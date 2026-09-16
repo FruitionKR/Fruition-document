@@ -1,0 +1,2 @@
+-- (no-op) workspace_members는 access_db 소유로 이동 (MSA DB 분리).
+-- 버전 연속성을 위해 파일만 유지한다. role check 제약은 access-svc V1__access_baseline.sql에 반영됨.

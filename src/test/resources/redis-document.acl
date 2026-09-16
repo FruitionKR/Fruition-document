@@ -1,0 +1,1 @@
+on -@all resetkeys resetchannels +ping +hello +client|setname (+get +set ~authz:role:*) (+get +set +incr +expire +pexpire +del +exists +lrange +rpush +ltrim +eval +evalsha +publish +subscribe +unsubscribe ~query:* &query-events)

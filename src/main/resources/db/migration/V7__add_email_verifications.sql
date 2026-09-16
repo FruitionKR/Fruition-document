@@ -1,0 +1,2 @@
+-- (no-op) email_verifications는 access_db 소유로 이동 (MSA DB 분리).
+-- 버전 연속성을 위해 파일만 유지한다. 생성 DDL은 access-svc V1__access_baseline.sql 참조.

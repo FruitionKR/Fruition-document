@@ -1,0 +1,138 @@
+// 문서·채팅·Wiki·query 담당 boot 앱 (포트 8080).
+// Flyway Gradle 플러그인(flywayInfo 등)이 DB에 접속하려면 JDBC 드라이버와
+// Postgres 모듈을 플러그인 classpath(buildscript)에 올려야 한다. Spring Boot가 쓰는 Flyway 11.7.2와 버전을 맞춘다.
+buildscript {
+	repositories { mavenCentral() }
+	dependencies {
+		classpath 'org.postgresql:postgresql:42.7.10'
+		classpath 'org.flywaydb:flyway-database-postgresql:11.7.2'
+	}
+}
+
+plugins {
+	id 'java'
+	id 'io.spring.dependency-management' version '1.1.7'
+	id 'org.springframework.boot' version '3.5.14'
+	id 'org.flywaydb.flyway' version '11.7.2'
+}
+
+group = 'fruition'
+version = '0.0.1-SNAPSHOT'
+java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+repositories { mavenCentral() }
+
+ext {
+	set('springAiVersion', "1.1.7")
+}
+
+dependencies {
+	// ErrorResponse/BaseExceptionHandler(web), JwtAuthenticationFilter(security),
+	// Idempotency entity·repository(data-jpa)가 컴파일에 필요하다.
+	// JwtTokenProvider (access는 발급까지, document는 검증만)
+	implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
+	runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
+	runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
+	// MinioConfig/StorageProperties (document만 스캔하지만 컴파일은 여기서 한다)
+	// OpenApiConfig
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.16'
+	implementation 'me.paulschwarz:spring-dotenv:4.0.0'
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	implementation 'org.flywaydb:flyway-core'
+	implementation 'org.flywaydb:flyway-database-postgresql'
+	implementation 'io.minio:minio:8.5.7'
+	implementation 'org.commonmark:commonmark:0.24.0'
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	// /actuator/prometheus 노출용 registry. 버전은 Spring Boot BOM이 관리한다.
+	implementation 'io.micrometer:micrometer-registry-prometheus'
+	implementation 'org.springframework.boot:spring-boot-starter-security'
+	// MarkdownDiffService: 선형 공간 Myers diff 구현(편집 거리와 무관하게 O(n+m) 메모리)
+	implementation 'io.github.java-diff-utils:java-diff-utils:4.15'
+	// 다중 인스턴스 공유 store: query run 상태·SSE 이벤트 중계
+	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+	// AI 비동기 command 발행 (ingest → ai-svc worker)
+	implementation 'org.springframework.kafka:spring-kafka'
+	developmentOnly 'org.springframework.boot:spring-boot-devtools'
+	runtimeOnly 'org.postgresql:postgresql'
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	// api-specs/openapi.yaml 스냅샷 생성·비교
+	testImplementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml'
+	testImplementation 'org.springframework.ai:spring-ai-spring-boot-testcontainers'
+	testImplementation 'org.testcontainers:junit-jupiter'
+	testImplementation 'org.testcontainers:postgresql'
+	testImplementation 'org.testcontainers:minio'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+dependencyManagement {
+	imports {
+		mavenBom "org.springframework.ai:spring-ai-bom:${springAiVersion}"
+	}
+}
+
+// Flyway Gradle 태스크(flywayInfo/flywayValidate 등) 설정.
+// 접속 정보는 bootRun과 동일하게 SERVICE_ENV_FILE 또는 서비스 .env에서 읽고, 없으면 application.properties와 같은 기본값을 쓴다.
+def flywayDbEnv = { ->
+	def env = [:]
+	def envFile = file("${System.getenv('SERVICE_ENV_FILE') ?: "$projectDir/.env"}")
+	// Docker 빌드처럼 상위 경로가 없는 환경에서는 경로가 디렉터리로 정규화될 수 있어 isFile로 가드한다.
+	if (envFile.isFile()) {
+		envFile.readLines().each { line ->
+			if (line && !line.startsWith('#') && line.contains('=')) {
+				def parts = line.split('=', 2)
+				env[parts[0].trim()] = parts[1].trim()
+			}
+		}
+	}
+	env
+}()
+
+flyway {
+	def host = flywayDbEnv.POSTGRES_HOST ?: System.getenv('POSTGRES_HOST') ?: 'localhost'
+	def port = flywayDbEnv.POSTGRES_PORT ?: System.getenv('POSTGRES_PORT') ?: '5432'
+	def name = flywayDbEnv.CORE_DB_NAME ?: System.getenv('CORE_DB_NAME') ?: 'core_db'
+	url = "jdbc:postgresql://${host}:${port}/${name}"
+	user = flywayDbEnv.CORE_DB_MIGRATION_USER ?: System.getenv('CORE_DB_MIGRATION_USER') ?: 'core_migration'
+	password = flywayDbEnv.CORE_DB_MIGRATION_PASSWORD ?: System.getenv('CORE_DB_MIGRATION_PASSWORD') ?: 'core_migration_dev_password'
+	locations = ['classpath:db/migration']
+	baselineOnMigrate = true
+	baselineVersion = '1'
+}
+
+tasks.withType(org.flywaydb.gradle.task.AbstractFlywayTask).configureEach {
+	dependsOn tasks.named('classes')
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+	// 운영 기본값을 두지 않는 설정이라 테스트에서만 고정값을 준다.
+	environment('INTERNAL_CALLBACK_TOKEN', 'test-internal-callback')
+	environment('AGENT_INTERNAL_TOKEN', 'test-agent-internal')
+	// Testcontainers postgres에는 migration 전용 계정이 없다 — 컨테이너 기본 계정으로 Flyway를 돌린다.
+	environment('CORE_DB_MIGRATION_USER', 'test')
+	environment('CORE_DB_MIGRATION_PASSWORD', 'test')
+	// OpenAPI 스냅샷 위치. 각 서비스 저장소가 API 계약을 소유한다.
+	// 스냅샷 파일을 input으로 선언한다. systemProperty는 경로 문자열이라, 이것이 없으면
+	// api-specs/openapi.yaml을 손으로 고쳐도 태스크가 UP-TO-DATE로 판정돼 비교가 다시 돌지 않는다.
+	inputs.file(file("$rootDir/api-specs/openapi.yaml")).withPropertyName('openApiSnapshot')
+	systemProperty 'openapi.snapshot.path', file("$rootDir/api-specs/openapi.yaml").absolutePath
+	// Gradle은 -D를 테스트 JVM으로 자동 전달하지 않는다 — 갱신 플래그를 명시적으로 넘긴다.
+	systemProperty 'updateOpenApiSnapshot', System.getProperty('updateOpenApiSnapshot') ?: 'false'
+}
+
+tasks.named('bootRun') {
+	doFirst {
+		environment('SPRING_PROFILES_ACTIVE', System.getenv('SPRING_PROFILES_ACTIVE') ?: 'local')
+		def envFile = file("${System.getenv('SERVICE_ENV_FILE') ?: "$projectDir/.env"}")
+		if (envFile.isFile()) {
+			envFile.readLines().each { line ->
+				if (line && !line.startsWith('#') && line.contains('=')) {
+					def parts = line.split('=', 2)
+					environment(parts[0].trim(), parts[1].trim())
+				}
+			}
+		}
+	}
+}
