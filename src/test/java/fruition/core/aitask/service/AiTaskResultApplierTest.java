@@ -61,6 +61,8 @@ class AiTaskResultApplierTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(jdbcTemplate.queryForObject(
+                contains("set_config"), eq(String.class), anyString())).thenReturn("run");
         org.mockito.Mockito.lenient().when(jdbcTemplate.update(
                 eq("UPDATE ai_task_runs SET status = 'completed', updated_at = now() WHERE id = ?"), anyString())).thenReturn(1);
         org.mockito.Mockito.lenient().when(jdbcTemplate.queryForList(
@@ -118,7 +120,9 @@ class AiTaskResultApplierTest {
                 .thenReturn(1, 0);
         when(jdbcTemplate.update(
                 org.mockito.ArgumentMatchers.contains("UPDATE agent_apply_projections"),
-                eq(event.get("payload").toString()), eq("new"), eq("run-1"))).thenReturn(1);
+                eq(event.get("payload").toString()), eq("<!-- fruition-note: doc-1 -->\nnew\n"), eq("run-1"))).thenReturn(1);
+        when(jdbcTemplate.queryForObject(contains("document_edit_states"), eq(String.class), eq("doc-1")))
+                .thenReturn("<!-- fruition-note: doc-1 -->\nold\n");
         when(jdbcTemplate.query(contains("FOR UPDATE"), any(ResultSetExtractor.class), eq("run-1")))
                 .thenReturn(new AiTaskResultApplier.AgentProjection("ws-1", "user-1", "doc-1", 1L, "op-1"));
 
@@ -127,7 +131,7 @@ class AiTaskResultApplierTest {
 
         verify(jdbcTemplate).update(
                 org.mockito.ArgumentMatchers.contains("UPDATE agent_apply_projections"),
-                eq(event.get("payload").toString()), eq("new"), eq("run-1"));
+                eq(event.get("payload").toString()), eq("<!-- fruition-note: doc-1 -->\nnew\n"), eq("run-1"));
     }
 
     @Test
@@ -438,6 +442,38 @@ class AiTaskResultApplierTest {
                 """);
 
         assertThat(AiTaskResultApplier.expectedMarkdown(event)).isNull();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "note, false", "workspace, false", "none, false", "note, true"
+    })
+    void markdownEditStoresTheExactEditorSaveFormat(String markerKind, boolean trailingNewline) throws Exception {
+        String marker = markerKind.equals("none") ? "<!-- fruition-note: doc-1 -->"
+                : "<!-- fruition-" + markerKind + ": original-id -->";
+        String stored = markerKind.equals("none") ? "# 제목\n" : marker + "\n# 제목\n";
+        String body = "# 회의록\n\n- 의제" + (trailingNewline ? "\n" : "");
+        var event = objectMapper.createObjectNode();
+        event.put("event_id", "agent:run-edit:succeeded").put("run_id", "run-edit").put("status", "succeeded");
+        var request = event.putObject("request");
+        request.put("workspace_id", "ws-1").put("user_id", "user-1").put("document_id", "doc-1")
+                .put("base_version", 1).put("apply_operation_id", "op-1");
+        request.putObject("editor_snapshot").put("markdown", "# 제목");
+        var edit = event.putObject("payload").put("action", "markdown_edit").putObject("edit");
+        edit.put("operation", "replace").put("replacement_markdown", body);
+        edit.putObject("actual_target").put("start_line", 1).put("end_line", 1);
+        when(jdbcTemplate.update(contains("INSERT INTO ai_task_result_receipts"),
+                eq("agent:run-edit:succeeded"), eq("run-edit"), any())).thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(ResultSetExtractor.class), eq("run-edit")))
+                .thenReturn(new AiTaskResultApplier.AgentProjection("ws-1", "user-1", "doc-1", 1L, "op-1"));
+        when(jdbcTemplate.queryForObject(
+                contains("document_edit_states"), eq(String.class), eq("doc-1"))).thenReturn(stored);
+        when(jdbcTemplate.update(contains("SET status = 'ready'"), any(), any(), eq("run-edit"))).thenReturn(1);
+
+        applier.applyAgent(event);
+
+        verify(jdbcTemplate).update(contains("SET status = 'ready'"), any(),
+                eq(marker + "\n# 회의록\n\n- 의제\n"), eq("run-edit"));
     }
 
     @Test
