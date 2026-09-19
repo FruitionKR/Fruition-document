@@ -43,6 +43,15 @@ class ChatProgressIntegrationTest {
             messages.save(reloaded);
             applier.recordProgress(mapper.readTree(event.toString().replace("progress_1", "progress_2")));
             assertThat(messages.findById(reloaded.getId()).orElseThrow().getProgress()).hasSize(1);
+            var titleEvent = mapper.readTree("""
+                    {"run_id":"query_progress_test","workspace_id":"ws_progress","user_id":"user_progress",
+                     "payload":{"title":"첫 문답 제목"}}
+                    """);
+            applier.applySessionTitle(titleEvent);
+            assertThat(sessions.findById(sessionId).orElseThrow().getTitle()).isEqualTo("첫 문답 제목");
+            applier.applySessionTitle(mapper.readTree(titleEvent.toString().replace("첫 문답 제목", "다른 제목")));
+            assertThat(sessions.findById(sessionId).orElseThrow().getTitle()).isEqualTo("첫 문답 제목");
+
         } finally {
             sessions.deleteById(sessionId);
         }

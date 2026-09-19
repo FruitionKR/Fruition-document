@@ -52,6 +52,10 @@ public class AiTaskResultConsumer {
                 if (applier.acceptsProgress(flowId)) relayRunProgress(event, flowId);
                 return;
             }
+            if ("session_title".equals(event.path("status").asText())) {
+                applier.applySessionTitle(event);
+                return;
+            }
             if ("ingest".equals(kind)) {
                 applier.applyIngest(event);
                 return;
