@@ -54,7 +54,15 @@ public class QueryEventBroker implements MessageListener {
     }
 
     public SseEmitter subscribe(String requestId) {
-        SseEmitter emitter = new SseEmitter(0L);
+        SseEmitter emitter = new SseEmitter(0L) {
+            @Override
+            protected void extendResponse(org.springframework.http.server.ServerHttpResponse response) {
+                super.extendResponse(response);
+                // 프록시 압축 버퍼가 진행 이벤트를 완료 시점까지 모으지 않게 한다.
+                response.getHeaders().setCacheControl("no-store, no-transform");
+                response.getHeaders().set("X-Accel-Buffering", "no");
+            }
+        };
         Subscriber subscriber = new Subscriber(emitter);
         CopyOnWriteArrayList<Subscriber> list = subscribers.computeIfAbsent(requestId, id -> new CopyOnWriteArrayList<>());
         list.add(subscriber);

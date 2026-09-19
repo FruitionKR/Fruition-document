@@ -124,6 +124,20 @@ class QueryEventBrokerTest {
     }
 
     @Test
+    void streamDisablesProxyCompressionAndBuffering() throws Exception {
+        var emitter = broker.subscribe("stream-headers");
+        var servletResponse = new org.springframework.mock.web.MockHttpServletResponse();
+        var output = new org.springframework.http.server.ServletServerHttpResponse(servletResponse);
+        var method = emitter.getClass().getDeclaredMethod("extendResponse",
+                org.springframework.http.server.ServerHttpResponse.class);
+        method.setAccessible(true);
+        method.invoke(emitter, output);
+        assertThat(output.getHeaders().getCacheControl()).isEqualTo("no-store, no-transform");
+        assertThat(output.getHeaders().getFirst("X-Accel-Buffering")).isEqualTo("no");
+        assertThat(output.getHeaders().getContentType()).isEqualTo(org.springframework.http.MediaType.TEXT_EVENT_STREAM);
+    }
+
+    @Test
     void cancellationReplacesReplayAndBlocksLateCompletion() throws Exception {
         broker.publish("run", "progress", "stage", "진행", Map.of());
         broker.cancel("run");

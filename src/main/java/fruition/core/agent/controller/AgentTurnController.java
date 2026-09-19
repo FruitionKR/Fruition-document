@@ -121,7 +121,7 @@ public class AgentTurnController {
 
     @Operation(summary = "Agent turn 진행 이벤트 구독",
             description = "Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. "
-                    + "AI가 질의로 판정한 턴만 단계 이벤트를 내며, 편집·Skill 갈래는 완료 이벤트만 옵니다.")
+                    + "요청 확인·처리 유형 결정·편집안 작성 등 실제 처리 단계와 완료 이벤트를 전달합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "SSE 구독 시작",
             content = @Content(mediaType = "text/event-stream", schema = @Schema(type = "string"))),

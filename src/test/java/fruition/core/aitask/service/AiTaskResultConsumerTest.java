@@ -87,6 +87,7 @@ class AiTaskResultConsumerTest {
                 "Wiki 데이터를 불러왔습니다.",
                 java.util.Map.of("page_count", 3));
         verify(applier).acceptsProgress(org.mockito.ArgumentMatchers.anyString());
+        verify(applier).recordProgress(org.mockito.ArgumentMatchers.any());
         org.mockito.Mockito.verifyNoMoreInteractions(applier);
         verifyNoInteractions(queryRunStore);
     }
@@ -111,6 +112,7 @@ class AiTaskResultConsumerTest {
                 """);
 
         verify(applier).acceptsProgress(org.mockito.ArgumentMatchers.anyString());
+        verify(applier).recordProgress(org.mockito.ArgumentMatchers.any());
         org.mockito.Mockito.verifyNoMoreInteractions(applier);
         verifyNoInteractions(queryRunStore);
     }
@@ -138,6 +140,7 @@ class AiTaskResultConsumerTest {
                 "Wiki 데이터를 불러왔습니다.",
                 java.util.Map.of());
         verify(applier).acceptsProgress(org.mockito.ArgumentMatchers.anyString());
+        verify(applier).recordProgress(org.mockito.ArgumentMatchers.any());
         org.mockito.Mockito.verifyNoMoreInteractions(applier);
         verifyNoInteractions(queryRunStore);
     }

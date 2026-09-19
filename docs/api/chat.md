@@ -851,3 +851,5 @@ string
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-chat-sessions-session-id-wiki-preview)
 
 </details>
+
+메시지 응답의 `progress`에는 실제 실행 단계(`stage`, `message`, `sequence`)가 순서대로 보존됩니다. `run_id`는 Agent와 질의 모두에 기록합니다. 미완료 대화를 다시 열면 메시지를 주기적으로 조회해 저장된 단계와 최종 답변을 복원합니다. 기록이 없는 과거 대화에는 고정된 가상 단계를 만들지 않습니다.

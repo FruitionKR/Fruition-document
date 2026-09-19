@@ -63,8 +63,7 @@ public record ChatMessageResponse(
 
         @JsonInclude(JsonInclude.Include.NON_NULL)
         @JsonProperty("run_id")
-        @Schema(description = "Agent turn이 만든 메시지의 run ID. 승인 상태와 미리보기 본문을 이 run에서 읽는다. "
-                + "질의 메시지는 키가 빠진다.",
+        @Schema(description = "Agent 또는 질의 메시지를 생성한 run ID. 진행 상태를 이 run과 연결한다.",
                 example = "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83")
         String runId,
 
@@ -74,5 +73,8 @@ public record ChatMessageResponse(
                 allowableValues = {"chat_answer", "conversation_reply", "markdown_edit", "markdown_create", "clarify", "reject",
                         "folder_organize", "workspace_workflow", "skill_authoring", "skill_draft_proposal"},
                 example = "markdown_edit")
-        String action
+        String action,
+
+        @Schema(description = "실제 실행 순서대로 저장된 진행 단계")
+        List<com.fasterxml.jackson.databind.JsonNode> progress
 ) {}

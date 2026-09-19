@@ -80,6 +80,23 @@ public class AiTaskResultApplier {
     }
 
     @Transactional
+    public void recordProgress(JsonNode event) {
+        JsonNode payload = event.path("payload");
+        if (!payload.path("stage").isTextual() || !payload.path("message").isTextual()) return;
+        // SSE 보존 기간과 무관하게 대화에 남긴다. Kafka 재전송은 event_id로 제거한다.
+        jdbcTemplate.update("""
+                UPDATE chat_messages
+                SET progress = progress || jsonb_build_array(jsonb_build_object(
+                    'event_id', CAST(? AS text), 'stage', CAST(? AS text),
+                    'message', CAST(? AS text), 'sequence', jsonb_array_length(progress) + 1))
+                WHERE run_id = ? AND role = 'assistant' AND status = 'pending'
+                  AND NOT jsonb_path_exists(progress, '$[*] ? (@.event_id == $id)',
+                      jsonb_build_object('id', CAST(? AS text)))
+                """, text(event, "event_id"), payload.path("stage").asText(),
+                payload.path("message").asText(), text(event, "run_id"), text(event, "event_id"));
+    }
+
+    @Transactional
     public void applyLint(JsonNode event) {
         String eventId = text(event, "event_id");
         String runId = text(event, "run_id");
