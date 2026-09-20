@@ -5,7 +5,7 @@
 Skill 작성·게시·설정 Gateway와 내부 참조 문서 읽기 API다. 공개 요청은 Backend가 권한과
 workspace AI 모델을 확인한 뒤 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 8
+- API 수: 9
 
 작성·게시·수정 요청은 선택 query parameter `run_id`를 받고 응답에도 `run_id`를 반환한다.
 호출자가 ID를 미리 지정하면 HTTP 응답을 기다리는 중에도 [공통 취소 API](tasks.md)를
@@ -21,6 +21,7 @@ workspace AI 모델을 확인한 뒤 ai-svc 내부 HTTP로 전달한다.
 | [`POST /api/workspaces/{workspace_id}/skills/author/publish`](#summary-post-api-workspaces-workspace-id-skills-author-publish) | 작성된 Skill 정의를 검토 후 게시합니다. |
 | [`GET /api/workspaces/{workspace_id}/skills/{skill_id}`](#summary-get-api-workspaces-workspace-id-skills-skill-id) | Skill의 현재 정의와 실행 설정을 반환합니다. |
 | [`PATCH /api/workspaces/{workspace_id}/skills/{skill_id}`](#summary-patch-api-workspaces-workspace-id-skills-skill-id) | Skill의 정의를 수정합니다. |
+| [`DELETE /api/workspaces/{workspace_id}/skills/{skill_id}`](#delete-skill) | Skill과 버전을 삭제하고 실행 기록을 보존합니다. |
 | [`POST /api/workspaces/{workspace_id}/skills/{skill_id}/disable`](#summary-post-api-workspaces-workspace-id-skills-skill-id-disable) | Skill을 Agent 실행 대상에서 제외합니다. |
 | [`POST /api/workspaces/{workspace_id}/skills/{skill_id}/enable`](#summary-post-api-workspaces-workspace-id-skills-skill-id-enable) | Skill을 Agent 실행 대상에 포함합니다. |
 | [`POST /internal/agent/skill-authoring/references/read`](#summary-post-internal-agent-skill-authoring-references-read) | Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다. |
@@ -1273,3 +1274,13 @@ curl -X POST "$DOCUMENT/internal/agent/skill-authoring/references/read" \
 [↑ 요약으로 돌아가기](#summary-post-internal-agent-skill-authoring-references-read)
 
 </details>
+
+<a id="delete-skill"></a>
+## `DELETE /api/workspaces/{workspace_id}/skills/{skill_id}`
+
+- 인증: Bearer 토큰. Path의 워크스페이스 멤버십을 확인하고 인증된 사용자 ID를 AI 서비스에 전달한다. 요청 본문은 없다.
+- 개인 스킬은 소유자, 워크스페이스 스킬은 OWNER만 삭제할 수 있다.
+- 내부 호출: `DELETE /skills/{skill_id}?workspace_id=...&user_id=...`, `X-Agent-Service-Token` 사용.
+- 성공: `204 No Content`. 미인증 `401`, 워크스페이스·스킬이 없거나 삭제 권한이 없으면 `404`, AI 서비스 사용 불가 `503`.
+- 스킬·저장된 버전·버전 출처를 삭제한다. 과거 실행 기록은 보존하고 삭제된 버전의 참조만 해제한다. 실행 중 작업의 취소는 별도 계약이다.
+- OFF는 목록에 남는 비활성화이며, DELETE는 되돌릴 수 없는 삭제다.

@@ -34,6 +34,11 @@ class PipelineSkillRequesterTest {
             uri.set(exchange.getRequestURI().toString());
             body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             token.set(exchange.getRequestHeaders().getFirst("X-Agent-Service-Token"));
+            if ("DELETE".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(204, -1);
+                exchange.close();
+                return;
+            }
             byte[] response = "{\"status\":\"proposal_ready\"}".getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
@@ -108,6 +113,15 @@ class PipelineSkillRequesterTest {
                 .contains("\"provider\":\"openai\"")
                 .contains("\"model\":\"gpt-5-nano\"")
                 .doesNotContain("api_key", "base_url");
+    }
+
+    @Test
+    void delete_acceptsNoContentAndForwardsTrustedActor() {
+        requester().delete("ws_1", "user_1", "skill_1");
+        assertThat(method.get()).isEqualTo("DELETE");
+        assertThat(uri.get()).isEqualTo("/skills/skill_1?workspace_id=ws_1&user_id=user_1");
+        assertThat(token.get()).isEqualTo("agent-token");
+        assertThat(body.get()).isEmpty();
     }
 
     private PipelineSkillRequester requester() {

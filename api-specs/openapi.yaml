@@ -2908,6 +2908,40 @@ paths:
       tags:
       - Skills
   /api/workspaces/{workspace_id}/skills/{skill_id}:
+    delete:
+      description: "개인 Skill은 소유자, 워크스페이스 Skill은 관리자만 삭제할 수 있습니다. 버전은 함께 삭제하고 과거 실행 기록은 보존합니다."
+      operationId: deleteSkill
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: skill_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "204":
+          description: 삭제 성공
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Skill이 없거나 삭제 권한이 없음
+        "503":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: llmPipeline 사용 불가
+      summary: Skill 삭제
+      tags:
+      - Skills
     get:
       description: Skill의 현재 정의와 실행 설정을 반환합니다.
       operationId: get_1
