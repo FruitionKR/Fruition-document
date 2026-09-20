@@ -803,8 +803,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 
 Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다.
 
-AI가 질의로 판정한 턴만 단계 이벤트를 낸다. 편집·Skill 갈래는 완료 이벤트만 온다. 클라이언트는
-어느 갈래인지 미리 알 필요 없이 접수 응답의 `requestId`로 구독하면 된다.
+AI는 요청 확인·처리 유형 결정·편집안 작성·결과 정리 단계를 `query.log`로 전달한다. 질의 갈래는 검색 진행 단계도 전달한다. 클라이언트는 접수 응답의 `requestId`로 구독하고, 완료 이벤트 후 결과를 조회한다. 편집·생성 결과의 `message`는 스킬 사용 여부와 변경 요약을 담으며 적용할 Markdown 본문과 분리된다.
 
 #### 3. Auth 필요 여부
 
@@ -824,6 +823,7 @@ AI가 질의로 판정한 턴만 단계 이벤트를 낸다. 편집·Skill 갈�
 
 - HTTP `200`: SSE 구독 시작
 - Content-Type: `text/event-stream`
+- `Cache-Control: no-store, no-transform`, `X-Accel-Buffering: no`: 중간 프록시의 압축·버퍼링으로 진행 이벤트가 지연되지 않게 합니다.
 
 ```text
 string

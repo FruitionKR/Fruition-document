@@ -72,6 +72,7 @@ public class QueryService {
                     sessionId, context.pairId(), context.userMessageId(), context.assistantMessageId(), question,
                     createdAt, provider, model);
         }
+        chatTurnRecorder.assignRun(context.assistantMessageId(), requestId);
         log.info("[질의 메시지 선저장 commit 완료] requestId={} pairId={} userStatus=completed assistantStatus=pending",
                 requestId, context.pairId());
         return context;

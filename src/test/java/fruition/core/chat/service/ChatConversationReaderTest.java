@@ -68,7 +68,7 @@ class ChatConversationReaderTest {
     @DisplayName("assistant action을 다음 Agent 턴의 참고 정보로 보존한다")
     void keepsAssistantActionAsConversationHint() {
         ChatMessage assistant = message("p1", "assistant", "날씨를 알려주세요.", "completed", 1);
-        assistant.assignAgentRun("agent_1");
+        assistant.assignRun("agent_1");
         assistant.completeAgentTurn("conversation_reply", "날씨를 알려주세요.");
         given(message("p1", "user", "제목을 써줘", "completed", 0), assistant);
 

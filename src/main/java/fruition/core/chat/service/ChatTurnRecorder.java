@@ -69,6 +69,13 @@ public class ChatTurnRecorder {
         chatSessionRepository.save(session);
     }
 
+    @Transactional
+    public void assignRun(String messageId, String runId) {
+        ChatMessage message = chatMessageRepository.findById(messageId).orElseThrow();
+        message.assignRun(runId);
+        chatMessageRepository.save(message);
+    }
+
     /**
      * Agent turn용 쌍. 질의와 달리 assistant 메시지에 run ID를 새겨, 결과가 왔을 때
      * 어느 말풍선을 채울지와 승인 상태를 어디서 읽을지 정한다.
@@ -87,7 +94,7 @@ public class ChatTurnRecorder {
                 .orElseThrow(() -> new ChatSessionNotFoundException(sessionId));
         ChatMessage assistant = new ChatMessage(assistantMessageId, session, pairId, "assistant", "", "pending",
                 createdAt, null, provider, model, false);
-        assistant.assignAgentRun(runId);
+        assistant.assignRun(runId);
         chatMessageRepository.saveAll(List.of(
                 new ChatMessage(userMessageId, session, pairId, "user", message, "completed", createdAt,
                         null, provider, model, false),
