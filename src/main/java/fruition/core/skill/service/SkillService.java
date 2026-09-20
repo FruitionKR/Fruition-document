@@ -53,6 +53,11 @@ public class SkillService {
         return requester.setEnabled(workspaceId, userId, skillId, enabled);
     }
 
+    public void delete(String workspaceId, String userId, String skillId) {
+        requireMember(workspaceId, userId);
+        requester.delete(workspaceId, userId, skillId);
+    }
+
     private void requireMember(String workspaceId, String userId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
     }
