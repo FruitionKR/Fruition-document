@@ -499,6 +499,13 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 사용자가 그 계획을 승인해야 실제 문서에 반영한다. 저장을 명시하지 않은 편집 요청은 기존처럼
 `markdown_edit` 미리보기만 반환한다.
 
+`markdown_edit`의 `editorSnapshot.markdown`은 숨겨진 문서 식별 주석을 제외한 본문이다.
+서버는 AI 편집 결과에 `document_edit_states`의 기존 `fruition-note` 또는 `fruition-workspace`
+주석을 붙이고 마지막 줄바꿈을 보장한 저장용 Markdown을 `ready_markdown`으로 기록한다.
+기존 주석이 없는 문서는 편집기와 동일하게 `<!-- fruition-note: {documentId} -->`를 사용한다.
+적용 시에는 이 전체 문자열과 기준 버전이 정확히 일치해야 하며, 본문·주석 변조를 허용하지 않는다.
+자율 Agent Tool은 이미 완성된 저장용 Markdown을 제공하므로 이 편집기 변환을 적용하지 않는다.
+
 #### 3. Auth 필요 여부
 
 - 필요
@@ -796,8 +803,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 
 Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다.
 
-AI가 질의로 판정한 턴만 단계 이벤트를 낸다. 편집·Skill 갈래는 완료 이벤트만 온다. 클라이언트는
-어느 갈래인지 미리 알 필요 없이 접수 응답의 `requestId`로 구독하면 된다.
+AI는 요청 확인·처리 유형 결정·편집안 작성·결과 정리 단계를 `query.log`로 전달한다. 질의 갈래는 검색 진행 단계도 전달한다. 클라이언트는 접수 응답의 `requestId`로 구독하고, 완료 이벤트 후 결과를 조회한다. 편집·생성 결과의 `message`는 스킬 사용 여부와 변경 요약을 담으며 적용할 Markdown 본문과 분리된다.
 
 #### 3. Auth 필요 여부
 
@@ -817,6 +823,7 @@ AI가 질의로 판정한 턴만 단계 이벤트를 낸다. 편집·Skill 갈�
 
 - HTTP `200`: SSE 구독 시작
 - Content-Type: `text/event-stream`
+- `Cache-Control: no-store, no-transform`, `X-Accel-Buffering: no`: 중간 프록시의 압축·버퍼링으로 진행 이벤트가 지연되지 않게 합니다.
 
 ```text
 string

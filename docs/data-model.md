@@ -44,3 +44,5 @@ Ingest 경로는 이 필드를 쓰지 않고 block ID를 새로 부여하므로,
 V44는 AI 작업 로그와 변경 항목에 실행 시점의 문서 표시 이름 스냅샷을 추가한다.
 V45는 원문을 복제하지 않고 `agent_apply_projections`와 `chat_messages`를 연결하는
 `agent_route_outcomes` view를 추가한다. 취소·재시도는 route 실패로 단정하지 않는다.
+
+`chat_messages.progress`는 실제 진행 이벤트의 JSONB 배열입니다. `event_id`로 중복 반영을 막고, 최종 상태 이후의 이벤트는 추가하지 않습니다. SSE 캐시 만료 후에도 대화와 함께 보존됩니다.

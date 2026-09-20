@@ -53,6 +53,12 @@ public class ChatMessage {
     @Column(name = "action")
     private String action;
 
+    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+    @Column(nullable = false, columnDefinition = "jsonb", insertable = false, updatable = false)
+    private java.util.List<com.fasterxml.jackson.databind.JsonNode> progress = java.util.List.of();
+
+    public java.util.List<com.fasterxml.jackson.databind.JsonNode> getProgress() { return progress; }
+
     protected ChatMessage() {}
 
     public ChatMessage(String id, ChatSession session, String pairId, String role, String content,
@@ -84,7 +90,7 @@ public class ChatMessage {
     }
 
     /** Agent turn 요청 시점에 어느 run이 이 메시지를 채울지 새겨 둔다. */
-    public void assignAgentRun(String runId) { this.runId = runId; }
+    public void assignRun(String runId) { this.runId = runId; }
 
     /** 결과가 도착해 AI가 고른 갈래가 정해졌을 때 기록한다. */
     public void completeAgentTurn(String action, String content) {

@@ -18,6 +18,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -165,6 +166,23 @@ public class SkillController {
             @org.springframework.web.bind.annotation.RequestParam(value = "run_id", required = false) String runId) {
         runId = runId == null ? "skill_" + java.util.UUID.randomUUID() : runId;
         return ResponseEntity.ok(skillService.update(workspaceId, userId, skillId, request, runId));
+    }
+
+    @Operation(operationId = "deleteSkill", summary = "Skill 삭제", description = "개인 Skill은 소유자, 워크스페이스 Skill은 관리자만 삭제할 수 있습니다. 버전은 함께 삭제하고 과거 실행 기록은 보존합니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "204", description = "삭제 성공"),
+        @ApiResponse(responseCode = "404", description = "Skill이 없거나 삭제 권한이 없음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "503", description = "llmPipeline 사용 불가",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @DeleteMapping("/{skill_id}")
+    public ResponseEntity<Void> delete(
+            @PathVariable("workspace_id") String workspaceId,
+            @PathVariable("skill_id") String skillId,
+            @AuthenticationPrincipal String userId) {
+        skillService.delete(workspaceId, userId, skillId);
+        return ResponseEntity.noContent().build();
     }
 
     @Operation(summary = "Skill 활성화", description = "Skill을 Agent 실행 대상에 포함합니다.")

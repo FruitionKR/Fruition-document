@@ -81,6 +81,23 @@ public class PipelineSkillRequester {
                 new ActorPayload(workspaceId, userId));
     }
 
+    public void delete(String workspaceId, String userId, String skillId) {
+        String uri = UriComponentsBuilder.fromUriString(endpoint)
+                .pathSegment("{skillId}")
+                .queryParam("workspace_id", "{workspaceId}")
+                .queryParam("user_id", "{userId}")
+                .encode()
+                .buildAndExpand(skillId, workspaceId, userId)
+                .toUriString();
+        try {
+            restClient.delete().uri(java.net.URI.create(uri)).retrieve().toBodilessEntity();
+        } catch (ResourceAccessException exception) {
+            throw unavailable("Skill 파이프라인 응답 시간이 초과되었습니다.");
+        } catch (RestClientResponseException exception) {
+            throw translate(exception);
+        }
+    }
+
     private JsonNode task(String runId, String kind, String workspaceId, String userId, String skillId, Object payload) {
         var command = mapper.createObjectNode().put("run_id", runId).put("kind", kind)
                 .put("workspace_id", workspaceId).put("user_id", userId);

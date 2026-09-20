@@ -38,6 +38,23 @@ class SkillServiceTest {
     }
 
     @Test
+    void delete_requiresMembershipBeforeForwarding() {
+        service.delete("ws_1", "user_1", "skill_1");
+        var order = org.mockito.Mockito.inOrder(workspaceAccessGuard, requester);
+        order.verify(workspaceAccessGuard).requireMember("ws_1", "user_1");
+        order.verify(requester).delete("ws_1", "user_1", "skill_1");
+    }
+
+    @Test
+    void delete_rejectsNonMemberBeforePipelineCall() {
+        doThrow(new WorkspaceNotFoundException("ws_1"))
+                .when(workspaceAccessGuard).requireMember("ws_1", "user_2");
+        assertThatThrownBy(() -> service.delete("ws_1", "user_2", "skill_1"))
+                .isInstanceOf(WorkspaceNotFoundException.class);
+        verifyNoInteractions(requester);
+    }
+
+    @Test
     void author_checksMembershipThenForwardsPathAndPrincipalScope() {
         var request = new SkillAuthoringRequest(
                 "personal", "meeting-notes", null,

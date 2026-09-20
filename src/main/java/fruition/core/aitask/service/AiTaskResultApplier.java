@@ -35,6 +35,8 @@ import java.util.Set;
 public class AiTaskResultApplier {
 
     private static final Set<String> MARKDOWN_ACTIONS = Set.of("markdown_create", "markdown_edit");
+    private static final java.util.regex.Pattern NOTE_MARKER = java.util.regex.Pattern.compile(
+            "^(<!--\\s*fruition-(?:note|workspace):\\s*[^\\r\\n]+?\\s*-->)\\r?\\n?");
     private static final Set<String> NON_MUTATING_ACTIONS = Set.of(
             "chat_answer", "conversation_reply", "clarify", "reject", "skill_authoring", "skill_draft_proposal");
     private static final Set<String> AUTONOMOUS_ACTIONS = Set.of("folder_organize", "workspace_workflow");
@@ -77,6 +79,40 @@ public class AiTaskResultApplier {
         this.restoreApplier = restoreApplier;
         this.restoreLifecycle = restoreLifecycle;
         this.documentService = documentService;
+    }
+
+    @Transactional
+    public void applySessionTitle(JsonNode event) {
+        JsonNode value = event.path("payload").path("title");
+        if (!value.isTextual()) return;
+        String title = value.asText().strip();
+        if (title.isBlank() || title.codePointCount(0, title.length()) > 30 || "새 채팅".equals(title)) return;
+        // 이미 정한 제목은 덮어쓰지 않는다. 소유자와 완료 문답을 함께 확인한다.
+        jdbcTemplate.update("""
+                UPDATE chat_sessions s SET title = ?
+                WHERE s.workspace_id = ? AND s.user_id = ?
+                  AND (s.title IS NULL OR btrim(s.title) IN ('', '새 채팅'))
+                  AND EXISTS (SELECT 1 FROM chat_messages m
+                    WHERE m.session_id = s.id AND m.run_id = ?
+                      AND m.role = 'assistant' AND m.status = 'completed')
+                """, title, text(event, "workspace_id"), text(event, "user_id"), text(event, "run_id"));
+    }
+
+    @Transactional
+    public void recordProgress(JsonNode event) {
+        JsonNode payload = event.path("payload");
+        if (!payload.path("stage").isTextual() || !payload.path("message").isTextual()) return;
+        // SSE 보존 기간과 무관하게 대화에 남긴다. Kafka 재전송은 event_id로 제거한다.
+        jdbcTemplate.update("""
+                UPDATE chat_messages
+                SET progress = progress || jsonb_build_array(jsonb_build_object(
+                    'event_id', CAST(? AS text), 'stage', CAST(? AS text),
+                    'message', CAST(? AS text), 'sequence', jsonb_array_length(progress) + 1))
+                WHERE run_id = ? AND role = 'assistant' AND status = 'pending'
+                  AND NOT jsonb_path_exists(progress, '$[*] ? (@.event_id == $id)',
+                      jsonb_build_object('id', CAST(? AS text)))
+                """, text(event, "event_id"), payload.path("stage").asText(),
+                payload.path("message").asText(), text(event, "run_id"), text(event, "event_id"));
     }
 
     @Transactional
@@ -209,7 +245,7 @@ public class AiTaskResultApplier {
                                 SET status = 'ready', result = CAST(? AS jsonb), ready_markdown = ?,
                                     error_code = NULL, updated_at = now()
                                 WHERE run_id = ? AND status = 'queued'
-                                """, payload.toString(), expectedMarkdown(event), runId)
+                                """, payload.toString(), expectedStoredMarkdown(event, projection.documentId()), runId)
                         : markAgentFailed(runId, errorCode);
             }
         } else {
@@ -313,6 +349,17 @@ public class AiTaskResultApplier {
         }
         return ACTION_FALLBACK_MESSAGE.getOrDefault(payload.path("action").asText(),
                 "요청을 처리했습니다.");
+    }
+
+    private String expectedStoredMarkdown(JsonNode event, String documentId) {
+        String body = expectedMarkdown(event);
+        if (!"markdown_edit".equals(event.path("payload").path("action").asText())) return body;
+        // 편집기 snapshot은 본문만 담는다. 저장 시 복원되는 주석은 서버 원본에서 가져온다.
+        String stored = jdbcTemplate.queryForObject(
+                "SELECT markdown FROM document_edit_states WHERE document_id = ?", String.class, documentId);
+        var markerMatch = NOTE_MARKER.matcher(Objects.requireNonNull(stored));
+        String marker = markerMatch.find() ? markerMatch.group(1) : "<!-- fruition-note: " + documentId + " -->";
+        return marker + "\n" + body + (body.endsWith("\n") ? "" : "\n");
     }
 
     public static String expectedMarkdown(JsonNode event) {

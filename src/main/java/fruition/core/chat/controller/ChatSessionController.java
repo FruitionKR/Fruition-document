@@ -180,7 +180,7 @@ public class ChatSessionController {
                     return new ChatMessageResponse(m.getId(), m.getPairId(), m.getRole(), m.getContent(), m.getStatus(), m.getCreatedAt(),
                             relatedPages, refs, partialWikiPageIds, m.getErrorMessage(),
                             m.getAiProvider(), m.getAiModel(), m.getWebSearchEnabled(),
-                            m.getRunId(), m.getAction());
+                            m.getRunId(), m.getAction(), m.getProgress());
                 })
                 .toList();
 

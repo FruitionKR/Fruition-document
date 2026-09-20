@@ -52,6 +52,10 @@ public class AiTaskResultConsumer {
                 if (applier.acceptsProgress(flowId)) relayRunProgress(event, flowId);
                 return;
             }
+            if ("session_title".equals(event.path("status").asText())) {
+                applier.applySessionTitle(event);
+                return;
+            }
             if ("ingest".equals(kind)) {
                 applier.applyIngest(event);
                 return;
@@ -109,6 +113,7 @@ public class AiTaskResultConsumer {
     private void relayRunProgress(JsonNode event, String flowId) {
         JsonNode payload = event.path("payload");
         try {
+            applier.recordProgress(event);
             queryEventBroker.publish(
                     event.path("run_id").asText(),
                     event.path("event_id").asText(),

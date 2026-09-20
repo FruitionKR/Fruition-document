@@ -408,7 +408,7 @@ paths:
       - Agent
   /api/workspaces/{workspace_id}/agent/turn/{run_id}/events:
     get:
-      description: "Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. AI가 질의로 판정한 턴만 단계 이벤트를 내며, 편집·Skill 갈래는 완료 이벤트만 옵니다."
+      description: Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. 요청 확인·처리 유형 결정·편집안 작성 등 실제 처리 단계와 완료 이벤트를 전달합니다.
       operationId: subscribeTurnEvents
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -2908,6 +2908,40 @@ paths:
       tags:
       - Skills
   /api/workspaces/{workspace_id}/skills/{skill_id}:
+    delete:
+      description: "개인 Skill은 소유자, 워크스페이스 Skill은 관리자만 삭제할 수 있습니다. 버전은 함께 삭제하고 과거 실행 기록은 보존합니다."
+      operationId: deleteSkill
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: skill_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "204":
+          description: 삭제 성공
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Skill이 없거나 삭제 권한이 없음
+        "503":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: llmPipeline 사용 불가
+      summary: Skill 삭제
+      tags:
+      - Skills
     get:
       description: Skill의 현재 정의와 실행 설정을 반환합니다.
       operationId: get_1
@@ -4299,6 +4333,11 @@ components:
           description: 이 문답을 내보내 만들어진 Wiki 페이지 ID 목록
           items:
             type: string
+        progress:
+          type: array
+          description: 실제 실행 순서대로 저장된 진행 단계
+          items:
+            $ref: "#/components/schemas/JsonNode"
         provider:
           type: string
           description: 이 답변을 생성한 LLM provider. 실행 시점 값이 snapshot으로 남는다.
@@ -4322,7 +4361,7 @@ components:
           example: assistant
         run_id:
           type: string
-          description: Agent turn이 만든 메시지의 run ID. 승인 상태와 미리보기 본문을 이 run에서 읽는다. 질의 메시지는 키가 빠진다.
+          description: Agent 또는 질의 메시지를 생성한 run ID. 진행 상태를 이 run과 연결한다.
           example: agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
         status:
           type: string

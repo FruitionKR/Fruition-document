@@ -55,6 +55,34 @@ class SkillControllerTest {
     @MockBean SkillReferenceService referenceService;
 
     @Test
+    void delete_usesAuthenticatedActorAndReturnsNoContent() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(
+                        "/api/workspaces/" + WORKSPACE_ID + "/skills/skill_1")
+                        .header("Authorization", bearer())
+                        .param("user_id", "forged-user"))
+                .andExpect(status().isNoContent());
+        org.mockito.Mockito.verify(skillService).delete(WORKSPACE_ID, USER_ID, "skill_1");
+    }
+
+    @Test
+    void delete_requiresAuthentication() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(
+                        "/api/workspaces/" + WORKSPACE_ID + "/skills/skill_1"))
+                .andExpect(status().isUnauthorized());
+        org.mockito.Mockito.verifyNoInteractions(skillService);
+    }
+
+    @Test
+    void delete_preservesPipelineNotFound() throws Exception {
+        org.mockito.Mockito.doThrow(new PipelineSkillException("삭제 권한 없음", 404, "{}"))
+                .when(skillService).delete(WORKSPACE_ID, USER_ID, "skill_1");
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(
+                        "/api/workspaces/" + WORKSPACE_ID + "/skills/skill_1")
+                        .header("Authorization", bearer()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     void author_forwardsPathWorkspaceAndPrincipalUser() throws Exception {
         when(skillService.author(eq(WORKSPACE_ID), eq(USER_ID), any(SkillAuthoringRequest.class), org.mockito.ArgumentMatchers.anyString()))
                 .thenReturn(objectMapper.readTree("{\"status\":\"proposal_ready\",\"name\":\"meeting-notes\"}"));
