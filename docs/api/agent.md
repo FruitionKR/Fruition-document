@@ -499,6 +499,13 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 사용자가 그 계획을 승인해야 실제 문서에 반영한다. 저장을 명시하지 않은 편집 요청은 기존처럼
 `markdown_edit` 미리보기만 반환한다.
 
+`markdown_edit`의 `editorSnapshot.markdown`은 숨겨진 문서 식별 주석을 제외한 본문이다.
+서버는 AI 편집 결과에 `document_edit_states`의 기존 `fruition-note` 또는 `fruition-workspace`
+주석을 붙이고 마지막 줄바꿈을 보장한 저장용 Markdown을 `ready_markdown`으로 기록한다.
+기존 주석이 없는 문서는 편집기와 동일하게 `<!-- fruition-note: {documentId} -->`를 사용한다.
+적용 시에는 이 전체 문자열과 기준 버전이 정확히 일치해야 하며, 본문·주석 변조를 허용하지 않는다.
+자율 Agent Tool은 이미 완성된 저장용 Markdown을 제공하므로 이 편집기 변환을 적용하지 않는다.
+
 #### 3. Auth 필요 여부
 
 - 필요

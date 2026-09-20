@@ -35,6 +35,8 @@ import java.util.Set;
 public class AiTaskResultApplier {
 
     private static final Set<String> MARKDOWN_ACTIONS = Set.of("markdown_create", "markdown_edit");
+    private static final java.util.regex.Pattern NOTE_MARKER = java.util.regex.Pattern.compile(
+            "^(<!--\\s*fruition-(?:note|workspace):\\s*[^\\r\\n]+?\\s*-->)\\r?\\n?");
     private static final Set<String> NON_MUTATING_ACTIONS = Set.of(
             "chat_answer", "conversation_reply", "clarify", "reject", "skill_authoring", "skill_draft_proposal");
     private static final Set<String> AUTONOMOUS_ACTIONS = Set.of("folder_organize", "workspace_workflow");
@@ -209,7 +211,7 @@ public class AiTaskResultApplier {
                                 SET status = 'ready', result = CAST(? AS jsonb), ready_markdown = ?,
                                     error_code = NULL, updated_at = now()
                                 WHERE run_id = ? AND status = 'queued'
-                                """, payload.toString(), expectedMarkdown(event), runId)
+                                """, payload.toString(), expectedStoredMarkdown(event, projection.documentId()), runId)
                         : markAgentFailed(runId, errorCode);
             }
         } else {
@@ -313,6 +315,17 @@ public class AiTaskResultApplier {
         }
         return ACTION_FALLBACK_MESSAGE.getOrDefault(payload.path("action").asText(),
                 "요청을 처리했습니다.");
+    }
+
+    private String expectedStoredMarkdown(JsonNode event, String documentId) {
+        String body = expectedMarkdown(event);
+        if (!"markdown_edit".equals(event.path("payload").path("action").asText())) return body;
+        // 편집기 snapshot은 본문만 담는다. 저장 시 복원되는 주석은 서버 원본에서 가져온다.
+        String stored = jdbcTemplate.queryForObject(
+                "SELECT markdown FROM document_edit_states WHERE document_id = ?", String.class, documentId);
+        var markerMatch = NOTE_MARKER.matcher(Objects.requireNonNull(stored));
+        String marker = markerMatch.find() ? markerMatch.group(1) : "<!-- fruition-note: " + documentId + " -->";
+        return marker + "\n" + body + (body.endsWith("\n") ? "" : "\n");
     }
 
     public static String expectedMarkdown(JsonNode event) {
