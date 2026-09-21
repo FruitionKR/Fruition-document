@@ -1,5 +1,11 @@
 # Backend 변경 기록
 
+## 2026-09-21 (수정: PDF multipart 업로드 AWS 자격 증명)
+
+- 운영(EKS IRSA)에서 `POST /documents/uploads`가 `NullPointerException: AccessKey must not be null`로 500을 반환하던 문제를 수정했습니다. `MultipartStorage`가 `ChainedProvider(AwsEnvironmentProvider, IamAwsProvider)`를 직접 구성해, 환경변수 키가 없을 때 MinIO 8.5.7이 던지는 NPE가 IAM(web identity) 단계로 넘어가지 못했습니다.
+- `MinioConfig.asyncClient`를 추가해 `MinioClient`와 같은 credentials mode·region 검증과 `awsCredentialsProvider` 체인을 multipart 클라이언트에도 적용합니다. 로컬 MinIO(`local` mode)는 기존과 같이 access/secret key를 사용합니다.
+- 회귀 테스트 `MultipartStorageTest`: 정적 AWS 키 없이 web identity 토큰만으로 STS를 거쳐 multipart 시작 요청이 IRSA 자격 증명(`X-Amz-Security-Token` 포함)으로 서명되는지, region 누락·알 수 없는 mode가 거부되는지 검증합니다.
+
 ## 2026-09-21
 
 - PDF S3 multipart 직접 업로드 API(시작·조각 URL 발급·완료)를 추가했습니다. 서버가 파트 번호·크기, 최종 크기·MIME·PDF 헤더, 사용자·workspace를 검증하고 특정 객체 버전을 고정해 S3 내부에서 원본 경로로 복사합니다. 업로드 티켓은 24시간, 조각 URL은 15분 유효합니다.

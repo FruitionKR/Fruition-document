@@ -4,6 +4,7 @@ import com.google.common.collect.HashMultimap;
 import io.minio.*;
 import io.minio.credentials.*;
 import io.minio.messages.Part;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import java.util.*;
 
@@ -11,19 +12,13 @@ import java.util.*;
 @Component
 public class MultipartStorage extends MinioAsyncClient {
     private final StorageProperties properties;
+    @Autowired
     public MultipartStorage(StorageProperties properties) {
-        super(client(properties));
-        this.properties = properties;
+        this(properties, new IamAwsProvider(null, null));
     }
-    private static MinioAsyncClient client(StorageProperties p) {
-        var builder = MinioAsyncClient.builder().endpoint(p.getEndpoint());
-        if ("aws".equals(p.getCredentialsMode())) {
-            builder.region(p.getRegion()).credentialsProvider(new ChainedProvider(
-                    new AwsEnvironmentProvider(), new IamAwsProvider(null, null)));
-        } else {
-            builder.credentials(p.getAccessKey(), p.getSecretKey());
-        }
-        return builder.build();
+    MultipartStorage(StorageProperties properties, Provider iamProvider) {
+        super(MinioConfig.asyncClient(properties, iamProvider));
+        this.properties = properties;
     }
     public String start(String key) throws Exception {
         var headers = HashMultimap.<String, String>create();
