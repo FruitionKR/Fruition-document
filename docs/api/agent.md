@@ -1089,3 +1089,9 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 [↑ 요약으로 돌아가기](#summary-post-internal-agent-tools-read-tool-name)
 
 </details>
+
+## 본인 모델 사용량 조회
+
+`GET /api/workspaces/{workspace_id}/usage/models?from_at=...&to_at=...`
+
+로그인 사용자의 workspace 멤버 권한을 확인한 뒤 AI 내부 `/usage/models`에서 집계를 조회한다. 다른 사용자의 ID를 지정할 수 없다. 기간은 시간대 포함 ISO 8601, 시작 포함·종료 제외이며 생략 시 UTC 이번 달이다. 모델별 입력·출력·캐시·추론 토큰과 실패·미확인 호출 수를 반환한다. 캐시와 추론은 각각 입력과 출력의 부분 집합이므로 중복 합산하지 않는다. 금액 환산은 백엔드 책임이며 현재 응답은 사용량이다. 잘못된 기간 400, 권한 없음 404, AI 장애·빈 응답 503.

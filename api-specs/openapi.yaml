@@ -3309,6 +3309,40 @@ paths:
       summary: Skill 활성화
       tags:
       - Skills
+  /api/workspaces/{workspace_id}/usage/models:
+    get:
+      description: AI 저장소에서 사용량을 조회합니다. 기본 기간은 UTC 이번 달이며 실제 청구액은 포함하지 않습니다.
+      operationId: read_2
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: query
+        name: from_at
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: to_at
+        required: false
+        schema:
+          type: string
+          format: date-time
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/JsonNode"
+          description: OK
+      summary: 본인의 모델별 토큰 사용량 조회
+      tags:
+      - model-usage-controller
   /api/workspaces/{workspace_id}/wiki-schema/active:
     get:
       description: 활성 Schema가 없으면 null을 포함한 200 응답을 반환합니다.
