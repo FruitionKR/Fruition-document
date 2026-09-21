@@ -86,4 +86,58 @@ class MultipartStorageTest {
         props.setCredentialsMode("typo"); props.setRegion("ap-northeast-2");
         assertThrows(IllegalArgumentException.class, () -> new MultipartStorage(props));
     }
+
+    @Test
+    void finishSendsOnlyPartNumberAndEtagFromListedParts() throws Exception {
+        var completeBody = new AtomicReference<String>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            String query = exchange.getRequestURI().getQuery();
+            String body;
+            if ("GET".equals(exchange.getRequestMethod()) && query != null && query.contains("uploadId=")) {
+                body = "<ListPartsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+                        + "<Bucket>test-bucket</Bucket><Key>sources/documents/a/original</Key><UploadId>upload-1</UploadId>"
+                        + "<Initiator><ID>arn:aws:sts::123456789012:assumed-role/test</ID><DisplayName>test</DisplayName></Initiator>"
+                        + "<Owner><ID>owner-id</ID><DisplayName>owner</DisplayName></Owner>"
+                        + "<StorageClass>STANDARD</StorageClass><PartNumberMarker>0</PartNumberMarker>"
+                        + "<NextPartNumberMarker>2</NextPartNumberMarker><MaxParts>1000</MaxParts><IsTruncated>false</IsTruncated>"
+                        + "<Part><PartNumber>1</PartNumber><LastModified>2026-09-21T10:00:00.000Z</LastModified>"
+                        + "<ETag>&quot;etag-1&quot;</ETag><Size>67108864</Size></Part>"
+                        + "<Part><PartNumber>2</PartNumber><LastModified>2026-09-21T10:00:01.000Z</LastModified>"
+                        + "<ETag>&quot;etag-2&quot;</ETag><Size>1048576</Size></Part>"
+                        + "</ListPartsResult>";
+            } else {
+                completeBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                body = "<CompleteMultipartUploadResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+                        + "<Location>http://x/y</Location><Bucket>test-bucket</Bucket>"
+                        + "<Key>sources/documents/a/original</Key><ETag>&quot;final-2&quot;</ETag></CompleteMultipartUploadResult>";
+            }
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var props = new StorageProperties();
+            props.setEndpoint("http://127.0.0.1:" + server.getAddress().getPort()); props.setBucket("test-bucket");
+            props.setAccessKey("local-access"); props.setSecretKey("local-secret"); props.setRegion("ap-northeast-2");
+            var multipart = new MultipartStorage(props);
+            var parts = multipart.parts("sources/documents/a/original", "upload-1");
+            assertEquals(2, parts.size());
+            assertEquals(67108864L, parts.get(0).partSize());
+            multipart.finish("sources/documents/a/original", "upload-1", parts);
+            String xml = completeBody.get();
+            assertTrue(xml.contains("<CompleteMultipartUpload"), xml);
+            assertTrue(xml.contains("<PartNumber>1</PartNumber>"), xml);
+            assertTrue(xml.contains("<PartNumber>2</PartNumber>"), xml);
+            assertTrue(xml.contains("<ETag>etag-1</ETag>") && xml.contains("<ETag>etag-2</ETag>"), xml);
+            assertFalse(xml.contains("<Size>"), xml);
+            assertFalse(xml.contains("<LastModified>"), xml);
+            String unsanitized = io.minio.Xml.marshal(new io.minio.messages.CompleteMultipartUpload(parts.toArray(new io.minio.messages.Part[0])));
+            assertTrue(unsanitized.contains("<Size>67108864</Size>") && unsanitized.contains("<LastModified>"), unsanitized);
+        } finally {
+            server.stop(0);
+        }
+    }
 }

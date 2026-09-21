@@ -40,8 +40,10 @@ public class MultipartStorage extends MinioAsyncClient {
         }
     }
     public void finish(String key, String uploadId, List<Part> parts) throws Exception {
+        // ListParts가 채운 Size/LastModified는 CompleteMultipartUpload 스키마에 없어 AWS S3가 MalformedXML로 거부한다.
+        Part[] completion = parts.stream().map(part -> new Part(part.partNumber(), part.etag())).toArray(Part[]::new);
         completeMultipartUploadAsync(properties.getBucket(), properties.getRegion(), key, uploadId,
-                parts.toArray(Part[]::new), null, null).get();
+                completion, null, null).get();
     }
     public void abort(String key, String uploadId) throws Exception {
         abortMultipartUploadAsync(properties.getBucket(), properties.getRegion(), key, uploadId, null, null).get();
