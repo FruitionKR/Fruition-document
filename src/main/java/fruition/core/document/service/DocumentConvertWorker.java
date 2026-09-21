@@ -30,17 +30,14 @@ public class DocumentConvertWorker {
     @PostConstruct
     public void resetStuckItems() {
         transactionTemplate.execute(status -> {
-            queueRepository.findAllByStatus("processing").forEach(item -> {
-                log.warn("[변환 큐 리셋] document_id={} (서버 재시작으로 인한 stuck 복구)", item.getDocumentId());
-                item.setStatus("pending");
-                queueRepository.save(item);
-            });
+            queueRepository.recoverStale();
             return null;
         });
     }
 
     @Scheduled(fixedDelay = 2000)
     public void processNext() {
+        resetStuckItems();
         DocumentConvertQueue picked = transactionTemplate.execute(status ->
                 queueRepository.findFirstByStatusOrderByCreatedAtAsc("pending")
                         .map(item -> {
@@ -59,8 +56,12 @@ public class DocumentConvertWorker {
             documentService.doConvert(picked.getId(), picked.getDocumentId(), picked.getSourceDocumentId());
         } finally {
             transactionTemplate.execute(status -> {
-                queueRepository.deleteById(picked.getId());
-                log.info("[문서 변환 큐 삭제] documentId={}", picked.getDocumentId());
+                queueRepository.findById(picked.getId()).ifPresent(item -> {
+                    if ("processing".equals(item.getStatus())) {
+                        queueRepository.deleteById(picked.getId());
+                        log.info("[문서 변환 큐 삭제] documentId={}", picked.getDocumentId());
+                    }
+                });
                 return null;
             });
         }
