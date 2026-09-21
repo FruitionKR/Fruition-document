@@ -1,5 +1,11 @@
 # Backend 변경 기록
 
+## 2026-09-22 (수정: PDF multipart 완료 요청 MalformedXML)
+
+- 운영 AWS S3에서 PDF multipart 완료(`POST /documents/uploads/complete`)가 `MalformedXML`로 500을 반환하던 문제를 수정했습니다. `MultipartStorage.finish`가 ListParts 응답에서 역직렬화한 `Part`(Size·LastModified 포함)를 그대로 `CompleteMultipartUpload` 본문으로 직렬화했는데, S3 완료 스키마는 `PartNumber`·`ETag`만 허용합니다. MinIO는 이를 무시해 로컬에서는 드러나지 않았습니다.
+- 완료 요청은 이제 조각 번호와 ETag만 담은 `Part`로 다시 구성합니다. 조각 수·크기·순서 검증은 기존과 같이 ListParts 결과로 수행합니다.
+- 회귀 테스트: AWS 형식 ListParts 응답을 실제 SDK로 역직렬화한 조각으로 완료 요청을 보내고, 전송된 XML에 `Size`·`LastModified`가 없고 `PartNumber`·`ETag`만 있는지 확인합니다. 같은 조각을 그대로 직렬화하면 `Size`·`LastModified`가 포함됨을 대조합니다.
+
 ## 2026-09-21 (수정: PDF multipart 업로드 AWS 자격 증명)
 
 - 운영(EKS IRSA)에서 `POST /documents/uploads`가 `NullPointerException: AccessKey must not be null`로 500을 반환하던 문제를 수정했습니다. `MultipartStorage`가 `ChainedProvider(AwsEnvironmentProvider, IamAwsProvider)`를 직접 구성해, 환경변수 키가 없을 때 MinIO 8.5.7이 던지는 NPE가 IAM(web identity) 단계로 넘어가지 못했습니다.
