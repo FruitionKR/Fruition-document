@@ -86,8 +86,10 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
@@ -208,14 +210,14 @@ public class DocumentService {
         String objectPath = null;
         boolean objectStored = false;
         try {
-            byte[] bytes = file.getBytes();
             String filename = file.getOriginalFilename();
             validateFilename(filename);
             String mimeType = resolveMimeType(file);
             boolean markdownUpload = isMarkdown(filename, mimeType);
             DocumentEditingRules.MarkdownContent markdownContent =
-                    markdownUpload ? DocumentEditingRules.markdown(bytes) : null;
-            String contentHash = markdownUpload ? markdownContent.contentHash() : sha256(bytes);
+                    markdownUpload ? readUploadedMarkdown(file) : null;
+            String contentHash = markdownUpload ? markdownContent.contentHash()
+                    : file instanceof StoredOriginal stored ? stored.storageFingerprint() : uploadedFileHash(file);
             String endpointScope = uploadEndpointScope(workspaceId);
             String requestHash = requestHash(
                     filename.trim(), mimeType, contentHash, String.valueOf(folderId));
@@ -232,14 +234,16 @@ public class DocumentService {
             String documentId = newDocumentId();
             objectPath = "sources/documents/" + documentId + "/original";
             log.info("[문서 원본 저장 시작] documentId={} bucket={} objectPath={} mimeType={} byteSize={}",
-                    documentId, storageProps.getBucket(), objectPath, mimeType, bytes.length);
+                    documentId, storageProps.getBucket(), objectPath, mimeType, file.getSize());
 
-            try (InputStream inputStream = new ByteArrayInputStream(bytes)) {
+            if (file instanceof StoredOriginal stored) {
+                stored.copyTo(objectPath);
+            } else try (InputStream inputStream = file.getInputStream()) {
                 minioClient.putObject(
                         PutObjectArgs.builder()
                                 .bucket(storageProps.getBucket())
                                 .object(objectPath)
-                                .stream(inputStream, bytes.length, -1)
+                                .stream(inputStream, file.getSize(), 16L * 1024 * 1024)
                                 .contentType(mimeType)
                                 .build()
                 );
@@ -254,7 +258,7 @@ public class DocumentService {
                     userId,
                     filename.trim(),
                     mimeType,
-                    bytes.length,
+                    file.getSize(),
                     objectPath,
                     contentHash
             );
@@ -407,6 +411,29 @@ public class DocumentService {
             );
         } catch (Exception e) {
             log.warn("초기 노트 저장 실패로 건너뜁니다. workspaceId={}", workspaceId, e);
+        }
+    }
+
+    private DocumentEditingRules.MarkdownContent readUploadedMarkdown(MultipartFile file) throws IOException {
+        // 편집 본문은 DB·diff 처리 한도를 유지하고, 읽기 전에 크기를 검사한다.
+        if (file.getSize() > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
+            throw new MarkdownContentTooLargeException("Markdown 본문은 UTF-8 기준 5MB 이하여야 합니다.");
+        }
+        try (InputStream stream = file.getInputStream()) {
+            return DocumentEditingRules.markdown(stream.readNBytes(DocumentEditingRules.MAX_MARKDOWN_BYTES + 1));
+        }
+    }
+
+    private String uploadedFileHash(MultipartFile file) throws IOException {
+        try (InputStream stream = file.getInputStream()) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[64 * 1024];
+            for (int length; (length = stream.read(buffer)) != -1;) {
+                digest.update(buffer, 0, length);
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 알고리즘을 사용할 수 없습니다.", e);
         }
     }
 
@@ -892,6 +919,21 @@ public class DocumentService {
         return response;
     }
 
+    public String originalReadUrl(String workspaceId, String userId, String documentId) {
+        verifyWorkspaceOwnership(workspaceId, userId);
+        Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                .orElseThrow(() -> new DocumentNotFoundException(documentId));
+        if (!"aws".equals(storageProps.getCredentialsMode()) || !isPdf(document)) return null;
+        try {
+            return minioClient.getPresignedObjectUrl(io.minio.GetPresignedObjectUrlArgs.builder()
+                    .bucket(storageProps.getBucket()).object(normalizeObjectKey(document.getSourceUri()))
+                    .method(io.minio.http.Method.GET).expiry(3600)
+                    .extraQueryParams(java.util.Map.of("response-content-type", "application/pdf",
+                            "response-content-disposition", "inline"))
+                    .build());
+        } catch (Exception e) { throw new DocumentConvertException("원본 읽기 URL 발급 실패", e); }
+    }
+
     private boolean isPdf(Document document) {
         return "application/pdf".equals(document.getMimeType())
                 || document.getNormalizedFilename().endsWith(".pdf");
@@ -921,6 +963,10 @@ public class DocumentService {
             Document source = documentRepository.findById(sourceDocumentId)
                     .orElseThrow(() -> new DocumentConvertException(
                             "원본 문서를 찾을 수 없습니다: " + sourceDocumentId));
+            if ("aws".equals(storageProps.getCredentialsMode())) {
+                doConvertBatches(queueId, placeholder, source);
+                return;
+            }
             byte[] pdfBytes = readOriginalBytes(source);
             log.info("[문서 변환 시작] documentId={} sourceDocumentId={} pdfByteSize={}",
                     documentId, sourceDocumentId, pdfBytes.length);
@@ -938,13 +984,173 @@ public class DocumentService {
             Instant now = Instant.now();
             transactionTemplate.execute(status -> {
                 if (!taskWriter.join("convert:" + documentId)) return null;
-                documentRepository.findByIdInActiveWorkspace(documentId).ifPresent(doc ->
-                        doc.markProcessingFailed("PDF 변환에 실패했습니다: " + e.getMessage(), now));
+                documentRepository.findByIdInActiveWorkspace(documentId).ifPresent(doc -> {
+                    // 일부 분할 문서가 이미 AI 큐에 등록된 뒤의 실패는 진행 중인 AI 상태를 덮어쓰지 않는다.
+                    if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
+                        doc.markProcessingFailed("PDF 변환에 실패했습니다: " + e.getMessage(), now);
+                    }
+                });
+                return null;
+            });
+            transactionTemplate.execute(status -> {
+                convertQueueRepository.findById(queueId).ifPresent(item -> { item.retry(); convertQueueRepository.save(item); });
                 return null;
             });
             log.warn("[문서 변환 실패 반영] documentId={} sourceDocumentId={} error={}",
                     documentId, sourceDocumentId, e.getMessage());
         }
+    }
+
+    private void doConvertBatches(long queueId, Document placeholder, Document source) throws Exception {
+        var queue = convertQueueRepository.findById(queueId).orElseThrow();
+        int completed = queue.getCompletedPages();
+        transactionTemplate.execute(status -> {
+            if (taskWriter.join("convert:" + placeholder.getId())) {
+                documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc -> {
+                    if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
+                        doc.updateStatus(DocumentStatus.processing, null, null, null);
+                    }
+                });
+            }
+            return null;
+        });
+        var model = workspaceAiModelClient.get(placeholder.getWorkspaceId());
+        java.util.concurrent.atomic.AtomicLong lastTouch = new java.util.concurrent.atomic.AtomicLong();
+        java.util.function.BooleanSupplier active = () -> {
+            if (!taskWriter.active("convert:" + placeholder.getId())) return false;
+            long now = System.currentTimeMillis();
+            if (now - lastTouch.get() > 10000 && lastTouch.getAndSet(now) != now) {
+                transactionTemplate.execute(status -> {
+                    convertQueueRepository.findById(queueId).ifPresent(item -> { item.heartbeat(); convertQueueRepository.save(item); });
+                    documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc ->
+                            doc.markProcessingHeartbeat("PDF 페이지 묶음 변환 중", Instant.now()));
+                    return null;
+                });
+            }
+            return true;
+        };
+        while (active.getAsBoolean()) {
+            // 페이지 묶음마다 새 서명을 발급하므로 수 시간 변환에도 URL이 만료되지 않는다.
+            String url = minioClient.getPresignedObjectUrl(io.minio.GetPresignedObjectUrlArgs.builder()
+                    .bucket(storageProps.getBucket()).object(normalizeObjectKey(source.getSourceUri()))
+                    .method(io.minio.http.Method.GET).expiry(3600).build());
+            var batch = converterClient.convertSourceBatch(url, source.getByteSize(), model.provider(), model.model(), completed, active);
+            if (batch.page_start() != completed + 1 || (batch.done() && batch.page_end() != batch.total_pages())
+                    || batch.page_end() < completed || batch.total_pages() < batch.page_end()
+                    || (!batch.done() && batch.page_end() == completed)) {
+                throw new DocumentConvertException("변환 페이지 체크포인트가 올바르지 않습니다.");
+            }
+            if (batch.page_end() > completed) saveConvertedBatch(queueId, placeholder, batch);
+            completed = batch.page_end();
+            if (batch.done()) {
+                transactionTemplate.execute(status -> {
+                    if (!taskWriter.join("convert:" + placeholder.getId())) return null;
+                    documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc -> {
+                        var content = editStateRepository.findById(doc.getId()).orElseThrow();
+                        if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
+                            doc.completeConvert(content.getContentHash(), content.getMarkdown().getBytes(StandardCharsets.UTF_8).length, Instant.now());
+                        }
+                    });
+                    return null;
+                });
+                // 각각의 본문 묶음을 기존 AI 큐로 보낸다. 한 LLM 요청에 전체 PDF를 넣지 않는다.
+                java.util.List<Document> parts = new java.util.ArrayList<>();
+                parts.add(documentRepository.findById(placeholder.getId()).orElseThrow());
+                parts.addAll(documentRepository.findConvertedParts(placeholder.getWorkspaceId(), placeholder.getId()));
+                for (Document part : parts) {
+                    transactionTemplate.execute(status -> {
+                        if (!taskWriter.join("convert:" + placeholder.getId())) return null;
+                        Document doc = documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
+                                .filter(value -> value.getDeletedAt() == null).orElse(null);
+                        if (doc != null && (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:"))) {
+                            var content = editStateRepository.findById(doc.getId()).orElseThrow();
+                            doc.reopenForReingest(content.getContentHash(), content.getMarkdown().getBytes(StandardCharsets.UTF_8).length);
+                            enqueueIngest(doc);
+                        }
+                        return null;
+                    });
+                }
+                transactionTemplate.execute(status -> {
+                    if (taskWriter.join("convert:" + placeholder.getId())) taskWriter.complete("convert:" + placeholder.getId());
+                    return null;
+                });
+                return;
+            }
+        }
+    }
+
+    private void saveConvertedBatch(long queueId, Document parent, ConverterClient.Batch batch) {
+        transactionTemplate.execute(status -> {
+            if (!taskWriter.join("convert:" + parent.getId())) return null;
+            var checkpoint = convertQueueRepository.findById(queueId).orElseThrow();
+            if (checkpoint.getCompletedPages() >= batch.page_end()) return null;
+            var chunks = ConvertedMarkdownChunks.split(externalizeConvertedImages(parent, batch.markdown()));
+            for (int index = 0; index < chunks.size(); index++) {
+                var content = DocumentEditingRules.markdown(chunks.get(index));
+                boolean first = batch.page_start() == 1 && index == 0;
+                String id = first ? parent.getId() : "doc_" + UUID.nameUUIDFromBytes(
+                        (parent.getId() + ":" + batch.page_start() + ":" + index).getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
+                if (first) {
+                    var result = postgresDocumentEditStore.save(parent.getWorkspaceId(), id, content.markdown(),
+                            content.contentHash(), 1L, "convert:" + queueId, parent.getUserId(), null);
+                    if (!result.replayed()) projectContentVersions(id, content.markdown(), result);
+                    storeMarkdownSource(id, content.bytes());
+                } else if (!documentRepository.existsById(id)) {
+                    String base = parent.getDisplayName();
+                    base = base.substring(0, Math.min(170, base.length()));
+                    String filename = base + " [" + batch.page_start() + "-" + batch.page_end() + ", " + (index + 1)
+                            + ", " + parent.getId().substring(parent.getId().length() - 6) + "].md";
+                    var child = new Document(id, parent.getWorkspaceId(), parent.getUserId(), filename, "text/markdown",
+                            content.bytes().length, storeMarkdownSource(id, content.bytes()), content.contentHash(), "convert_part");
+                    child.initializeDuplicate(parent.getId(), parent.getFolderId(), content.contentHash(), content.bytes().length,
+                            placementSortOrder(parent.getWorkspaceId(), parent.getFolderId(), DocumentRole.EDITABLE));
+                    documentRepository.save(child);
+                    editStateRepository.save(new DocumentEditState(id, content.markdown(), content.contentHash(), 1));
+                }
+            }
+                // 모든 분할 문서의 이미지 참조를 등록해 조회 권한·orphan 수거와 연결한다.
+            for (int index = 0; index < chunks.size(); index++) {
+                String id = batch.page_start() == 1 && index == 0 ? parent.getId() : "doc_" + UUID.nameUUIDFromBytes(
+                        (parent.getId() + ":" + batch.page_start() + ":" + index).getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
+                assetReferenceSynchronizer.synchronize(id, parent.getWorkspaceId(), assetReferenceParser.parse(chunks.get(index)));
+            }
+            checkpoint.checkpoint(batch.page_end(), batch.total_pages());
+            convertQueueRepository.save(checkpoint);
+            documentRepository.findById(parent.getId()).ifPresent(doc -> doc.markProcessingHeartbeat(
+                    "PDF " + batch.page_end() + "/" + batch.total_pages() + "페이지 변환 완료", Instant.now()));
+            return null;
+        });
+    }
+
+    private String externalizeConvertedImages(Document parent, String markdown) {
+        var pattern = java.util.regex.Pattern.compile("data:(image/(?:png|jpeg|gif));base64,([A-Za-z0-9+/=]+)");
+        var matcher = pattern.matcher(markdown);
+        StringBuilder output = new StringBuilder();
+        while (matcher.find()) {
+            byte[] bytes = java.util.Base64.getDecoder().decode(matcher.group(2));
+            String hash = sha256(bytes);
+            UUID id = UUID.nameUUIDFromBytes((parent.getWorkspaceId() + ":" + hash).getBytes(StandardCharsets.UTF_8));
+            String key = "assets/" + parent.getWorkspaceId() + "/" + id + "/content";
+            if (!assetRepository.existsById(id)) {
+                try (var image = javax.imageio.ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
+                    var readers = javax.imageio.ImageIO.getImageReaders(image);
+                    if (!readers.hasNext()) throw new DocumentConvertException("변환 이미지 형식을 읽을 수 없습니다.");
+                    var reader = readers.next();
+                    int width, height;
+                    try { reader.setInput(image); width = reader.getWidth(0); height = reader.getHeight(0); }
+                    finally { reader.dispose(); }
+                    minioClient.putObject(PutObjectArgs.builder().bucket(storageProps.getBucket()).object(key)
+                            .stream(new ByteArrayInputStream(bytes), bytes.length, -1).contentType(matcher.group(1)).build());
+                    registerMinioRollbackCleanup(key);
+                    assetRepository.save(new fruition.core.document.domain.DocumentAsset(id, parent.getWorkspaceId(),
+                            parent.getUserId(), "converted-" + id, matcher.group(1), bytes.length, width, height, hash, key, Instant.now()));
+                } catch (Exception e) { throw new DocumentConvertException("변환 이미지 저장 실패", e); }
+            }
+            matcher.appendReplacement(output, java.util.regex.Matcher.quoteReplacement(
+                    "/api/workspaces/" + parent.getWorkspaceId() + "/assets/" + id + "/content"));
+        }
+        matcher.appendTail(output);
+        return output.toString();
     }
 
     private byte[] readOriginalBytes(Document source) {

@@ -1326,6 +1326,111 @@ paths:
       summary: 문서 휴지통
       tags:
       - Documents
+  /api/workspaces/{workspace_id}/documents/uploads:
+    post:
+      operationId: start
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/StartResponse"
+          description: OK
+      tags:
+      - document-direct-upload-controller
+  /api/workspaces/{workspace_id}/documents/uploads/abort:
+    post:
+      operationId: abort
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+      tags:
+      - document-direct-upload-controller
+  /api/workspaces/{workspace_id}/documents/uploads/complete:
+    post:
+      operationId: complete
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentUploadResponse"
+          description: Created
+      tags:
+      - document-direct-upload-controller
+  /api/workspaces/{workspace_id}/documents/uploads/parts:
+    post:
+      operationId: parts
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PartsRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/PartsResponse"
+          description: OK
+      tags:
+      - document-direct-upload-controller
   /api/workspaces/{workspace_id}/documents/{document_id}:
     delete:
       description: 원본과 편집 상태를 유지한 채 문서를 소프트 삭제합니다.
@@ -1939,6 +2044,31 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
           description: "문서, 원본 파일 또는 워크스페이스를 찾을 수 없음"
       summary: 원본 문서 조회
+      tags:
+      - Documents
+  /api/workspaces/{workspace_id}/documents/{document_id}/original-url:
+    get:
+      operationId: originalReadUrl
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: document_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OriginalReadUrl"
+          description: OK
       tags:
       - Documents
   /api/workspaces/{workspace_id}/documents/{document_id}/position:
@@ -4461,6 +4591,11 @@ components:
           - saved
           - skipped
           example: saved
+    CompleteRequest:
+      type: object
+      properties:
+        ticket:
+          type: string
     ContributionRequest:
       type: object
       properties:
@@ -5824,6 +5959,37 @@ components:
         next_cursor:
           type: string
           description: 다음 페이지를 받을 커서. null이면 마지막 페이지다.
+    OriginalReadUrl:
+      type: object
+      properties:
+        url:
+          type: string
+    PartUrl:
+      type: object
+      properties:
+        part_number:
+          type: integer
+          format: int32
+        url:
+          type: string
+    PartsRequest:
+      type: object
+      properties:
+        count:
+          type: integer
+          format: int32
+        first_part:
+          type: integer
+          format: int32
+        ticket:
+          type: string
+    PartsResponse:
+      type: object
+      properties:
+        parts:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartUrl"
     PendingSkillProposal:
       type: object
       description: 사용자 확인 대기 중인 Skill 제안
@@ -6534,6 +6700,28 @@ components:
           type: string
           description: 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+    StartRequest:
+      type: object
+      properties:
+        filename:
+          type: string
+        folder_id:
+          type: string
+          format: uuid
+        size:
+          type: integer
+          format: int64
+    StartResponse:
+      type: object
+      properties:
+        part_count:
+          type: integer
+          format: int32
+        part_size:
+          type: integer
+          format: int64
+        ticket:
+          type: string
     Target:
       type: object
       description: 편집 대상 범위(1-based 줄 번호)

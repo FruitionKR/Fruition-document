@@ -698,6 +698,33 @@ class DocumentServiceBlocksTest {
     }
 
     @Test
+    void largePdfUsesStreamsWithoutAllocatingWholeFile() throws Exception {
+        stubOwnedWorkspace();
+        when(storageProps.getBucket()).thenReturn("test-bucket");
+        when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.ORIGINAL)).thenReturn(-1L);
+        var file = mock(org.springframework.web.multipart.MultipartFile.class);
+        when(file.getOriginalFilename()).thenReturn("large.pdf");
+        when(file.getContentType()).thenReturn("application/pdf");
+        long size = 60L * 1024 * 1024;
+        when(file.getSize()).thenReturn(size);
+        when(file.getInputStream()).thenAnswer(inv -> new java.io.InputStream() {
+            long remaining = size;
+            public int read() { return remaining-- > 0 ? 0 : -1; }
+            public int read(byte[] b, int off, int len) {
+                if (remaining <= 0) return -1;
+                int count = (int) Math.min(remaining, len);
+                java.util.Arrays.fill(b, off, off + count, (byte) 0);
+                remaining -= count;
+                return count;
+            }
+        });
+        documentService.upload(WORKSPACE_ID, USER_ID, "large-pdf-key", null, file);
+        verify(file, never()).getBytes();
+        verify(file, times(2)).getInputStream();
+        verify(minioClient).putObject(org.mockito.ArgumentMatchers.argThat(args -> args.objectSize() == size));
+    }
+
+    @Test
     @DisplayName("Markdown 본문 저장은 편집 상태와 현재 버전을 함께 갱신한다")
     void saveContent_changed_updatesContentAndVersion() {
         stubOwnedWorkspace();

@@ -115,5 +115,36 @@ public class ConverterClient {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Batch(int page_start, int page_end, int total_pages, String markdown,
+                        boolean heartbeat, boolean done, String error) {}
+
+    public Batch convertSourceBatch(String sourceUrl, long byteSize, String provider, String model,
+            int startPage, java.util.function.BooleanSupplier active) {
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var request = executor.submit(() -> restClient.post().uri("/convert-source-batch")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(java.util.Map.of("source_url", sourceUrl, "byte_size", byteSize,
+                            "provider", provider, "model", model, "start_page", startPage))
+                    .retrieve().body(Batch.class));
+            try {
+                while (active.getAsBoolean()) {
+                    try {
+                        Batch batch = request.get(1, java.util.concurrent.TimeUnit.SECONDS);
+                        if (batch == null || batch.markdown() == null) throw new DocumentConvertException("빈 변환 응답");
+                        return batch;
+                    } catch (java.util.concurrent.TimeoutException pending) { /* cancellation/heartbeat */ }
+                }
+                throw new java.util.concurrent.CancellationException("변환 작업이 취소되었습니다.");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new DocumentConvertException("변환 대기가 중단되었습니다.", e);
+            } catch (java.util.concurrent.ExecutionException e) {
+                // source URL의 credentials가 예외 메시지로 노출되지 않게 요청 본문을 기록하지 않는다.
+                throw new DocumentConvertException("페이지 묶음 변환 실패", e.getCause());
+            } finally { request.cancel(true); }
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     record ConvertResponse(String markdown) {}
 }
