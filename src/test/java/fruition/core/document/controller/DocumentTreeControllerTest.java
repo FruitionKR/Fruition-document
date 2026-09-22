@@ -79,7 +79,7 @@ class DocumentTreeControllerTest {
                 Instant.parse("2026-08-17T00:00:30Z"),
                 null, "run_1", DocumentProcessingState.completed, null,
                 "pages", "page", "메모", "md", DocumentRole.EDITABLE, true, 3L, null,
-                Instant.parse("2026-08-17T00:02:00Z"), true);
+                Instant.parse("2026-08-17T00:02:00Z"), true, null);
     }
 
     @Test

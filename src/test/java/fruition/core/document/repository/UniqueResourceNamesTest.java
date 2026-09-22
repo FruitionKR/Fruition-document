@@ -54,12 +54,13 @@ class UniqueResourceNamesTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"보고서.md", " 보고서.MD ", "보고서.md"})
-    void documentsAreUniqueAcrossFoldersAndUnicodeForms(String duplicate) {
+    void documentsAreUniqueOnlyWithinTheirParentAndAcrossUnicodeForms(String duplicate) {
         String workspace = UUID.randomUUID().toString();
         UUID folder = folder(workspace, "자료", null);
         document(workspace, "보고서.md", null);
-        assertThatThrownBy(() -> document(workspace, duplicate, folder))
-                .isInstanceOf(DuplicateKeyException.class).hasMessageContaining("uq_documents_active_name");
+        document(workspace, duplicate, folder);
+        assertThatThrownBy(() -> document(workspace, duplicate, null))
+                .isInstanceOf(DuplicateKeyException.class).hasMessageContaining("uq_document_tree_active_name");
         document(UUID.randomUUID().toString(), duplicate, null);
         document(workspace, "보고서.pdf", null);
     }
@@ -80,16 +81,17 @@ class UniqueResourceNamesTest {
     }
 
     @Test
-    void foldersAreUniqueAcrossParentsAndRestoreIsAtomic() {
+    void foldersAreUniqueOnlyWithinTheirParentAndRestoreIsAtomic() {
         String workspace = UUID.randomUUID().toString();
         UUID first = folder(workspace, "운영", null);
         UUID second = folder(workspace, "자료", null);
-        assertThatThrownBy(() -> folder(workspace, "운영", second))
-                .isInstanceOf(DuplicateKeyException.class).hasMessageContaining("uq_folders_active_name");
+        folder(workspace, "운영", second);
+        assertThatThrownBy(() -> folder(workspace, "운영", null))
+                .isInstanceOf(DuplicateKeyException.class).hasMessageContaining("uq_document_tree_active_name");
         assertThatThrownBy(() -> jdbc.update("UPDATE folders SET name = '운영' WHERE id = ?", second))
                 .isInstanceOf(DuplicateKeyException.class);
         jdbc.update("UPDATE folders SET deleted_at = now() WHERE id = ?", first);
-        folder(workspace, "운영", second);
+        folder(workspace, "운영", null);
         assertThatThrownBy(() -> jdbc.update("UPDATE folders SET deleted_at = NULL WHERE id = ?", first))
                 .isInstanceOf(DuplicateKeyException.class);
         folder(UUID.randomUUID().toString(), "운영", null);
@@ -117,4 +119,109 @@ class UniqueResourceNamesTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM documents WHERE workspace_id = ?", Integer.class, workspace))
                 .isEqualTo(1);
     }
+
+    @Test
+    void filesAndFoldersShareOneNamespaceButExtensionsRemainDistinct() {
+        String workspace = UUID.randomUUID().toString();
+        UUID parent = folder(workspace, "parent", null);
+        document(workspace, "Report.md", parent);
+        assertThatThrownBy(() -> folder(workspace, "report.MD", parent))
+                .isInstanceOf(DuplicateKeyException.class).hasMessageContaining("uq_document_tree_active_name");
+        folder(workspace, "report", parent);
+        document(workspace, "report.pdf", parent);
+        folder(workspace, "report.md", null);
+        assertThatThrownBy(() -> document(workspace, "REPORT.MD", null))
+                .isInstanceOf(DuplicateKeyException.class);
+    }
+
+    @Test
+    void movesCheckDestinationAcrossKindsAndReleaseTheOldName() {
+        String workspace = UUID.randomUUID().toString();
+        UUID parent = folder(workspace, "parent", null);
+        UUID target = folder(workspace, "target", null);
+        String doc = document(workspace, "Report.md", parent);
+        UUID collision = folder(workspace, "report.md", target);
+        assertThatThrownBy(() -> jdbc.update("UPDATE documents SET folder_id = ? WHERE id = ?", target, doc))
+                .isInstanceOf(DuplicateKeyException.class);
+        assertThat(jdbc.queryForObject("SELECT folder_id FROM documents WHERE id = ?", UUID.class, doc))
+                .isEqualTo(parent);
+        assertThatThrownBy(() -> jdbc.update("UPDATE folders SET parent_folder_id = ? WHERE id = ?", parent, collision))
+                .isInstanceOf(DuplicateKeyException.class);
+        jdbc.update("UPDATE documents SET folder_id = NULL WHERE id = ?", doc);
+        folder(workspace, "report.md", parent);
+        assertThatThrownBy(() -> jdbc.update("UPDATE folders SET parent_folder_id = NULL WHERE id = ?", collision))
+                .isInstanceOf(DuplicateKeyException.class);
+    }
+
+    @Test
+    void crossKindRenamesRestoreAndHardDeleteMaintainTheNamespace() {
+        String workspace = UUID.randomUUID().toString();
+        String doc = document(workspace, "Report.md", null);
+        UUID folder = folder(workspace, "other", null);
+        assertThatThrownBy(() -> jdbc.update("UPDATE folders SET name = 'report.md' WHERE id = ?", folder))
+                .isInstanceOf(DuplicateKeyException.class);
+        assertThatThrownBy(() -> jdbc.update("UPDATE documents SET filename = 'OTHER' WHERE id = ?", doc))
+                .isInstanceOf(DuplicateKeyException.class);
+        jdbc.update("UPDATE documents SET deleted_at = now() WHERE id = ?", doc);
+        jdbc.update("UPDATE folders SET name = 'report.md' WHERE id = ?", folder);
+        assertThatThrownBy(() -> jdbc.update("UPDATE documents SET deleted_at = NULL WHERE id = ?", doc))
+                .isInstanceOf(DuplicateKeyException.class);
+        jdbc.update("DELETE FROM folders WHERE id = ?", folder);
+        jdbc.update("UPDATE documents SET deleted_at = NULL WHERE id = ?", doc);
+        jdbc.update("DELETE FROM documents WHERE id = ?", doc);
+        folder(workspace, "REPORT.MD", null);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM document_tree_names WHERE workspace_id = ?",
+                Integer.class, workspace)).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentFileAndFolderCreatesCommitExactlyOneItem() throws Exception {
+        String workspace = UUID.randomUUID().toString();
+        var barrier = new CyclicBarrier(2);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var first = executor.submit(() -> {
+                barrier.await(5, TimeUnit.SECONDS);
+                try { document(workspace, "Report.md", null); return true; }
+                catch (DuplicateKeyException expected) { return false; }
+            });
+            var second = executor.submit(() -> {
+                barrier.await(5, TimeUnit.SECONDS);
+                try { folder(workspace, "report.MD", null); return true; }
+                catch (DuplicateKeyException expected) { return false; }
+            });
+            assertThat(java.util.List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(true, false);
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM document_tree_names WHERE workspace_id = ?",
+                Integer.class, workspace)).isEqualTo(1);
+    }
+
+
+    @Test
+    void concurrentMovesIntoTheSameParentCommitOnlyOneItem() throws Exception {
+        String workspace = UUID.randomUUID().toString();
+        UUID a = folder(workspace, "a", null);
+        UUID b = folder(workspace, "b", null);
+        UUID target = folder(workspace, "target", null);
+        String doc = document(workspace, "Report.md", a);
+        UUID dir = folder(workspace, "report.MD", b);
+        var barrier = new CyclicBarrier(2);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var first = executor.submit(() -> {
+                barrier.await(5, TimeUnit.SECONDS);
+                try { jdbc.update("UPDATE documents SET folder_id = ? WHERE id = ?", target, doc); return true; }
+                catch (DuplicateKeyException expected) { return false; }
+            });
+            var second = executor.submit(() -> {
+                barrier.await(5, TimeUnit.SECONDS);
+                try { jdbc.update("UPDATE folders SET parent_folder_id = ? WHERE id = ?", target, dir); return true; }
+                catch (DuplicateKeyException expected) { return false; }
+            });
+            assertThat(java.util.List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(true, false);
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM document_tree_names WHERE workspace_id = ? AND parent_folder_id = ?",
+                Integer.class, workspace, target)).isEqualTo(1);
+    }
+
 }

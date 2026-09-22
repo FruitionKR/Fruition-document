@@ -8,6 +8,7 @@ import fruition.core.document.domain.DocumentStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
+import java.util.UUID;
 import java.util.List;
 
 public record DocumentListResponse(
@@ -108,6 +109,11 @@ public record DocumentListResponse(
             @JsonProperty("needs_reingest")
             @Schema(description = "마지막 ingest 이후 편집본이 바뀌어 재분석이 필요한지 여부. 편집 가능 문서만 true가 될 수 있다.",
                     example = "false")
-            boolean needsReingest
+            boolean needsReingest,
+
+            @JsonProperty("folder_id")
+            @JsonInclude(JsonInclude.Include.ALWAYS)
+            @Schema(description = "부모 폴더 ID. 루트면 null이다.", nullable = true)
+            UUID folderId
     ) {}
 }

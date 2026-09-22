@@ -358,7 +358,7 @@ public class DocumentService {
         }
 
         Set<String> existingNames = new java.util.HashSet<>(
-                documentRepository.findActiveNormalizedFilenames(workspaceId));
+                documentRepository.findActiveSiblingNames(workspaceId, source.getFolderId()));
         DocumentEditingRules.Filename duplicateFilename =
                 DocumentEditingRules.duplicateFilename(source.getDisplayName(), existingNames);
         long sortOrder = siblings.stream()
@@ -525,7 +525,8 @@ public class DocumentService {
                 document.getUploadedAt(),
                 editable,
                 document.getCurrentVersion(),
-                document.getDocumentRole()
+                document.getDocumentRole(),
+                document.getFolderId()
         );
     }
 
@@ -727,7 +728,7 @@ public class DocumentService {
         }
         // 자기 이름은 후보에서 뺀다. 넣어 두면 두 번째 호출이 자기 자신과 충돌한 것으로 보고 (2)를 붙인다.
         String filename = uniqueChatExportFilename(
-                document.getWorkspaceId(), title, document.getNormalizedFilename());
+                document.getWorkspaceId(), document.getFolderId(), title, document.getNormalizedFilename());
         if (filename.equals(document.getFilename())) {
             return;
         }
@@ -737,7 +738,7 @@ public class DocumentService {
     }
 
     /**
-     * 채팅 export 문서 이름을 만든다. 채팅에서 온 문서임을 알리는 접두사를 붙이고, 워크스페이스의 기존 문서와
+     * 채팅 export 문서 이름을 만든다. 채팅에서 온 문서임을 알리는 접두사를 붙이고, 같은 폴더의 기존 항목과
      * 겹치면 {@code (2)}를 더한다. export 시점과 이름 확정 시점이 모두 이 경로를 지나 접두사가 유지된다.
      *
      * <p>이름은 세션 제목이나 AI가 만든 페이지 제목에서 오므로 파일명에 못 쓰는 문자가 섞일 수 있어
@@ -745,9 +746,9 @@ public class DocumentService {
      *
      * <p>동시에 같은 이름을 선택하는 경합은 DB 고유 제약으로 거절한다.
      */
-    private String uniqueChatExportFilename(String workspaceId, String displayName,
+    private String uniqueChatExportFilename(String workspaceId, UUID folderId, String displayName,
                                             String excludedNormalizedFilename) {
-        Set<String> existingNames = documentRepository.findActiveNormalizedFilenames(workspaceId).stream()
+        Set<String> existingNames = documentRepository.findActiveSiblingNames(workspaceId, folderId).stream()
                 .filter(name -> excludedNormalizedFilename == null || !name.equals(
                         java.text.Normalizer.normalize(excludedNormalizedFilename.trim(), java.text.Normalizer.Form.NFC)
                                 .toLowerCase(java.util.Locale.ROOT)))
@@ -806,7 +807,7 @@ public class DocumentService {
         byte[] bytes = markdown.getBytes(StandardCharsets.UTF_8);
 
         Document candidate = new Document(
-                documentId, workspaceId, userId, uniqueChatExportFilename(workspaceId, displayName, null),
+                documentId, workspaceId, userId, uniqueChatExportFilename(workspaceId, null, displayName, null),
                 "text/markdown", bytes.length, objectPath, contentHash, "chat_export");
         candidate.assignSelectionMode(CHAT_EXPORT_SELECTION_MODE);
         candidate.updateStatus(DocumentStatus.uploaded, null, null, null);
@@ -1322,7 +1323,8 @@ public class DocumentService {
                 doc.getSourceDocumentId(),
                 editState.map(DocumentEditState::getUpdatedAt).orElse(doc.getUpdatedAt()),
                 editState.map(DocumentEditState::getMarkdown).orElse(null),
-                editLockService.getStatus(doc.getId())
+                editLockService.getStatus(doc.getId()),
+                doc.getFolderId()
         );
     }
 

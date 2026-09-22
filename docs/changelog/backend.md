@@ -1,5 +1,11 @@
 # Backend 변경 기록
 
+## 2026-09-22 (기능: 부모 폴더별 파일·폴더 이름)
+
+- V51에서 파일과 폴더가 부모별 공유 namespace를 사용합니다. 같은 부모의 대소문자·NFC 정규화 이름 충돌은 409로 거절하고 다른 부모의 동명 항목은 허용합니다.
+- 문서 업로드·목록·상세 및 트리 응답에 `folder_id`를 추가하고, 복제·채팅 문서 자동 이름도 같은 부모를 기준으로 선택합니다.
+- 전체 898개 테스트를 통과했습니다. 기존 교차 종류 이름 충돌은 migration을 중단하며 자동 삭제·이름 변경하지 않습니다. 배포 전 조회와 DB 권한 주의사항은 `docs/db/v51-folder-names-2026-09-22.md`를 참고하세요.
+
 ## 2026-09-22 (수정: PDF multipart 완료 요청 MalformedXML)
 
 - 운영 AWS S3에서 PDF multipart 완료(`POST /documents/uploads/complete`)가 `MalformedXML`로 500을 반환하던 문제를 수정했습니다. `MultipartStorage.finish`가 ListParts 응답에서 역직렬화한 `Part`(Size·LastModified 포함)를 그대로 `CompleteMultipartUpload` 본문으로 직렬화했는데, S3 완료 스키마는 `PartNumber`·`ETag`만 허용합니다. MinIO는 이를 무시해 로컬에서는 드러나지 않았습니다.

@@ -69,7 +69,8 @@ public class DocumentItemAssembler {
                 doc.getCurrentVersion(),
                 doc.getSourceDocumentId(),
                 doc.getUpdatedAt(),
-                needsReingest(doc));
+                needsReingest(doc),
+                doc.getFolderId());
     }
 
     static DocumentProcessingState resolveProcessingState(Document doc) {
