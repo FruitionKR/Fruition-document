@@ -1,11 +1,13 @@
 package fruition.core.document.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.domain.DocumentStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
+import java.util.UUID;
 
 public record DocumentUploadResponse(
         @Schema(description = "문서 ID", example = "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83")
@@ -43,5 +45,10 @@ public record DocumentUploadResponse(
 
         @JsonProperty("document_role")
         @Schema(description = "문서 역할. Markdown은 EDITABLE, PDF는 ORIGINAL이다.")
-        DocumentRole documentRole
+        DocumentRole documentRole,
+
+        @JsonProperty("folder_id")
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        @Schema(description = "부모 폴더 ID. 루트면 null이다.", nullable = true)
+        UUID folderId
 ) {}

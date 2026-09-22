@@ -77,7 +77,7 @@ class DocumentControllerTest {
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
     void duplicateUploadReturns409EvenWhenStorageWrapsTheFailure(boolean wrapped) throws Exception {
         var violation = new org.hibernate.exception.ConstraintViolationException(
-                "duplicate", new java.sql.SQLException("duplicate", "23505"), "uq_documents_active_name");
+                "duplicate", new java.sql.SQLException("duplicate", "23505"), "uq_document_tree_active_name");
         RuntimeException failure = new org.springframework.dao.DataIntegrityViolationException("write failed", violation);
         if (wrapped) failure = new fruition.core.document.exception.DocumentUploadException("upload failed", failure);
         when(documentService.upload(eq(WORKSPACE_ID), eq(USER_ID), any(), any(), any())).thenThrow(failure);
@@ -195,8 +195,7 @@ class DocumentControllerTest {
                 Instant.now(),
                 true,
                 1,
-                DocumentRole.EDITABLE
-        );
+                DocumentRole.EDITABLE, null);
         when(documentService.createMarkdown(
                 eq(WORKSPACE_ID), eq(USER_ID), eq("create-key"), any(MarkdownDocumentCreateRequest.class)))
                 .thenReturn(response);
@@ -226,7 +225,7 @@ class DocumentControllerTest {
                 "# 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         DocumentUploadResponse response = new DocumentUploadResponse(
                 "doc_uploaded", "노트.md", "text/markdown", 0, DocumentStatus.completed,
-                null, Instant.now(), true, 1, DocumentRole.EDITABLE);
+                null, Instant.now(), true, 1, DocumentRole.EDITABLE, null);
         when(documentService.upload(eq(WORKSPACE_ID), eq(USER_ID), eq("up-key"), eq(folderId), any()))
                 .thenReturn(response);
 
@@ -539,8 +538,7 @@ class DocumentControllerTest {
                 Instant.now(),
                 true,
                 1,
-                DocumentRole.EDITABLE
-        );
+                DocumentRole.EDITABLE, null);
         when(documentService.convertToMarkdown(WORKSPACE_ID, USER_ID, "doc_pdf", "convert-key"))
                 .thenReturn(response);
 

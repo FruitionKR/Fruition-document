@@ -235,7 +235,7 @@ class DocumentServiceConvertTest {
         Instant now = Instant.now();
         DocumentUploadResponse stored = new DocumentUploadResponse(
                 "doc_replay", "보고서.md", "text/markdown", 10,
-                DocumentStatus.processing, null, now, true, 1, DocumentRole.EDITABLE);
+                DocumentStatus.processing, null, now, true, 1, DocumentRole.EDITABLE, null);
         when(idempotencyService.replay(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
                 eq(DocumentUploadResponse.class))).thenReturn(Optional.of(stored));

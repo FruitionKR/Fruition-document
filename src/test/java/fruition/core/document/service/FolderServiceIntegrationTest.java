@@ -414,6 +414,70 @@ class FolderServiceIntegrationTest {
         assertThat(docMatch.breadcrumb()).extracting(BreadcrumbResponse.Node::name).containsExactly("보고서 폴더");
     }
 
+
+    @Test
+    void uploadAndRenameRespectSiblingFilesAndFolders() {
+        var a = folderService.create(workspaceId, userId, "a", new FolderCreateRequest("A", null));
+        var b = folderService.create(workspaceId, userId, "b", new FolderCreateRequest("B", null));
+        var file = new org.springframework.mock.web.MockMultipartFile("file", "Report.md", "text/markdown",
+                "# report".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var first = documentService.upload(workspaceId, userId, "upload-a", a.id(), file);
+        var second = documentService.upload(workspaceId, userId, "upload-b", b.id(), file);
+        assertThat(first.folderId()).isEqualTo(a.id());
+        assertThat(second.folderId()).isEqualTo(b.id());
+        assertThatThrownBy(() -> documentService.upload(workspaceId, userId, "duplicate-a", a.id(), file))
+                .satisfies(error -> assertThat(fruition.shared.util.DuplicateResourceName.message(error)).isNotNull());
+        folderService.create(workspaceId, userId, "reserved", new FolderCreateRequest("Reserved.md", a.id()));
+        assertThatThrownBy(() -> documentService.rename(workspaceId, userId, first.id(),
+                new fruition.core.document.dto.DocumentRenameRequest("reserved", first.currentVersion())))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(documentService.findAll(workspaceId, userId, null).documents())
+                .filteredOn(item -> item.id().equals(first.id())).singleElement()
+                .satisfies(item -> assertThat(item.folderId()).isEqualTo(a.id()));
+    }
+
+    @Test
+    void failedDocumentMoveRollsBackSiblingReordering() {
+        var a = folderService.create(workspaceId, userId, "a", new FolderCreateRequest("A", null));
+        var b = folderService.create(workspaceId, userId, "b", new FolderCreateRequest("B", null));
+        var document = documentService.createMarkdown(workspaceId, userId, "doc",
+                new MarkdownDocumentCreateRequest("Report", "# content", a.id()));
+        var reserved = folderService.create(workspaceId, userId, "reserved", new FolderCreateRequest("report.md", b.id()));
+        assertThatThrownBy(() -> documentPlacementService.move(workspaceId, userId, document.id(), "move",
+                new DocumentPositionRequest(b.id(), 0, document.currentVersion())))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(jdbcTemplate.queryForObject("SELECT folder_id FROM documents WHERE id = ?", UUID.class, document.id()))
+                .isEqualTo(a.id());
+        assertThat(jdbcTemplate.queryForObject("SELECT sort_order FROM folders WHERE id = ?", Long.class, reserved.id()))
+                .isEqualTo(reserved.sortOrder());
+    }
+
+    @Test
+    void duplicateNamesOnlyConsiderTheDestinationAndIncludeFolders() {
+        var a = folderService.create(workspaceId, userId, "a", new FolderCreateRequest("A", null));
+        var b = folderService.create(workspaceId, userId, "b", new FolderCreateRequest("B", null));
+        var document = documentService.createMarkdown(workspaceId, userId, "doc",
+                new MarkdownDocumentCreateRequest("Report", "# content", a.id()));
+        folderService.create(workspaceId, userId, "other-copy", new FolderCreateRequest("Report 복사본.md", b.id()));
+        var copy = documentService.duplicate(workspaceId, userId, document.id(), "copy");
+        assertThat(copy.filename()).isEqualTo("Report 복사본.md");
+        folderService.create(workspaceId, userId, "reserved", new FolderCreateRequest("Report 복사본 (2).md", a.id()));
+        assertThat(documentService.duplicate(workspaceId, userId, document.id(), "copy-2").filename())
+                .isEqualTo("Report 복사본 (3).md");
+    }
+
+    @Test
+    void conversionPlaceholderCannotCollideWithASiblingFolder() {
+        var a = folderService.create(workspaceId, userId, "a", new FolderCreateRequest("A", null));
+        String source = "doc_convert_" + UUID.randomUUID();
+        insertDocumentInFolder(source, "Report.pdf", "ORIGINAL", a.id(), 0);
+        folderService.create(workspaceId, userId, "reserved", new FolderCreateRequest("report.md", a.id()));
+        assertThatThrownBy(() -> documentService.convertToMarkdown(workspaceId, userId, source, "convert"))
+                .satisfies(error -> assertThat(fruition.shared.util.DuplicateResourceName.message(error)).isNotNull());
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM documents WHERE source_document_id = ?",
+                Integer.class, source)).isZero();
+    }
+
     private String insertMember(String role) {
         String memberId = "member_" + UUID.randomUUID();
         // users/workspace_members는 access_db 소유 — guard가 읽는 projection만 심는다 (MSA DB 분리).

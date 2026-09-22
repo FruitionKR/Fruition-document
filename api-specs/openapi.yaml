@@ -4886,6 +4886,10 @@ components:
           type: string
           description: 저장된 파일명
           example: 설계문서.pdf
+        folder_id:
+          type: string
+          format: uuid
+          description: 부모 폴더 ID. 루트면 null이다.
         id:
           type: string
           description: 문서 ID
@@ -5053,6 +5057,10 @@ components:
           type: string
           description: 저장된 파일명
           example: 설계문서.pdf
+        folder_id:
+          type: string
+          format: uuid
+          description: 부모 폴더 ID. 루트면 null이다.
         id:
           type: string
           description: 문서 ID
@@ -5390,6 +5398,10 @@ components:
           type: string
           description: 업로드된 원본 파일명
           example: 설계문서.pdf
+        folder_id:
+          type: string
+          format: uuid
+          description: 부모 폴더 ID. 루트면 null이다.
         id:
           type: string
           description: 문서 ID
