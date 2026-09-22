@@ -73,6 +73,15 @@ public class DocumentController {
         this.documentAssetContentService = documentAssetContentService;
     }
 
+    public record OriginalReadUrl(String url) {}
+
+    @GetMapping("/{document_id}/original-url")
+    public ResponseEntity<OriginalReadUrl> originalReadUrl(@PathVariable("workspace_id") String workspaceId,
+            @PathVariable("document_id") String documentId, @AuthenticationPrincipal String userId) {
+        return ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(new OriginalReadUrl(documentService.originalReadUrl(workspaceId, userId, documentId)));
+    }
+
     @Operation(
         summary = "문서 업로드",
         description = "PDF 또는 Markdown 파일을 업로드합니다. Markdown은 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다.")

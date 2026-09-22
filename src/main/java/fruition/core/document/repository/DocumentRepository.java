@@ -16,6 +16,10 @@ import java.util.List;
 import java.util.Optional;
 
 public interface DocumentRepository extends JpaRepository<Document, String> {
+    @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspace AND d.sourceDocumentId = :parent "
+            + "AND d.origin = 'convert_part' AND d.deletedAt IS NULL ORDER BY d.sortOrder, d.id")
+    List<Document> findConvertedParts(@Param("workspace") String workspace, @Param("parent") String parent);
+
 
     /** chat export 중복 판별: 일반 문서는 같은 content를 허용한다. */
     Optional<Document> findByWorkspaceIdAndOriginAndContentHashAndSelectionModeAndDeletedAtIsNull(

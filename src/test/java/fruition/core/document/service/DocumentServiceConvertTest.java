@@ -265,6 +265,56 @@ class DocumentServiceConvertTest {
     }
 
     @Test
+    void largePdfResumesAtCompletedPagesAndQueuesIndependentAiInputs() throws Exception {
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        queue.checkpoint(10, 20);
+        var rows = new java.util.HashMap<String, Document>();
+        rows.put(parent.getId(), parent); rows.put(source.getId(), source);
+        when(storageProps.getCredentialsMode()).thenReturn("aws");
+        when(convertQueueRepository.findById(7L)).thenReturn(Optional.of(queue));
+        when(documentRepository.findByIdInActiveWorkspace(parent.getId())).thenReturn(Optional.of(parent));
+        when(documentRepository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(rows.get(inv.getArgument(0))));
+        when(documentRepository.save(any())).thenAnswer(inv -> { Document doc = inv.getArgument(0); rows.put(doc.getId(), doc); return doc; });
+        when(documentRepository.findByIdAndWorkspaceIdForUpdate(anyString(), eq(WORKSPACE_ID)))
+                .thenAnswer(inv -> Optional.ofNullable(rows.get(inv.getArgument(0))));
+        when(documentRepository.findConvertedParts(WORKSPACE_ID, parent.getId())).thenAnswer(inv -> rows.values().stream()
+                .filter(doc -> "convert_part".equals(doc.getOrigin())).toList());
+        when(editStateRepository.findById(anyString())).thenAnswer(inv -> Optional.of(new DocumentEditState(
+                inv.getArgument(0), "# bounded input", "hash", 1)));
+        when(minioClient.getPresignedObjectUrl(any())).thenReturn("https://storage.example.test/signed");
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
+                .thenReturn(new ConverterClient.Batch(11, 20, 20, "# next pages", false, true, null));
+        documentService.doConvert(7L, parent.getId(), source.getId());
+        assertThat(queue.getCompletedPages()).isEqualTo(20);
+        assertThat(queue.getAttempts()).isZero();
+        assertThat(rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).count()).isEqualTo(1);
+        verify(converterClient).convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any());
+        verify(minioClient, never()).getObject(any());
+        verify(ingestCommandOutbox, times(2)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+    }
+
+    @Test
+    void failedBatchKeepsCheckpointForRetry() throws Exception {
+        var parent = placeholderDocument();
+        var queue = new DocumentConvertQueue(parent.getId(), SOURCE_DOCUMENT_ID);
+        queue.checkpoint(10, 20);
+        when(storageProps.getCredentialsMode()).thenReturn("aws");
+        when(convertQueueRepository.findById(7L)).thenReturn(Optional.of(queue));
+        when(documentRepository.findByIdInActiveWorkspace(parent.getId())).thenReturn(Optional.of(parent));
+        when(documentRepository.findById(SOURCE_DOCUMENT_ID)).thenReturn(Optional.of(sourcePdf()));
+        when(minioClient.getPresignedObjectUrl(any())).thenReturn("https://storage.example.test/signed");
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
+                .thenThrow(new DocumentConvertException("temporary failure"));
+        documentService.doConvert(7L, parent.getId(), SOURCE_DOCUMENT_ID);
+        assertThat(queue.getCompletedPages()).isEqualTo(10);
+        assertThat(queue.getStatus()).isEqualTo("pending");
+        assertThat(queue.getAttempts()).isEqualTo(1);
+        verify(taskWriter, never()).complete(anyString());
+    }
+
+    @Test
     @DisplayName("변환 성공 시 edit store에 convert write_id로 저장하고 문서를 completed로 반영한다")
     void doConvert_success_appliesMarkdownAndCompletes() throws Exception {
         Document placeholder = placeholderDocument();
