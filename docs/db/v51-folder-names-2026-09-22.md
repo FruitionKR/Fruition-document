@@ -90,3 +90,17 @@ rtk proxy env JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Content
 - 이 보고서.
 
 작업 브랜치 `fix/multipart-complete-xml`의 기존 clean 상태에서 수정했다. commit/push/PR/merge 및 운영 DB 변경은 수행하지 않았다.
+
+
+## main 통합 전 로컬 실서버 검증
+
+최신 main의 사용량 API를 통합한 기능 브랜치에서 `test bootJar`를 재실행하여 **899 tests / 0 failures / 0 errors / 0 skipped**를 확인했다.
+
+기존 로컬 PostgreSQL 컨테이너는 없어져 버린 초기화 script bind mount 때문에 시작하지 못했다. 기존 볼륨과 데이터는 수정하지 않고 Colima의 별도 PostgreSQL 16 컨테이너 `fruition-v51-postgres-local`을 127.0.0.1:15432에 생성했다. 새 `core_db`에 Flyway V1~V50을 먼저 적용하고 위 사전 조회에서 충돌 0건을 확인한 뒤 V51을 적용했다. `flyway_schema_history`의 version=51, success=true와 분리된 `core_runtime`의 새 namespace 테이블 SELECT/INSERT/UPDATE/DELETE 권한을 확인했다. 기존 데이터가 있는 DB의 충돌 유무는 이번 검증에 포함되지 않는다.
+
+별도 Orca shell terminal에서 document(127.0.0.1:18080, health 18082)와 access(18081, health 18083)를 실행했다. 실제 이메일 인증·가입·로그인·워크스페이스 생성 API로 로컬 계정을 준비했고 두 health 모두 200 UP이다. 계정과 토큰은 저장소 밖 권한 600 파일로만 보관한다.
+
+- 폴더 HTTP 11건: 생성 201, 동일 부모 대소문자 중복 409/DUPLICATE_NAME, 다른 부모 동명 201, rename 200, move 200, rename 충돌 409, delete 200, 트리 재조회 200 및 이동/삭제 결과 확인.
+- 문서 HTTP 8건: 부모를 지정한 Markdown 생성 201과 응답 folder_id, 파일·폴더 교차 이름 충돌 409, 다른 부모 동명 파일 생성 201, 목록 200의 folder_id, 충돌 이동 409 후 원래 위치 유지, 루트 이동 200 후 목록 folder_id=null 확인.
+- 제약: 기존 AI 컨테이너들이 restart loop이며 localhost:8000이 없어 문서 상세 GET의 wiki context 호출이 연결 실패로 500을 반환했다. AI 코드나 기존 컨테이너 설정은 수정하지 않았다. 문서 상세의 실제 HTTP 성공과 AI 처리 흐름은 확인하지 못했다.
+- 운영 및 원격 DB는 접근하거나 변경하지 않았다. 보호 규칙 우회와 force push는 사용하지 않는다.
