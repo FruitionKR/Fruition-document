@@ -8,6 +8,7 @@ import fruition.core.document.domain.DocumentStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
+import java.util.UUID;
 import java.util.List;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -102,5 +103,10 @@ public record DocumentDetailResponse(
 
         @JsonProperty("edit_lock")
         @Schema(description = "다른 사용자가 편집 중이면 그 잠금 정보. 없으면 키가 빠진다.")
-        EditLockResponse editLock
+        EditLockResponse editLock,
+
+        @JsonProperty("folder_id")
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        @Schema(description = "부모 폴더 ID. 루트면 null이다.", nullable = true)
+        UUID folderId
 ) {}

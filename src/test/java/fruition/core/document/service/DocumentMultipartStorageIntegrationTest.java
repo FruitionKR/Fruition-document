@@ -27,8 +27,9 @@ class DocumentMultipartStorageIntegrationTest {
             var documents = mock(DocumentService.class);
             var service = new DocumentDirectUploadService(storage, multipart, props, mock(WorkspaceAccessGuard.class), documents,
                     "test-only-direct-upload-secret");
+            UUID folderId = UUID.randomUUID();
             long size = 65L * 1024 * 1024;
-            var start = service.start("ws_test", "user_test", new DocumentDirectUploadService.StartRequest("large.pdf", size, null));
+            var start = service.start("ws_test", "user_test", new DocumentDirectUploadService.StartRequest("large.pdf", size, folderId));
             var urls = service.partUrls("ws_test", "user_test", new DocumentDirectUploadService.PartsRequest(start.ticket(), 1, 2));
             var http = HttpClient.newHttpClient();
             for (var part : urls.parts()) {
@@ -51,7 +52,7 @@ class DocumentMultipartStorageIntegrationTest {
                     .object("sources/documents/doc_test/original").build()).size()).isEqualTo(size);
             // Complete 응답 유실 뒤에도 NoSuchUpload로 실패하지 않고 등록을 멱등하게 재시도한다.
             service.complete("ws_test", "user_test", "same-key", new DocumentDirectUploadService.CompleteRequest(start.ticket()));
-            verify(documents, times(2)).upload(eq("ws_test"), eq("user_test"), eq("same-key"), isNull(), any());
+            verify(documents, times(2)).upload(eq("ws_test"), eq("user_test"), eq("same-key"), eq(folderId), any());
         }
     }
 }

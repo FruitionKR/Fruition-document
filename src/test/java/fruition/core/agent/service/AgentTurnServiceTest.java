@@ -712,7 +712,7 @@ class AgentTurnServiceTest {
                 "s3://source", null, Instant.now(), Instant.now(), null, List.of(),
                 null, null, null, filename.substring(0, filename.lastIndexOf('.')),
                 filename.substring(filename.lastIndexOf('.') + 1), null, false, currentVersion,
-                currentVersion, null, Instant.now(), null, null);
+                currentVersion, null, Instant.now(), null, null, null);
     }
 
     /** 고른 문답 ID는 조회의 IN 절로 그대로 들어간다. 클라이언트가 SQL 크기를 정하지 못하게 막는다. */

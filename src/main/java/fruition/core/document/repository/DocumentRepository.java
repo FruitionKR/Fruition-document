@@ -232,10 +232,12 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             @Param("updatedAt") Instant updatedAt
     );
 
-    /** 폴더 위치·문서 종류와 무관하게 활성 파일명을 읽는다. 최종 경합은 DB 고유 제약이 막는다. */
-    @Query(value = "SELECT lower(normalize(btrim(filename), NFC)) FROM documents "
-            + "WHERE workspace_id = :workspaceId AND deleted_at IS NULL", nativeQuery = true)
-    List<String> findActiveNormalizedFilenames(@Param("workspaceId") String workspaceId);
+    /** 동일 부모의 파일·폴더 이름만 비교한다. 최종 경합은 공유 DB 고유 제약이 막는다. */
+    @Query(value = "SELECT normalized_name FROM document_tree_names "
+            + "WHERE workspace_id = :workspaceId "
+            + "AND parent_folder_id IS NOT DISTINCT FROM :folderId", nativeQuery = true)
+    List<String> findActiveSiblingNames(@Param("workspaceId") String workspaceId,
+                                        @Param("folderId") java.util.UUID folderId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
