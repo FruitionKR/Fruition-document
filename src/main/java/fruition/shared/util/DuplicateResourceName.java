@@ -8,8 +8,7 @@ public final class DuplicateResourceName {
     private static final Map<String, String> MESSAGES = Map.of(
             "uq_document_tree_active_name", "같은 폴더에 같은 이름의 파일 또는 폴더가 이미 있습니다. 다른 이름을 사용해 주세요.",
             "uq_documents_active_name", "같은 워크스페이스에 같은 파일명이 이미 있습니다. 다른 이름을 사용해 주세요.",
-            "uq_folders_active_name", "같은 워크스페이스에 같은 폴더명이 이미 있습니다. 다른 이름을 사용해 주세요.",
-            "uq_workspaces_owner_active_name", "소유한 워크스페이스에 같은 이름이 이미 있습니다. 다른 이름을 사용해 주세요.");
+            "uq_folders_active_name", "같은 워크스페이스에 같은 폴더명이 이미 있습니다. 다른 이름을 사용해 주세요.");
 
     private DuplicateResourceName() {}
 
