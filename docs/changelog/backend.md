@@ -1,5 +1,13 @@
 # Backend 변경 기록
 
+## 2026-09-28 (기능: 회의 녹음 원본·파일 전사·삭제)
+
+- 회의 API 3개를 추가했습니다: 녹음 원본 업로드(`PUT .../meetings/{id}/recording`), 재생 주소(`GET .../recording-url`, 5분 presigned), 회의 삭제(`DELETE .../meetings/{id}`).
+- 녹음 파일 회의는 업로드하면 `transcribing`이 되고, 작업자가 `FOR UPDATE SKIP LOCKED`로 한 건씩 선점해 AI 파일 전사를 부른 뒤 문장 단위 구간으로 저장합니다. 실패하면 `failed`와 사유를 남기고 다시 올릴 수 있습니다. 실시간 회의는 받아쓰기가 끝난 뒤 원본만 한 번 보관합니다.
+- 원본은 회의 삭제 전까지 보관하고 크기를 기록합니다. 삭제는 원본을 먼저 지우고 실패하면 아무것도 지우지 않습니다. 받아쓰기 연결 중에는 업로드·삭제를 409로 거절합니다.
+- V54: `meetings`에 원본·전사 상태 컬럼 추가(expand-only). 설정 `SPEECH_TRANSCRIPTION_ENDPOINT`(채팅 음성 입력과 같은 키). 호환성·롤백·실제 AI 검증 기록은 `docs/db/v54-meeting-recordings-2026-09-28.md`에 있습니다.
+- 실제 MinIO와 가짜 AI 서버로 통합 테스트 6개를 추가했고, 로컬 실제 AI로 27초 녹음 → 4문장 전사(약 11초) → 회의록 초안 → 새 문서 → 재생 → 삭제를 확인했습니다. 전체 916개 테스트와 OpenAPI 스냅샷 비교를 통과했습니다.
+
 ## 2026-09-28 (기능: 회의록 초안과 저장)
 
 - 회의록 초안 API 4개를 추가했습니다: 생성(`POST .../notes`), 최신 조회(`GET .../notes`), 기존 문서 끝 추가 미리보기(`POST .../notes/{version}/append-preview`), 저장(`POST .../notes/{version}/apply`).

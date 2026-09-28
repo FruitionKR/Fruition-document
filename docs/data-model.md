@@ -31,7 +31,7 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | document_assets | document-svc | 문서 첨부 이미지 metadata(바이너리는 MinIO) | `storage_key` UK, `content_hash`(ETag), `unreferenced_since`(정리 후보 판정). workspace_id·uploaded_by는 access_db 논리 참조(물리 FK 없음) |
 | document_asset_references | document-svc | 문서 본문↔asset 참조 동기화 | 복합 PK `(document_id, asset_id)`, asset 삭제 RESTRICT — 참조 중 asset 보호 |
 | document_asset_orphans | document-svc | storage 정리 실패 asset 재시도 큐 | `storage_key` UK, `retry_count`, cleanup worker가 소비 |
-| meetings | document-svc | 회의 받아쓰기 단위(만든 사람만 조회) | `created_by`, `document_id`(회의록 저장 대상, 논리 참조), `source`(live/upload), `status`(open/awaiting_upload/transcribing/failed). V52 |
+| meetings | document-svc | 회의 받아쓰기 단위(만든 사람만 조회) | `created_by`, `document_id`(회의록 저장 대상, 논리 참조), `source`(live/upload), `status`(open/awaiting_upload/transcribing/failed). V54: `recording_key`·`recording_content_type`·`recording_bytes`(원본, 용량 한도 대비), `error`(파일 전사 실패 사유), `claimed_at`(파일 전사 작업자 선점). `status='transcribing'`이 전사 대기열이다. V52·V54 |
 | meeting_streams | document-svc | 받아쓰기 연결 한 번 | `(meeting_id, stream_order)` UK, `end_reason`(finished/interrupted/failed, NULL=진행 중). 회의 삭제 cascade. V52 |
 | meeting_segments | document-svc | 확정 전사 구간 | PK `(meeting_id, id)`, `(meeting_id, position)` UK. `id`=`s{stream_order}_{AI 구간 ID}`, `position`은 AI `committed` 순서, `text` NULL=확정 전(끊겼으면 누락). V52 |
 | meeting_notes | document-svc | 회의록 초안 버전과 저장 기록 | PK `(meeting_id, version)`, `(meeting_id, generation_request_id)` UK(생성 재시도), `status`(generating/ready/failed/applied), `segment_snapshot`(AI에 보낸 구간), `result`(이름·네 배열, AI markdown 제외), `apply_*`(저장 전에 기록하는 대상·본문·기준 revision). 회의 삭제 cascade. V53 |
@@ -43,7 +43,7 @@ V34는 `chat_export`에만 `(workspace_id, content_hash, selection_mode)` partia
 `chat_sessions.wiki_page_id`·`chat_sessions.wiki_export_document_id`·`chat_messages.wiki_page_id`는 쓰지 않는 잔여 컬럼이 됐다
 (코드 매핑만 제거했고 컬럼은 남아 있다).
 
-회의 실시간 받아쓰기는 Redis에 두 키를 둔다. `speech:ticket:{ticket}`은 WebSocket 접속용 일회용 ticket(사용자·workspace·회의, 60초, 접속 시 `GETDEL`)이고, `speech:live:{meeting_id}`는 회의당 연결 1개를 보장하는 잠금(90초 TTL, 연결 중 30초마다 연장)이다. 잠금이 없는데 `meeting_streams.end_reason`이 NULL인 연결은 기록 전에 인스턴스가 종료된 것으로 보고 조회 시 `interrupted`로 반환한다.
+회의 실시간 받아쓰기는 Redis에 두 키를 둔다. `speech:ticket:{ticket}`은 WebSocket 접속용 일회용 ticket(사용자·workspace·회의, 60초, 접속 시 `GETDEL`)이고, `speech:live:{meeting_id}`는 회의당 연결 1개를 보장하는 잠금(90초 TTL, 연결 중 30초마다 연장)이다. 녹음 원본은 기존 버킷의 `meetings/{meeting_id}/recording.{ext}`에 두고 회의 삭제 전까지 보관한다(삭제 시 원본을 먼저 지운다). 잠금이 없는데 `meeting_streams.end_reason`이 NULL인 연결은 기록 전에 인스턴스가 종료된 것으로 보고 조회 시 `interrupted`로 반환한다.
 V43은 `documents.pipeline_input_blocks`를 추가한다. 채팅 export는 문답 단위 블록(JSON 배열, `block_id =
 session_id:pair_id`)을 여기에 보존하고, 완료 후처리가 이 값을 읽어 문답↔페이지 멤버십을 기록한다. 일반 문서
 Ingest 경로는 이 필드를 쓰지 않고 block ID를 새로 부여하므로, 파이프라인이 돌려준 값은 provenance로 쓰지 않는다.

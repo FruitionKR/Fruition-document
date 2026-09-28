@@ -6,7 +6,7 @@
 실시간 전사는 document-svc가 AI 실시간 전사 WebSocket에 연결마다 1:1로 중계하고, 확정 문장을 저장한 뒤에만 브라우저에 전달한다.
 모델은 AI가 고정한다. 결정 근거는 [ADR-0023](../adr/0023-meeting-transcripts-and-recordings.md)이다.
 
-- API 수: 7 + WebSocket 1
+- API 수: 10 + WebSocket 1
 
 ## API 목차
 
@@ -15,6 +15,9 @@
 | [`POST /api/workspaces/{workspace_id}/meetings`](#summary-post-api-workspaces-workspace-id-meetings) | 받아쓰기 회의를 만듭니다. document_id를 주면 그 문서를 회의록 저장 대상으로 기억합니다. |
 | [`GET /api/workspaces/{workspace_id}/meetings/{meeting_id}`](#summary-get-api-workspaces-workspace-id-meetings-meeting-id) | 회의 상태, 받아쓰기 연결 기록, 발화 순서대로 정렬된 전사 구간을 반환합니다. |
 | [`POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/live-tickets`](#summary-post-api-workspaces-workspace-id-meetings-meeting-id-live-tickets) | 실시간 받아쓰기 WebSocket 접속에 쓰는 60초짜리 일회용 ticket을 발급합니다. |
+| [`DELETE .../meetings/{meeting_id}`](#meeting-delete) | 회의·전사·회의록 초안·녹음 원본을 삭제합니다. |
+| [`PUT .../meetings/{meeting_id}/recording`](#meeting-recording) | 녹음 원본을 올립니다. 녹음 파일 회의는 전사를 시작합니다. |
+| [`GET .../meetings/{meeting_id}/recording-url`](#meeting-recording-url) | 녹음 원본을 재생할 5분짜리 주소를 반환합니다. |
 | [`POST .../meetings/{meeting_id}/notes`](#notes-generate) | 확정 전사로 회의록 초안을 만들어 새 버전으로 보관합니다. |
 | [`GET .../meetings/{meeting_id}/notes`](#notes-latest) | 최신 회의록 초안을 반환합니다. |
 | [`POST .../meetings/{meeting_id}/notes/{version}/append-preview`](#notes-append-preview) | 기존 문서 끝에 회의록을 붙인 전체 결과와 base_revision을 반환합니다. |
@@ -325,6 +328,38 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-meetings-meeting-id-live-tickets)
 
 </details>
+
+## 녹음 원본과 회의 삭제
+
+경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 세 API 모두 workspace 멤버십과 회의를 만든 사람임을 검증한다(아니면 `404`). 원본은 회의가 삭제될 때까지 보관한다. 조회 응답(`MeetingResponse`)에 `has_recording`, `error`(녹음 파일 전사 실패 사유)가 있다.
+
+<a id="meeting-recording"></a>
+### `PUT .../meetings/{meeting_id}/recording` — 녹음 원본 업로드
+
+| 항목 | 내용 |
+|---|---|
+| 입력 | multipart `file`. `audio/wav`·`audio/mpeg`·`audio/mp4`·`audio/webm`(파라미터·`audio/x-wav`·`audio/x-m4a` 허용), 1 byte–24 MiB |
+| 녹음 파일 회의(`source=upload`) | `awaiting_upload`·`failed`에서만. 저장 후 `202`, `status=transcribing`. 다시 올리면 이전 원본을 교체한다 |
+| 실시간 회의(`source=live`) | `open`이고 받아쓰기 연결이 없을 때 한 번만. 저장만 하고 `200`(브라우저가 받아쓰기와 함께 녹음한 원본) |
+| 오류 | `409` 허용되지 않는 상태·원본이 이미 있음(`MEETING_RECORDING_NOT_ALLOWED`)·받아쓰기 중(`MEETING_LIVE_IN_USE`), `413`, `415`, `422` 빈 파일, `503` 저장소 실패 |
+
+녹음 파일 전사는 작업자가 2초마다 `transcribing` 회의 한 건을 선점해(여러 Pod 동시 처리 없음, 5분 넘은 선점은 다시 잡음) AI 파일 전사를 부르고, 결과를 문장 부호·줄바꿈 기준 구간(`s1_seg_0001`…, 10,000자 초과 문장은 분할)으로 저장한 뒤 `open`으로 바꾼다. 연결 기록 하나(`finished`)가 생겨 `transcript_complete=true`가 된다. 인식된 말이 없거나 실패하면 `failed`와 `error`를 남기며 자동 재시도는 없다. 클라이언트는 조회 API로 상태를 확인한다. 로컬 실측(실제 AI): 27초 m4a가 약 11초에 4문장으로 전사됐다.
+
+<a id="meeting-recording-url"></a>
+### `GET .../meetings/{meeting_id}/recording-url` — 재생 주소
+
+```json
+{ "url": "https://...presigned...", "expires_at": "2026-09-28T04:40:24Z" }
+```
+
+5분 유효 presigned GET 주소다(`response-content-type`은 올린 형식). `<audio src>`로 재생한다. 원본이 없으면 `404`(`MEETING_RECORDING_NOT_FOUND`).
+
+<a id="meeting-delete"></a>
+### `DELETE .../meetings/{meeting_id}` — 회의 삭제
+
+- 응답 `204`. 회의·연결·전사 구간·회의록 초안과 녹음 원본을 지운다. 이미 저장한 회의록 문서는 일반 문서라 남는다.
+- 원본을 먼저 지우고 DB를 지운다. 원본 삭제가 실패하면 `503`이고 아무것도 지우지 않는다(원본만 남는 상황을 막는다).
+- 받아쓰기 연결 중이면 `409`(`MEETING_LIVE_IN_USE`). 녹음 취소는 WebSocket을 닫은 뒤 이 API를 호출한다(잠금 해제가 늦으면 잠시 뒤 다시 시도).
 
 ## 회의록 초안과 저장
 

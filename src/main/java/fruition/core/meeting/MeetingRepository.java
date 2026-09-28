@@ -19,7 +19,14 @@ import java.util.UUID;
 public class MeetingRepository {
 
     public record Meeting(String id, String workspaceId, String createdBy, String displayName,
-                          String documentId, String source, String status, Instant createdAt) {}
+                          String documentId, String source, String status, Instant createdAt,
+                          String recordingKey, String recordingContentType, Long recordingBytes, String error) {
+
+        public Meeting(String id, String workspaceId, String createdBy, String displayName,
+                       String documentId, String source, String status, Instant createdAt) {
+            this(id, workspaceId, createdBy, displayName, documentId, source, status, createdAt, null, null, null, null);
+        }
+    }
 
     public record Stream(String id, int order, String endReason) {}
 
@@ -118,9 +125,64 @@ public class MeetingRepository {
                 (rs, n) -> new Segment(rs.getString("id"), rs.getInt("position"), rs.getString("text")), meetingId);
     }
 
+    /** 원본을 기록하고 상태를 바꾼다. 허용 상태가 아니면(동시 요청 등) false. */
+    public boolean saveRecording(String id, String key, String contentType, long bytes,
+                                 List<String> allowedStatuses, String nextStatus) {
+        return jdbc.update("""
+                UPDATE meetings SET recording_key = ?, recording_content_type = ?, recording_bytes = ?,
+                       status = ?, error = NULL, claimed_at = NULL, updated_at = now()
+                WHERE id = ? AND status = ANY(?)
+                """, key, contentType, bytes, nextStatus, id, allowedStatuses.toArray(String[]::new)) == 1;
+    }
+
+    /** 대기 중이거나 선점이 오래된 전사 한 건을 잡는다. 여러 Pod가 같은 건을 동시에 잡지 않는다. */
+    public Optional<Meeting> claimTranscription(Instant staleBefore) {
+        return jdbc.query("""
+                UPDATE meetings SET claimed_at = now()
+                WHERE id = (SELECT id FROM meetings
+                            WHERE status = 'transcribing' AND (claimed_at IS NULL OR claimed_at < ?)
+                            ORDER BY updated_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+                RETURNING *
+                """, (rs, n) -> meeting(rs), Timestamp.from(staleBefore)).stream().findFirst();
+    }
+
+    /** 전사 결과를 연결 하나(정상 종료)와 구간들로 저장하고 회의를 연다. 그사이 삭제·재업로드됐으면 저장하지 않는다. */
+    @org.springframework.transaction.annotation.Transactional
+    public boolean completeTranscription(String id, String recordingKey, List<String> sentences) {
+        if (jdbc.update("""
+                UPDATE meetings SET status = 'open', error = NULL, claimed_at = NULL, updated_at = now()
+                WHERE id = ? AND status = 'transcribing' AND recording_key = ?
+                """, id, recordingKey) != 1) {
+            return false;
+        }
+        Stream stream = openStream(id);
+        endStream(stream.id(), "finished");
+        for (int i = 0; i < sentences.size(); i++) {
+            String segmentId = "s" + stream.order() + "_seg_" + String.format("%04d", i + 1);
+            register(id, segmentId, stream.id());
+            complete(id, segmentId, sentences.get(i));
+        }
+        return true;
+    }
+
+    public void failTranscription(String id, String recordingKey, String error) {
+        jdbc.update("""
+                UPDATE meetings SET status = 'failed', error = ?, claimed_at = NULL, updated_at = now()
+                WHERE id = ? AND status = 'transcribing' AND recording_key = ?
+                """, error, id, recordingKey);
+    }
+
+    /** 연결·구간·회의록 초안은 FK cascade로 함께 지워진다. */
+    public void delete(String id) {
+        jdbc.update("DELETE FROM meetings WHERE id = ?", id);
+    }
+
     private static Meeting meeting(java.sql.ResultSet rs) throws java.sql.SQLException {
+        long bytes = rs.getLong("recording_bytes");
         return new Meeting(rs.getString("id"), rs.getString("workspace_id"), rs.getString("created_by"),
                 rs.getString("display_name"), rs.getString("document_id"), rs.getString("source"),
-                rs.getString("status"), rs.getTimestamp("created_at").toInstant());
+                rs.getString("status"), rs.getTimestamp("created_at").toInstant(),
+                rs.getString("recording_key"), rs.getString("recording_content_type"),
+                rs.wasNull() ? null : bytes, rs.getString("error"));
     }
 }

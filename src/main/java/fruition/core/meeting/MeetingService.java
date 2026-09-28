@@ -124,11 +124,13 @@ public class MeetingService {
                 .map(segment -> new MeetingResponse.SegmentItem(segment.id(), segment.position(), segment.text(),
                         segment.text() == null ? "pending" : "completed"))
                 .toList();
-        boolean complete = !live
+        // 녹음 파일 회의는 전사가 끝나 open이 되기 전까지 완료가 아니다.
+        boolean complete = !live && "open".equals(meeting.status())
                 && segments.stream().noneMatch(segment -> segment.text() == null)
                 && streams.stream().allMatch(stream -> "finished".equals(stream.endReason()));
         return new MeetingResponse(meeting.id(), meeting.displayName(), meeting.documentId(), meeting.source(),
-                meeting.status(), live, complete, streams, segments, meeting.createdAt());
+                meeting.status(), live, meeting.recordingKey() != null, meeting.error(), complete, streams, segments,
+                meeting.createdAt());
     }
 
     private String write(Ticket ticket) {
