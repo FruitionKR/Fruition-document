@@ -38,3 +38,14 @@
 5. 다른 회의로 `apply(create, display_name="출시 회의록")` 200, 새 문서에 회의록 본문 저장.
 
 AWS 경로는 검증하지 않았다. 버전·재시도·충돌·거절 규칙은 가짜 AI 서버 통합 테스트(`MeetingNotesIntegrationTest`)로 검증했다.
+
+## 번호 변경 후 재검증 (2026-09-28)
+
+dev(`6060879`, V52·V53 포함)를 합친 뒤 격리 DB에서 다시 확인했다.
+
+| 순서 | 대상 | 결과 |
+|---|---|---|
+| 1 | dev `--migrate-only` 후 앱 | V1~V53 적용, Markdown 문서 생성 201 |
+| 2 | 녹음 원본 브랜치(회의·회의록·녹음 포함) `--migrate-only` | V54 `add meetings`, V55 `add meeting notes`, V56 `add meeting recordings` 순서대로 success. `core_runtime`에 `meetings`·`meeting_streams`·`meeting_segments`·`meeting_notes` DELETE·INSERT·SELECT·UPDATE |
+| 3 | 새 버전 앱 | 기존 문서 목록 200, 회의 생성·조회 200, 초안 없음 404 |
+| 4 | 롤백: V56 DB에서 dev 앱 | 기동 정상(Flyway 검증 오류 없음), 문서 목록 200 |
