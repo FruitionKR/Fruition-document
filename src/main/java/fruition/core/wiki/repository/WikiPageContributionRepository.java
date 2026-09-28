@@ -3,6 +3,7 @@ package fruition.core.wiki.repository;
 import fruition.core.wiki.domain.WikiPageContribution;
 import fruition.core.wiki.domain.WikiPageContributionId;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -59,4 +60,13 @@ public interface WikiPageContributionRepository
             @Param("workspaceId") String workspaceId);
 
     long countByIdPageIdAndActiveTrue(String pageId);
+
+    /** 휴지통으로 옮긴 문서의 기여를 끈다. 복구 작업이 아니므로 deactivated_by는 비워 둔다. */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = """
+            UPDATE wiki_page_contributions
+            SET active = false
+            WHERE source_document_id IN (:documentIds) AND active = true
+            """, nativeQuery = true)
+    int deactivateBySourceDocumentIds(@Param("documentIds") Collection<String> documentIds);
 }

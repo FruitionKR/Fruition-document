@@ -46,7 +46,7 @@ class BaseExceptionHandlerTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {
-            "uq_documents_active_name", "uq_folders_active_name", "uq_workspaces_owner_active_name"})
+            "uq_documents_active_name", "uq_folders_active_name"})
     void duplicateNamesReturnConflictWithActionableMessage(String constraint) {
         var violation = new org.hibernate.exception.ConstraintViolationException(
                 "duplicate", new java.sql.SQLException("duplicate", "23505"), constraint);

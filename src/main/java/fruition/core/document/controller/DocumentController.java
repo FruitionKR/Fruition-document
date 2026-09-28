@@ -263,7 +263,7 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.blocks(workspaceId, userId, documentId));
     }
 
-    @Operation(summary = "문서 삭제", description = "원본과 편집 상태를 유지한 채 문서를 소프트 삭제합니다.")
+    @Operation(summary = "문서 삭제", description = "원본과 편집 상태를 유지한 채 문서를 소프트 삭제하고 AI에 위키 정리를 요청합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "삭제 성공",
             content = @Content(schema = @Schema(implementation = DocumentLifecycleResponse.class))),
@@ -303,7 +303,7 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.trash(workspaceId, userId));
     }
 
-    @Operation(summary = "문서 복구", description = "삭제 문서를 역할별 최상위 마지막 위치에 복구합니다.")
+    @Operation(summary = "문서 복구", description = "삭제 문서를 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "복구 성공",
             content = @Content(schema = @Schema(implementation = DocumentLifecycleResponse.class))),

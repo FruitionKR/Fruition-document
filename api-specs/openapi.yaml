@@ -1433,7 +1433,7 @@ paths:
       - document-direct-upload-controller
   /api/workspaces/{workspace_id}/documents/{document_id}:
     delete:
-      description: 원본과 편집 상태를 유지한 채 문서를 소프트 삭제합니다.
+      description: 원본과 편집 상태를 유지한 채 문서를 소프트 삭제하고 AI에 위키 정리를 요청합니다.
       operationId: delete_2
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -2190,7 +2190,7 @@ paths:
       - Documents
   /api/workspaces/{workspace_id}/documents/{document_id}/restore:
     post:
-      description: 삭제 문서를 역할별 최상위 마지막 위치에 복구합니다.
+      description: 삭제 문서를 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다.
       operationId: restore_1
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -2446,7 +2446,7 @@ paths:
       - Folders
   /api/workspaces/{workspace_id}/folders/{folder_id}:
     delete:
-      description: 폴더와 하위 항목을 휴지통 상태로 전환하며 base version으로 동시 변경을 검증합니다.
+      description: 폴더와 하위 항목을 휴지통 상태로 전환하고 하위 문서의 위키 정리를 요청하며 base version으로 동시 변경을 검증합니다.
       operationId: delete
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
