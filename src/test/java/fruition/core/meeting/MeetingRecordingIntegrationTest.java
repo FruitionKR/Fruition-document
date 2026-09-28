@@ -49,7 +49,8 @@ class MeetingRecordingIntegrationTest {
 
     static final HttpServer FAKE_AI;
     static volatile int aiStatus = 200;
-    static volatile String aiText = "출시는 금요일로 하겠습니다. 민수가 점검을 맡나요?\n네, 맡겠습니다!";
+    static final String DEFAULT_TEXT = "출시는 금요일로 하겠습니다. 민수가 점검을 맡나요?\n네, 맡겠습니다!";
+    static volatile String aiText = DEFAULT_TEXT;
     static final AtomicReference<String> lastContentType = new AtomicReference<>();
 
     static {
@@ -101,6 +102,7 @@ class MeetingRecordingIntegrationTest {
         workspaceId = "ws_" + suffix;
         redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
         aiStatus = 200;
+        aiText = DEFAULT_TEXT;
     }
 
     @Test
@@ -111,9 +113,9 @@ class MeetingRecordingIntegrationTest {
 
         JsonNode meeting = awaitStatus(meetingId, "open");
         assertThat(lastContentType.get()).isEqualTo("audio/mp4");
+        // 문장을 약 1,000자 단위로 묶는다(회의록 AI의 1,000구간 한도).
         assertThat(meeting.path("segments")).extracting(s -> s.path("id").asText() + "=" + s.path("text").asText())
-                .containsExactly("s1_seg_0001=출시는 금요일로 하겠습니다.", "s1_seg_0002=민수가 점검을 맡나요?",
-                        "s1_seg_0003=네, 맡겠습니다!");
+                .containsExactly("s1_seg_0001=출시는 금요일로 하겠습니다. 민수가 점검을 맡나요? 네, 맡겠습니다!");
         assertThat(meeting.path("transcript_complete").asBoolean()).isTrue();
         assertThat(meeting.path("has_recording").asBoolean()).isTrue();
 
@@ -188,6 +190,31 @@ class MeetingRecordingIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM meeting_segments WHERE meeting_id = ?", Integer.class, meetingId)).isZero();
         assertThatThrownBy(() -> minio.statObject(StatObjectArgs.builder().bucket(storage.getBucket()).object(key).build()))
                 .hasMessageContaining("Object does not exist");
+    }
+
+    @Test
+    void longTranscript_isPackedUnderNotesLimitsOrRejected() throws Exception {
+        aiText = "네. ".repeat(3_000);  // 짧은 발화 3,000개
+        String meetingId = createMeeting("upload");
+        upload(meetingId, "audio/mp4", new byte[]{1}).andExpect(status().isAccepted());
+        JsonNode meeting = awaitStatus(meetingId, "open");
+        assertThat(meeting.path("segments").size()).isBetween(1, 1_000);
+        meeting.path("segments").forEach(s -> assertThat(s.path("text").asText().length()).isLessThanOrEqualTo(1_000));
+
+        aiText = "가".repeat(100_001);
+        String tooLong = createMeeting("upload");
+        upload(tooLong, "audio/mp4", new byte[]{1}).andExpect(status().isAccepted());
+        assertThat(awaitStatus(tooLong, "failed").path("error").asText()).contains("100,000자");
+    }
+
+    @Test
+    void segments_packSentencesUpToTargetLength() {
+        String sentence = "가".repeat(400) + ".";
+        assertThat(MeetingTranscriptionWorker.segments(String.join(" ", sentence, sentence, sentence)))
+                .extracting(String::length).containsExactly(803, 401);  // 두 문장+공백까지 1,000자 이하
+        assertThat(MeetingTranscriptionWorker.segments("가".repeat(5_000))).extracting(String::length)
+                .containsExactly(5_000);  // 한 문장이 길면 그대로(구간당 10,000자 한도 안)
+        assertThat(MeetingTranscriptionWorker.segments("")).isEmpty();
     }
 
     @Test

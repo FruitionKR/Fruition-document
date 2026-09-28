@@ -30,6 +30,9 @@ import java.util.regex.Pattern;
 public class MeetingTranscriptionWorker {
     static final Duration STALE_CLAIM = Duration.ofMinutes(5);
     static final int MAX_SEGMENT_CHARS = 10_000;
+    /** 회의록 AI는 구간 1,000개·전체 100,000자까지 받는다. 문장을 이 길이까지 묶어 구간 수를 한도 안에 둔다. */
+    static final int TARGET_SEGMENT_CHARS = 1_000;
+    static final int MAX_TOTAL_CHARS = 100_000;
     private static final Pattern SENTENCE_END = Pattern.compile("(?<=[.?!。？！])\\s+|\\n+");
     private static final Logger log = LoggerFactory.getLogger(MeetingTranscriptionWorker.class);
 
@@ -68,12 +71,17 @@ public class MeetingTranscriptionWorker {
                     .encode().buildAndExpand(meeting.workspaceId(), meeting.createdBy()).toUri();
             JsonNode body = restClient.post().uri(uri).contentType(MediaType.parseMediaType(meeting.recordingContentType()))
                     .body(audio).retrieve().body(JsonNode.class);
-            List<String> sentences = sentences(body == null ? "" : body.path("text").asText(""));
-            if (sentences.isEmpty()) {
+            String text = body == null ? "" : body.path("text").asText("").strip();
+            if (text.isEmpty()) {
                 repository.failTranscription(meeting.id(), meeting.recordingKey(), "인식된 음성이 없습니다.");
                 return;
             }
-            repository.completeTranscription(meeting.id(), meeting.recordingKey(), sentences);
+            if (text.length() > MAX_TOTAL_CHARS) {
+                repository.failTranscription(meeting.id(), meeting.recordingKey(),
+                        "전사가 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요.");
+                return;
+            }
+            repository.completeTranscription(meeting.id(), meeting.recordingKey(), segments(text));
         } catch (RestClientResponseException e) {
             log.warn("[회의 파일 전사 실패] meetingId={} status={}", meeting.id(), e.getStatusCode().value());
             repository.failTranscription(meeting.id(), meeting.recordingKey(), switch (e.getStatusCode().value()) {
@@ -84,6 +92,29 @@ public class MeetingTranscriptionWorker {
             log.warn("[회의 파일 전사 실패] meetingId={}", meeting.id(), e);
             repository.failTranscription(meeting.id(), meeting.recordingKey(), "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.");
         }
+    }
+
+    /**
+     * 문장을 이어 붙여 구간을 최대 약 1,000자로 묶는다. 이어진 두 구간의 합은 항상 1,000자를 넘으므로
+     * 100,000자 전사는 구간 약 200개 이하가 되어 회의록 AI의 1,000구간 한도에 걸리지 않는다.
+     */
+    static List<String> segments(String text) {
+        List<String> result = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String sentence : sentences(text)) {
+            if (!current.isEmpty() && current.length() + 1 + sentence.length() > TARGET_SEGMENT_CHARS) {
+                result.add(current.toString());
+                current.setLength(0);
+            }
+            if (!current.isEmpty()) {
+                current.append(' ');
+            }
+            current.append(sentence);
+        }
+        if (!current.isEmpty()) {
+            result.add(current.toString());
+        }
+        return result;
     }
 
     /** 문장 부호·줄바꿈으로 나누고, 회의록 AI의 구간 한도(10,000자)를 넘는 문장은 잘라서 나눈다. */

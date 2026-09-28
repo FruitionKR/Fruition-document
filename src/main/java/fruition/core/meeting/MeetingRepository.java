@@ -187,6 +187,12 @@ public class MeetingRepository {
                 """, error, id, recordingKey);
     }
 
+    /** 삭제 전에 행을 잠그고 원본 키를 읽는다. 호출자의 트랜잭션이 끝날 때까지 겹친 업로드가 기다린다. 행이 없으면 빈 값. */
+    public Optional<Optional<String>> lockRecordingKey(String id) {
+        return jdbc.query("SELECT recording_key FROM meetings WHERE id = ? FOR UPDATE",
+                (rs, n) -> Optional.ofNullable(rs.getString(1)), id).stream().findFirst();
+    }
+
     /** 연결·구간·회의록 초안은 FK cascade로 함께 지워진다. */
     public void delete(String id) {
         jdbc.update("DELETE FROM meetings WHERE id = ?", id);

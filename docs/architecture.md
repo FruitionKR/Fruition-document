@@ -18,7 +18,7 @@ Document는 문서·폴더·채팅·Wiki 공개 API와 AI 요청 중계를 담�
 
 ## 녹음 원본과 파일 전사
 
-녹음 원본은 S3/MinIO에 회의 삭제 전까지 보관하고 5분 presigned 주소로 재생한다. 녹음 파일 회의는 `status='transcribing'`을 대기열로 쓰는 작업자가 `FOR UPDATE SKIP LOCKED`로 한 건씩 선점해 AI 파일 전사를 부르고 문장 단위 구간으로 저장한다. 회의 삭제는 원본을 먼저 지우고 DB 행을 지운다.
+녹음 원본은 S3/MinIO에 회의 삭제 전까지 보관하고 5분 presigned 주소로 재생한다. 녹음 파일 회의는 `status='transcribing'`을 대기열로 쓰는 작업자가 `FOR UPDATE SKIP LOCKED`로 한 건씩 선점해 AI 파일 전사를 부르고 약 1,000자 단위 구간으로 저장한다(회의록 AI 1,000구간 한도). 회의 삭제는 행을 잠근 채 원본을 먼저 지우고 DB 행을 지운다.
 
 ## 회의록 초안과 저장
 

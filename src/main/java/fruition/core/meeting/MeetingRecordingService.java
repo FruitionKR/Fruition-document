@@ -8,6 +8,7 @@ import io.minio.RemoveObjectArgs;
 import io.minio.http.Method;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
@@ -16,6 +17,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -107,16 +109,19 @@ public class MeetingRecordingService {
 
     /**
      * 원본을 먼저 지우고 DB를 지운다. 원본이 남는 쪽의 실패가 개인정보 문제이므로 원본 삭제가 실패하면 전체를 실패시킨다.
+     * 행을 잠근 채 키를 읽고 지우므로, 겹친 재업로드는 잠금이 풀린 뒤 행을 찾지 못해 자기 객체를 지운다.
      * 실시간 받아쓰기 중이면 연결을 닫은 뒤 다시 요청해야 한다.
      */
+    @Transactional
     public void delete(String workspaceId, String userId, String meetingId) {
-        MeetingRepository.Meeting meeting = meetingService.requireOwned(workspaceId, userId, meetingId);
+        meetingService.requireOwned(workspaceId, userId, meetingId);
         if (liveLock.isHeld(meetingId)) {
             throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "받아쓰기 연결을 닫은 뒤 삭제해 주세요.");
         }
-        if (meeting.recordingKey() != null) {
+        Optional<String> recordingKey = repository.lockRecordingKey(meetingId).orElseThrow(MeetingException::notFound);
+        if (recordingKey.isPresent()) {
             try {
-                minio.removeObject(RemoveObjectArgs.builder().bucket(storage.getBucket()).object(meeting.recordingKey()).build());
+                minio.removeObject(RemoveObjectArgs.builder().bucket(storage.getBucket()).object(recordingKey.get()).build());
             } catch (Exception e) {
                 throw new MeetingException(HttpStatus.SERVICE_UNAVAILABLE, "MEETING_RECORDING_STORAGE_FAILED",
                         "녹음 원본을 삭제하지 못했습니다. 다시 시도해 주세요.");
