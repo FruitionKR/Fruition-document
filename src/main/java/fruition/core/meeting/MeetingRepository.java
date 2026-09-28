@@ -125,14 +125,29 @@ public class MeetingRepository {
                 (rs, n) -> new Segment(rs.getString("id"), rs.getInt("position"), rs.getString("text")), meetingId);
     }
 
-    /** 원본을 기록하고 상태를 바꾼다. 허용 상태가 아니면(동시 요청 등) false. */
-    public boolean saveRecording(String id, String key, String contentType, long bytes,
-                                 List<String> allowedStatuses, String nextStatus) {
-        return jdbc.update("""
+    /** 원본 교체 결과. {@code previousKey}는 교체되기 전 원본(없으면 null)이다. */
+    public record RecordingSwap(String previousKey) {}
+
+    /**
+     * 원본을 기록하고 상태를 바꾼다. 행을 잠근 뒤 허용 상태인지(그리고 {@code requireNoRecording}이면 원본이 없는지)
+     * 확인하므로 겹친 요청 중 하나만 성공한다. 실패하면 빈 값, 성공하면 교체 전 원본 키(없으면 null)를 돌려준다.
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public Optional<RecordingSwap> saveRecording(String id, String key, String contentType, long bytes,
+                                                 List<String> allowedStatuses, String nextStatus,
+                                                 boolean requireNoRecording) {
+        List<String[]> current = jdbc.query("SELECT status, recording_key FROM meetings WHERE id = ? FOR UPDATE",
+                (rs, n) -> new String[]{rs.getString(1), rs.getString(2)}, id);
+        if (current.isEmpty() || !allowedStatuses.contains(current.get(0)[0])
+                || (requireNoRecording && current.get(0)[1] != null)) {
+            return Optional.empty();
+        }
+        jdbc.update("""
                 UPDATE meetings SET recording_key = ?, recording_content_type = ?, recording_bytes = ?,
                        status = ?, error = NULL, claimed_at = NULL, updated_at = now()
-                WHERE id = ? AND status = ANY(?)
-                """, key, contentType, bytes, nextStatus, id, allowedStatuses.toArray(String[]::new)) == 1;
+                WHERE id = ?
+                """, key, contentType, bytes, nextStatus, id);
+        return Optional.of(new RecordingSwap(current.get(0)[1]));
     }
 
     /** 대기 중이거나 선점이 오래된 전사 한 건을 잡는다. 여러 Pod가 같은 건을 동시에 잡지 않는다. */

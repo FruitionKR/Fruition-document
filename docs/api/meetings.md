@@ -339,7 +339,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 | 항목 | 내용 |
 |---|---|
 | 입력 | multipart `file`. `audio/wav`·`audio/mpeg`·`audio/mp4`·`audio/webm`(파라미터·`audio/x-wav`·`audio/x-m4a` 허용), 1 byte–24 MiB |
-| 녹음 파일 회의(`source=upload`) | `awaiting_upload`·`failed`에서만. 저장 후 `202`, `status=transcribing`. 다시 올리면 이전 원본을 교체한다 |
+| 녹음 파일 회의(`source=upload`) | `awaiting_upload`·`failed`에서만. 저장 후 `202`, `status=transcribing`. 다시 올리면 새 원본으로 바꾸고 이전 원본은 저장소에서 지운다. 겹친 업로드 중 하나만 성공하고 실패한 쪽의 객체는 남지 않는다 |
 | 실시간 회의(`source=live`) | `open`이고 받아쓰기 연결이 없을 때 한 번만. 저장만 하고 `200`(브라우저가 받아쓰기와 함께 녹음한 원본) |
 | 오류 | `409` 허용되지 않는 상태·원본이 이미 있음(`MEETING_RECORDING_NOT_ALLOWED`)·받아쓰기 중(`MEETING_LIVE_IN_USE`), `413`, `415`, `422` 빈 파일, `503` 저장소 실패 |
 

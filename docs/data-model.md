@@ -44,7 +44,7 @@ V34는 `chat_export`에만 `(workspace_id, content_hash, selection_mode)` partia
 `chat_sessions.wiki_page_id`·`chat_sessions.wiki_export_document_id`·`chat_messages.wiki_page_id`는 쓰지 않는 잔여 컬럼이 됐다
 (코드 매핑만 제거했고 컬럼은 남아 있다).
 
-회의 실시간 받아쓰기는 Redis에 두 키를 둔다. `speech:ticket:{ticket}`은 WebSocket 접속용 일회용 ticket(사용자·workspace·회의, 60초, 접속 시 `GETDEL`)이고, `speech:live:{meeting_id}`는 회의당 연결 1개를 보장하는 잠금(90초 TTL, 연결 중 30초마다 연장)이다. 녹음 원본은 기존 버킷의 `meetings/{meeting_id}/recording.{ext}`에 두고 회의 삭제 전까지 보관한다(삭제 시 원본을 먼저 지운다). 잠금이 없는데 `meeting_streams.end_reason`이 NULL인 연결은 기록 전에 인스턴스가 종료된 것으로 보고 조회 시 `interrupted`로 반환한다.
+회의 실시간 받아쓰기는 Redis에 두 키를 둔다. `speech:ticket:{ticket}`은 WebSocket 접속용 일회용 ticket(사용자·workspace·회의, 60초, 접속 시 `GETDEL`)이고, `speech:live:{meeting_id}`는 회의당 연결 1개를 보장하는 잠금(90초 TTL, 연결 중 30초마다 연장)이다. 녹음 원본은 기존 버킷의 `meetings/{meeting_id}/recording-{uuid}.{ext}`(업로드마다 새 키)에 두고 회의 삭제 전까지 보관한다. 재업로드로 교체된 이전 원본과 상태 변경에 실패한 업로드 객체는 바로 지우며, 회의 삭제 시 원본을 먼저 지운다. 잠금이 없는데 `meeting_streams.end_reason`이 NULL인 연결은 기록 전에 인스턴스가 종료된 것으로 보고 조회 시 `interrupted`로 반환한다.
 V43은 `documents.pipeline_input_blocks`를 추가한다. 채팅 export는 문답 단위 블록(JSON 배열, `block_id =
 session_id:pair_id`)을 여기에 보존하고, 완료 후처리가 이 값을 읽어 문답↔페이지 멤버십을 기록한다. 일반 문서
 Ingest 경로는 이 필드를 쓰지 않고 block ID를 새로 부여하므로, 파이프라인이 돌려준 값은 provenance로 쓰지 않는다.

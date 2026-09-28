@@ -131,12 +131,14 @@ class MeetingRecordingIntegrationTest {
         upload(meetingId, "audio/wav", new byte[]{1, 2}).andExpect(status().isAccepted());
         JsonNode failed = awaitStatus(meetingId, "failed");
         assertThat(failed.path("error").asText()).isEqualTo("지원하지 않거나 인식할 수 없는 녹음 파일입니다.");
+        String firstKey = recordingKey(meetingId);
 
         aiStatus = 200;
         upload(meetingId, "audio/webm;codecs=opus", new byte[]{3}).andExpect(status().isAccepted());
         assertThat(awaitStatus(meetingId, "open").path("error").isNull()).isTrue();
-        assertThat(jdbc.queryForObject("SELECT recording_key FROM meetings WHERE id = ?", String.class, meetingId))
-                .endsWith("/recording.webm");
+        // 다른 형식으로 다시 올려도 이전 원본이 남지 않는다(회의 삭제로도 지울 수 없게 되는 것을 막는다).
+        assertThat(recordingKey(meetingId)).endsWith(".webm").isNotEqualTo(firstKey);
+        assertThat(storedKeys(meetingId)).containsExactly(recordingKey(meetingId));
     }
 
     @Test
@@ -150,6 +152,8 @@ class MeetingRecordingIntegrationTest {
         upload(meetingId, "audio/webm", new byte[]{1}).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("open"));
         upload(meetingId, "audio/webm", new byte[]{2}).andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("MEETING_RECORDING_NOT_ALLOWED"));
+        // 거절된 업로드는 상태 변경 전에 걸러지거나, 걸러지지 않아도 방금 쓴 객체를 지운다.
+        assertThat(storedKeys(meetingId)).containsExactly(recordingKey(meetingId));
     }
 
     @Test
@@ -220,6 +224,19 @@ class MeetingRecordingIntegrationTest {
             Thread.sleep(100);
         }
         throw new AssertionError("상태가 " + expected + "가 되지 않았습니다: " + meeting);
+    }
+
+    private String recordingKey(String meetingId) {
+        return jdbc.queryForObject("SELECT recording_key FROM meetings WHERE id = ?", String.class, meetingId);
+    }
+
+    private java.util.List<String> storedKeys(String meetingId) throws Exception {
+        java.util.List<String> keys = new java.util.ArrayList<>();
+        for (var item : minio.listObjects(io.minio.ListObjectsArgs.builder().bucket(storage.getBucket())
+                .prefix("meetings/" + meetingId + "/").recursive(true).build())) {
+            keys.add(item.get().objectName());
+        }
+        return keys;
     }
 
     private String base() {

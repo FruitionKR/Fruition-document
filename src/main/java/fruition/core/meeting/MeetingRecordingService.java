@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 회의 녹음 원본의 업로드·재생 URL·회의 삭제. 원본은 회의가 삭제될 때까지 보관한다.
@@ -25,6 +26,7 @@ import java.util.Map;
  */
 @Service
 public class MeetingRecordingService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MeetingRecordingService.class);
     static final long MAX_BYTES = 24L * 1024 * 1024;
     static final Duration URL_TTL = Duration.ofMinutes(5);
     private static final Map<String, String> EXTENSIONS = Map.of(
@@ -65,17 +67,22 @@ public class MeetingRecordingService {
         if (!upload && liveLock.isHeld(meetingId)) {
             throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "받아쓰기가 끝난 뒤 녹음 원본을 올릴 수 있습니다.");
         }
-        String key = "meetings/" + meetingId + "/recording." + EXTENSIONS.get(contentType);
+        // 업로드마다 새 키에 쓴다. 겹친 업로드가 전사 중인 원본을 덮어쓰지 않고, 교체된 이전 원본은 아래에서 지운다.
+        String key = "meetings/" + meetingId + "/recording-" + UUID.randomUUID() + "." + EXTENSIONS.get(contentType);
         try (InputStream input = file.getInputStream()) {
             minio.putObject(PutObjectArgs.builder().bucket(storage.getBucket()).object(key)
                     .stream(input, file.getSize(), -1).contentType(contentType).build());
         } catch (Exception e) {
             throw new MeetingException(HttpStatus.SERVICE_UNAVAILABLE, "MEETING_RECORDING_STORAGE_FAILED", "녹음 파일을 저장하지 못했습니다.");
         }
-        // 같은 키를 덮어쓰므로 재업로드(failed)도 이전 원본을 교체한다.
-        if (!repository.saveRecording(meetingId, key, contentType, file.getSize(), allowed,
-                upload ? "transcribing" : "open")) {
+        var swap = repository.saveRecording(meetingId, key, contentType, file.getSize(), allowed,
+                upload ? "transcribing" : "open", !upload);
+        if (swap.isEmpty()) {
+            removeQuietly(key);  // 다른 요청이 먼저 상태를 바꿨다. 방금 쓴 객체는 어디에도 기록되지 않았다.
             throw new MeetingException(HttpStatus.CONFLICT, "MEETING_RECORDING_NOT_ALLOWED", "지금은 녹음 원본을 올릴 수 없습니다.");
+        }
+        if (swap.get().previousKey() != null) {
+            removeQuietly(swap.get().previousKey());  // 재업로드로 교체된 이전 원본(음성 개인정보)을 남기지 않는다
         }
         return meetingService.get(workspaceId, userId, meetingId);
     }
@@ -116,6 +123,15 @@ public class MeetingRecordingService {
             }
         }
         repository.delete(meetingId);
+    }
+
+    /** 추적에서 빠진 객체 정리. 실패하면 수동 정리를 위해 키를 남긴다(요청 결과에는 영향 없음). */
+    private void removeQuietly(String key) {
+        try {
+            minio.removeObject(RemoveObjectArgs.builder().bucket(storage.getBucket()).object(key).build());
+        } catch (Exception e) {
+            log.warn("[회의 녹음 원본 정리 실패] key={}", key, e);
+        }
     }
 
     /** 브라우저 MediaRecorder는 audio/webm;codecs=opus처럼 파라미터를 붙이므로 type/subtype만 본다. */
