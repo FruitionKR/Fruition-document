@@ -5,6 +5,7 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 ### core_db (document-svc)
 
 - 활성 문서의 전체 파일명(확장자 포함)과 폴더명은 각각 워크스페이스 전체에서 고유하다. 폴더 위치가 달라도 중복을 허용하지 않는다. 앞뒤 공백 제거·Unicode NFC·소문자 변환 후 DB expression unique index로 비교한다(V48). 휴지통 항목은 이름을 점유하지 않으며, 복구 시 활성 이름과 충돌하면 전체 트랜잭션을 거절한다. 기존 중복은 적용 전에 별도로 검토해 정리해야 한다.
+- 문서를 휴지통으로 옮기면(문서·폴더 삭제) 같은 트랜잭션에서 `document_deleted` command를 `ai_command_outbox`에 넣어 AI가 해당 문서의 source 페이지를 위키에서 뺀다. 같은 트랜잭션에서 그 문서의 `wiki_page_contributions`를 `active = false`(`deactivated_by` 없음)로 꺼서, 로그 되돌리기가 삭제한 문서의 source 페이지나 개념 기여를 다시 살리지 않게 한다. 개념 페이지는 유지한다. 편집 문서는 `status = uploaded`로 되돌려 복구 후 다시 편입하게 한다. 이 규칙 이전에 휴지통에 들어간 문서는 V52가 한 번 정리 command를 발행하고 기여를 껐다.
 
 - `chat_messages.web_search_enabled`: 질의 요청의 `allow_web_search` 실행 시점 snapshot
 
@@ -31,10 +32,10 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | document_assets | document-svc | 문서 첨부 이미지 metadata(바이너리는 MinIO) | `storage_key` UK, `content_hash`(ETag), `unreferenced_since`(정리 후보 판정). workspace_id·uploaded_by는 access_db 논리 참조(물리 FK 없음) |
 | document_asset_references | document-svc | 문서 본문↔asset 참조 동기화 | 복합 PK `(document_id, asset_id)`, asset 삭제 RESTRICT — 참조 중 asset 보호 |
 | document_asset_orphans | document-svc | storage 정리 실패 asset 재시도 큐 | `storage_key` UK, `retry_count`, cleanup worker가 소비 |
-| meetings | document-svc | 회의 받아쓰기 단위(만든 사람만 조회) | `created_by`, `document_id`(회의록 저장 대상, 논리 참조), `source`(live/upload), `status`(open/awaiting_upload/transcribing/failed). V52 |
-| meeting_streams | document-svc | 받아쓰기 연결 한 번 | `(meeting_id, stream_order)` UK, `end_reason`(finished/interrupted/failed, NULL=진행 중). 회의 삭제 cascade. V52 |
-| meeting_segments | document-svc | 확정 전사 구간 | PK `(meeting_id, id)`, `(meeting_id, position)` UK. `id`=`s{stream_order}_{AI 구간 ID}`, `position`은 AI `committed` 순서, `text` NULL=확정 전(끊겼으면 누락). V52 |
-| meeting_notes | document-svc | 회의록 초안 버전과 저장 기록 | PK `(meeting_id, version)`, `(meeting_id, generation_request_id)` UK(생성 재시도), `status`(generating/ready/failed/applied), `segment_snapshot`(AI에 보낸 구간), `result`(이름·네 배열, AI markdown 제외), `apply_*`(저장 전에 기록하는 대상·본문·기준 revision). 회의 삭제 cascade. V53 |
+| meetings | document-svc | 회의 받아쓰기 단위(만든 사람만 조회) | `created_by`, `document_id`(회의록 저장 대상, 논리 참조), `source`(live/upload), `status`(open/awaiting_upload/transcribing/failed). V54 |
+| meeting_streams | document-svc | 받아쓰기 연결 한 번 | `(meeting_id, stream_order)` UK, `end_reason`(finished/interrupted/failed, NULL=진행 중). 회의 삭제 cascade. V54 |
+| meeting_segments | document-svc | 확정 전사 구간 | PK `(meeting_id, id)`, `(meeting_id, position)` UK. `id`=`s{stream_order}_{AI 구간 ID}`, `position`은 AI `committed` 순서, `text` NULL=확정 전(끊겼으면 누락). V54 |
+| meeting_notes | document-svc | 회의록 초안 버전과 저장 기록 | PK `(meeting_id, version)`, `(meeting_id, generation_request_id)` UK(생성 재시도), `status`(generating/ready/failed/applied), `segment_snapshot`(AI에 보낸 구간), `result`(이름·네 배열, AI markdown 제외), `apply_*`(저장 전에 기록하는 대상·본문·기준 revision). 회의 삭제 cascade. V55 |
 | wiki_lint_state | document-svc | workspace별 마지막 lint 성공 시각(needs_lint 판단 기준점) | PK `workspace_id`(access_db 논리 참조), `last_lint_at` |
 
 V34는 `chat_export`에만 `(workspace_id, content_hash, selection_mode)` partial unique index를 추가한다.

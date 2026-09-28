@@ -127,7 +127,7 @@ public class FolderController {
         return ResponseEntity.ok(folderService.children(workspaceId, userId, folderId));
     }
 
-    @Operation(summary = "폴더 삭제", description = "폴더와 하위 항목을 휴지통 상태로 전환하며 base version으로 동시 변경을 검증합니다.")
+    @Operation(summary = "폴더 삭제", description = "폴더와 하위 항목을 휴지통 상태로 전환하고 하위 문서의 위키 정리를 요청하며 base version으로 동시 변경을 검증합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "삭제 성공 또는 멱등 재요청",
             content = @Content(schema = @Schema(implementation = FolderLifecycleResponse.class))),

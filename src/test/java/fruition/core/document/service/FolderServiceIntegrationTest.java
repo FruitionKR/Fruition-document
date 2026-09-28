@@ -1,6 +1,7 @@
 package fruition.core.document.service;
 
 import fruition.TestcontainersConfiguration;
+import fruition.core.document.dto.DocumentLifecycleRequest;
 import fruition.core.document.dto.DocumentPositionRequest;
 import fruition.core.document.dto.DocumentPositionResponse;
 import fruition.core.document.dto.BreadcrumbResponse;
@@ -19,10 +20,13 @@ import fruition.core.document.exception.HierarchyCycleException;
 import fruition.core.document.exception.HierarchyItemNotFoundException;
 import fruition.core.document.exception.HierarchyVersionConflictException;
 import fruition.core.document.exception.HierarchyWriteForbiddenException;
+import fruition.core.document.repository.DocumentRepository;
+import fruition.core.document.repository.IngestCommandOutbox;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -33,6 +37,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verify;
 
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
@@ -42,7 +47,9 @@ class FolderServiceIntegrationTest {
     @Autowired DocumentPlacementService documentPlacementService;
     @Autowired DocumentService documentService;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired DocumentRepository documentRepository;
     @Autowired StringRedisTemplate redisTemplate;
+    @SpyBean IngestCommandOutbox ingestCommandOutbox;
 
     private String userId;
     private String workspaceId;
@@ -299,6 +306,48 @@ class FolderServiceIntegrationTest {
     }
 
     @Test
+    void document_deleteRequestsWikiCleanupAndResetsEditableStatus() {
+        FolderResponse folder = folderService.create(workspaceId, userId, "kf", new FolderCreateRequest("자료", null));
+        String documentId = "doc_d_" + UUID.randomUUID();
+        insertDocumentInFolder(documentId, "d.md", "EDITABLE", folder.id(), 0);
+
+        insertActiveContribution(documentId);
+        assertThat(documentRepository.findDeletedForShare(documentId)).contains(false);
+
+        documentService.delete(workspaceId, userId, documentId, "delete-" + documentId,
+                new DocumentLifecycleRequest(1L));
+
+        assertThat(documentRepository.findDeletedForShare(documentId)).contains(true);
+
+        verify(ingestCommandOutbox).enqueueDelete(documentId, workspaceId);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM documents WHERE id = ?", String.class, documentId)).isEqualTo("uploaded");
+        assertThat(activeContributionCount(documentId)).isZero();
+    }
+
+    @Test
+    void folder_deleteRequestsWikiCleanupAndResetsEditableStatus() {
+        FolderResponse parent = folderService.create(workspaceId, userId, "kp", new FolderCreateRequest("부모", null));
+        FolderResponse child = folderService.create(workspaceId, userId, "kc", new FolderCreateRequest("자식", parent.id()));
+        String editableId = "doc_e_" + UUID.randomUUID();
+        String originalId = "doc_o_" + UUID.randomUUID();
+        insertDocumentInFolder(editableId, "e.md", "EDITABLE", parent.id(), 0);
+        insertDocumentInFolder(originalId, "o.pdf", "ORIGINAL", child.id(), 0);
+        insertActiveContribution(editableId);
+
+        folderService.delete(workspaceId, userId, parent.id(), "dk", parent.currentVersion());
+
+        assertThat(activeContributionCount(editableId)).isZero();
+
+        verify(ingestCommandOutbox).enqueueDelete(editableId, workspaceId);
+        verify(ingestCommandOutbox).enqueueDelete(originalId, workspaceId);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM documents WHERE id = ?", String.class, editableId)).isEqualTo("uploaded");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM documents WHERE id = ?", String.class, originalId)).isEqualTo("completed");
+    }
+
+    @Test
     void folder_restoreRestoresSubtreeUnderOriginalParent() {
         FolderResponse parent = folderService.create(workspaceId, userId, "kp", new FolderCreateRequest("부모", null));
         folderService.create(workspaceId, userId, "kc", new FolderCreateRequest("자식", parent.id()));
@@ -483,6 +532,29 @@ class FolderServiceIntegrationTest {
         // users/workspace_members는 access_db 소유 — guard가 읽는 projection만 심는다 (MSA DB 분리).
         seedAuthzProjection(memberId, role);
         return memberId;
+    }
+
+    /** 로그 되돌리기가 복구 대상을 정할 때 읽는 활성 기여를 문서 하나에 심는다. */
+    private void insertActiveContribution(String documentId) {
+        String operationId = "op_" + documentId;
+        jdbcTemplate.update("""
+                INSERT INTO ai_operation_logs(
+                    operation_id, workspace_id, user_id, operation_type, target_document_id,
+                    status, changed_resource_count, created_at
+                ) VALUES (?, ?, ?, 'ingest', ?, 'succeeded', 1, now())
+                """, operationId, workspaceId, userId, documentId);
+        jdbcTemplate.update("""
+                INSERT INTO wiki_page_contributions(
+                    page_id, ingest_operation_id, source_document_id, sequence_revision,
+                    object_key, active, created_at
+                ) VALUES (?, ?, ?, 1, 'wiki/contribution', true, now())
+                """, "source:" + documentId, operationId, documentId);
+    }
+
+    private Integer activeContributionCount(String documentId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM wiki_page_contributions WHERE source_document_id = ? AND active",
+                Integer.class, documentId);
     }
 
     private void insertDocumentInFolder(String documentId, String filename, String role, UUID folderId, long sortOrder) {

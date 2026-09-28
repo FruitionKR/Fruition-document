@@ -191,7 +191,8 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             + "UNION ALL "
             + "SELECT f.id FROM folders f JOIN subtree s ON f.parent_folder_id = s.id) "
             + "UPDATE documents SET deleted_at = :deletedAt, deleted_by = :deletedBy, "
-            + "delete_operation_id = :operationId, current_version = current_version + 1, updated_at = :deletedAt "
+            + "delete_operation_id = :operationId, current_version = current_version + 1, updated_at = :deletedAt, "
+            + "status = CASE WHEN document_role = 'EDITABLE' THEN 'uploaded' ELSE status END "
             + "WHERE folder_id IN (SELECT id FROM subtree) AND deleted_at IS NULL",
             nativeQuery = true)
     void softDeleteDocumentsInSubtree(
@@ -200,6 +201,18 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             @Param("deletedAt") Instant deletedAt,
             @Param("operationId") java.util.UUID operationId
     );
+
+    /**
+     * 문서가 휴지통에 있는지 읽고 삭제와 겹치지 않게 행을 공유 잠금한다. 문서가 없으면 비어 있다.
+     * 삭제는 같은 행을 FOR UPDATE로 잡으므로 둘 중 먼저 온 쪽이 끝난 뒤 나머지가 진행한다.
+     */
+    @Query(value = "SELECT deleted_at IS NOT NULL FROM documents WHERE id = :documentId FOR SHARE",
+            nativeQuery = true)
+    java.util.Optional<Boolean> findDeletedForShare(@Param("documentId") String documentId);
+
+    /** 같은 삭제 작업으로 휴지통에 들어간 문서 ID. 위키 정리 명령을 문서마다 보낼 때 쓴다. */
+    @Query(value = "SELECT id FROM documents WHERE delete_operation_id = :operationId", nativeQuery = true)
+    java.util.List<String> findIdsByDeleteOperationId(@Param("operationId") java.util.UUID operationId);
 
     /** 복구 대상 폴더의 하위 트리에 속하고 같은 삭제 작업으로 삭제된 문서만 되살린다. */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
@@ -292,10 +305,13 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             @Param("updatedAt") Instant updatedAt
     );
 
+    /** 삭제하면 위키에서 빠지므로 편집 문서는 미편입 상태로 되돌린다. 복구하면 다시 편입해야 한다. */
     @Modifying(flushAutomatically = true)
     @Query("UPDATE Document d SET d.currentVersion = d.currentVersion + 1, "
             + "d.deletedAt = :deletedAt, d.deletedBy = :deletedBy, "
-            + "d.deleteOperationId = :deleteOperationId, d.updatedAt = :deletedAt "
+            + "d.deleteOperationId = :deleteOperationId, d.updatedAt = :deletedAt, "
+            + "d.status = CASE WHEN d.documentRole = fruition.core.document.domain.DocumentRole.EDITABLE "
+            + "THEN fruition.core.document.domain.DocumentStatus.uploaded ELSE d.status END "
             + "WHERE d.id = :documentId AND d.workspaceId = :workspaceId "
             + "AND d.deletedAt IS NULL AND d.currentVersion = :baseVersion")
     int softDeleteIfVersionMatches(
