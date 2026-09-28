@@ -1704,7 +1704,7 @@ class DocumentServiceBlocksTest {
     }
 
     @Test
-    @DisplayName("문서 삭제는 version을 증가시키고 원본·편집 상태를 보존한다")
+    @DisplayName("문서 삭제는 version을 증가시키고 원본·편집 상태를 보존하며 위키 정리를 요청한다")
     void delete_softDeletesWithoutRemovingDocumentData() throws Exception {
         stubOwnedWorkspace();
         Document document = new Document(
@@ -1727,7 +1727,7 @@ class DocumentServiceBlocksTest {
         assertThat(response.deleted()).isTrue();
         assertThat(response.currentVersion()).isEqualTo(2);
         verify(documentRepository, never()).delete(any(Document.class));
-        verify(ingestCommandOutbox, never()).enqueueDelete(anyString(), anyString());
+        verify(ingestCommandOutbox).enqueueDelete(document.getId(), WORKSPACE_ID);
         verify(minioClient, never()).removeObject(any(RemoveObjectArgs.class));
         verify(idempotencyService).save(any(), any(), any(), any(), anyInt(), any(), any());
     }

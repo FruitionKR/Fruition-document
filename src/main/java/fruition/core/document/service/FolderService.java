@@ -20,6 +20,7 @@ import fruition.core.document.exception.HierarchyWriteForbiddenException;
 import fruition.core.document.exception.InvalidHierarchyRequestException;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
+import fruition.core.document.repository.IngestCommandOutbox;
 import fruition.core.authz.WorkspaceAccessGuard;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,19 +47,22 @@ public class FolderService {
     private final IdempotencyService idempotencyService;
     private final SiblingReorderer siblingReorderer;
     private final DocumentItemAssembler documentItemAssembler;
+    private final IngestCommandOutbox ingestCommandOutbox;
 
     public FolderService(WorkspaceAccessGuard workspaceAccessGuard,
                          FolderRepository folderRepository,
                          DocumentRepository documentRepository,
                          IdempotencyService idempotencyService,
                          SiblingReorderer siblingReorderer,
-                         DocumentItemAssembler documentItemAssembler) {
+                         DocumentItemAssembler documentItemAssembler,
+                         IngestCommandOutbox ingestCommandOutbox) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.folderRepository = folderRepository;
         this.documentRepository = documentRepository;
         this.idempotencyService = idempotencyService;
         this.siblingReorderer = siblingReorderer;
         this.documentItemAssembler = documentItemAssembler;
+        this.ingestCommandOutbox = ingestCommandOutbox;
     }
 
     @Transactional
@@ -170,6 +174,9 @@ public class FolderService {
                     }
                     folderRepository.softDeleteDescendantFolders(folderId, userId, now, operationId);
                     documentRepository.softDeleteDocumentsInSubtree(folderId, userId, now, operationId);
+                    // 위키 페이지는 AI가 소유하므로 휴지통에 들어간 문서마다 삭제 사실을 알린다.
+                    documentRepository.findIdsByDeleteOperationId(operationId)
+                            .forEach(documentId -> ingestCommandOutbox.enqueueDelete(documentId, workspaceId));
                     return new FolderLifecycleResponse(
                             folderId, baseVersion + 1, true, now, operationId);
                 });

@@ -1944,6 +1944,8 @@ public class DocumentService {
         if (updated == 0) {
             throw conditionalUpdateFailure(workspaceId, documentId);
         }
+        // 위키 페이지는 AI가 소유하므로 삭제 사실을 알려야 그래프·검색에서 빠진다.
+        ingestCommandOutbox.enqueueDelete(documentId, workspaceId);
 
         DocumentLifecycleResponse response = new DocumentLifecycleResponse(
                 documentId,

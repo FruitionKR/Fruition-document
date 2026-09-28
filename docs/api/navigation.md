@@ -14,7 +14,7 @@
 |---|---|
 | [`POST /api/workspaces/{workspace_id}/folders`](#summary-post-api-workspaces-workspace-id-folders) | 워크스페이스의 최상위 또는 지정한 상위 폴더 아래에 새 폴더를 생성합니다. |
 | [`PATCH /api/workspaces/{workspace_id}/folders/{folder_id}`](#summary-patch-api-workspaces-workspace-id-folders-folder-id) | 폴더 이름을 변경하고 base version으로 동시 변경을 검증합니다. |
-| [`DELETE /api/workspaces/{workspace_id}/folders/{folder_id}`](#summary-delete-api-workspaces-workspace-id-folders-folder-id) | 폴더와 하위 항목을 휴지통 상태로 전환하며 base version으로 동시 변경을 검증합니다. |
+| [`DELETE /api/workspaces/{workspace_id}/folders/{folder_id}`](#summary-delete-api-workspaces-workspace-id-folders-folder-id) | 폴더와 하위 항목을 휴지통 상태로 전환하고 하위 문서의 위키 정리를 요청하며 base version으로 동시 변경을 검증합니다. |
 | [`GET /api/workspaces/{workspace_id}/folders/{folder_id}/children`](#summary-get-api-workspaces-workspace-id-folders-folder-id-children) | 폴더 바로 아래의 하위 폴더와 문서를 정렬 순서로 반환합니다. |
 | [`PATCH /api/workspaces/{workspace_id}/folders/{folder_id}/position`](#summary-patch-api-workspaces-workspace-id-folders-folder-id-position) | 폴더를 대상 상위 폴더와 정렬 위치로 이동합니다. 자기 자신이나 하위 폴더로는 이동할 수 없습니다. |
 | [`POST /api/workspaces/{workspace_id}/folders/{folder_id}/restore`](#summary-post-api-workspaces-workspace-id-folders-folder-id-restore) | 삭제된 폴더와 하위 항목을 복구하고 유효한 탐색 위치에 배치합니다. |
@@ -285,7 +285,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/fold
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | 폴더와 하위 항목을 휴지통 상태로 전환하며 base version으로 동시 변경을 검증합니다. |
+| 목적 | 폴더와 하위 항목을 휴지통 상태로 전환하고 하위 문서의 위키 정리를 요청하며 base version으로 동시 변경을 검증합니다. |
 | 입력 | **Path** — `workspace_id`: `string`, `folder_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `DocumentLifecycleRequest` |
 | 출력 | `200` 삭제 성공 또는 멱등 재요청 — `FolderLifecycleResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
@@ -303,7 +303,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/fold
 
 #### 2. 목적
 
-폴더와 하위 항목을 휴지통 상태로 전환하며 base version으로 동시 변경을 검증합니다.
+폴더와 하위 항목을 휴지통 상태로 전환하고 하위 문서의 위키 정리를 요청하며 base version으로 동시 변경을 검증합니다.
 
 #### 3. Auth 필요 여부
 
