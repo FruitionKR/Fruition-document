@@ -1,5 +1,14 @@
 # Backend 변경 기록
 
+## 2026-09-28 (기능: 회의록 초안과 저장)
+
+- 회의록 초안 API 4개를 추가했습니다: 생성(`POST .../notes`), 최신 조회(`GET .../notes`), 기존 문서 끝 추가 미리보기(`POST .../notes/{version}/append-preview`), 저장(`POST .../notes/{version}/apply`).
+- 초안은 확정 전사로 AI 회의록 API를 불러 만들고 버전별로 보관합니다. AI 호출은 트랜잭션 밖에서 하며 결과는 자기 버전 행에만 써서 늦게 끝난 이전 생성이 새 초안을 덮지 않습니다. 다시 만들기가 실패해도 마지막 성공 초안은 저장할 수 있습니다. 누락·비정상 종료 전사는 `allow_partial=true`일 때만 초안을 만듭니다.
+- 문서 본문은 AI 응답의 markdown 대신 요약·결정 사항·할 일·미결 사항 배열로 다시 만들어 근거 ID를 넣지 않습니다.
+- 저장은 기존 Markdown 문서 생성(`create`)과 본문 저장(`append`, `base_revision`·`revision_write_id`)을 그대로 쓰고, 대상·본문을 먼저 기록해 같은 요청 재시도가 같은 저장을 반복합니다. 미리보기 이후 문서가 바뀌면 409, 최신이 아닌 초안은 409, 한 버전은 한 번만 저장합니다.
+- V55: `meeting_notes` 추가(expand-only, 처음 V53이었으나 dev의 V52·V53과 겹쳐 번호만 옮김). 설정 `MEETING_NOTES_ENDPOINT`, `MEETING_NOTES_TIMEOUT_SECONDS`(기본 150초). 호환성·롤백·실제 AI 검증 기록은 `docs/db/v55-meeting-notes-2026-09-28.md`에 있습니다.
+- 가짜 AI 서버 통합 테스트 6개를 추가했고, 로컬 실제 AI로 받아쓰기 → 초안(약 20초) → 기존 문서 끝 추가·새 문서 저장을 확인했습니다. 전체 910개 테스트와 OpenAPI 스냅샷 비교를 통과했습니다.
+
 ## 2026-09-28 (기능: 회의 실시간 받아쓰기)
 
 - 회의 생성·조회·ticket 발급 API와 `WS /api/meetings/{meeting_id}/live`를 추가했습니다. document-svc가 AI 실시간 전사 WebSocket에 연결마다 1:1로 중계하고, 확정 문장을 core_db에 저장한 뒤에만 브라우저에 전달합니다. 회의는 만든 사람만 조회할 수 있습니다.
