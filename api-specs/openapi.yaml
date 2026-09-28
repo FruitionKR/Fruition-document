@@ -26,6 +26,8 @@ tags:
   name: Documents
 - description: "워크스페이스 문서 폴더의 생성, 이동, 삭제 및 복구 API"
   name: Folders
+- description: 회의 실시간 받아쓰기. 회의는 만든 사람만 조회·변경할 수 있다.
+  name: Meetings
 - description: 워크스페이스 문서·폴더 계층 탐색 API
   name: Navigation
 - description: 워크스페이스 문서와 폴더 계층 탐색 API
@@ -2720,6 +2722,136 @@ paths:
       summary: 폴더 복구
       tags:
       - Folders
+  /api/workspaces/{workspace_id}/meetings:
+    post:
+      description: "받아쓰기 회의를 만듭니다. document_id를 주면 그 문서를 회의록 저장 대상으로 기억하며, 사용자가 편집할 수 있는 자기 Markdown 문서여야 합니다."
+      operationId: createMeeting
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - description: 요청 멱등 키
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MeetingCreateRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/MeetingResponse"
+          description: 생성됨
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 잘못된 이름·source 또는 Idempotency-Key
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 대상 문서를 편집할 수 없음
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스 또는 대상 문서를 찾을 수 없음
+        "409":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Idempotency-Key 충돌
+      summary: 회의 생성
+      tags:
+      - Meetings
+  /api/workspaces/{workspace_id}/meetings/{meeting_id}:
+    get:
+      description: "회의 상태, 받아쓰기 연결 기록, 발화 순서대로 정렬된 전사 구간을 반환합니다."
+      operationId: getMeeting
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: meeting_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/MeetingResponse"
+          description: 조회 성공
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 회의를 찾을 수 없음(다른 사용자의 회의 포함)
+      summary: 회의 조회
+      tags:
+      - Meetings
+  /api/workspaces/{workspace_id}/meetings/{meeting_id}/live-tickets:
+    post:
+      description: "WS /api/meetings/{meeting_id}/live?ticket= 접속에 쓰는 60초짜리 일회용 ticket을 발급합니다. 브라우저 WebSocket은 Authorization 헤더를 보낼 수 없어 ticket으로 인증합니다."
+      operationId: issueMeetingLiveTicket
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: meeting_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/MeetingLiveTicketResponse"
+          description: 발급 성공
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 회의를 찾을 수 없음
+        "409":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 실시간 회의가 아니거나 이미 다른 곳에서 받아쓰는 중
+      summary: 실시간 받아쓰기 ticket 발급
+      tags:
+      - Meetings
   /api/workspaces/{workspace_id}/navigation:
     get:
       description: 워크스페이스 최상위의 폴더와 문서를 정렬 순서로 반환합니다.
@@ -5844,6 +5976,107 @@ components:
             # 회의록
 
             - 첫 번째 안건
+    MeetingCreateRequest:
+      type: object
+      description: 회의 생성 요청
+      properties:
+        display_name:
+          type: string
+          description: 1–200자. 생략하면 회의록
+          example: 출시 회의
+        document_id:
+          type: string
+          description: 선택. 회의록을 끝에 추가할 문서
+        source:
+          type: string
+          description: live(실시간 받아쓰기) 또는 upload(녹음 파일)
+          enum:
+          - live
+          - upload
+          example: live
+    MeetingLiveTicketResponse:
+      type: object
+      description: 실시간 받아쓰기 일회용 접속권
+      properties:
+        expires_at:
+          type: string
+          format: date-time
+        ticket:
+          type: string
+          example: wst_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+    MeetingResponse:
+      type: object
+      description: 회의 상태와 받아쓴 내용. 새로고침·연결 끊김 뒤 화면 복구에 쓴다.
+      properties:
+        created_at:
+          type: string
+          format: date-time
+        display_name:
+          type: string
+        document_id:
+          type: string
+          description: 회의록 저장 대상 문서. 없으면 새 문서로 저장한다.
+        live_connected:
+          type: boolean
+          description: 지금 실시간 받아쓰기 연결이 있는지
+        meeting_id:
+          type: string
+          example: mtg_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/MeetingSegment"
+        source:
+          type: string
+          enum:
+          - live
+          - upload
+        status:
+          type: string
+          enum:
+          - open
+          - awaiting_upload
+          - transcribing
+          - failed
+        streams:
+          type: array
+          items:
+            $ref: "#/components/schemas/MeetingStream"
+        transcript_complete:
+          type: boolean
+          description: 확정 전 구간이 없고 모든 연결이 정상 종료됐는지. false면 일부 전사만 있다.
+    MeetingSegment:
+      type: object
+      description: 발화 순서대로 정렬된 전사 구간
+      properties:
+        id:
+          type: string
+          example: s1_item_a1
+        position:
+          type: integer
+          format: int32
+        status:
+          type: string
+          enum:
+          - completed
+          - pending
+        text:
+          type: string
+          description: 확정 전이면 null
+    MeetingStream:
+      type: object
+      description: 받아쓰기 연결 한 번
+      properties:
+        end_reason:
+          type: string
+          description: "finished(정상 종료), interrupted(끊김), failed(오류). 진행 중이면 null"
+          enum:
+          - finished
+          - interrupted
+          - failed
+        stream_order:
+          type: integer
+          format: int32
     MessageSummary:
       type: object
       description: 질의로 저장된 메시지 요약

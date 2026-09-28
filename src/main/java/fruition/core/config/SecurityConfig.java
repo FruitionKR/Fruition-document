@@ -76,6 +76,9 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         // access(인증 서비스)가 호출하는 내부 API: 컨트롤러에서 X-Internal-Token을 검증한다
                         .requestMatchers("/internal/**").permitAll()
+                        // 회의 실시간 받아쓰기 WebSocket. 브라우저가 Authorization 헤더를 못 보내므로
+                        // JWT 대신 일회용 ticket을 handshake interceptor가 검증한다.
+                        .requestMatchers("/api/meetings/*/live").permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
