@@ -11,7 +11,6 @@ import fruition.core.document.exception.HierarchyVersionConflictException;
 import fruition.core.document.exception.InvalidHierarchyRequestException;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
-import fruition.core.document.repository.IngestCommandOutbox;
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.authz.WorkspaceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,7 +47,7 @@ class FolderServiceTest {
     @Mock IdempotencyService idempotencyService;
     @Mock SiblingReorderer siblingReorderer;
     @Mock DocumentItemAssembler documentItemAssembler;
-    @Mock IngestCommandOutbox ingestCommandOutbox;
+    @Mock DocumentWikiRetirement documentWikiRetirement;
 
     private FolderService service;
 
@@ -56,7 +55,7 @@ class FolderServiceTest {
     void setUp() {
         service = new FolderService(workspaceAccessGuard,
                 folderRepository, documentRepository,
-                idempotencyService, siblingReorderer, documentItemAssembler, ingestCommandOutbox);
+                idempotencyService, siblingReorderer, documentItemAssembler, documentWikiRetirement);
         lenient().when(idempotencyService.execute(
                 any(), any(), any(), any(), any(), anyInt(), any(), any()))
                 .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(7).get());

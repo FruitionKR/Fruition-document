@@ -103,6 +103,7 @@ class DocumentServiceBlocksTest {
     @Mock MinioClient minioClient;
     @Mock StorageProperties storageProps;
     @Mock IngestCommandOutbox ingestCommandOutbox;
+    @Mock DocumentWikiRetirement documentWikiRetirement;
     @Mock PipelineWikiStateRequester pipelineWikiStateRequester;
     @Mock fruition.core.document.repository.DocumentConvertQueueRepository convertQueueRepository;
     @Mock fruition.core.document.repository.ConverterClient converterClient;
@@ -147,7 +148,7 @@ class DocumentServiceBlocksTest {
                 applyOperationStore,
                 operationRecorder,
                 ingestOperationStarter,
-                workspaceAiModelClient, taskWriter);
+                workspaceAiModelClient, taskWriter, documentWikiRetirement);
         lenient().when(pipelineWikiStateRequester.documentContext(anyString(), anyString()))
                 .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of()));
         // 직접 생성·복제·변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.
@@ -1727,7 +1728,7 @@ class DocumentServiceBlocksTest {
         assertThat(response.deleted()).isTrue();
         assertThat(response.currentVersion()).isEqualTo(2);
         verify(documentRepository, never()).delete(any(Document.class));
-        verify(ingestCommandOutbox).enqueueDelete(document.getId(), WORKSPACE_ID);
+        verify(documentWikiRetirement).retire(WORKSPACE_ID, List.of(document.getId()));
         verify(minioClient, never()).removeObject(any(RemoveObjectArgs.class));
         verify(idempotencyService).save(any(), any(), any(), any(), anyInt(), any(), any());
     }

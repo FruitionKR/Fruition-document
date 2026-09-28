@@ -114,6 +114,7 @@ public class DocumentService {
     private final MinioClient minioClient;
     private final StorageProperties storageProps;
     private final IngestCommandOutbox ingestCommandOutbox;
+    private final DocumentWikiRetirement documentWikiRetirement;
     private final PipelineWikiStateRequester pipelineWikiStateRequester;
     private final DocumentConvertQueueRepository convertQueueRepository;
     private final ConverterClient converterClient;
@@ -162,8 +163,10 @@ public class DocumentService {
                            OperationRecorder operationRecorder,
                            IngestOperationStarter ingestOperationStarter,
                            WorkspaceAiModelClient workspaceAiModelClient,
-                           fruition.core.document.repository.AiCommandOutboxWriter taskWriter) {
+                           fruition.core.document.repository.AiCommandOutboxWriter taskWriter,
+                           DocumentWikiRetirement documentWikiRetirement) {
         this.taskWriter = taskWriter;
+        this.documentWikiRetirement = documentWikiRetirement;
         this.documentRepository = documentRepository;
         this.folderRepository = folderRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
@@ -1944,8 +1947,7 @@ public class DocumentService {
         if (updated == 0) {
             throw conditionalUpdateFailure(workspaceId, documentId);
         }
-        // 위키 페이지는 AI가 소유하므로 삭제 사실을 알려야 그래프·검색에서 빠진다.
-        ingestCommandOutbox.enqueueDelete(documentId, workspaceId);
+        documentWikiRetirement.retire(workspaceId, List.of(documentId));
 
         DocumentLifecycleResponse response = new DocumentLifecycleResponse(
                 documentId,

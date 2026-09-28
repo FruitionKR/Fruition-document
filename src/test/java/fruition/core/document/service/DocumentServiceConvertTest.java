@@ -78,6 +78,7 @@ class DocumentServiceConvertTest {
     @Mock MinioClient minioClient;
     @Mock StorageProperties storageProps;
     @Mock IngestCommandOutbox ingestCommandOutbox;
+    @Mock DocumentWikiRetirement documentWikiRetirement;
     @Mock PipelineWikiStateRequester pipelineWikiStateRequester;
     @Mock DocumentConvertQueueRepository convertQueueRepository;
     @Mock ConverterClient converterClient;
@@ -121,7 +122,7 @@ class DocumentServiceConvertTest {
                 applyOperationStore,
                 operationRecorder,
                 ingestOperationStarter,
-                workspaceAiModelClient, taskWriter);
+                workspaceAiModelClient, taskWriter, documentWikiRetirement);
         // 변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.
         lenient().when(storageProps.getBucket()).thenReturn("fruition-storage");
         // 단위 테스트에서는 transactionTemplate이 콜백을 그대로 실행하게 한다.
