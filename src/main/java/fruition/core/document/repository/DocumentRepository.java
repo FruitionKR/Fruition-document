@@ -202,6 +202,14 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             @Param("operationId") java.util.UUID operationId
     );
 
+    /**
+     * 문서가 휴지통에 있는지 읽고 삭제와 겹치지 않게 행을 공유 잠금한다. 문서가 없으면 비어 있다.
+     * 삭제는 같은 행을 FOR UPDATE로 잡으므로 둘 중 먼저 온 쪽이 끝난 뒤 나머지가 진행한다.
+     */
+    @Query(value = "SELECT deleted_at IS NOT NULL FROM documents WHERE id = :documentId FOR SHARE",
+            nativeQuery = true)
+    java.util.Optional<Boolean> findDeletedForShare(@Param("documentId") String documentId);
+
     /** 같은 삭제 작업으로 휴지통에 들어간 문서 ID. 위키 정리 명령을 문서마다 보낼 때 쓴다. */
     @Query(value = "SELECT id FROM documents WHERE delete_operation_id = :operationId", nativeQuery = true)
     java.util.List<String> findIdsByDeleteOperationId(@Param("operationId") java.util.UUID operationId);

@@ -20,6 +20,7 @@ import fruition.core.document.exception.HierarchyCycleException;
 import fruition.core.document.exception.HierarchyItemNotFoundException;
 import fruition.core.document.exception.HierarchyVersionConflictException;
 import fruition.core.document.exception.HierarchyWriteForbiddenException;
+import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.IngestCommandOutbox;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,6 +47,7 @@ class FolderServiceIntegrationTest {
     @Autowired DocumentPlacementService documentPlacementService;
     @Autowired DocumentService documentService;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired DocumentRepository documentRepository;
     @Autowired StringRedisTemplate redisTemplate;
     @SpyBean IngestCommandOutbox ingestCommandOutbox;
 
@@ -310,9 +312,12 @@ class FolderServiceIntegrationTest {
         insertDocumentInFolder(documentId, "d.md", "EDITABLE", folder.id(), 0);
 
         insertActiveContribution(documentId);
+        assertThat(documentRepository.findDeletedForShare(documentId)).contains(false);
 
         documentService.delete(workspaceId, userId, documentId, "delete-" + documentId,
                 new DocumentLifecycleRequest(1L));
+
+        assertThat(documentRepository.findDeletedForShare(documentId)).contains(true);
 
         verify(ingestCommandOutbox).enqueueDelete(documentId, workspaceId);
         assertThat(jdbcTemplate.queryForObject(

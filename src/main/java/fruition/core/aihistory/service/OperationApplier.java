@@ -11,6 +11,7 @@ import fruition.core.aihistory.exception.InvalidCallbackPayloadException;
 import fruition.core.aihistory.exception.OperationNotFoundException;
 import fruition.core.aihistory.repository.OperationChangeRepository;
 import fruition.core.aihistory.repository.OperationLogRepository;
+import fruition.core.document.repository.DocumentRepository;
 import fruition.core.wiki.domain.WikiPageContribution;
 import fruition.core.wiki.domain.WikiPageContributionId;
 import fruition.core.wiki.domain.WikiPageVersion;
@@ -44,19 +45,22 @@ public class OperationApplier {
     private final WikiPageVersionRepository versionRepository;
     private final WikiPageContributionRepository contributionRepository;
     private final LineCounter lineCounter;
+    private final DocumentRepository documentRepository;
 
     public OperationApplier(OperationLogRepository operationLogRepository,
                             OperationChangeRepository operationChangeRepository,
                             PipelineWikiStateRequester wikiStateRequester,
                             WikiPageVersionRepository versionRepository,
                             WikiPageContributionRepository contributionRepository,
-                            LineCounter lineCounter) {
+                            LineCounter lineCounter,
+                            DocumentRepository documentRepository) {
         this.operationLogRepository = operationLogRepository;
         this.operationChangeRepository = operationChangeRepository;
         this.wikiStateRequester = wikiStateRequester;
         this.versionRepository = versionRepository;
         this.contributionRepository = contributionRepository;
         this.lineCounter = lineCounter;
+        this.documentRepository = documentRepository;
     }
 
     @Transactional
@@ -71,9 +75,14 @@ public class OperationApplier {
                 .sorted(Comparator.comparing(LoadedPage::pageId))
                 .toList();
 
+        // 편입 도중 문서가 휴지통으로 가면 삭제가 기여를 끈 뒤에 이 결과가 도착한다.
+        // 그대로 활성 기여를 넣으면 로그 되돌리기가 삭제한 문서를 다시 살리므로 꺼진 채로 넣는다.
+        boolean documentDeleted = operation.getTargetDocumentId() != null
+                && documentRepository.findDeletedForShare(operation.getTargetDocumentId()).orElse(false);
+
         int recorded = 0;
         for (LoadedPage page : ordered) {
-            if (applyPage(operation, page, now)) {
+            if (applyPage(operation, page, now, documentDeleted)) {
                 recorded++;
             }
         }
@@ -101,7 +110,7 @@ public class OperationApplier {
     }
 
     /** @return 적재했으면 true. 같은 작업의 재전송이면 건너뛴다 */
-    private boolean applyPage(OperationLog operation, LoadedPage page, Instant now) {
+    private boolean applyPage(OperationLog operation, LoadedPage page, Instant now, boolean documentDeleted) {
         String pageId = page.pageId();
         // 행을 바꾸지는 않지만, 같은 페이지 콜백이 동시에 와도 revision 채번이 겹치지 않도록 잠근다.
         versionRepository.lockPage(pageId);
@@ -127,9 +136,13 @@ public class OperationApplier {
         long revision = versionRepository.findMaxRevision(pageId) + 1;
 
         // 기여를 먼저 넣어야 그 시점 기여 수가 나온다. 그 값이 버전 행에 들어간다.
-        contributionRepository.save(new WikiPageContribution(
+        WikiPageContribution contribution = new WikiPageContribution(
                 pageId, operation.getOperationId(), operation.getTargetDocumentId(),
-                revision, page.contributionKey(), now));
+                revision, page.contributionKey(), now);
+        if (documentDeleted) {
+            contribution.deactivate(null);
+        }
+        contributionRepository.save(contribution);
         int contributionCount = (int) contributionRepository.countByIdPageIdAndActiveTrue(pageId);
 
         versionRepository.save(new WikiPageVersion(
