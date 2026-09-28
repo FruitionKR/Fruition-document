@@ -46,19 +46,22 @@ public class FolderService {
     private final IdempotencyService idempotencyService;
     private final SiblingReorderer siblingReorderer;
     private final DocumentItemAssembler documentItemAssembler;
+    private final DocumentWikiRetirement documentWikiRetirement;
 
     public FolderService(WorkspaceAccessGuard workspaceAccessGuard,
                          FolderRepository folderRepository,
                          DocumentRepository documentRepository,
                          IdempotencyService idempotencyService,
                          SiblingReorderer siblingReorderer,
-                         DocumentItemAssembler documentItemAssembler) {
+                         DocumentItemAssembler documentItemAssembler,
+                         DocumentWikiRetirement documentWikiRetirement) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.folderRepository = folderRepository;
         this.documentRepository = documentRepository;
         this.idempotencyService = idempotencyService;
         this.siblingReorderer = siblingReorderer;
         this.documentItemAssembler = documentItemAssembler;
+        this.documentWikiRetirement = documentWikiRetirement;
     }
 
     @Transactional
@@ -170,6 +173,8 @@ public class FolderService {
                     }
                     folderRepository.softDeleteDescendantFolders(folderId, userId, now, operationId);
                     documentRepository.softDeleteDocumentsInSubtree(folderId, userId, now, operationId);
+                    documentWikiRetirement.retire(
+                            workspaceId, documentRepository.findIdsByDeleteOperationId(operationId));
                     return new FolderLifecycleResponse(
                             folderId, baseVersion + 1, true, now, operationId);
                 });

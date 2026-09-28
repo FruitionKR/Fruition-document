@@ -5,7 +5,7 @@
 - 회의 API 3개를 추가했습니다: 녹음 원본 업로드(`PUT .../meetings/{id}/recording`), 재생 주소(`GET .../recording-url`, 5분 presigned), 회의 삭제(`DELETE .../meetings/{id}`).
 - 녹음 파일 회의는 업로드하면 `transcribing`이 되고, 작업자가 `FOR UPDATE SKIP LOCKED`로 한 건씩 선점해 AI 파일 전사를 부른 뒤 문장 단위 구간으로 저장합니다. 실패하면 `failed`와 사유를 남기고 다시 올릴 수 있습니다. 실시간 회의는 받아쓰기가 끝난 뒤 원본만 한 번 보관합니다.
 - 원본은 회의 삭제 전까지 보관하고 크기를 기록합니다. 삭제는 원본을 먼저 지우고 실패하면 아무것도 지우지 않습니다. 받아쓰기 연결 중에는 업로드·삭제를 409로 거절합니다.
-- V54: `meetings`에 원본·전사 상태 컬럼 추가(expand-only). 설정 `SPEECH_TRANSCRIPTION_ENDPOINT`(채팅 음성 입력과 같은 키). 호환성·롤백·실제 AI 검증 기록은 `docs/db/v54-meeting-recordings-2026-09-28.md`에 있습니다.
+- V56: `meetings`에 원본·전사 상태 컬럼 추가(expand-only, 처음 V54였으나 dev의 V52·V53과 겹쳐 번호만 옮김). 설정 `SPEECH_TRANSCRIPTION_ENDPOINT`(채팅 음성 입력과 같은 키). 호환성·롤백·실제 AI 검증 기록은 `docs/db/v56-meeting-recordings-2026-09-28.md`에 있습니다.
 - 실제 MinIO와 가짜 AI 서버로 통합 테스트 6개를 추가했고, 로컬 실제 AI로 27초 녹음 → 4문장 전사(약 11초) → 회의록 초안 → 새 문서 → 재생 → 삭제를 확인했습니다. 전체 916개 테스트와 OpenAPI 스냅샷 비교를 통과했습니다.
 
 ## 2026-09-28 (기능: 회의록 초안과 저장)
@@ -14,7 +14,7 @@
 - 초안은 확정 전사로 AI 회의록 API를 불러 만들고 버전별로 보관합니다. AI 호출은 트랜잭션 밖에서 하며 결과는 자기 버전 행에만 써서 늦게 끝난 이전 생성이 새 초안을 덮지 않습니다. 다시 만들기가 실패해도 마지막 성공 초안은 저장할 수 있습니다. 누락·비정상 종료 전사는 `allow_partial=true`일 때만 초안을 만듭니다.
 - 문서 본문은 AI 응답의 markdown 대신 요약·결정 사항·할 일·미결 사항 배열로 다시 만들어 근거 ID를 넣지 않습니다.
 - 저장은 기존 Markdown 문서 생성(`create`)과 본문 저장(`append`, `base_revision`·`revision_write_id`)을 그대로 쓰고, 대상·본문을 먼저 기록해 같은 요청 재시도가 같은 저장을 반복합니다. 미리보기 이후 문서가 바뀌면 409, 최신이 아닌 초안은 409, 한 버전은 한 번만 저장합니다.
-- V53: `meeting_notes` 추가(expand-only). 설정 `MEETING_NOTES_ENDPOINT`, `MEETING_NOTES_TIMEOUT_SECONDS`(기본 150초). 호환성·롤백·실제 AI 검증 기록은 `docs/db/v53-meeting-notes-2026-09-28.md`에 있습니다.
+- V55: `meeting_notes` 추가(expand-only, 처음 V53이었으나 dev의 V52·V53과 겹쳐 번호만 옮김). 설정 `MEETING_NOTES_ENDPOINT`, `MEETING_NOTES_TIMEOUT_SECONDS`(기본 150초). 호환성·롤백·실제 AI 검증 기록은 `docs/db/v55-meeting-notes-2026-09-28.md`에 있습니다.
 - 가짜 AI 서버 통합 테스트 6개를 추가했고, 로컬 실제 AI로 받아쓰기 → 초안(약 20초) → 기존 문서 끝 추가·새 문서 저장을 확인했습니다. 전체 910개 테스트와 OpenAPI 스냅샷 비교를 통과했습니다.
 
 ## 2026-09-28 (기능: 회의 실시간 받아쓰기)
@@ -22,7 +22,7 @@
 - 회의 생성·조회·ticket 발급 API와 `WS /api/meetings/{meeting_id}/live`를 추가했습니다. document-svc가 AI 실시간 전사 WebSocket에 연결마다 1:1로 중계하고, 확정 문장을 core_db에 저장한 뒤에만 브라우저에 전달합니다. 회의는 만든 사람만 조회할 수 있습니다.
 - 브라우저 WebSocket은 Authorization 헤더를 보낼 수 없어 60초 일회용 ticket(Redis `GETDEL`)과 Origin(CORS 허용 목록)으로 인증합니다. 회의당 연결 1개는 Redis 잠금(90초 TTL, 30초 연장)으로 보장합니다.
 - 발화 순서는 AI `committed` 시점의 position으로 정하고, 구간 ID에 연결 순번을 붙여(`s{n}_`) 재연결 사이 충돌을 막습니다. 같은 구간에 다른 확정 문장이 오면 덮어쓰지 않고 연결을 닫으며, `finished`의 구간 수와 저장 수가 같을 때만 정상 종료로 기록합니다.
-- V52: `meetings`, `meeting_streams`, `meeting_segments`를 추가했습니다. 새 테이블만 만들며 기존 테이블을 잠그거나 바꾸지 않습니다. 운영 runtime role에 새 테이블 SELECT/INSERT/UPDATE/DELETE 권한이 필요합니다. 로컬 호환성·롤백 검증은 `docs/db/v52-meetings-2026-09-28.md`에 있습니다.
+- V54: `meetings`, `meeting_streams`, `meeting_segments`를 추가했습니다(처음 V52였으나 dev의 V52·V53과 겹쳐 번호만 옮김). 새 테이블만 만들며 기존 테이블을 잠그거나 바꾸지 않습니다. 운영 runtime role에 새 테이블 SELECT/INSERT/UPDATE/DELETE 권한이 필요합니다. 로컬 호환성·롤백 검증은 `docs/db/v54-meetings-2026-09-28.md`에 있습니다.
 - `spring-boot-starter-websocket` 의존성과 `SPEECH_LIVE_ENDPOINT` 설정을 추가했습니다. 배포 경로(WebSocket 직접 연결, ALB idle timeout)는 platform ADR-0022를 따릅니다.
 - 같은 앱 안의 가짜 AI WebSocket으로 역순·중복·충돌 완료, 재연결 순서, 종료 개수 불일치, ticket 재사용·Origin·동시 연결 거절, 1초(48,000 bytes) frame을 검증했습니다. 전체 904개 테스트와 OpenAPI 스냅샷 비교를 통과했습니다. 실제 AI·모델 연결과 AWS 경로는 검증하지 않았습니다.
 

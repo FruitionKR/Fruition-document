@@ -1,15 +1,17 @@
-# 회의 녹음 원본 V54 배포 검증
+# 회의 녹음 원본 V56 배포 검증
 
 ## 변경
 
-`V54__add_meeting_recordings.sql`은 `meetings`에 NULL 허용 컬럼 5개(`recording_key`, `recording_content_type`, `recording_bytes`, `error`, `claimed_at`)와 partial index `idx_meetings_transcribing`을 추가한다. 기본값·backfill이 없어 기존 행을 다시 쓰지 않는다(`migration_mode: expand-only`). V53이 먼저 적용돼 있어야 한다. 계약은 [Meetings API](../api/meetings.md#녹음-원본과-회의-삭제), 설계는 [ADR-0023](../adr/0023-meeting-transcripts-and-recordings.md)을 따른다.
+> 번호 변경: 처음 `V54__add_meeting_recordings.sql`로 만들고 아래 검증을 회의록 초안(당시 V53) 위에서 했다. dev에 V52·V53이 들어와 회의 테이블 V54, 회의록 V55로 옮겨졌고, 이 마이그레이션은 내용 그대로 **V56**으로 옮겼다. 아래 표의 V53·V54는 당시 번호다. 새 번호로 다시 확인한 결과는 문서 끝 "번호 변경 후 재검증"에 있다.
+
+`V56__add_meeting_recordings.sql`은 `meetings`에 NULL 허용 컬럼 5개(`recording_key`, `recording_content_type`, `recording_bytes`, `error`, `claimed_at`)와 partial index `idx_meetings_transcribing`을 추가한다. 기본값·backfill이 없어 기존 행을 다시 쓰지 않는다(`migration_mode: expand-only`). 회의록 초안 마이그레이션(V55)이 먼저 적용돼 있어야 한다. 계약은 [Meetings API](../api/meetings.md#녹음-원본과-회의-삭제), 설계는 [ADR-0023](../adr/0023-meeting-transcripts-and-recordings.md)을 따른다.
 
 ## 배포 제약
 
 - `meetings`의 기존 runtime 권한을 그대로 쓴다. 인덱스 생성은 `meetings` 크기에 비례해 짧게 쓰기를 막는다(신규 테이블이라 작다).
 - 새 앱은 `SPEECH_TRANSCRIPTION_ENDPOINT`(AI 파일 전사) 설정과 S3/MinIO `meetings/` 접두사 쓰기·읽기·삭제 권한이 필요하다.
 - 녹음 원본은 음성 개인정보다. 회의 삭제 전까지 보관하며 용량 한도는 없다(`recording_bytes`로 추후 적용).
-- 롤백: V53 버전 앱은 V54가 적용된 DB에서 그대로 동작한다(아래 검증). 새 컬럼은 이전 앱이 읽지 않는다.
+- 롤백: 회의록 초안 버전 앱은 이 마이그레이션이 적용된 DB에서 그대로 동작한다(아래 검증). 새 컬럼은 이전 앱이 읽지 않는다.
 
 ## 로컬 호환성 검증 (2026-09-28)
 

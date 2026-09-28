@@ -32,12 +32,16 @@ public class TestcontainersConfiguration {
 		return new GenericContainer<>(DockerImageName.parse("redis:7-alpine")).withExposedPorts(6379);
 	}
 
+	// MinIO는 공식 커뮤니티 이미지(minio/minio, quay.io/minio/minio) 배포를 중단해 기존 태그를 받을 수 없다.
+	// 원본을 소스에서 빌드한 Chainguard 이미지를 digest로 고정해 CI가 매번 같은 이미지를 받게 한다.
+	public static final String MINIO_IMAGE =
+		"cgr.dev/chainguard/minio@sha256:6a1d0b45c8669726bba580ced0bfa4cb9fdeed1ed636dfabd81d1577beb6937b";
+
 	// 문서 생성 시 원본 Markdown을 object storage에 넣으므로 통합 테스트에도 MinIO 컨테이너를 띄운다.
 	// MinIO는 @ServiceConnection 지원이 없어 app.storage.* 를 직접 덮어쓴다.
 	@Bean
 	MinIOContainer minioContainer() {
-		return new MinIOContainer(DockerImageName.parse("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
-			.asCompatibleSubstituteFor("minio/minio"));
+		return new MinIOContainer(DockerImageName.parse(MINIO_IMAGE).asCompatibleSubstituteFor("minio/minio"));
 	}
 
 	@Bean

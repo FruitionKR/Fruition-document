@@ -1,14 +1,16 @@
-# 회의록 초안 V53 배포 검증
+# 회의록 초안 V55 배포 검증
 
 ## 변경
 
-`V53__add_meeting_notes.sql`은 `meeting_notes` 테이블 하나를 새로 만든다(`meetings` FK, 회의 삭제 cascade). 기존 테이블을 변경·잠금하지 않고 backfill도 없다(`migration_mode: expand-only`). V52가 먼저 적용돼 있어야 한다. 계약은 [Meetings API](../api/meetings.md#회의록-초안과-저장), 설계는 [ADR-0023](../adr/0023-meeting-transcripts-and-recordings.md)을 따른다.
+> 번호 변경: 처음 `V53__add_meeting_notes.sql`로 만들고 아래 검증을 회의 테이블(당시 V52) 위에서 했다. dev에 V52·V53이 들어와 번호가 겹쳐, 회의 테이블은 V54, 이 마이그레이션은 내용 그대로 **V55**로 옮겼다. 아래 표의 V52·V53은 당시 번호다. 새 번호로 다시 확인한 결과는 문서 끝 "번호 변경 후 재검증"에 있다.
+
+`V55__add_meeting_notes.sql`은 `meeting_notes` 테이블 하나를 새로 만든다(`meetings` FK, 회의 삭제 cascade). 기존 테이블을 변경·잠금하지 않고 backfill도 없다(`migration_mode: expand-only`). 회의 테이블 마이그레이션(V54)이 먼저 적용돼 있어야 한다. 계약은 [Meetings API](../api/meetings.md#회의록-초안과-저장), 설계는 [ADR-0023](../adr/0023-meeting-transcripts-and-recordings.md)을 따른다.
 
 ## 배포 제약
 
 - runtime role(`core_runtime`)에 `meeting_notes` SELECT/INSERT/UPDATE/DELETE 권한이 필요하다. 로컬에서는 platform `init-db-isolation.sh`의 default privileges로 자동 부여됐다.
 - 새 앱은 `MEETING_NOTES_ENDPOINT` 설정이 필요하다(기본 `http://localhost:8000/meeting-notes/preview`).
-- 롤백: V52 버전 앱은 V53이 적용된 DB에서 그대로 동작한다(아래 검증). `meeting_notes`에는 회의 발언 요약이 들어가므로 테이블을 지울 때는 데이터를 먼저 처리한다.
+- 롤백: 회의 실시간 받아쓰기 버전 앱은 이 마이그레이션이 적용된 DB에서 그대로 동작한다(아래 검증). `meeting_notes`에는 회의 발언 요약이 들어가므로 테이블을 지울 때는 데이터를 먼저 처리한다.
 
 ## 로컬 호환성 검증 (2026-09-28)
 
