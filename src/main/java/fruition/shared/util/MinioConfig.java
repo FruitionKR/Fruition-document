@@ -8,9 +8,11 @@ import io.minio.credentials.IamAwsProvider;
 import io.minio.credentials.Provider;
 import java.security.ProviderException;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import okhttp3.ConnectionPool;
 import okhttp3.OkHttpClient;
+import okhttp3.Protocol;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -24,9 +26,14 @@ public class MinioConfig {
     static final long IDLE_CONNECTION_SECONDS = 30;
     private static final int MAX_IDLE_CONNECTIONS = 5;
 
-    /** 동기·비동기 MinIO 클라이언트가 함께 쓰는 HTTP 클라이언트. */
+    /**
+     * 동기·비동기 MinIO 클라이언트가 함께 쓰는 HTTP 클라이언트. MinIO 기본 클라이언트처럼 HTTP/1.1로
+     * 고정한다(HTTP/2 다중화는 연결 풀·유휴 시간 전제를 바꾼다). connect만 10초로 줄여 빨리 실패하게 하고
+     * read/write는 MinIO 기본값 5분을 그대로 둔다(대용량 multipart part 업로드 고려).
+     */
     static OkHttpClient httpClient() {
         return new OkHttpClient.Builder()
+                .protocols(List.of(Protocol.HTTP_1_1))
                 .connectionPool(new ConnectionPool(MAX_IDLE_CONNECTIONS, IDLE_CONNECTION_SECONDS, TimeUnit.SECONDS))
                 .connectTimeout(Duration.ofSeconds(10))
                 .readTimeout(Duration.ofMinutes(5))
