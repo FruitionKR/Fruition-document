@@ -31,6 +31,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 /**
@@ -80,7 +81,8 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         volatile MeetingRepository.Stream stream;
         volatile WebSocket upstream;
         volatile boolean ready;
-        volatile boolean closing;
+        /** 종료 처리는 한 번만 한다. 전송 시간 초과(Tomcat 스레드)와 ai-svc 오류(listener 스레드)가 겹칠 수 있다. */
+        final AtomicBoolean closing = new AtomicBoolean();
         ScheduledFuture<?> renewal;
 
         Live(MeetingService.Ticket ticket, WebSocketSession browser) {
@@ -122,17 +124,22 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
             return;
         }
         live.stream = repository.openStream(ticket.meetingId());
-        try {
-            URI uri = URI.create(environment.getRequiredProperty("app.speech.live-endpoint")
-                    + "?workspace_id=" + encode(ticket.workspaceId()) + "&user_id=" + encode(ticket.userId()));
-            live.upstream = httpClient.newWebSocketBuilder()
-                    .header("X-Internal-Token", internalToken)
-                    .buildAsync(uri, new AiListener(live))
-                    .get(15, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            log.warn("[회의 실시간 전사 연결 실패] meetingId={}", ticket.meetingId(), e);
-            fail(live, "transcription_failed", "전사를 시작하지 못했습니다. 다시 연결해 주세요.", CloseStatus.SERVER_ERROR);
-        }
+        URI uri = URI.create(environment.getRequiredProperty("app.speech.live-endpoint")
+                + "?workspace_id=" + encode(ticket.workspaceId()) + "&user_id=" + encode(ticket.userId()));
+        // ai-svc 연결(실측 ready까지 약 3.5초)을 기다리며 요청 스레드를 잡지 않는다. 연결 객체는 onOpen에서 잡는다.
+        httpClient.newWebSocketBuilder()
+                .header("X-Internal-Token", internalToken)
+                .buildAsync(uri, new AiListener(live))
+                .orTimeout(15, TimeUnit.SECONDS)
+                .whenComplete((upstream, error) -> {
+                    if (error != null) {
+                        log.warn("[회의 실시간 전사 연결 실패] meetingId={}", ticket.meetingId(), error);
+                        fail(live, "transcription_failed", "전사를 시작하지 못했습니다. 다시 연결해 주세요.",
+                                CloseStatus.SERVER_ERROR);
+                    } else if (live.closing.get()) {
+                        upstream.abort();  // 연결되는 사이에 브라우저가 떠났다
+                    }
+                });
     }
 
     @Override
@@ -172,7 +179,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         if (live == null) {
             return;
         }
-        live.closing = true;
+        live.closing.set(true);
         if (live.renewal != null) {
             live.renewal.cancel(false);
         }
@@ -254,7 +261,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         }
 
         private void upstreamGone() {
-            if (!live.closing) {
+            if (!live.closing.get()) {
                 fail(live, "transcription_failed", "전사가 중단됐습니다. 다시 연결해 주세요.", CloseStatus.SERVER_ERROR);
             }
         }
@@ -306,7 +313,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                 }
                 repository.endStream(live.stream.id(), "finished");
                 send(live, message("finished").put("segment_count", expected));
-                live.closing = true;
+                live.closing.set(true);
                 live.browser.close(CloseStatus.NORMAL);
             }
             case "error" -> fail(live, "transcription_failed", "전사가 중단됐습니다. 다시 연결해 주세요.",
@@ -317,10 +324,9 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
 
     /** 확정 구간은 유지한 채 이 연결만 실패로 기록하고 닫는다. 브라우저는 새 ticket으로 이어서 녹음한다. */
     private void fail(Live live, String code, String message, CloseStatus status) {
-        if (live.closing) {
+        if (!live.closing.compareAndSet(false, true)) {
             return;
         }
-        live.closing = true;
         if (live.stream != null) {
             repository.endStream(live.stream.id(), "failed");
         }

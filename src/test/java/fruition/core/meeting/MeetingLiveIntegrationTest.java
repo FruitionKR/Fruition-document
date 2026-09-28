@@ -102,6 +102,18 @@ class MeetingLiveIntegrationTest {
     }
 
     @Test
+    void aiHandshakeRejection_closesBrowserAndReleasesLock() throws Exception {
+        String meetingId = createMeeting();
+        FakeAi.mode = "reject";
+        Browser browser = connect(meetingId);
+
+        assertThat(browser.untilType("error").path("code").asText()).isEqualTo("transcription_failed");
+        browser.untilClosed();
+        assertThat(browser.closeStatus().getCode()).isEqualTo(CloseStatus.SERVER_ERROR.getCode());
+        assertThat(awaitLiveReleased(meetingId).path("streams").get(0).path("end_reason").asText()).isEqualTo("failed");
+    }
+
+    @Test
     void conflictingCompletion_isRejectedWithoutOverwriting() throws Exception {
         String meetingId = createMeeting();
         FakeAi.mode = "conflict";
@@ -358,7 +370,26 @@ class MeetingLiveIntegrationTest {
     static class FakeAiConfig implements WebSocketConfigurer {
         @Override
         public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-            registry.addHandler(new FakeAi(), "/internal/test-ai/live");
+            registry.addHandler(new FakeAi(), "/internal/test-ai/live")
+                    .addInterceptors(new org.springframework.web.socket.server.HandshakeInterceptor() {
+                        @Override
+                        public boolean beforeHandshake(org.springframework.http.server.ServerHttpRequest request,
+                                                       org.springframework.http.server.ServerHttpResponse response,
+                                                       org.springframework.web.socket.WebSocketHandler handler,
+                                                       java.util.Map<String, Object> attributes) {
+                            if ("reject".equals(FakeAi.mode)) {  // ai-svc가 토큰·권한으로 handshake를 거절하는 경우
+                                response.setStatusCode(org.springframework.http.HttpStatus.UNAUTHORIZED);
+                                return false;
+                            }
+                            return true;
+                        }
+
+                        @Override
+                        public void afterHandshake(org.springframework.http.server.ServerHttpRequest request,
+                                                   org.springframework.http.server.ServerHttpResponse response,
+                                                   org.springframework.web.socket.WebSocketHandler handler,
+                                                   Exception exception) {}
+                    });
         }
     }
 }
