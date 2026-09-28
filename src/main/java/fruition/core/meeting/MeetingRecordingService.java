@@ -8,7 +8,6 @@ import io.minio.RemoveObjectArgs;
 import io.minio.http.Method;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
@@ -17,7 +16,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -109,25 +107,31 @@ public class MeetingRecordingService {
 
     /**
      * 원본을 먼저 지우고 DB를 지운다. 원본이 남는 쪽의 실패가 개인정보 문제이므로 원본 삭제가 실패하면 전체를 실패시킨다.
-     * 행을 잠근 채 키를 읽고 지우므로, 겹친 재업로드는 잠금이 풀린 뒤 행을 찾지 못해 자기 객체를 지운다.
-     * 실시간 받아쓰기 중이면 연결을 닫은 뒤 다시 요청해야 한다.
+     * 저장소 호출 동안 DB 잠금이나 트랜잭션을 잡지 않는다. 대신 읽어 둔 키와 같을 때만 행을 지우므로,
+     * 그사이 재업로드로 키가 바뀌었으면 새 원본을 남긴 채 409로 끝난다(다시 요청하면 지워진다).
+     * 전사 중이거나 실시간 받아쓰기 중이면 거절한다.
      */
-    @Transactional
     public void delete(String workspaceId, String userId, String meetingId) {
-        meetingService.requireOwned(workspaceId, userId, meetingId);
+        MeetingRepository.Meeting meeting = meetingService.requireOwned(workspaceId, userId, meetingId);
+        if ("transcribing".equals(meeting.status())) {
+            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_TRANSCRIBING", "전사가 끝난 뒤 삭제해 주세요.");
+        }
         if (liveLock.isHeld(meetingId)) {
             throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "받아쓰기 연결을 닫은 뒤 삭제해 주세요.");
         }
-        Optional<String> recordingKey = repository.lockRecordingKey(meetingId).orElseThrow(MeetingException::notFound);
-        if (recordingKey.isPresent()) {
+        String recordingKey = meeting.recordingKey();
+        if (recordingKey != null) {
             try {
-                minio.removeObject(RemoveObjectArgs.builder().bucket(storage.getBucket()).object(recordingKey.get()).build());
+                minio.removeObject(RemoveObjectArgs.builder().bucket(storage.getBucket()).object(recordingKey).build());
             } catch (Exception e) {
                 throw new MeetingException(HttpStatus.SERVICE_UNAVAILABLE, "MEETING_RECORDING_STORAGE_FAILED",
                         "녹음 원본을 삭제하지 못했습니다. 다시 시도해 주세요.");
             }
         }
-        repository.delete(meetingId);
+        if (repository.deleteIfUnchanged(meetingId, recordingKey) == 0 && repository.findById(meetingId).isPresent()) {
+            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_RECORDING_CHANGED",
+                    "삭제 중에 녹음 원본이 바뀌었습니다. 다시 시도해 주세요.");
+        }
     }
 
     /** 추적에서 빠진 객체 정리. 실패하면 수동 정리를 위해 키를 남긴다(요청 결과에는 영향 없음). */
