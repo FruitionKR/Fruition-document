@@ -38,6 +38,7 @@ import fruition.core.document.exception.InvalidHierarchyRequestException;
 import fruition.core.document.exception.HierarchyWriteForbiddenException;
 import fruition.core.chat.exception.ChatSessionLimitExceededException;
 import fruition.core.chat.exception.ChatSessionNotFoundException;
+import fruition.core.meeting.MeetingException;
 import fruition.core.chat.exception.EmptyChatWikiExportException;
 import fruition.core.chat.exception.InvalidChatWikiExportRequestException;
 import fruition.core.query.exception.PipelineQueryException;
@@ -175,6 +176,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
                 .body(ErrorResponse.of("PAYLOAD_TOO_LARGE", "요청 크기가 허용 한도를 초과했습니다."));
     }
 
+
+    @ExceptionHandler(MeetingException.class)
+    public ResponseEntity<ErrorResponse> handleMeeting(MeetingException e) {
+        logHandled(e, e.getStatus(), e.getCode());
+        return ResponseEntity
+                .status(e.getStatus())
+                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
+    }
 
     @ExceptionHandler(DocumentNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleDocumentNotFound(DocumentNotFoundException e) {
