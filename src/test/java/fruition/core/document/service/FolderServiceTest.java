@@ -47,6 +47,7 @@ class FolderServiceTest {
     @Mock IdempotencyService idempotencyService;
     @Mock SiblingReorderer siblingReorderer;
     @Mock DocumentItemAssembler documentItemAssembler;
+    @Mock DocumentWikiRetirement documentWikiRetirement;
 
     private FolderService service;
 
@@ -54,7 +55,7 @@ class FolderServiceTest {
     void setUp() {
         service = new FolderService(workspaceAccessGuard,
                 folderRepository, documentRepository,
-                idempotencyService, siblingReorderer, documentItemAssembler);
+                idempotencyService, siblingReorderer, documentItemAssembler, documentWikiRetirement);
         lenient().when(idempotencyService.execute(
                 any(), any(), any(), any(), any(), anyInt(), any(), any()))
                 .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(7).get());

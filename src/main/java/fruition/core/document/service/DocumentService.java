@@ -114,6 +114,7 @@ public class DocumentService {
     private final MinioClient minioClient;
     private final StorageProperties storageProps;
     private final IngestCommandOutbox ingestCommandOutbox;
+    private final DocumentWikiRetirement documentWikiRetirement;
     private final PipelineWikiStateRequester pipelineWikiStateRequester;
     private final DocumentConvertQueueRepository convertQueueRepository;
     private final ConverterClient converterClient;
@@ -162,8 +163,10 @@ public class DocumentService {
                            OperationRecorder operationRecorder,
                            IngestOperationStarter ingestOperationStarter,
                            WorkspaceAiModelClient workspaceAiModelClient,
-                           fruition.core.document.repository.AiCommandOutboxWriter taskWriter) {
+                           fruition.core.document.repository.AiCommandOutboxWriter taskWriter,
+                           DocumentWikiRetirement documentWikiRetirement) {
         this.taskWriter = taskWriter;
+        this.documentWikiRetirement = documentWikiRetirement;
         this.documentRepository = documentRepository;
         this.folderRepository = folderRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
@@ -1944,6 +1947,7 @@ public class DocumentService {
         if (updated == 0) {
             throw conditionalUpdateFailure(workspaceId, documentId);
         }
+        documentWikiRetirement.retire(workspaceId, List.of(documentId));
 
         DocumentLifecycleResponse response = new DocumentLifecycleResponse(
                 documentId,
