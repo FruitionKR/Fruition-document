@@ -140,6 +140,10 @@ public class MeetingNotesService {
             if (!note.applyRequestId().equals(requestId)) {
                 throw new MeetingException(HttpStatus.CONFLICT, "MEETING_NOTES_ALREADY_APPLIED", "이미 저장한 회의록 초안입니다.");
             }
+            if (!sameRequest(note, request, meeting)) {
+                throw new MeetingException(HttpStatus.CONFLICT, "IDEMPOTENCY_KEY_CONFLICT",
+                        "같은 Idempotency-Key로 다른 저장 요청을 보냈습니다.");
+            }
             return save(workspaceId, userId, note);  // 같은 요청의 재시도: 기록해 둔 대상·본문으로 같은 저장을 반복한다
         }
         requireLatestReady(meetingId, version);
@@ -165,6 +169,28 @@ public class MeetingNotesService {
             throw new MeetingException(HttpStatus.BAD_REQUEST, "INVALID_MEETING_NOTES_APPLY", "mode는 create 또는 append여야 합니다.");
         }
         return save(workspaceId, userId, notes.find(meetingId, version).orElseThrow());
+    }
+
+    /**
+     * 재시도가 처음 기록한 요청과 같은지 본다(기존 IdempotencyService와 같은 규칙). append의 기록 본문은
+     * 기존 본문과 합친 결과라, 요청한 회의록 본문으로 끝나는지로 비교한다.
+     */
+    private boolean sameRequest(MeetingNotesRepository.Note note, ApplyRequest request, MeetingRepository.Meeting meeting) {
+        if (!Objects.equals(note.applyMode(), request.mode())) {
+            return false;
+        }
+        String notesBody = body(note, request.markdown());
+        if ("create".equals(request.mode())) {
+            String name = request.displayName() != null && !request.displayName().isBlank()
+                    ? request.displayName().strip() : result(note).path("display_name").asText();
+            return Objects.equals(note.applyDisplayName(), name) && Objects.equals(note.applyFolderId(), request.folderId())
+                    && Objects.equals(note.applyMarkdown(), notesBody);
+        }
+        String target = request.documentId() != null && !request.documentId().isBlank()
+                ? request.documentId() : meeting.documentId();
+        return Objects.equals(note.applyDocumentId(), target)
+                && Objects.equals(note.applyBaseRevision(), request.baseRevision())
+                && note.applyMarkdown() != null && note.applyMarkdown().endsWith(notesBody + "\n");
     }
 
     private void claim(MeetingNotesRepository.Note note, String requestId, String mode, String documentId,
