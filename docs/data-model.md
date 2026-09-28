@@ -32,6 +32,9 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | document_assets | document-svc | 문서 첨부 이미지 metadata(바이너리는 MinIO) | `storage_key` UK, `content_hash`(ETag), `unreferenced_since`(정리 후보 판정). workspace_id·uploaded_by는 access_db 논리 참조(물리 FK 없음) |
 | document_asset_references | document-svc | 문서 본문↔asset 참조 동기화 | 복합 PK `(document_id, asset_id)`, asset 삭제 RESTRICT — 참조 중 asset 보호 |
 | document_asset_orphans | document-svc | storage 정리 실패 asset 재시도 큐 | `storage_key` UK, `retry_count`, cleanup worker가 소비 |
+| meetings | document-svc | 회의 받아쓰기 단위(만든 사람만 조회) | `created_by`, `document_id`(회의록 저장 대상, 논리 참조), `source`(live/upload), `status`(open/awaiting_upload/transcribing/failed). V54 |
+| meeting_streams | document-svc | 받아쓰기 연결 한 번 | `(meeting_id, stream_order)` UK, `end_reason`(finished/interrupted/failed, NULL=진행 중). 회의 삭제 cascade. V54 |
+| meeting_segments | document-svc | 확정 전사 구간 | PK `(meeting_id, id)`, `(meeting_id, position)` UK. `id`=`s{stream_order}_{AI 구간 ID}`, `position`은 AI `committed` 순서, `text` NULL=확정 전(끊겼으면 누락). V54 |
 | wiki_lint_state | document-svc | workspace별 마지막 lint 성공 시각(needs_lint 판단 기준점) | PK `workspace_id`(access_db 논리 참조), `last_lint_at` |
 
 V34는 `chat_export`에만 `(workspace_id, content_hash, selection_mode)` partial unique index를 추가한다.
@@ -39,6 +42,8 @@ V34는 `chat_export`에만 `(workspace_id, content_hash, selection_mode)` partia
 이 index가 기존 문서를 재사용하게 한다. 세션 전체를 위키에 누적하던 경로를 걷어내면서
 `chat_sessions.wiki_page_id`·`chat_sessions.wiki_export_document_id`·`chat_messages.wiki_page_id`는 쓰지 않는 잔여 컬럼이 됐다
 (코드 매핑만 제거했고 컬럼은 남아 있다).
+
+회의 실시간 받아쓰기는 Redis에 두 키를 둔다. `speech:ticket:{ticket}`은 WebSocket 접속용 일회용 ticket(사용자·workspace·회의, 60초, 접속 시 `GETDEL`)이고, `speech:live:{meeting_id}`는 회의당 연결 1개를 보장하는 잠금(90초 TTL, 연결 중 30초마다 연장)이다. 잠금이 없는데 `meeting_streams.end_reason`이 NULL인 연결은 기록 전에 인스턴스가 종료된 것으로 보고 조회 시 `interrupted`로 반환한다.
 V43은 `documents.pipeline_input_blocks`를 추가한다. 채팅 export는 문답 단위 블록(JSON 배열, `block_id =
 session_id:pair_id`)을 여기에 보존하고, 완료 후처리가 이 값을 읽어 문답↔페이지 멤버십을 기록한다. 일반 문서
 Ingest 경로는 이 필드를 쓰지 않고 block ID를 새로 부여하므로, 파이프라인이 돌려준 값은 provenance로 쓰지 않는다.

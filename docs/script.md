@@ -12,6 +12,16 @@ docker build -t fruition-document-svc:local .
 
 API 계약을 의도적으로 바꾸면 `./gradlew test -DupdateOpenApiSnapshot=true`로 `api-specs/openapi.yaml`을 갱신합니다. 배포용 migration은 같은 JAR의 `--migrate-only` 명령을 사용하며 migration 전용 계정이 필요합니다. 공용 인프라 생성과 배포 순서는 platform이 관리합니다.
 
+## 회의 실시간 받아쓰기 연결
+
+`SPEECH_LIVE_ENDPOINT`에 AI 실시간 전사 WebSocket 주소를 설정한다(기본 `ws://localhost:8000/speech/transcriptions/live`). 연결할 때 `INTERNAL_CALLBACK_TOKEN`을 `X-Internal-Token`으로 보낸다. 브라우저 접속 Origin은 `CORS_ALLOWED_ORIGINS`로 검사한다. 배포 경로의 WebSocket 허용·idle timeout은 platform이 관리한다([ADR-0022](https://github.com/FruitionKR/Fruition-flatform/blob/main/docs/adr/0022-realtime-speech-transcription.md)).
+
+```bash
+./gradlew test --tests 'fruition.core.meeting.*'
+```
+
+테스트는 같은 앱 안에 가짜 AI WebSocket을 띄워 역순·중복·충돌 완료, 재연결 순서, 종료 개수 대조, ticket·Origin 거절을 확인한다. 실제 AI·모델 연결은 포함하지 않는다.
+
 ## 모델 사용량 API 연결
 
 `MODEL_USAGE_ENDPOINT`에 AI `/usage/models`의 내부 주소를 설정한다(기본 `http://localhost:8000/usage/models`). `INTERNAL_CALLBACK_TOKEN`을 AI와 동일하게 주입한다. AI 원장 migration과 새 AI API 배포 후 document 서비스를 새 코드로 적용한다. 금액 환산이나 사용량 UI는 포함하지 않는다.
