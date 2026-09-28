@@ -172,6 +172,9 @@ class MeetingNotesIntegrationTest {
         assertThat(markdownOf(first)).startsWith("# 출시 회의\n\n## 요약").doesNotContain("s1_a");
         apply(meetingId, 1, "a2", "{\"mode\":\"create\"}").andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("MEETING_NOTES_ALREADY_APPLIED"));
+        // 같은 키로 내용이 다른 요청은 처음 기록한 요청으로 다시 저장하지 않는다.
+        apply(meetingId, 1, "a1", "{\"mode\":\"create\",\"display_name\":\"다른 이름\"}").andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_CONFLICT"));
     }
 
     @Test
@@ -195,6 +198,8 @@ class MeetingNotesIntegrationTest {
         apply(meetingId, 1, "a2", appendBody(fresh)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.applied.mode").value("append"));
         apply(meetingId, 1, "a2", appendBody(fresh)).andExpect(status().isOk());  // 같은 요청 재시도
+        apply(meetingId, 1, "a2", "{\"mode\":\"append\",\"base_revision\":" + fresh + ",\"markdown\":\"# 다른 회의록\"}")
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_CONFLICT"));
 
         String saved = markdownOf(documentId);
         assertThat(saved).startsWith("# 주간 회의\n\n- 다른 곳에서 수정\n\n# 출시 회의\n");
