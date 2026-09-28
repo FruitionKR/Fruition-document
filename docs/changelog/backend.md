@@ -5,7 +5,7 @@
 - 회의 생성·조회·ticket 발급 API와 `WS /api/meetings/{meeting_id}/live`를 추가했습니다. document-svc가 AI 실시간 전사 WebSocket에 연결마다 1:1로 중계하고, 확정 문장을 core_db에 저장한 뒤에만 브라우저에 전달합니다. 회의는 만든 사람만 조회할 수 있습니다.
 - 브라우저 WebSocket은 Authorization 헤더를 보낼 수 없어 60초 일회용 ticket(Redis `GETDEL`)과 Origin(CORS 허용 목록)으로 인증합니다. 회의당 연결 1개는 Redis 잠금(90초 TTL, 30초 연장)으로 보장합니다.
 - 발화 순서는 AI `committed` 시점의 position으로 정하고, 구간 ID에 연결 순번을 붙여(`s{n}_`) 재연결 사이 충돌을 막습니다. 같은 구간에 다른 확정 문장이 오면 덮어쓰지 않고 연결을 닫으며, `finished`의 구간 수와 저장 수가 같을 때만 정상 종료로 기록합니다.
-- V52: `meetings`, `meeting_streams`, `meeting_segments`를 추가했습니다. 새 테이블만 만들며 기존 테이블을 잠그거나 바꾸지 않습니다. 운영 runtime role에 새 테이블 SELECT/INSERT/UPDATE/DELETE 권한이 필요합니다. 로컬 호환성·롤백 검증은 `docs/db/v52-meetings-2026-09-28.md`에 있습니다.
+- V54: `meetings`, `meeting_streams`, `meeting_segments`를 추가했습니다(처음 V52였으나 dev의 V52·V53과 겹쳐 번호만 옮김). 새 테이블만 만들며 기존 테이블을 잠그거나 바꾸지 않습니다. 운영 runtime role에 새 테이블 SELECT/INSERT/UPDATE/DELETE 권한이 필요합니다. 로컬 호환성·롤백 검증은 `docs/db/v54-meetings-2026-09-28.md`에 있습니다.
 - `spring-boot-starter-websocket` 의존성과 `SPEECH_LIVE_ENDPOINT` 설정을 추가했습니다. 배포 경로(WebSocket 직접 연결, ALB idle timeout)는 platform ADR-0022를 따릅니다.
 - 같은 앱 안의 가짜 AI WebSocket으로 역순·중복·충돌 완료, 재연결 순서, 종료 개수 불일치, ticket 재사용·Origin·동시 연결 거절, 1초(48,000 bytes) frame을 검증했습니다. 전체 904개 테스트와 OpenAPI 스냅샷 비교를 통과했습니다. 실제 AI·모델 연결과 AWS 경로는 검증하지 않았습니다.
 
