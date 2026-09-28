@@ -24,6 +24,16 @@ API 계약을 의도적으로 바꾸면 `./gradlew test -DupdateOpenApiSnapshot=
 
 테스트는 같은 앱 안에 가짜 AI WebSocket을 띄워 역순·중복·충돌 완료, 재연결 순서, 종료 개수 대조, ticket·Origin 거절을 확인한다. 실제 AI·모델 연결은 포함하지 않는다.
 
+## 채팅 음성 입력 연결
+
+`SPEECH_TRANSCRIPTION_ENDPOINT`에 AI 파일 전사 주소를 설정한다(기본 `http://localhost:8000/speech/transcriptions`). `INTERNAL_CALLBACK_TOKEN`을 AI와 동일하게 주입한다. 응답 대기는 `SPEECH_TRANSCRIPTION_TIMEOUT_SECONDS`(기본 150초, AI의 모델 호출 120초보다 길게)다.
+
+```bash
+./gradlew test --tests 'fruition.core.speech.*'
+```
+
+테스트는 JDK 내장 HTTP 서버로 가짜 AI를 띄워 요청 전달·형식·크기·권한·오류 변환을 확인한다.
+
 ## 모델 사용량 API 연결
 
 `MODEL_USAGE_ENDPOINT`에 AI `/usage/models`의 내부 주소를 설정한다(기본 `http://localhost:8000/usage/models`). `INTERNAL_CALLBACK_TOKEN`을 AI와 동일하게 주입한다. AI 원장 migration과 새 AI API 배포 후 document 서비스를 새 코드로 적용한다. 금액 환산이나 사용량 UI는 포함하지 않는다.

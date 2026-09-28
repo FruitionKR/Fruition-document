@@ -38,6 +38,8 @@ tags:
   name: Query Runs
 - description: "재사용 가능한 Agent Skill 작성, 게시 및 실행 설정 API"
   name: Skills
+- description: 채팅 음성 입력. 음성과 전사 결과를 저장하지 않는다.
+  name: Speech
 - description: Wiki 그래프 및 페이지 조회 API
   name: Wiki
 - description: Wiki 정합성 검사와 유지보수 실행 API
@@ -3820,6 +3822,90 @@ paths:
       summary: Skill 활성화
       tags:
       - Skills
+  /api/workspaces/{workspace_id}/speech/transcriptions:
+    post:
+      description: "짧은 음성을 텍스트로 바꿔 반환합니다. 결과를 질의·Agent에 자동으로 제출하지 않으며, 음성과 텍스트를 저장하지 않습니다. 인식된 말이 없으면 text는 빈 문자열입니다."
+      operationId: transcribeSpeech
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      requestBody:
+        content:
+          audio/mp4:
+            schema:
+              type: string
+              format: binary
+          audio/mpeg:
+            schema:
+              type: string
+              format: binary
+          audio/wav:
+            schema:
+              type: string
+              format: binary
+          audio/webm:
+            schema:
+              type: string
+              format: binary
+        description: 오디오 bytes 그대로(multipart 아님). 24 MiB 이하
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/SpeechTranscriptionResponse"
+          description: 전사 성공
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스 접근 권한 없음
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+        "413":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 24 MiB 초과
+        "415":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 지원하지 않는 오디오 형식
+        "422":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 빈 음성 또는 인식할 수 없는 음성
+        "502":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 음성 모델 호출 실패
+        "503":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 음성 전사 서비스를 사용할 수 없음
+      summary: 음성 받아쓰기
+      tags:
+      - Speech
   /api/workspaces/{workspace_id}/usage/models:
     get:
       description: AI 저장소에서 사용량을 조회합니다. 기본 기간은 UTC 이번 달이며 실제 청구액은 포함하지 않습니다.
@@ -7495,6 +7581,14 @@ components:
           type: string
           description: 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+    SpeechTranscriptionResponse:
+      type: object
+      description: 받아쓴 텍스트
+      properties:
+        text:
+          type: string
+          description: 받아쓴 문장. 인식된 말이 없으면 빈 문자열
+          example: 검색 인덱싱은 어떻게 동작해?
     StartRequest:
       type: object
       properties:

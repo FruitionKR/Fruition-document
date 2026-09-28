@@ -1,5 +1,11 @@
 # Backend 변경 기록
 
+## 2026-09-28 (기능: 채팅 음성 입력)
+
+- `POST /api/workspaces/{workspace_id}/speech/transcriptions`를 추가했습니다. 오디오 bytes(webm·mp4·mpeg·wav, 24 MiB 이하)를 AI 파일 전사에 중계해 `{text}`를 반환합니다. 음성과 텍스트는 저장하지 않고 질의·Agent에 자동 제출하지 않습니다. 인식된 말이 없으면 빈 문자열입니다.
+- 형식(415)·빈 음성(422)·크기(413)·멤버십을 AI 호출 전에 검사합니다. AI 오류는 입력 오류는 그대로, 모델 실패는 502, 연결·인증 문제는 503으로 바꾸며 제공자 원문은 노출하지 않습니다.
+- 설정 `SPEECH_TRANSCRIPTION_ENDPOINT`, `SPEECH_TRANSCRIPTION_TIMEOUT_SECONDS`(기본 150초)를 추가했습니다. DB 변경은 없습니다.
+- 가짜 AI HTTP 서버 테스트 5개를 추가했고, 로컬 실제 AI(OpenAI 모델)로 한국어 m4a·wav·27초 발화·무음을 받아써 확인했습니다. document 경유와 AI 직접 호출의 지연 차이는 없었습니다. 전체 903개 테스트와 OpenAPI 스냅샷 비교를 통과했습니다.
 ## 2026-09-28 (기능: 회의 녹음 원본·파일 전사·삭제)
 
 - 회의 API 3개를 추가했습니다: 녹음 원본 업로드(`PUT .../meetings/{id}/recording`), 재생 주소(`GET .../recording-url`, 5분 presigned), 회의 삭제(`DELETE .../meetings/{id}`).
