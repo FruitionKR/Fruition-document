@@ -1,5 +1,6 @@
 package fruition.core.document.service;
 
+import fruition.TestcontainersConfiguration;
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.shared.util.*;
 import io.minio.*;
@@ -14,7 +15,7 @@ import static org.mockito.Mockito.*;
 
 class DocumentMultipartStorageIntegrationTest {
     @Test void multipartRoundTripAndStorageSideCopyPreserveBytes() throws Exception {
-        try (var container = new MinIOContainer(DockerImageName.parse("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
+        try (var container = new MinIOContainer(DockerImageName.parse(TestcontainersConfiguration.MINIO_IMAGE)
                 .asCompatibleSubstituteFor("minio/minio"))) {
             container.start();
             var props = new StorageProperties();
