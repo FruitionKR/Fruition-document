@@ -34,6 +34,7 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | meetings | document-svc | 회의 받아쓰기 단위(만든 사람만 조회) | `created_by`, `document_id`(회의록 저장 대상, 논리 참조), `source`(live/upload), `status`(open/awaiting_upload/transcribing/failed). V52 |
 | meeting_streams | document-svc | 받아쓰기 연결 한 번 | `(meeting_id, stream_order)` UK, `end_reason`(finished/interrupted/failed, NULL=진행 중). 회의 삭제 cascade. V52 |
 | meeting_segments | document-svc | 확정 전사 구간 | PK `(meeting_id, id)`, `(meeting_id, position)` UK. `id`=`s{stream_order}_{AI 구간 ID}`, `position`은 AI `committed` 순서, `text` NULL=확정 전(끊겼으면 누락). V52 |
+| meeting_notes | document-svc | 회의록 초안 버전과 저장 기록 | PK `(meeting_id, version)`, `(meeting_id, generation_request_id)` UK(생성 재시도), `status`(generating/ready/failed/applied), `segment_snapshot`(AI에 보낸 구간), `result`(이름·네 배열, AI markdown 제외), `apply_*`(저장 전에 기록하는 대상·본문·기준 revision). 회의 삭제 cascade. V53 |
 | wiki_lint_state | document-svc | workspace별 마지막 lint 성공 시각(needs_lint 판단 기준점) | PK `workspace_id`(access_db 논리 참조), `last_lint_at` |
 
 V34는 `chat_export`에만 `(workspace_id, content_hash, selection_mode)` partial unique index를 추가한다.

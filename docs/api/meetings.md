@@ -6,7 +6,7 @@
 실시간 전사는 document-svc가 AI 실시간 전사 WebSocket에 연결마다 1:1로 중계하고, 확정 문장을 저장한 뒤에만 브라우저에 전달한다.
 모델은 AI가 고정한다. 결정 근거는 [ADR-0023](../adr/0023-meeting-transcripts-and-recordings.md)이다.
 
-- API 수: 3 + WebSocket 1
+- API 수: 7 + WebSocket 1
 
 ## API 목차
 
@@ -15,6 +15,10 @@
 | [`POST /api/workspaces/{workspace_id}/meetings`](#summary-post-api-workspaces-workspace-id-meetings) | 받아쓰기 회의를 만듭니다. document_id를 주면 그 문서를 회의록 저장 대상으로 기억합니다. |
 | [`GET /api/workspaces/{workspace_id}/meetings/{meeting_id}`](#summary-get-api-workspaces-workspace-id-meetings-meeting-id) | 회의 상태, 받아쓰기 연결 기록, 발화 순서대로 정렬된 전사 구간을 반환합니다. |
 | [`POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/live-tickets`](#summary-post-api-workspaces-workspace-id-meetings-meeting-id-live-tickets) | 실시간 받아쓰기 WebSocket 접속에 쓰는 60초짜리 일회용 ticket을 발급합니다. |
+| [`POST .../meetings/{meeting_id}/notes`](#notes-generate) | 확정 전사로 회의록 초안을 만들어 새 버전으로 보관합니다. |
+| [`GET .../meetings/{meeting_id}/notes`](#notes-latest) | 최신 회의록 초안을 반환합니다. |
+| [`POST .../meetings/{meeting_id}/notes/{version}/append-preview`](#notes-append-preview) | 기존 문서 끝에 회의록을 붙인 전체 결과와 base_revision을 반환합니다. |
+| [`POST .../meetings/{meeting_id}/notes/{version}/apply`](#notes-apply) | 회의록을 새 문서로 만들거나 기존 문서 끝에 추가합니다. |
 | [`WS /api/meetings/{meeting_id}/live?ticket=`](#ws-api-meetings-meeting-id-live) | 실시간 받아쓰기. 오디오를 보내고 전사 이벤트를 받습니다. |
 
 ## 한눈에 보기
@@ -321,6 +325,77 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-meetings-meeting-id-live-tickets)
 
 </details>
+
+## 회의록 초안과 저장
+
+경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 네 API 모두 `Authorization: Bearer <access_token>`, workspace 멤버십, 회의를 만든 사람임을 검증한다(아니면 `404`). 초안은 AI 회의록 API(모델 고정)로 만들고 document가 버전별로 보관한다.
+
+<a id="notes-generate"></a>
+### `POST .../meetings/{meeting_id}/notes` — 초안 생성
+
+| 항목 | 내용 |
+|---|---|
+| 입력 | **Header** — `Idempotency-Key`(필수). 네트워크 재시도는 같은 키(같은 버전 반환, AI 재호출 없음), 다시 만들기는 새 키<br>**Query** — `allow_partial`(기본 `false`) |
+| 처리 | `completed` 구간을 `position` 순으로 AI에 보낸다. 새 버전 행을 `generating`으로 만든 뒤 **트랜잭션 밖에서** AI를 호출하고, 결과는 그 버전 행에만 쓴다 |
+| 출력 | `200` — `MeetingNotesResponse` |
+| 오류 | `409` 받아쓰기 중(`MEETING_LIVE_IN_USE`), 누락·비정상 종료 전사를 `allow_partial` 없이 요청(`MEETING_TRANSCRIPT_INCOMPLETE`), 동시 생성(`MEETING_NOTES_BUSY`)<br>`422` 확정 전사 없음(`MEETING_TRANSCRIPT_EMPTY`), AI 입력 한도(`MEETING_NOTES_INPUT_REJECTED`)<br>`502` 생성·근거 검증 실패(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INVALID`)<br>`503` AI 사용 불가(`MEETING_NOTES_UNAVAILABLE`) |
+
+실패하면 그 버전은 `failed`로 남고 이전 `ready` 초안은 그대로 쓸 수 있다. 로컬 실측에서 실제 AI 생성에 약 20초 걸렸다. 클라이언트는 생성 중 표시를 둔다.
+
+<a id="notes-latest"></a>
+### `GET .../meetings/{meeting_id}/notes` — 최신 초안
+
+```json
+{
+  "meeting_id": "mtg_1b9f...",
+  "version": 1,
+  "status": "ready",
+  "partial": false,
+  "display_name": "출시 회의",
+  "markdown": "# 출시 회의\n\n## 요약\n- 출시는 다음 주 금요일로 확정되었습니다.\n\n## 결정 사항\n- 출시는 다음 주 금요일로 확정.\n\n## 할 일\n- 민수님을 배포 전 점검 담당자로 지정.\n\n## 미결 사항\n- 확인된 내용 없음",
+  "summary": [{ "text": "출시는 다음 주 금요일로 확정되었습니다.", "source_segment_ids": ["s1_item_a1"] }],
+  "decisions": [{ "text": "출시는 다음 주 금요일로 확정.", "source_segment_ids": ["s1_item_a1"] }],
+  "action_items": [{ "text": "민수님을 배포 전 점검 담당자로 지정.", "source_segment_ids": ["s1_item_a2"] }],
+  "open_questions": [],
+  "applied": null,
+  "error_code": null,
+  "last_ready_version": null
+}
+```
+
+- `status`: `generating` · `ready` · `failed` · `applied`. `partial`은 `allow_partial`로 만든 초안이다.
+- `markdown`은 document가 네 배열로 다시 만든 본문이다(`# 이름` → `## 요약` · `## 결정 사항` · `## 할 일` · `## 미결 사항`, 빈 항목은 `- 확인된 내용 없음`). AI 응답의 `markdown`은 항목마다 근거 ID를 붙이므로 쓰지 않는다. 근거는 `source_segment_ids`로만 준다.
+- 최신 버전이 `failed`면 `last_ready_version`에 마지막 성공 버전을 준다. 5분 넘게 `generating`인 버전은 `failed`(`MEETING_NOTES_TIMEOUT`)로 바뀐다.
+- 저장 후 `applied`: `{"mode":"append","document_id":"doc_...","applied_at":"..."}`.
+- 초안이 없으면 `404`(`MEETING_NOTES_NOT_FOUND`).
+
+<a id="notes-append-preview"></a>
+### `POST .../meetings/{meeting_id}/notes/{version}/append-preview` — 기존 문서 끝 추가 미리보기
+
+| 항목 | 내용 |
+|---|---|
+| 입력 | **Body**(선택) — `document_id`(생략 시 회의를 시작한 문서), `markdown`(사용자가 수정한 회의록, 생략 시 초안 본문). 아무것도 바꾸지 않아 멱등 키를 받지 않는다 |
+| 출력 | `200` — `{"document_id": "...", "base_revision": 17, "markdown": "(기존 본문)\n\n# 출시 회의\n..."}` |
+| 규칙 | 현재 편집 본문 끝 공백을 지우고 빈 줄 하나 뒤에 회의록을 붙인다. `apply`는 같은 입력이면 같은 본문을 만든다 |
+| 오류 | `400` 대상 문서 없음, `403` 편집 불가(`DOCUMENT_WRITE_FORBIDDEN`), `404` 문서 없음, `409` 최신 초안이 아님(`MEETING_NOTES_OUTDATED`)·이미 저장함 |
+
+<a id="notes-apply"></a>
+### `POST .../meetings/{meeting_id}/notes/{version}/apply` — 저장
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `mode` | 예 | `create`(새 문서) 또는 `append`(기존 문서 끝) |
+| `display_name` | 아니오 | `create`의 문서 이름. 생략 시 초안 이름 |
+| `markdown` | 아니오 | 사용자가 수정한 회의록 본문. 생략 시 초안 본문 |
+| `folder_id` | 아니오 | `create`의 위치. 생략 시 루트 |
+| `document_id` | 아니오 | `append` 대상. 생략 시 회의를 시작한 문서 |
+| `base_revision` | `append`에서 예 | `append-preview`에서 받은 값 |
+
+- 헤더 `Idempotency-Key` 필수. 같은 키 재시도는 처음 기록한 대상·본문으로 같은 저장을 반복해 같은 결과를 돌려준다(문서 중복 생성·회의록 중복 추가 없음). 문서 저장은 됐는데 회의 상태 기록이 실패한 경우도 같은 재시도로 복구된다.
+- `create`는 기존 Markdown 문서 생성, `append`는 기존 본문 저장(`base_revision`, `revision_write_id`)을 그대로 쓴다. 문서 권한·편집 잠금·revision·이름 검증을 우회하지 않으며 Agent 적용 표·`source`를 쓰지 않는다.
+- 사용자가 본 버전이 마지막 성공 초안이 아니면 `409 MEETING_NOTES_OUTDATED`. 한 버전은 한 번 저장하며 다른 키로 다시 저장하면 `409 MEETING_NOTES_ALREADY_APPLIED`.
+- `append`에서 미리보기 이후 문서가 바뀌었으면 `409 DOCUMENT_REVISION_CHANGED`(저장하지 않음). revision 충돌·권한·잠금·본문 검증·이름 중복처럼 문서가 바뀌지 않은 거절은 저장 선점을 풀어 새 키로 다시 시도할 수 있다.
+- 응답 `200`: `MeetingNotesResponse`(`status: "applied"`, `applied` 채움).
 
 <a id="ws-api-meetings-meeting-id-live"></a>
 ## `WS /api/meetings/{meeting_id}/live?ticket=`

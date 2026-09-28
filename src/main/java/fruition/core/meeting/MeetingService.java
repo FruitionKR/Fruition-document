@@ -107,7 +107,8 @@ public class MeetingService {
         return Optional.of(parsed);
     }
 
-    private MeetingRepository.Meeting requireOwned(String workspaceId, String userId, String meetingId) {
+    /** 회의록 기능도 같은 소유 범위를 쓴다. 다른 사용자에게는 404로 존재를 숨긴다. */
+    MeetingRepository.Meeting requireOwned(String workspaceId, String userId, String meetingId) {
         accessGuard.requireMember(workspaceId, userId);
         return repository.findOwned(meetingId, workspaceId, userId).orElseThrow(MeetingException::notFound);
     }
