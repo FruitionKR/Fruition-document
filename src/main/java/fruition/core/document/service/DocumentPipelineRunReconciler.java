@@ -29,6 +29,10 @@ public class DocumentPipelineRunReconciler {
     public void reconcile() {
         for (var document : documentRepository
                 .findAllByStatusAndPipelineRunIdIsNotNull(DocumentStatus.processing)) {
+            // 변환 placeholder의 runId는 로컬 값이라 AI pipeline run API에 없다.
+            if (document.getPipelineRunId().startsWith("convert:")) {
+                continue;
+            }
             try {
                 requester.find(document.getPipelineRunId()).ifPresent(run -> {
                     if (!document.getId().equals(run.documentId())) {
