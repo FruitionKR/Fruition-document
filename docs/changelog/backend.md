@@ -1,5 +1,9 @@
 # Backend 변경 기록
 
+## 2026-09-30 (수정: PDF 페이지 묶음 변환 실패 원인 기록)
+
+- 변환기가 `/convert-source-batch`를 422로 거절하면 지금까지 "페이지 묶음 변환 실패"만 남아 원인을 알 수 없었습니다(2026-09-29 운영에서 같은 PDF가 3회 연속 즉시 실패). 이제 예외 메시지와 `[문서 변환 실패 반영]` 로그에 변환기 응답의 status와 detail(변환기가 만든 사유 문장, 300자 제한)을 포함합니다. 원본 서명 URL과 요청 본문은 여전히 기록하지 않습니다.
+
 ## 2026-09-30 (수정: 변환 placeholder pipeline run 조회 오류)
 
 - `DocumentPipelineRunReconciler`가 PDF→Markdown 변환 placeholder 문서(runId `convert:doc_…`)까지 AI pipeline run 상태 API에 조회해, 변환이 끝날 때까지 3초마다 500(`invalid input syntax for type uuid`) 오류 로그가 반복되던 문제를 고쳤습니다. `convert:` runId는 로컬 값이라 변환 작업자와 `AiTaskCancellationService`가 정리하므로 reconciler는 건너뜁니다. DB·API 변경은 없습니다.
@@ -11,6 +15,7 @@
 - 형식(415)·빈 음성(422)·크기(413)·멤버십을 AI 호출 전에 검사합니다. AI 오류는 입력 오류는 그대로, 모델 실패는 502, 연결·인증 문제는 503으로 바꾸며 제공자 원문은 노출하지 않습니다.
 - 설정 `SPEECH_TRANSCRIPTION_ENDPOINT`, `SPEECH_TRANSCRIPTION_TIMEOUT_SECONDS`(기본 150초)를 추가했습니다. DB 변경은 없습니다.
 - 가짜 AI HTTP 서버 테스트 5개를 추가했고, 로컬 실제 AI(OpenAI 모델)로 한국어 m4a·wav·27초 발화·무음을 받아써 확인했습니다. document 경유와 AI 직접 호출의 지연 차이는 없었습니다. 전체 903개 테스트와 OpenAPI 스냅샷 비교를 통과했습니다.
+
 ## 2026-09-28 (기능: 회의 녹음 원본·파일 전사·삭제)
 
 - 회의 API 3개를 추가했습니다: 녹음 원본 업로드(`PUT .../meetings/{id}/recording`), 재생 주소(`GET .../recording-url`, 5분 presigned), 회의 삭제(`DELETE .../meetings/{id}`).

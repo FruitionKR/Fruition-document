@@ -41,6 +41,14 @@ class ConverterClientTest {
             exchange.getResponseBody().write(body);
             exchange.close();
         });
+        server.createContext("/convert-source-batch", exchange -> {
+            capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(responseStatus.get(), body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
         server.start();
     }
 
@@ -117,5 +125,30 @@ class ConverterClientTest {
         assertThatThrownBy(() -> client().convertPdf(
                 "보고서.pdf", new byte[]{1}, "openai", "gpt-5-nano"))
                 .isInstanceOf(DocumentConvertException.class);
+    }
+
+    @Test
+    void convertSourceBatch_422_includesConverterDetailWithoutSourceUrl() {
+        responseStatus.set(422);
+        responseBody.set("{\"detail\":\"Could not read the PDF storage range: HTTP 403 AccessDenied\"}");
+        String sourceUrl = "https://bucket.s3.ap-northeast-2.amazonaws.com/o?X-Amz-Credential=SECRETKEY&X-Amz-Signature=sig";
+
+        assertThatThrownBy(() -> client().convertSourceBatch(sourceUrl, 1234, "gemini", "m", 0, () -> true))
+                .isInstanceOf(DocumentConvertException.class)
+                .hasMessageContaining("페이지 묶음 변환 실패")
+                .hasMessageContaining("status=422")
+                .hasMessageContaining("HTTP 403 AccessDenied")
+                .satisfies(error -> assertThat(error.getMessage()).doesNotContain("SECRETKEY").doesNotContain("X-Amz"));
+    }
+
+    @Test
+    void convertSourceBatch_success_returnsBatch() {
+        responseBody.set("{\"page_start\":1,\"page_end\":10,\"total_pages\":25,\"markdown\":\"# p\",\"done\":false}");
+
+        var batch = client().convertSourceBatch("https://example.invalid/o", 1234, "gemini", "m", 0, () -> true);
+
+        assertThat(batch.page_end()).isEqualTo(10);
+        assertThat(batch.done()).isFalse();
+        assertThat(capturedBody.get()).contains("\"start_page\":0").contains("\"byte_size\":1234");
     }
 }
