@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.shared.util.StorageProperties;
+import fruition.shared.util.RetryingObjectPut;
 import fruition.core.document.domain.Document;
 import fruition.core.document.domain.DocumentAsset;
 import fruition.core.document.repository.DocumentAssetRepository;
@@ -648,15 +649,8 @@ public class DocumentService {
      */
     private String storeMarkdownSource(String documentId, byte[] bytes) {
         String objectPath = "sources/documents/" + documentId + "/original";
-        try (InputStream inputStream = new ByteArrayInputStream(bytes)) {
-            minioClient.putObject(
-                    PutObjectArgs.builder()
-                            .bucket(storageProps.getBucket())
-                            .object(objectPath)
-                            .stream(inputStream, bytes.length, -1)
-                            .contentType("text/markdown")
-                            .build()
-            );
+        try {
+            RetryingObjectPut.put(minioClient, storageProps.getBucket(), objectPath, bytes, "text/markdown");
         } catch (Exception e) {
             throw new DocumentUploadException("문서 원본 저장 중 오류가 발생했습니다.", e);
         }
@@ -828,15 +822,8 @@ public class DocumentService {
             return new ExportDocumentResult(canonical.getId(), true);
         }
 
-        try (InputStream inputStream = new ByteArrayInputStream(bytes)) {
-            minioClient.putObject(
-                    PutObjectArgs.builder()
-                            .bucket(storageProps.getBucket())
-                            .object(objectPath)
-                            .stream(inputStream, bytes.length, -1)
-                            .contentType("text/markdown")
-                            .build()
-            );
+        try {
+            RetryingObjectPut.put(minioClient, storageProps.getBucket(), objectPath, bytes, "text/markdown");
         } catch (Exception e) {
             throw new DocumentUploadException("채팅 export 저장 중 오류가 발생했습니다.", e);
         }
@@ -1000,8 +987,8 @@ public class DocumentService {
                 convertQueueRepository.findById(queueId).ifPresent(item -> { item.retry(); convertQueueRepository.save(item); });
                 return null;
             });
-            log.warn("[문서 변환 실패 반영] documentId={} sourceDocumentId={} error={}",
-                    documentId, sourceDocumentId, e.getMessage());
+            log.warn("[문서 변환 실패 반영] documentId={} sourceDocumentId={} error={} cause={}",
+                    documentId, sourceDocumentId, e.getMessage(), e.getCause() == null ? "-" : e.getCause().toString());
         }
     }
 
@@ -1143,8 +1130,7 @@ public class DocumentService {
                     int width, height;
                     try { reader.setInput(image); width = reader.getWidth(0); height = reader.getHeight(0); }
                     finally { reader.dispose(); }
-                    minioClient.putObject(PutObjectArgs.builder().bucket(storageProps.getBucket()).object(key)
-                            .stream(new ByteArrayInputStream(bytes), bytes.length, -1).contentType(matcher.group(1)).build());
+                    RetryingObjectPut.put(minioClient, storageProps.getBucket(), key, bytes, matcher.group(1));
                     registerMinioRollbackCleanup(key);
                     assetRepository.save(new fruition.core.document.domain.DocumentAsset(id, parent.getWorkspaceId(),
                             parent.getUserId(), "converted-" + id, matcher.group(1), bytes.length, width, height, hash, key, Instant.now()));
@@ -1814,15 +1800,9 @@ public class DocumentService {
         }
 
         byte[] bytes = currentMarkdown.getBytes(StandardCharsets.UTF_8);
-        try (InputStream inputStream = new ByteArrayInputStream(bytes)) {
-            minioClient.putObject(
-                    PutObjectArgs.builder()
-                            .bucket(storageProps.getBucket())
-                            .object(normalizeObjectKey(document.getSourceUri()))
-                            .stream(inputStream, bytes.length, -1)
-                            .contentType("text/markdown")
-                            .build()
-            );
+        try {
+            RetryingObjectPut.put(minioClient, storageProps.getBucket(),
+                    normalizeObjectKey(document.getSourceUri()), bytes, "text/markdown");
         } catch (Exception e) {
             throw new DocumentUploadException("문서 원본 갱신 중 오류가 발생했습니다.", e);
         }

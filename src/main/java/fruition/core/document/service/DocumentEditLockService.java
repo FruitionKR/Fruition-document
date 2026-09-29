@@ -112,7 +112,8 @@ public class DocumentEditLockService {
         return accessUserClient.getDisplayName(userId);
     }
 
-    private void requireEditableOwned(String workspaceId, String userId, String documentId) {
+    /** 사용자가 편집할 수 있는 자기 Markdown 문서인지 확인한다. 회의록 저장 대상 검증도 같은 규칙을 쓴다. */
+    public void requireEditableOwned(String workspaceId, String userId, String documentId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
