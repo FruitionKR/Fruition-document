@@ -13,8 +13,10 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Agent](agent.md) | 10 | Agent 실행·승인과 내부 Tool 호출 |
 | [Chat](chat.md) | 7 | 채팅 세션·메시지와 Wiki 내보내기 |
 | [Documents](documents/README.md) | 24 | 문서 관리·본문·편집·이력 |
+| [Meetings](meetings.md) | 10 + WS 1 | 회의 생성·조회·삭제, 실시간 받아쓰기 WebSocket, 녹음 원본·파일 전사, 회의록 초안·저장 |
 | [Navigation](navigation.md) | 10 | 폴더와 문서 트리 탐색 |
 | [Query](query.md) | 4 | 동기·비동기 Query와 SSE |
+| [Speech](speech.md) | 1 | 채팅 음성 입력(음성 → 텍스트, 저장 없음) |
 | [Skills](skills.md) | 8 | Skill 작성·게시·설정과 참조 읽기 |
 | [Wiki](wiki.md) | 8 | Wiki 조회·기여·유지보수 |
 | [Wiki Schema](wiki-schema.md) | 4 | Wiki 스키마 초안·미리보기·활성화 |

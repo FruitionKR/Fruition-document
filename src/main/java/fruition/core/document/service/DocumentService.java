@@ -987,8 +987,8 @@ public class DocumentService {
                 convertQueueRepository.findById(queueId).ifPresent(item -> { item.retry(); convertQueueRepository.save(item); });
                 return null;
             });
-            log.warn("[문서 변환 실패 반영] documentId={} sourceDocumentId={} error={}",
-                    documentId, sourceDocumentId, e.getMessage());
+            log.warn("[문서 변환 실패 반영] documentId={} sourceDocumentId={} error={} cause={}",
+                    documentId, sourceDocumentId, e.getMessage(), e.getCause() == null ? "-" : e.getCause().toString());
         }
     }
 

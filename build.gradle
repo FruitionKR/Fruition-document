@@ -43,6 +43,8 @@ dependencies {
 	implementation 'org.commonmark:commonmark:0.24.0'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-web'
+	// 회의 실시간 받아쓰기 중계(브라우저 쪽 WebSocket 서버). ai-svc 쪽 client는 JDK java.net.http.WebSocket을 쓴다.
+	implementation 'org.springframework.boot:spring-boot-starter-websocket'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	// /actuator/prometheus 노출용 registry. 버전은 Spring Boot BOM이 관리한다.
 	implementation 'io.micrometer:micrometer-registry-prometheus'
