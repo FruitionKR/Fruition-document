@@ -140,9 +140,25 @@ public class ConverterClient {
                 throw new DocumentConvertException("변환 대기가 중단되었습니다.", e);
             } catch (java.util.concurrent.ExecutionException e) {
                 // source URL의 credentials가 예외 메시지로 노출되지 않게 요청 본문을 기록하지 않는다.
-                throw new DocumentConvertException("페이지 묶음 변환 실패", e.getCause());
+                // 응답 본문의 detail(변환기가 만든 사유 문장)은 URL을 담지 않으므로 원인 파악용으로 남긴다.
+                throw new DocumentConvertException("페이지 묶음 변환 실패: " + describe(e.getCause()), e.getCause());
             } finally { request.cancel(true); }
         }
+    }
+
+    private static final int DETAIL_LIMIT = 300;
+
+    /** 변환기 실패 원인 요약. 상태 코드와 응답 detail만 쓰고 요청 URL·본문은 쓰지 않는다. */
+    static String describe(Throwable cause) {
+        if (cause instanceof RestClientResponseException response) {
+            String body = response.getResponseBodyAsString();
+            String detail = body == null ? "" : body.replaceAll("\\s+", " ").trim();
+            if (detail.length() > DETAIL_LIMIT) detail = detail.substring(0, DETAIL_LIMIT) + "…";
+            return "status=" + response.getStatusCode().value() + (detail.isEmpty() ? "" : " detail=" + detail);
+        }
+        if (cause == null) return "unknown";
+        String message = cause.getMessage();
+        return cause.getClass().getSimpleName() + (message == null ? "" : ": " + message);
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

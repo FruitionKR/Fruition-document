@@ -1,14 +1,13 @@
 package fruition.core.document.service;
 
 import fruition.core.document.exception.DocumentAssetStorageException;
+import fruition.shared.util.RetryingObjectPut;
 import fruition.shared.util.StorageProperties;
 import io.minio.MinioClient;
 import io.minio.GetObjectArgs;
-import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
 import org.springframework.stereotype.Component;
 
-import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 
 @Component
@@ -36,13 +35,8 @@ public class MinioDocumentAssetObjectStorage implements DocumentAssetObjectStora
 
     @Override
     public void put(String objectKey, String contentType, byte[] bytes) {
-        try (ByteArrayInputStream input = new ByteArrayInputStream(bytes)) {
-            minioClient.putObject(PutObjectArgs.builder()
-                    .bucket(storageProperties.getBucket())
-                    .object(objectKey)
-                    .stream(input, bytes.length, -1)
-                    .contentType(contentType)
-                    .build());
+        try {
+            RetryingObjectPut.put(minioClient, storageProperties.getBucket(), objectKey, bytes, contentType);
         } catch (Exception exception) {
             throw new DocumentAssetStorageException("이미지 asset을 저장하지 못했습니다.", exception);
         }
