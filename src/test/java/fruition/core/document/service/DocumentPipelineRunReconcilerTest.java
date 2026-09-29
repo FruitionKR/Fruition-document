@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -37,5 +38,19 @@ class DocumentPipelineRunReconcilerTest {
         new DocumentPipelineRunReconciler(documentRepository, requester, documentService).reconcile();
 
         verify(documentService).applyPipelineResult("doc-1", "run-1", "succeeded", null);
+    }
+
+    @Test
+    void reconcile_convertRunId_skipsAiLookup() {
+        Document document = new Document(
+                "doc-2", "ws-1", "user-1", "b.pdf", "application/pdf", 1,
+                "sources/documents/doc-2/original", "hash");
+        document.markPipelineStarted("convert:doc-2", java.time.Instant.now());
+        when(documentRepository.findAllByStatusAndPipelineRunIdIsNotNull(DocumentStatus.processing))
+                .thenReturn(List.of(document));
+
+        new DocumentPipelineRunReconciler(documentRepository, requester, documentService).reconcile();
+
+        verifyNoInteractions(requester, documentService);
     }
 }

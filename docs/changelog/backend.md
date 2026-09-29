@@ -1,5 +1,10 @@
 # Backend 변경 기록
 
+## 2026-09-30 (수정: 변환 placeholder pipeline run 조회 오류)
+
+- `DocumentPipelineRunReconciler`가 PDF→Markdown 변환 placeholder 문서(runId `convert:doc_…`)까지 AI pipeline run 상태 API에 조회해, 변환이 끝날 때까지 3초마다 500(`invalid input syntax for type uuid`) 오류 로그가 반복되던 문제를 고쳤습니다. `convert:` runId는 로컬 값이라 변환 작업자와 `AiTaskCancellationService`가 정리하므로 reconciler는 건너뜁니다. DB·API 변경은 없습니다.
+- `convert:` runId가 AI 클라이언트에 전달되지 않는 단위 테스트 1개를 추가했습니다.
+
 ## 2026-09-28 (기능: 채팅 음성 입력)
 
 - `POST /api/workspaces/{workspace_id}/speech/transcriptions`를 추가했습니다. 오디오 bytes(webm·mp4·mpeg·wav, 24 MiB 이하)를 AI 파일 전사에 중계해 `{text}`를 반환합니다. 음성과 텍스트는 저장하지 않고 질의·Agent에 자동 제출하지 않습니다. 인식된 말이 없으면 빈 문자열입니다.
