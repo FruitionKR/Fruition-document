@@ -28,6 +28,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import jakarta.annotation.PreDestroy;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -62,6 +63,12 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         return thread;
     });
     private final Map<String, Live> sessions = new ConcurrentHashMap<>();
+
+    /** 종료 시 잠금 갱신을 멈춘다. 열린 연결은 TCP가 끊기고 Redis 잠금은 TTL(90초)로 풀린다. */
+    @PreDestroy
+    void shutdownLockRenewer() {
+        lockRenewer.shutdownNow();
+    }
 
     public MeetingLiveHandler(MeetingRepository repository, MeetingLiveLock liveLock, ObjectMapper objectMapper,
                               Environment environment,

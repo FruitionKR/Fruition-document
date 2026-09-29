@@ -182,8 +182,16 @@ class MeetingRecordingIntegrationTest {
                 .andExpect(status().isNotFound());
 
         redisTemplate.opsForValue().set("speech:live:" + meetingId, "someone");
-        mockMvc.perform(delete(base() + "/" + meetingId).header("Authorization", bearer())).andExpect(status().isConflict());
+        mockMvc.perform(delete(base() + "/" + meetingId).header("Authorization", bearer())).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("MEETING_LIVE_IN_USE"));
         redisTemplate.delete("speech:live:" + meetingId);
+
+        // 전사 중(선점됨)인 회의는 지울 수 없다. 원본도 그대로 남는다.
+        jdbc.update("UPDATE meetings SET status = 'transcribing', claimed_at = now() WHERE id = ?", meetingId);
+        mockMvc.perform(delete(base() + "/" + meetingId).header("Authorization", bearer())).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("MEETING_TRANSCRIBING"));
+        assertThat(storedKeys(meetingId)).containsExactly(key);
+        jdbc.update("UPDATE meetings SET status = 'open', claimed_at = NULL WHERE id = ?", meetingId);
 
         mockMvc.perform(delete(base() + "/" + meetingId).header("Authorization", bearer())).andExpect(status().isNoContent());
         mockMvc.perform(get(base() + "/" + meetingId).header("Authorization", bearer())).andExpect(status().isNotFound());

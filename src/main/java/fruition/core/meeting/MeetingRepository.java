@@ -187,15 +187,15 @@ public class MeetingRepository {
                 """, error, id, recordingKey);
     }
 
-    /** 삭제 전에 행을 잠그고 원본 키를 읽는다. 호출자의 트랜잭션이 끝날 때까지 겹친 업로드가 기다린다. 행이 없으면 빈 값. */
-    public Optional<Optional<String>> lockRecordingKey(String id) {
-        return jdbc.query("SELECT recording_key FROM meetings WHERE id = ? FOR UPDATE",
-                (rs, n) -> Optional.ofNullable(rs.getString(1)), id).stream().findFirst();
-    }
-
-    /** 연결·구간·회의록 초안은 FK cascade로 함께 지워진다. */
-    public void delete(String id) {
-        jdbc.update("DELETE FROM meetings WHERE id = ?", id);
+    /**
+     * 원본 키가 호출자가 지운 키와 같을 때만 회의를 지운다(키가 없으면 NULL끼리 비교). 그사이 재업로드로 키가 바뀌었거나
+     * 전사가 시작됐으면 0을 돌려주고 행을 남긴다. 연결·구간·회의록 초안은 FK cascade로 함께 지워진다.
+     */
+    public int deleteIfUnchanged(String id, String recordingKey) {
+        return jdbc.update("""
+                DELETE FROM meetings
+                WHERE id = ? AND recording_key IS NOT DISTINCT FROM ? AND status <> 'transcribing'
+                """, id, recordingKey);
     }
 
     private static Meeting meeting(java.sql.ResultSet rs) throws java.sql.SQLException {
