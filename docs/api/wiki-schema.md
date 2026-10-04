@@ -161,6 +161,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki-s
 
 - 진입점: `src/main/java/fruition/core/wikischema/controller/WikiSchemaController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getActive`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. Wiki Schema 화면은 있으나 의도적으로 클라이언트 목업(`src/entities/schema/api/schema.ts:5-7`, "[임시 목업] … 실제 배선 시 이 파일의 함수 본문만 apiFetch 호출로 교체하면 된다")으로 동작한다
+- 하위 호출: ai-svc `GET ${WIKI_SCHEMA_ENDPOINT}/active?workspace_id&user_id` (`PipelineWikiSchemaRequester`)
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-schema-active)
 
@@ -479,6 +482,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki-
 
 - 진입점: `src/main/java/fruition/core/wikischema/controller/WikiSchemaController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: createDraft`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. Wiki Schema 화면은 클라이언트 목업으로 동작한다(`src/entities/schema/api/schema.ts:5-7`)
+- 하위 호출: ai-svc `POST ${WIKI_SCHEMA_ENDPOINT}/drafts` (`PipelineWikiSchemaRequester`)
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-wiki-schema-drafts)
 
@@ -618,6 +624,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki-
 
 - 진입점: `src/main/java/fruition/core/wikischema/controller/WikiSchemaController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: preview`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. Wiki Schema 화면은 클라이언트 목업으로 동작한다(`src/entities/schema/api/schema.ts:5-7`)
+- 하위 호출: ai-svc `POST ${WIKI_SCHEMA_ENDPOINT}/preview` (`PipelineWikiSchemaRequester`)
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-wiki-schema-preview)
 
@@ -766,6 +775,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki-
 
 - 진입점: `src/main/java/fruition/core/wikischema/controller/WikiSchemaController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: activate`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. Wiki Schema 화면은 클라이언트 목업으로 동작한다(`src/entities/schema/api/schema.ts:5-7`)
+- 하위 호출: ai-svc `POST ${WIKI_SCHEMA_ENDPOINT}/{schemaId}/activate` (`PipelineWikiSchemaRequester`)
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-wiki-schema-schema-id-activate)
 

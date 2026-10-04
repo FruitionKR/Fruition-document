@@ -72,6 +72,9 @@ Authorization: Bearer <access-token>
 - Backend: `src/main/java/fruition/core/aitask/service/AiTaskCancellationService.java`, `V47__add_ai_task_rollback_journal.sql`
 - Python: `app/modules/task_cancellation/`, `app/modules/agent_run/application/rollback_agent_run.py`
 - 기계 판독 계약: `api-specs/openapi.yaml`, `AI/pipeline/api-specs/openapi.yaml`
+- 호출자: 프론트엔드 — `src/entities/wiki/api/wiki.ts:40`(취소), `:49`(상태 조회) (`cancelQueryRun`)
+- 하위 호출: ai-svc `POST ${AGENT_STATUS_ENDPOINT 호스트}/internal/ai/tasks/{id}/cancel`·`/rollback-backend`·`GET /{id}`·`POST /documents/{id}/cancel` (`PipelineTaskCancellationClient`), 되돌리기 중 객체 저장소 `removeObject`
+- 배선 상태: 배선됨
 
 ## 업무 변경 복구 내부 API
 
@@ -82,5 +85,9 @@ AI가 Document의 업무 변경을 복구할 때 호출합니다.
 | `POST /internal/agent/tools/rollback/{id}/changes` | `X-Agent-Service-Token` | `workspace_id`, `user_id` | `200`: 미복구 변경 ID 배열, 내림차순 |
 | `POST /internal/agent/tools/rollback/{id}/finalize-edits` | `X-Agent-Service-Token` | 같은 actor | `200`: 본문 복구 revision·hash 이벤트 배열. 후속 변경 충돌 `409` |
 | `POST /internal/agent/tools/rollback/{id}/changes/{changeId}` | `X-Agent-Service-Token` | 같은 actor | `200`: 한 변경 복구. 충돌 `409` |
+
+세 경로 모두 **ai-svc가 호출하는 서비스 간 API**다. 호출자는 `pipeline/app/modules/task_cancellation/infrastructure/backend_rollback.py`이며
+`/changes`는 `:12`(조립)·`:15`(전송), `/changes/{changeId}`는 `:18`, `/finalize-edits`는 `:20`에서 만든다.
+하위 호출은 core DB 역순 복구와 객체 저장소 `removeObject`이고, ai-svc로 다시 나가는 HTTP는 없다. 프론트엔드 호출자는 없다(내부 전용이므로 정상이다).
 
 전체 순서와 검증 범위는 [공통 계약](https://github.com/FruitionKR/Fruition-flatform/blob/main/docs/api/ai-task-cancellation.md)을 따릅니다.

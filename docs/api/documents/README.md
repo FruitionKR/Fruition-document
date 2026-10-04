@@ -9,6 +9,6 @@
 
 | 구분 | API 수 | 역할 |
 |---|---:|---|
-| [Management](management.md) | 8 | 목록·생성·업로드·조회·복제·이동·이름 변경 |
-| [Content](content.md) | 9 | 본문·block·asset·원본·내보내기·편집 잠금 |
+| [Management](management.md) | 12 | 목록·생성·업로드(직접 업로드 포함)·조회·복제·이동·이름 변경 |
+| [Content](content.md) | 10 | 본문·block·asset·원본·원본 주소·내보내기·편집 잠금 |
 | [History](history.md) | 7 | 삭제·휴지통·복구·diff·버전 이력 |

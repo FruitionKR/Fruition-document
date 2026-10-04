@@ -103,6 +103,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getRun`)
+- 호출자: 프론트엔드 — `src/features/agent-chat/api/agentPlan.ts:15`(`fetchAgentPlanRun`)
+- 하위 호출: ai-svc `GET ${AGENT_RUN_ENDPOINT}/{runId}` (`PipelineAgentRunStatusRequester`, `X-Agent-Service-Token`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-runs-run-id)
 
@@ -196,6 +199,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: approve`)
+- 호출자: 프론트엔드 — `src/features/agent-chat/api/agentPlan.ts:25`(`decideAgentPlan(decision="approve")`)
+- 하위 호출: ai-svc `POST ${AGENT_RUN_ENDPOINT}/{runId}/approve` (`PipelineAgentRunStatusRequester`, `X-Agent-Service-Token`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-approve)
 
@@ -280,6 +286,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: cancel`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. `decideAgentPlan`은 `approve`·`reject`만 보낸다(`src/features/agent-chat/api/agentPlan.ts:25`)
+- 하위 호출: ai-svc `POST ${AGENT_RUN_ENDPOINT}/{runId}/cancel` (`PipelineAgentRunStatusRequester`)
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-cancel)
 
@@ -364,6 +373,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: reject`)
+- 호출자: 프론트엔드 — `src/features/agent-chat/api/agentPlan.ts:25`(`decideAgentPlan(decision="reject")`)
+- 하위 호출: ai-svc `POST ${AGENT_RUN_ENDPOINT}/{runId}/reject` (`PipelineAgentRunStatusRequester`, `X-Agent-Service-Token`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-reject)
 
@@ -456,6 +468,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: revise`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. `decideAgentPlan`은 `approve`·`reject`만 보낸다(`src/features/agent-chat/api/agentPlan.ts:25`)
+- 하위 호출: ai-svc `POST ${AGENT_RUN_ENDPOINT}/{runId}/revise` (`PipelineAgentRunStatusRequester`)
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-revise)
 
@@ -654,6 +669,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: turn`)
+- 호출자: 프론트엔드 — `src/features/agent-chat/api/agent.ts:18`(`requestAgentTurn`)
+- 하위 호출: HTTP 호출 없음. Kafka `ai.agent.command`로 ai-svc에 전달한다
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-agent-turn)
 
@@ -773,6 +791,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getTurn`)
+- 호출자: 프론트엔드 — `src/features/agent-chat/api/agentPlan.ts:6`, `src/features/agent-chat/api/agent.ts:37`
+- 하위 호출: ai-svc `GET ${AGENT_STATUS_ENDPOINT}/{runId}` (`PipelineAgentRunStatusRequester`, `X-Internal-Token`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-turn-run-id)
 
@@ -884,6 +905,9 @@ string
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: subscribeTurnEvents`)
+- 호출자: 프론트엔드 — `src/features/agent-chat/api/agent.ts:29`(SSE를 `EventSource` 대신 인증된 `fetch` 스트림으로 읽는다. `src/shared/lib/runEvents.ts`)
+- 하위 호출: 없음. 적용 표(`agent_apply_projections`)만으로 자격을 검증하고 버퍼 이벤트를 전달한다
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-turn-run-id-events)
 
@@ -987,6 +1011,9 @@ curl -X POST "$DOCUMENT/internal/agent/tools/execute/<value>" \
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentToolController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: execute`)
+- 호출자: ai-svc — `pipeline/app/modules/agent_run/infrastructure/backend_tool_gateway.py:51`(조립), `:67`(전송). base URL은 `AGENT_BACKEND_URL`(기본 `http://document-svc:8080`, 같은 파일 `:92`)이며 `DOCUMENT_INTERNAL_BASE_URL`이 아니다
+- 하위 호출: ai-svc `POST ${AGENT_STATUS_ENDPOINT}/tool-authorizations/execute`(`PipelineAgentToolAuthorizationClient`), `POST .../artifacts/list|resolve`(`PipelineAgentArtifactClient`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-internal-agent-tools-execute-tool-name)
 
@@ -1085,6 +1112,9 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentToolController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: read`)
+- 호출자: ai-svc — `pipeline/app/modules/agent_run/infrastructure/backend_tool_gateway.py:27`
+- 하위 호출: ai-svc `POST ${AGENT_STATUS_ENDPOINT}/tool-authorizations/read`(`PipelineAgentToolAuthorizationClient`), `POST .../artifacts/list|resolve`(`PipelineAgentArtifactClient`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-internal-agent-tools-read-tool-name)
 
@@ -1095,3 +1125,8 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 `GET /api/workspaces/{workspace_id}/usage/models?from_at=...&to_at=...`
 
 로그인 사용자의 workspace 멤버 권한을 확인한 뒤 AI 내부 `/usage/models`에서 집계를 조회한다. 다른 사용자의 ID를 지정할 수 없다. 기간은 시간대 포함 ISO 8601, 시작 포함·종료 제외이며 생략 시 UTC 이번 달이다. 모델별 입력·출력·캐시·추론 토큰과 실패·미확인 호출 수를 반환한다. 캐시와 추론은 각각 입력과 출력의 부분 집합이므로 중복 합산하지 않는다. 금액 환산은 백엔드 책임이며 현재 응답은 사용량이다. 잘못된 기간 400, 권한 없음 404, AI 장애·빈 응답 503.
+
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: ai-svc `GET ${MODEL_USAGE_ENDPOINT}?workspace_id&user_id[&from_at&to_at]` (`src/main/java/fruition/core/usage/service/ModelUsageService.java`, `X-Internal-Token`)
+- 진입점: `src/main/java/fruition/core/usage/controller/ModelUsageController.java`
+- 배선 상태: **미배선 — 호출자 없음**

@@ -24,6 +24,28 @@
 | [`POST .../meetings/{meeting_id}/notes/{version}/apply`](#notes-apply) | 회의록을 새 문서로 만들거나 기존 문서 끝에 추가합니다. |
 | [`WS /api/meetings/{meeting_id}/live?ticket=`](#ws-api-meetings-meeting-id-live) | 실시간 받아쓰기. 오디오를 보내고 전사 이벤트를 받습니다. |
 
+## 호출 관계(배선)
+
+경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 이 도메인은 **공개 API 10개와 WebSocket 1개 전부 호출자가 없다**.
+프론트엔드(`/Users/mireutale/coding/git/Fruition-frontend`)의 85개 `apiFetch` 호출 지점과 `fetch`·`new WebSocket` 호출 지점을
+전수 확인했으며 `meetings`·`speech`로 가는 경로가 하나도 없다. ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다.
+
+| API | 호출자 | 하위 호출 | 배선 |
+|---|---|---|---|
+| `POST .../meetings` | 없음 | 권한 확인 외 없음 | **미배선** |
+| `GET .../meetings/{meeting_id}` | 없음 | 권한 확인 외 없음 | **미배선** |
+| `POST .../meetings/{meeting_id}/live-tickets` | 없음 | 티켓만 발급. 티켓을 쓰는 WebSocket 중계(`MeetingLiveHandler`)가 ai-svc `${SPEECH_LIVE_ENDPOINT}`에 연결한다 | **미배선** |
+| `DELETE .../meetings/{meeting_id}` | 없음 | 객체 저장소(MinIO/S3) 녹음 원본 삭제 | **미배선** |
+| `PUT .../meetings/{meeting_id}/recording` | 없음 | 객체 저장소 쓰기 → `MeetingTranscriptionWorker`가 비동기로 ai-svc `POST ${SPEECH_TRANSCRIPTION_ENDPOINT}` 호출 | **미배선** |
+| `GET .../meetings/{meeting_id}/recording-url` | 없음 | 객체 저장소 presign | **미배선** |
+| `POST .../meetings/{meeting_id}/notes` | 없음 | ai-svc `POST ${MEETING_NOTES_ENDPOINT}` (`MeetingNotesClient`) | **미배선** |
+| `GET .../meetings/{meeting_id}/notes` | 없음 | 권한 확인 외 없음(DB 조회로 보이나 서비스 계층을 한 줄씩 확인하지는 않았다) | **미배선** |
+| `POST .../meetings/{meeting_id}/notes/{version}/append-preview` | 없음 | ai-svc `POST ${MEETING_NOTES_ENDPOINT}` (`MeetingNotesClient`) | **미배선** |
+| `POST .../meetings/{meeting_id}/notes/{version}/apply` | 없음 | 문서 본문 쓰기(DB·객체 저장소). ai-svc 호출 여부는 미확인 | **미배선** |
+| `WS /api/meetings/{meeting_id}/live?ticket=` | 없음 | ai-svc WebSocket `${SPEECH_LIVE_ENDPOINT}` 1:1 중계(`MeetingLiveHandler`, `X-Internal-Token`) | **미배선** |
+
+전체 배선 요약은 [API 목차의 배선 표](README.md#호출-관계배선-요약)를 본다.
+
 ## 한눈에 보기
 
 <a id="summary-post-api-workspaces-workspace-id-meetings"></a>
@@ -138,6 +160,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 
 - 진입점: `src/main/java/fruition/core/meeting/MeetingController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: createMeeting`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. 프론트엔드에 회의 화면 호출 지점이 전혀 없다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-meetings)
 
@@ -240,6 +265,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meetin
 
 - 진입점: `src/main/java/fruition/core/meeting/MeetingController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getMeeting`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-meetings-meeting-id)
 
@@ -324,6 +352,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 
 - 진입점: `src/main/java/fruition/core/meeting/MeetingController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: issueMeetingLiveTicket`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. 프론트엔드에 `new WebSocket` 호출 지점도 없다
+- 하위 호출: 티켓만 발급한다. 티켓을 쓰는 WebSocket 중계(`MeetingLiveHandler`)가 ai-svc `${SPEECH_LIVE_ENDPOINT}`에 연결한다
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-meetings-meeting-id-live-tickets)
 

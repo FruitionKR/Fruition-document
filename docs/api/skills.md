@@ -200,6 +200,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
 
 - 진입점: `src/main/java/fruition/core/skill/controller/SkillController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: list_2`)
+- 호출자: 프론트엔드 — `src/entities/skill/api/skill.ts:11`(`fetchSkills`)
+- 하위 호출: ai-svc `GET ${SKILL_ENDPOINT}?workspace_id&user_id` (`PipelineSkillRequester`, `X-Agent-Service-Token`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-skills)
 
@@ -353,6 +356,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 
 - 진입점: `src/main/java/fruition/core/skill/controller/SkillController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: author`)
+- 호출자: 프론트엔드 — `src/entities/skill/api/skill.ts:16`(`authorSkill`)
+- 하위 호출: ai-svc `POST ${SKILL_ENDPOINT}/tasks` (`PipelineSkillRequester`), access-svc `WorkspaceAiModelClient`, `PipelineTaskCancellationClient`로 작업 등록
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-skills-author)
 
@@ -508,6 +514,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 
 - 진입점: `src/main/java/fruition/core/skill/controller/SkillController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: publish`)
+- 호출자: 프론트엔드 — `src/entities/skill/api/skill.ts:25`(`publishSkill`)
+- 하위 호출: ai-svc `POST ${SKILL_ENDPOINT}/tasks` (`PipelineSkillRequester`), access-svc `WorkspaceAiModelClient`
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-skills-author-publish)
 
@@ -682,6 +691,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
 
 - 진입점: `src/main/java/fruition/core/skill/controller/SkillController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: get_1`)
+- 호출자: 프론트엔드 — `src/entities/skill/api/skill.ts` 상세 조회 경로
+- 하위 호출: ai-svc `GET ${SKILL_ENDPOINT}/{skillId}` (`PipelineSkillRequester`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-skills-skill-id)
 
@@ -823,6 +835,9 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skil
 
 - 진입점: `src/main/java/fruition/core/skill/controller/SkillController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: update_1`)
+- 호출자: 프론트엔드 — `src/entities/skill/api/skill.ts:38`(`updateSkill`)
+- 하위 호출: ai-svc `POST ${SKILL_ENDPOINT}/tasks` (`PipelineSkillRequester`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-patch-api-workspaces-workspace-id-skills-skill-id)
 
@@ -997,6 +1012,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 
 - 진입점: `src/main/java/fruition/core/skill/controller/SkillController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: disable`)
+- 호출자: 프론트엔드 — `src/entities/skill/api/skill.ts:52`(`disableSkill`)
+- 하위 호출: ai-svc `POST ${SKILL_ENDPOINT}/{skillId}/disable` (`PipelineSkillRequester`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-skills-skill-id-disable)
 
@@ -1171,6 +1189,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 
 - 진입점: `src/main/java/fruition/core/skill/controller/SkillController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: enable`)
+- 호출자: 프론트엔드 — `src/entities/skill/api/skill.ts:47`(`enableSkill`)
+- 하위 호출: ai-svc `POST ${SKILL_ENDPOINT}/{skillId}/enable` (`PipelineSkillRequester`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-skills-skill-id-enable)
 
@@ -1270,6 +1291,9 @@ curl -X POST "$DOCUMENT/internal/agent/skill-authoring/references/read" \
 
 - 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: read_1`)
+- 호출자: ai-svc — `pipeline/app/modules/skill/infrastructure/backend_skill_reference_reader.py:27`(base URL `DOCUMENT_INTERNAL_BASE_URL`, 헤더 `X-Agent-Service-Token`, 조립 `build_skill_reference_reader()` 같은 파일 `:73`)
+- 하위 호출: 객체 저장소(MinIO/S3) 읽기
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-internal-agent-skill-authoring-references-read)
 
