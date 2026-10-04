@@ -119,6 +119,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/speec
 - 진입점: `src/main/java/fruition/core/speech/SpeechController.java`
 - AI 호출: `src/main/java/fruition/core/speech/SpeechTranscriptionClient.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: transcribeSpeech`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. 프론트엔드에 마이크 입력 호출 지점이 없다
+- 하위 호출: ai-svc `POST ${SPEECH_TRANSCRIPTION_ENDPOINT}?workspace_id&user_id` (`SpeechTranscriptionClient`, `X-Internal-Token`)
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-speech-transcriptions)
 

@@ -126,6 +126,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/s
 
 - 진입점: `src/main/java/fruition/core/chat/controller/ChatSessionController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: list_1`)
+- 호출자: 프론트엔드 — `src/entities/chat/api/chat.ts:48`, `:53`, `:58`(`fetchChatSessions`, `resolveSessionId`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-chat-sessions)
 
@@ -240,6 +243,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 
 - 진입점: `src/main/java/fruition/core/chat/controller/ChatSessionController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: create_1`)
+- 호출자: 프론트엔드 — `src/entities/chat/api/chat.ts:25`(`createChatSession`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-chat-sessions)
 
@@ -357,6 +363,9 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat
 
 - 진입점: `src/main/java/fruition/core/chat/controller/ChatSessionController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: rename_3`)
+- 호출자: 프론트엔드 — `src/entities/chat/api/chat.ts` 세션 이름 변경 경로
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-patch-api-workspaces-workspace-id-chat-sessions-session-id)
 
@@ -447,6 +456,9 @@ curl -X DELETE "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/cha
 
 - 진입점: `src/main/java/fruition/core/chat/controller/ChatSessionController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: delete_1`)
+- 호출자: 프론트엔드 — `src/entities/chat/api/chat.ts:37`(`deleteChatSession`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-delete-api-workspaces-workspace-id-chat-sessions-session-id)
 
@@ -648,6 +660,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/s
 
 - 진입점: `src/main/java/fruition/core/chat/controller/ChatSessionController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getMessages`)
+- 호출자: 프론트엔드 — `src/entities/chat/api/chat.ts:91`(`fetchChatMessages`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-chat-sessions-session-id-messages)
 
@@ -764,6 +779,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 
 - 진입점: `src/main/java/fruition/core/chat/controller/ChatWikiExportController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: exportToWiki`)
+- 호출자: 프론트엔드 — `src/features/wiki-export/api/export.ts:18`(`exportChatWiki`)
+- 하위 호출: 문서를 만들고 Kafka ingest로 넘긴다. 실제 Wiki 생성은 ingestion pipeline과 `ChatWikiExportReconciler` 폴링이 처리한다 — 동기 HTTP 호출 여부는 미확인
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-chat-sessions-session-id-wiki)
 
@@ -847,6 +865,9 @@ string
 
 - 진입점: `src/main/java/fruition/core/chat/controller/ChatWikiExportController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: previewWikiMarkdown`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: `POST .../wiki`와 같은 서비스 경로. 동기 HTTP 호출 여부는 미확인
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-chat-sessions-session-id-wiki-preview)
 

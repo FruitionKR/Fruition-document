@@ -6,7 +6,7 @@
 
 문서 목록·생성·업로드·조회와 기본 관리 API다.
 
-- API 수: 8
+- API 수: 12
 
 ## API 목차
 
@@ -14,6 +14,10 @@
 |---|---|
 | [`GET /api/workspaces/{workspace_id}/documents`](#summary-get-api-workspaces-workspace-id-documents) | 활성 문서의 호환용 평면 목록을 반환하며 파일명 검색을 지원합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents`](#summary-post-api-workspaces-workspace-id-documents) | PDF 또는 Markdown 파일을 업로드합니다. Markdown은 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. |
+| [`POST /api/workspaces/{workspace_id}/documents/uploads`](#summary-post-api-workspaces-workspace-id-documents-uploads) | 대용량 PDF를 객체 저장소에 직접 올리기 위한 업로드 티켓과 조각 크기를 발급합니다. |
+| [`POST /api/workspaces/{workspace_id}/documents/uploads/parts`](#summary-post-api-workspaces-workspace-id-documents-uploads-parts) | 업로드 티켓으로 조각 번호 범위에 대한 15분짜리 presigned PUT 주소를 발급합니다. |
+| [`POST /api/workspaces/{workspace_id}/documents/uploads/complete`](#summary-post-api-workspaces-workspace-id-documents-uploads-complete) | 조각 업로드를 조립해 PDF를 검증하고 문서로 확정합니다. |
+| [`POST /api/workspaces/{workspace_id}/documents/uploads/abort`](#summary-post-api-workspaces-workspace-id-documents-uploads-abort) | 진행 중인 조각 업로드를 중단하고 임시 객체를 정리합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/markdown`](#summary-post-api-workspaces-workspace-id-documents-markdown) | 표시 이름과 전체 Markdown 본문으로 즉시 편집 가능한 문서를 생성합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}`](#summary-get-api-workspaces-workspace-id-documents-document-id) | 특정 문서의 상세 정보를 반환합니다. 연결된 Wiki 페이지 목록이 포함됩니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/{document_id}/duplicate`](#summary-post-api-workspaces-workspace-id-documents-document-id-duplicate) | 문서 소유자가 최신 Markdown 편집본을 같은 부모의 마지막 위치에 새 문서로 복제합니다. |
@@ -146,6 +150,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: list`)
+- 호출자: 프론트엔드 — `src/entities/document/api/document.ts:51`(`fetchDocuments`), `src/entities/wiki/api/wiki.ts:12`(`fetchDocumentData`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-documents)
 
@@ -280,8 +287,486 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: upload`)
+- 호출자: 프론트엔드 — `src/entities/document/api/document.ts:70`(`uploadDocumentFile`, multipart). 직접 업로드 플래그가 꺼져 있거나 PDF가 아닐 때 이 경로를 쓴다
+- 하위 호출: 객체 저장소(MinIO/S3) 쓰기
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents)
+
+</details>
+
+<a id="summary-post-api-workspaces-workspace-id-documents-uploads"></a>
+### `POST /api/workspaces/{workspace_id}/documents/uploads`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 대용량 PDF를 객체 저장소에 직접 올리기 위한 업로드 티켓과 조각 크기를 발급합니다. |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `StartRequest` |
+| 출력 | `200` 티켓 발급 — `StartResponse` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
+| 주요 오류 | `400` PDF 파일명이 올바르지 않음 — `ErrorResponse`<br>`413` 크기가 0 이하이거나 5 TiB 초과 — `ErrorResponse` |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-api-workspaces-workspace-id-documents-uploads"></a>
+### `POST /api/workspaces/{workspace_id}/documents/uploads` 상세
+
+#### 1. Method + Path
+
+`POST /api/workspaces/{workspace_id}/documents/uploads`
+
+#### 2. 목적
+
+원본 PDF를 서버를 거치지 않고 객체 저장소에 직접 올리기 위해 multipart 업로드를 시작한다. 응답의 `ticket`은 조각 주소 발급·확정·중단 요청에 그대로 다시 보낸다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| body | `filename` | `string` | 예 | 255자 이하, `.pdf`로 끝나야 하며 `/`·`\`·제어문자를 포함할 수 없다 |
+| body | `size` | `integer(int64)` | 예 | 0보다 크고 5 TiB 이하 |
+| body | `folder_id` | `string(uuid)` | 아니요 | 확정 시 문서를 넣을 폴더. 생략하면 최상위 |
+
+```json
+{
+  "filename": "설계문서.pdf",
+  "folder_id": "55555555-5555-5555-5555-555555555555",
+  "size": 482913
+}
+```
+
+#### 5. Response body
+
+- HTTP `200`: 티켓 발급
+- Content-Type: `*/*` (`StartResponse`)
+- `part_size`는 64 MiB와 `ceil(size / 10000)` 중 큰 값이다. `ticket`은 발급 후 1일간 유효하다.
+
+```json
+{
+  "part_count": 1,
+  "part_size": 67108864,
+  "ticket": "<upload-ticket>"
+}
+```
+
+#### 6. Error response
+
+| HTTP 상태 | 설명 | 응답 스키마 |
+|---|---|---|
+| `400` | 올바른 PDF 파일명이 아님 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `404` | 워크스페이스를 찾을 수 없음(멤버가 아님) | `ErrorResponse` |
+| `413` | 크기가 0 이하이거나 5 TiB 초과 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+
+```json
+{
+  "error": {
+    "code": "DOCUMENT_UPLOAD_REJECTED",
+    "message": "올바른 PDF 파일명이 필요합니다."
+  }
+}
+```
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 티켓은 인증 토큰과 다른 서명 키·audience(`document-upload-ticket`)를 쓰므로 Bearer 토큰으로 쓸 수 없고, 반대도 불가능하다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/documents/uploads" \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  --data '{"filename":"설계문서.pdf","size":482913}'
+```
+
+```json
+{
+  "part_count": 1,
+  "part_size": 67108864,
+  "ticket": "<upload-ticket>"
+}
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/document/controller/DocumentDirectUploadController.java`
+- 서비스: `src/main/java/fruition/core/document/service/DocumentDirectUploadService.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: start`)
+- 호출자: 프론트엔드 — `src/entities/document/api/multipartUpload.ts:9`(`uploadPdfMultipart`). 경로는 `src/entities/document/api/document.ts:64`에서 `workspacePath(workspaceId, "documents", "uploads")`로 조립한다. `getDocumentTransport().directUpload`와 PDF 확장자일 때만 이 경로를 쓰고, 아니면 `POST .../documents`로 간다
+- 하위 호출: 객체 저장소(MinIO/S3) multipart 시작. ai-svc·access-svc 호출 없음
+- 배선 상태: 배선됨(조건부 — 직접 업로드 플래그가 켜진 경우)
+
+[↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-uploads)
+
+</details>
+
+<a id="summary-post-api-workspaces-workspace-id-documents-uploads-parts"></a>
+### `POST /api/workspaces/{workspace_id}/documents/uploads/parts`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 업로드 티켓으로 조각 번호 범위에 대한 15분짜리 presigned PUT 주소를 발급합니다. |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `PartsRequest` |
+| 출력 | `200` 조각 주소 — `PartsResponse` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>티켓의 사용자·워크스페이스가 요청과 같아야 하고, 활성 멤버십을 다시 검증한다. |
+| 주요 오류 | `400` 티켓 만료·훼손 또는 조각 범위 오류 — `ErrorResponse`<br>`403` 다른 사용자의 업로드 — `ErrorResponse` |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-api-workspaces-workspace-id-documents-uploads-parts"></a>
+### `POST /api/workspaces/{workspace_id}/documents/uploads/parts` 상세
+
+#### 1. Method + Path
+
+`POST /api/workspaces/{workspace_id}/documents/uploads/parts`
+
+#### 2. 목적
+
+클라이언트가 조각을 객체 저장소에 직접 PUT할 수 있도록 presigned 주소를 한 번에 최대 32개까지 발급한다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| body | `ticket` | `string` | 예 | 시작 응답의 티켓 |
+| body | `first_part` | `integer(int32)` | 예 | 1 이상 |
+| body | `count` | `integer(int32)` | 예 | 1 이상 32 이하. `first_part + count - 1`이 전체 조각 수를 넘을 수 없다 |
+
+```json
+{
+  "count": 1,
+  "first_part": 1,
+  "ticket": "<upload-ticket>"
+}
+```
+
+#### 5. Response body
+
+- HTTP `200`: 조각 주소
+- Content-Type: `*/*` (`PartsResponse`)
+- 각 주소는 15분간 유효한 PUT presigned URL이며 `uploadId`·`partNumber` query를 포함한다.
+
+```json
+{
+  "parts": [
+    {
+      "part_number": 1,
+      "url": "https://<storage>/<bucket>/tmp/document-uploads/<id>?uploadId=...&partNumber=1"
+    }
+  ]
+}
+```
+
+#### 6. Error response
+
+| HTTP 상태 | 설명 | 응답 스키마 |
+|---|---|---|
+| `400` | 티켓이 만료되었거나 올바르지 않음, 또는 조각 범위 오류 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `403` | 다른 사용자의 업로드를 사용할 수 없음 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `404` | 워크스페이스를 찾을 수 없음(멤버가 아님) | `ErrorResponse` |
+
+```json
+{
+  "error": {
+    "code": "DOCUMENT_UPLOAD_REJECTED",
+    "message": "업로드 조각 범위가 올바르지 않습니다."
+  }
+}
+```
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음 (`first_part`·`count`로 조각 범위를 나눠 요청한다)
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 티켓의 `sub`(사용자)와 `workspace` claim이 요청과 일치해야 한다. 다르면 `403`이다.
+- 일치해도 활성 멤버십을 다시 검증한다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/documents/uploads/parts" \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  --data '{"ticket":"<upload-ticket>","first_part":1,"count":1}'
+```
+
+```json
+{
+  "parts": [
+    {
+      "part_number": 1,
+      "url": "https://<storage>/<bucket>/tmp/document-uploads/<id>?uploadId=...&partNumber=1"
+    }
+  ]
+}
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/document/controller/DocumentDirectUploadController.java`
+- 서비스: `src/main/java/fruition/core/document/service/DocumentDirectUploadService.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: parts`)
+- 호출자: 프론트엔드 — `src/entities/document/api/multipartUpload.ts:24`(3개 단위 묶음 요청). `${endpoint}/parts` 템플릿으로 조립한다
+- 하위 호출: 객체 저장소(MinIO/S3) `GetPresignedObjectUrl`. ai-svc·access-svc 호출 없음
+- 배선 상태: 배선됨(조건부 — 직접 업로드 플래그가 켜진 경우)
+
+[↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-uploads-parts)
+
+</details>
+
+<a id="summary-post-api-workspaces-workspace-id-documents-uploads-complete"></a>
+### `POST /api/workspaces/{workspace_id}/documents/uploads/complete`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 조각 업로드를 조립해 PDF를 검증하고 문서로 확정합니다. |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`(필수): `string`<br>**Body** — `CompleteRequest` |
+| 출력 | `201` 확정 성공 — `DocumentUploadResponse` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>티켓의 사용자·워크스페이스가 요청과 같아야 하고, 활성 멤버십을 다시 검증한다. |
+| 주요 오류 | `400` 티켓 오류, 조각 크기·순서 불일치, 파일 정보 불일치 — `ErrorResponse`<br>`403` 다른 사용자의 업로드 — `ErrorResponse`<br>`409` 전송되지 않은 조각이 있음 또는 Idempotency-Key 충돌 — `ErrorResponse`<br>`415` PDF 내용이 올바르지 않음 — `ErrorResponse` |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-api-workspaces-workspace-id-documents-uploads-complete"></a>
+### `POST /api/workspaces/{workspace_id}/documents/uploads/complete` 상세
+
+#### 1. Method + Path
+
+`POST /api/workspaces/{workspace_id}/documents/uploads/complete`
+
+#### 2. 목적
+
+조각을 하나의 객체로 조립하고 크기·Content-Type·`%PDF-` 시그니처를 검증한 뒤, 일반 업로드와 같은 멱등성·폴더 권한 경로로 문서를 생성한다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| header | `Idempotency-Key` | `string` | 예 | 요청 멱등 키 |
+| body | `ticket` | `string` | 예 | 시작 응답의 티켓 |
+
+```json
+{
+  "ticket": "<upload-ticket>"
+}
+```
+
+#### 5. Response body
+
+- HTTP `201`: 확정 성공
+- Content-Type: `*/*` (`DocumentUploadResponse`)
+- 응답이 유실되어 재시도해도 이미 조립된 객체를 재사용하므로 같은 티켓·멱등 키로 안전하게 다시 호출할 수 있다.
+
+```json
+{
+  "byte_size": 482913,
+  "current_version": 1,
+  "document_role": "EDITABLE",
+  "editable": false,
+  "filename": "설계문서.pdf",
+  "id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+  "mime_type": "application/pdf",
+  "source_uri": "string",
+  "status": "uploaded",
+  "uploaded_at": "2026-08-13T04:25:24.371948Z"
+}
+```
+
+#### 6. Error response
+
+| HTTP 상태 | 설명 | 응답 스키마 |
+|---|---|---|
+| `400` | 티켓 오류, 조각 크기·순서 불일치, 업로드한 파일 정보 불일치 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `403` | 다른 사용자의 업로드를 사용할 수 없음 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `409` | 전송되지 않은 조각이 있음 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `409` | Idempotency-Key 충돌 | `ErrorResponse` |
+| `415` | PDF 파일 내용이 올바르지 않음 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+
+```json
+{
+  "error": {
+    "code": "DOCUMENT_UPLOAD_REJECTED",
+    "message": "전송되지 않은 조각이 있습니다."
+  }
+}
+```
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 티켓의 사용자·워크스페이스 claim이 요청과 일치해야 하고, 활성 멤버십을 다시 검증한다.
+- 폴더 권한과 파일명 중복은 일반 업로드와 같은 경로에서 검증한다.
+- 객체 version ID(로컬 비버전 버킷은 ETag)를 고정해 해시 계산과 원본 저장 사이의 덮어쓰기를 차단한다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/documents/uploads/complete" \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Idempotency-Key: <value>' \
+  -H 'Content-Type: application/json' \
+  --data '{"ticket":"<upload-ticket>"}'
+```
+
+```json
+{
+  "byte_size": 482913,
+  "current_version": 1,
+  "document_role": "EDITABLE",
+  "editable": false,
+  "filename": "설계문서.pdf",
+  "id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+  "mime_type": "application/pdf",
+  "source_uri": "string",
+  "status": "uploaded",
+  "uploaded_at": "2026-08-13T04:25:24.371948Z"
+}
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/document/controller/DocumentDirectUploadController.java`
+- 서비스: `src/main/java/fruition/core/document/service/DocumentDirectUploadService.java` → `DocumentService.upload`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: complete`)
+- 호출자: 프론트엔드 — `src/entities/document/api/multipartUpload.ts:67`(최대 3회 재시도, 같은 `Idempotency-Key` 유지)
+- 하위 호출: 객체 저장소(MinIO/S3) multipart 조립·`StatObject`·`ComposeObject`. ai-svc·access-svc 호출 없음
+- 배선 상태: 배선됨(조건부 — 직접 업로드 플래그가 켜진 경우)
+
+[↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-uploads-complete)
+
+</details>
+
+<a id="summary-post-api-workspaces-workspace-id-documents-uploads-abort"></a>
+### `POST /api/workspaces/{workspace_id}/documents/uploads/abort`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 진행 중인 조각 업로드를 중단하고 임시 객체를 정리합니다. |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `CompleteRequest` |
+| 출력 | `204` 중단됨 — 본문 없음 |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>티켓의 사용자·워크스페이스가 요청과 같아야 하고, 활성 멤버십을 다시 검증한다. |
+| 주요 오류 | `400` 티켓 만료·훼손 — `ErrorResponse`<br>`403` 다른 사용자의 업로드 — `ErrorResponse` |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-api-workspaces-workspace-id-documents-uploads-abort"></a>
+### `POST /api/workspaces/{workspace_id}/documents/uploads/abort` 상세
+
+#### 1. Method + Path
+
+`POST /api/workspaces/{workspace_id}/documents/uploads/abort`
+
+#### 2. 목적
+
+사용자가 업로드를 취소하면 객체 저장소의 multipart 업로드를 중단해 조각을 남기지 않는다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| body | `ticket` | `string` | 예 | 시작 응답의 티켓 |
+
+```json
+{
+  "ticket": "<upload-ticket>"
+}
+```
+
+#### 5. Response body
+
+- HTTP `204`: 중단됨
+- 본문 없음
+
+#### 6. Error response
+
+| HTTP 상태 | 설명 | 응답 스키마 |
+|---|---|---|
+| `400` | 티켓이 만료되었거나 올바르지 않음 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `403` | 다른 사용자의 업로드를 사용할 수 없음 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `404` | 워크스페이스를 찾을 수 없음(멤버가 아님) | `ErrorResponse` |
+
+```json
+{
+  "error": {
+    "code": "DOCUMENT_UPLOAD_REJECTED",
+    "message": "업로드 확인 정보가 만료되었거나 올바르지 않습니다."
+  }
+}
+```
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 티켓의 사용자·워크스페이스 claim이 요청과 일치해야 하고, 활성 멤버십을 다시 검증한다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/documents/uploads/abort" \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  --data '{"ticket":"<upload-ticket>"}'
+```
+
+```http
+HTTP/1.1 204 No Content
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/document/controller/DocumentDirectUploadController.java`
+- 서비스: `src/main/java/fruition/core/document/service/DocumentDirectUploadService.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: abort`)
+- 호출자: 프론트엔드 — `src/entities/document/api/multipartUpload.ts:82`(업로드 실패 시 catch 경로)
+- 하위 호출: 객체 저장소(MinIO/S3) `AbortMultipartUpload`. ai-svc·access-svc 호출 없음
+- 배선 상태: 배선됨(조건부 — 직접 업로드 플래그가 켜진 경우)
+
+[↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-uploads-abort)
 
 </details>
 
@@ -415,6 +900,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: createMarkdown`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 객체 저장소(MinIO/S3) 쓰기
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-markdown)
 
@@ -539,6 +1027,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getById`)
+- 호출자: 프론트엔드 — `src/features/note-editing/api/note.ts:31`(`fetchNoteDraft`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-documents-document-id)
 
@@ -663,6 +1154,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: duplicate`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 객체 저장소(MinIO/S3) 복제
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-duplicate)
 
@@ -786,6 +1280,9 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docu
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentPositionController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: move_1`)
+- 호출자: 프론트엔드 — `src/entities/tree/api/folders.ts:24`(`mutateTreeItem`, suffix `["position"]`) → `:35`(`moveDocument`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-patch-api-workspaces-workspace-id-documents-document-id-position)
 
@@ -911,6 +1408,9 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docu
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: rename_2`)
+- 호출자: 프론트엔드 — `src/entities/document/api/document.ts:171`(`renameDocument`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-patch-api-workspaces-workspace-id-documents-document-id-rename)
 
@@ -997,6 +1497,9 @@ curl -X POST "$DOCUMENT/internal/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/
 
 - 진입점: `src/main/java/fruition/core/document/controller/InternalDocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: createInitialNote`)
+- 호출자: access-svc — `src/main/java/fruition/access/workspace/service/DocumentInternalClient.java:60`, 호출 지점 `WorkspaceService.java:148`(`runAfterCommit`, best-effort — 실패 시 warn만 남긴다). base URL은 `app.internal.document-base-url` ← `DOCUMENT_INTERNAL_BASE_URL`, 헤더 `X-Internal-Token`
+- 하위 호출: 객체 저장소(MinIO/S3) 쓰기
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-internal-workspaces-workspace-id-initial-note)
 

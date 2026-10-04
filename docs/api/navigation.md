@@ -147,6 +147,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
 
 - 진입점: `src/main/java/fruition/core/document/controller/FolderController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: create`)
+- 호출자: 프론트엔드 — `src/entities/tree/api/folders.ts:12`(`createFolder`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-folders)
 
@@ -275,6 +278,9 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/fold
 
 - 진입점: `src/main/java/fruition/core/document/controller/FolderController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: rename_1`)
+- 호출자: 프론트엔드 — `src/entities/tree/api/folders.ts:24`(`mutateTreeItem`, 빈 suffix) → `:31`(`renameFolder`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-patch-api-workspaces-workspace-id-folders-folder-id)
 
@@ -399,6 +405,9 @@ curl -X DELETE "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/fol
 
 - 진입점: `src/main/java/fruition/core/document/controller/FolderController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: delete`)
+- 호출자: 프론트엔드 — `src/entities/tree/api/folders.ts:24` → `:32`(`deleteFolder`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-delete-api-workspaces-workspace-id-folders-folder-id)
 
@@ -514,6 +523,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folder
 
 - 진입점: `src/main/java/fruition/core/document/controller/FolderController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: children`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. 프론트엔드는 `GET .../document-tree` 하나로 트리를 통째로 받는다(`src/entities/tree/api/folders.ts:5`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-folders-folder-id-children)
 
@@ -643,6 +655,9 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/fold
 
 - 진입점: `src/main/java/fruition/core/document/controller/FolderController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: move`)
+- 호출자: 프론트엔드 — `src/entities/tree/api/folders.ts:24`(suffix `["position"]`) → `:33`(`moveFolder`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-patch-api-workspaces-workspace-id-folders-folder-id-position)
 
@@ -766,6 +781,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
 
 - 진입점: `src/main/java/fruition/core/document/controller/FolderController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: restore`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-folders-folder-id-restore)
 
@@ -928,6 +946,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentTreeController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: tree`)
+- 호출자: 프론트엔드 — `src/entities/tree/api/folders.ts:5`(`fetchDocumentTree`), `src/features/agent-chat/api/agentPlan.ts:20`(`fetchPlanTree`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-document-tree)
 
@@ -1042,6 +1063,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/naviga
 
 - 진입점: `src/main/java/fruition/core/document/controller/NavigationController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: root`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. 프론트엔드는 `GET .../document-tree`로 트리를 받는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-navigation)
 
@@ -1159,6 +1183,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/naviga
 
 - 진입점: `src/main/java/fruition/core/document/controller/NavigationController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: breadcrumb`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-navigation-breadcrumb)
 
@@ -1289,6 +1316,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/naviga
 
 - 진입점: `src/main/java/fruition/core/document/controller/NavigationController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: search`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-navigation-search)
 
