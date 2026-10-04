@@ -21,7 +21,7 @@ public class MeetingNotesClient {
 
     public MeetingNotesClient(PipelineClientFactory clientFactory,
                               @Value("${app.speech.meeting-notes-endpoint}") String endpoint,
-                              @Value("${app.speech.meeting-notes-timeout-seconds:150}") int timeoutSeconds) {
+                              @Value("${app.speech.meeting-notes-timeout-seconds:270}") int timeoutSeconds) {
         this.restClient = clientFactory.restClient(timeoutSeconds);
         this.endpoint = endpoint;
     }
