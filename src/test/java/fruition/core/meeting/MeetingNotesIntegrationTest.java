@@ -24,6 +24,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -43,12 +45,14 @@ class MeetingNotesIntegrationTest {
     static final AtomicInteger calls = new AtomicInteger();
     static final AtomicReference<String> lastRequest = new AtomicReference<>();
     static volatile int aiStatus = 200;
+    /** 생성이 끝나기 전에 응답하는지 보려고 가짜 AI를 잡아 둔다. null이면 바로 답한다. */
+    static volatile CountDownLatch gate;
 
     static final String DRAFT = """
             {"display_name":"출시 회의","markdown":"# 출시 회의\\n- 금요일 출시 (s1_a)",
              "summary":[{"text":"출시 일정을 정했다.","source_segment_ids":["s1_a"]}],
              "decisions":[{"text":"금요일 출시","source_segment_ids":["s1_a"]}],
-             "action_items":[{"text":"민수: 배포 점검","source_segment_ids":["s1_b"]}],
+             "action_items":[{"text":"민수: 배포 점검","source_segment_ids":["s1_a"]}],
              "open_questions":[]}
             """;
 
@@ -60,6 +64,14 @@ class MeetingNotesIntegrationTest {
         }
         FAKE_AI.createContext("/meeting-notes/preview", exchange -> {
             calls.incrementAndGet();
+            CountDownLatch held = gate;
+            if (held != null) {
+                try {
+                    held.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             lastRequest.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] body = (aiStatus == 200 ? DRAFT : "{\"detail\":\"private-provider-detail\"}")
                     .getBytes(StandardCharsets.UTF_8);
@@ -98,13 +110,14 @@ class MeetingNotesIntegrationTest {
         workspaceId = "ws_" + suffix;
         redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
         aiStatus = 200;
+        gate = null;
         calls.set(0);
     }
 
     @Test
     void generate_rendersBodyWithoutSegmentIdsAndReplaysSameKey() throws Exception {
         String meetingId = meetingWithTranscript(null, "finished");
-        JsonNode notes = json(generate(meetingId, "k1", false).andExpect(status().isOk()));
+        JsonNode notes = generated(meetingId, "k1");
 
         assertThat(notes.path("version").asInt()).isEqualTo(1);
         assertThat(notes.path("status").asText()).isEqualTo("ready");
@@ -122,12 +135,17 @@ class MeetingNotesIntegrationTest {
 
                 ## 미결 사항
                 - 확인된 내용 없음""");
-        assertThat(notes.path("action_items").get(0).path("source_segment_ids").get(0).asText()).isEqualTo("s1_b");
+        // 짧은 발화는 한 묶음으로 보내고, AI가 돌려준 묶음 ID는 묶인 원래 구간 ID들로 되돌린다.
+        assertThat(notes.path("action_items").get(0).path("source_segment_ids"))
+                .extracting(JsonNode::asText).containsExactly("s1_a", "s1_b");
         JsonNode sent = objectMapper.readTree(lastRequest.get());
         assertThat(sent.path("display_name").asText()).isEqualTo("출시 회의");
-        assertThat(sent.path("segments")).extracting(s -> s.path("id").asText()).containsExactly("s1_a", "s1_b");
+        assertThat(sent.path("segments")).extracting(s -> s.path("id").asText()).containsExactly("s1_a");
+        assertThat(sent.path("segments").get(0).path("text").asText())
+                .isEqualTo("출시는 금요일로 확정하겠습니다. 민수가 배포 점검을 맡겠습니다.");
 
-        generate(meetingId, "k1", false).andExpect(jsonPath("$.version").value(1));
+        generate(meetingId, "k1", false).andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(1)).andExpect(jsonPath("$.status").value("ready"));
         assertThat(calls.get()).isEqualTo(1);  // 같은 키 재시도는 AI를 다시 부르지 않는다
     }
 
@@ -136,30 +154,31 @@ class MeetingNotesIntegrationTest {
         String meetingId = meetingWithTranscript(null, "interrupted");
         generate(meetingId, "k1", false).andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("MEETING_TRANSCRIPT_INCOMPLETE"));
-        generate(meetingId, "k2", true).andExpect(status().isOk()).andExpect(jsonPath("$.partial").value(true));
+        generate(meetingId, "k2", true).andExpect(status().isAccepted()).andExpect(jsonPath("$.partial").value(true));
+        assertThat(awaitStatus(meetingId, "ready").path("partial").asBoolean()).isTrue();
     }
 
     @Test
     void failedRegeneration_keepsLastReadyDraftUsable() throws Exception {
         String meetingId = meetingWithTranscript(null, "finished");
-        generate(meetingId, "k1", false).andExpect(status().isOk());
+        generated(meetingId, "k1");
         aiStatus = 502;
-        String failure = generate(meetingId, "k2", false).andExpect(status().isBadGateway())
-                .andReturn().getResponse().getContentAsString();
-        assertThat(failure).doesNotContain("private-provider-detail");
+        generate(meetingId, "k2", false).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("generating"));
 
-        mockMvc.perform(get(notesUrl(meetingId)).header("Authorization", bearer()))
-                .andExpect(jsonPath("$.version").value(2))
-                .andExpect(jsonPath("$.status").value("failed"))
-                .andExpect(jsonPath("$.error_code").value("MEETING_NOTES_FAILED"))
-                .andExpect(jsonPath("$.last_ready_version").value(1));
+        // 생성 실패는 HTTP 오류가 아니라 그 버전의 failed 상태로 알린다(제공자 원문은 노출하지 않는다).
+        JsonNode failed = awaitStatus(meetingId, "failed");
+        assertThat(failed.toString()).doesNotContain("private-provider-detail");
+        assertThat(failed.path("version").asInt()).isEqualTo(2);
+        assertThat(failed.path("error_code").asText()).isEqualTo("MEETING_NOTES_FAILED");
+        assertThat(failed.path("last_ready_version").asInt()).isEqualTo(1);
         apply(meetingId, 1, "a1", "{\"mode\":\"create\"}").andExpect(status().isOk());
     }
 
     @Test
     void create_isSavedOnceAcrossRetriesAndOnlyOncePerVersion() throws Exception {
         String meetingId = meetingWithTranscript(null, "finished");
-        generate(meetingId, "k1", false);
+        generated(meetingId, "k1");
 
         String first = json(apply(meetingId, 1, "a1", "{\"mode\":\"create\",\"display_name\":\"출시 회의록\"}")
                 .andExpect(status().isOk())).path("applied").path("document_id").asText();
@@ -181,7 +200,7 @@ class MeetingNotesIntegrationTest {
     void append_mergesOnceAndRejectsChangedDocument() throws Exception {
         String documentId = createDocument("# 주간 회의\n\n- 기존 본문");
         String meetingId = meetingWithTranscript(documentId, "finished");
-        generate(meetingId, "k1", false);
+        generated(meetingId, "k1");
 
         JsonNode preview = json(mockMvc.perform(post(notesUrl(meetingId) + "/1/append-preview")
                 .header("Authorization", bearer())).andExpect(status().isOk()));
@@ -209,8 +228,8 @@ class MeetingNotesIntegrationTest {
     @Test
     void olderDraftAndOtherUser_areRejected() throws Exception {
         String meetingId = meetingWithTranscript(null, "finished");
-        generate(meetingId, "k1", false);
-        generate(meetingId, "k2", false);
+        generated(meetingId, "k1");
+        generated(meetingId, "k2");
         apply(meetingId, 1, "a1", "{\"mode\":\"create\"}").andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("MEETING_NOTES_OUTDATED"));
 
@@ -221,7 +240,60 @@ class MeetingNotesIntegrationTest {
                 .andExpect(status().isNotFound());
     }
 
+    @Test
+    void longMeeting_bundlesUtterancesUnderAiSegmentLimit() throws Exception {
+        String meetingId = meetingWithManyUtterances(3_000);
+        generated(meetingId, "k1");
+
+        JsonNode sent = objectMapper.readTree(lastRequest.get()).path("segments");
+        assertThat(sent.size()).isLessThan(1_000);  // 발화 3,000개가 회의록 AI의 1,000구간 한도 안으로 묶인다
+        int total = 0;
+        for (JsonNode segment : sent) {
+            assertThat(segment.path("text").asText().length()).isLessThanOrEqualTo(10_000);
+            total += segment.path("text").asText().length();
+            // 묶음 ID는 실제 저장된 구간 ID라 AI가 돌려준 근거를 그대로 찾을 수 있다.
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM meeting_segments WHERE meeting_id = ? AND id = ?",
+                    Integer.class, meetingId, segment.path("id").asText())).isEqualTo(1);
+        }
+        assertThat(total).isLessThanOrEqualTo(100_000);
+    }
+
+    @Test
+    void generate_returnsBeforeAiFinishesAndPollingSeesResult() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        gate = new CountDownLatch(1);
+
+        // AI가 아직 답하지 않았는데도 요청은 202로 끝난다.
+        generate(meetingId, "k1", false).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.status").value("generating"));
+        mockMvc.perform(get(notesUrl(meetingId)).header("Authorization", bearer()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("generating"));
+
+        gate.countDown();
+        assertThat(awaitStatus(meetingId, "ready").path("display_name").asText()).isEqualTo("출시 회의");
+    }
+
     // ---------- helpers
+
+    /** 생성은 비동기다. 202로 받은 뒤 조회로 끝날 때까지 기다린다. */
+    private JsonNode generated(String meetingId, String key) throws Exception {
+        generate(meetingId, key, false).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("generating"));
+        return awaitStatus(meetingId, "ready");
+    }
+
+    private JsonNode awaitStatus(String meetingId, String expected) throws Exception {
+        for (int i = 0; i < 100; i++) {
+            JsonNode notes = json(mockMvc.perform(get(notesUrl(meetingId)).header("Authorization", bearer()))
+                    .andExpect(status().isOk()));
+            if (expected.equals(notes.path("status").asText())) {
+                return notes;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("회의록 초안이 " + expected + " 상태가 되지 않았습니다.");
+    }
 
     private String meetingWithTranscript(String documentId, String endReason) throws Exception {
         String body = documentId == null ? "{\"display_name\":\"출시 회의\",\"source\":\"live\"}"
@@ -236,6 +308,21 @@ class MeetingNotesIntegrationTest {
                 meetingId, "stream_" + meetingId, "출시는 금요일로 확정하겠습니다.");
         jdbc.update("INSERT INTO meeting_segments (meeting_id, id, stream_id, position, text, created_at) VALUES (?, 's1_b', ?, 2, ?, now())",
                 meetingId, "stream_" + meetingId, "민수가 배포 점검을 맡겠습니다.");
+        return meetingId;
+    }
+
+    private String meetingWithManyUtterances(int count) throws Exception {
+        String meetingId = json(mockMvc.perform(post("/api/workspaces/" + workspaceId + "/meetings")
+                        .header("Authorization", bearer()).header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"display_name\":\"긴 회의\",\"source\":\"live\"}"))
+                .andExpect(status().isCreated())).path("meeting_id").asText();
+        jdbc.update("INSERT INTO meeting_streams (id, meeting_id, stream_order, end_reason, started_at) VALUES (?, ?, 1, 'finished', now())",
+                "stream_" + meetingId, meetingId);
+        jdbc.update("""
+                INSERT INTO meeting_segments (meeting_id, id, stream_id, position, text, created_at)
+                SELECT ?, 's1_u' || n, ?, n, '네 그렇게 하겠습니다.', now() FROM generate_series(1, ?) AS n
+                """, meetingId, "stream_" + meetingId, count);
         return meetingId;
     }
 

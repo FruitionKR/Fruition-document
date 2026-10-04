@@ -18,7 +18,7 @@
 | [`DELETE .../meetings/{meeting_id}`](#meeting-delete) | 회의·전사·회의록 초안·녹음 원본을 삭제합니다. |
 | [`PUT .../meetings/{meeting_id}/recording`](#meeting-recording) | 녹음 원본을 올립니다. 녹음 파일 회의는 전사를 시작합니다. |
 | [`GET .../meetings/{meeting_id}/recording-url`](#meeting-recording-url) | 녹음 원본을 재생할 5분짜리 주소를 반환합니다. |
-| [`POST .../meetings/{meeting_id}/notes`](#notes-generate) | 확정 전사로 회의록 초안을 만들어 새 버전으로 보관합니다. |
+| [`POST .../meetings/{meeting_id}/notes`](#notes-generate) | 확정 전사로 회의록 초안을 만들어 새 버전으로 보관합니다. 생성은 비동기입니다(`202`, 조회로 대기). |
 | [`GET .../meetings/{meeting_id}/notes`](#notes-latest) | 최신 회의록 초안을 반환합니다. |
 | [`POST .../meetings/{meeting_id}/notes/{version}/append-preview`](#notes-append-preview) | 기존 문서 끝에 회의록을 붙인 전체 결과와 base_revision을 반환합니다. |
 | [`POST .../meetings/{meeting_id}/notes/{version}/apply`](#notes-apply) | 회의록을 새 문서로 만들거나 기존 문서 끝에 추가합니다. |
@@ -372,11 +372,11 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 | 항목 | 내용 |
 |---|---|
 | 입력 | **Header** — `Idempotency-Key`(필수). 네트워크 재시도는 같은 키(같은 버전 반환, AI 재호출 없음), 다시 만들기는 새 키<br>**Query** — `allow_partial`(기본 `false`) |
-| 처리 | `completed` 구간을 `position` 순으로 AI에 보낸다. 새 버전 행을 `generating`으로 만든 뒤 **트랜잭션 밖에서** AI를 호출하고, 결과는 그 버전 행에만 쓴다 |
-| 출력 | `200` — `MeetingNotesResponse` |
-| 오류 | `409` 받아쓰기 중(`MEETING_LIVE_IN_USE`), 누락·비정상 종료 전사를 `allow_partial` 없이 요청(`MEETING_TRANSCRIPT_INCOMPLETE`), 동시 생성(`MEETING_NOTES_BUSY`)<br>`422` 확정 전사 없음(`MEETING_TRANSCRIPT_EMPTY`), AI 입력 한도(`MEETING_NOTES_INPUT_REJECTED`)<br>`502` 생성·근거 검증 실패(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INVALID`)<br>`503` AI 사용 불가(`MEETING_NOTES_UNAVAILABLE`) |
+| 처리 | `completed` 구간을 `position` 순으로 약 1,000자까지 묶어 AI에 보낸다(묶음 ID는 묶인 첫 구간 ID, 근거 ID는 원래 구간 ID들로 되돌려 저장). 새 버전 행을 `generating`으로 만든 뒤 **요청 스레드·트랜잭션 밖에서** AI를 호출하고, 결과는 그 버전 행에만 쓴다 |
+| 출력 | `202` — `MeetingNotesResponse`(`status=generating`). 같은 키 재시도로 이미 끝난 버전을 돌려줄 때만 `200` |
+| 오류 | `409` 받아쓰기 중(`MEETING_LIVE_IN_USE`), 누락·비정상 종료 전사를 `allow_partial` 없이 요청(`MEETING_TRANSCRIPT_INCOMPLETE`)<br>`422` 확정 전사 없음(`MEETING_TRANSCRIPT_EMPTY`) |
 
-실패하면 그 버전은 `failed`로 남고 이전 `ready` 초안은 그대로 쓸 수 있다. 로컬 실측에서 실제 AI 생성에 약 20초 걸렸다. 클라이언트는 생성 중 표시를 둔다.
+생성은 비동기다. `202`를 받은 뒤 조회(`GET`)로 `status`가 `ready`나 `failed`가 될 때까지 기다린다. 생성 실패는 HTTP 오류가 아니라 그 버전의 `failed`와 `error_code`(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INVALID`, `MEETING_NOTES_INPUT_REJECTED`, `MEETING_NOTES_UNAVAILABLE`, 동시 생성 한도 초과는 `MEETING_NOTES_BUSY`)로 알리고, 이전 `ready` 초안은 그대로 쓸 수 있다.
 
 <a id="notes-latest"></a>
 ### `GET .../meetings/{meeting_id}/notes` — 최신 초안
@@ -470,7 +470,7 @@ WebSocket은 OpenAPI로 표현되지 않아 이 문서에만 계약을 둔다.
 |---|---|---|
 | `invalid_audio` | `ready` 전 전송, 알 수 없는 명령 | `1008` |
 | `meeting_not_open` | 받아쓰기할 수 없는 회의 | `1008` |
-| `transcript_limit` | 회의 전사 한도(1,000구간·100,000자) 초과 | `1008` |
+| `transcript_limit` | 회의 전사 한도(10,000구간·100,000자) 초과. 이미 한도에 닿은 회의는 연결 직후 거절하고 연결 기록을 남기지 않는다. 저장된 전사로 회의록은 만들 수 있다 | `1008` |
 | `segment_conflict` | 같은 구간에 다른 확정 문장이 옴(덮어쓰지 않음) | `1011` |
 | `transcript_incomplete` | `finished` 구간 수와 저장 수가 다름 | `1011` |
 | `transcript_save_failed` | 전사 저장 실패 | `1011` |

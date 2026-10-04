@@ -44,8 +44,13 @@ import java.util.regex.Pattern;
 @Component
 public class MeetingLiveHandler extends AbstractWebSocketHandler {
     static final CloseStatus IN_USE = new CloseStatus(4409, "meeting live in use");
-    static final int MAX_SEGMENTS = 1000;
+    /**
+     * 회의 하나에 저장할 구간 수 상한. 회의록 AI에는 확정 구간을 약 1,000자로 묶어 보내므로(ADR-0023 결정 7)
+     * 구간 수는 더 이상 AI 한도가 아니고 저장 보호 장치다. 실제 내용 한도는 {@link #MAX_CHARS}가 맡는다.
+     */
+    static final int MAX_SEGMENTS = 10_000;
     static final long MAX_CHARS = 100_000;
+    private static final String LIMIT_MESSAGE = "회의 전사 한도에 닿았습니다. 지금까지의 전사로 회의록을 만들거나 새 회의를 시작해 주세요.";
     private static final Duration SEND_TIMEOUT = Duration.ofSeconds(5);
     private static final Pattern SEGMENT_ID = Pattern.compile("[A-Za-z0-9_-]{1,128}");
     private static final Set<String> COMMANDS = Set.of("commit", "finish");
@@ -128,6 +133,13 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                 .isPresent();
         if (!open) {
             fail(live, "meeting_not_open", "실시간 받아쓰기를 시작할 수 없는 회의입니다.", CloseStatus.POLICY_VIOLATION);
+            return;
+        }
+        long[] totals = repository.totals(ticket.meetingId());
+        if (totals[0] >= MAX_SEGMENTS || totals[1] >= MAX_CHARS) {
+            // 한도에 닿은 회의는 연결을 받자마자 거절한다. 구간을 열지 않아 다시 연결할 때마다 실패한 연결이
+            // 쌓이지 않고, 저장된 전사로 회의록을 만드는 길은 그대로 남는다.
+            fail(live, "transcript_limit", LIMIT_MESSAGE, CloseStatus.POLICY_VIOLATION);
             return;
         }
         live.stream = repository.openStream(ticket.meetingId());
@@ -285,7 +297,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
             case "committed" -> {
                 String id = live.segmentId(event.get("segment_id"));
                 if (repository.totals(meetingId)[0] >= MAX_SEGMENTS) {
-                    fail(live, "transcript_limit", "회의 전사 한도(1,000구간)를 넘었습니다.", CloseStatus.POLICY_VIOLATION);
+                    fail(live, "transcript_limit", LIMIT_MESSAGE, CloseStatus.POLICY_VIOLATION);
                     return;
                 }
                 int position = repository.register(meetingId, id, live.stream.id());
@@ -300,7 +312,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                 String id = live.segmentId(event.get("segment_id"));
                 String text = event.path("text").asText();
                 if (repository.totals(meetingId)[1] + text.length() > MAX_CHARS) {
-                    fail(live, "transcript_limit", "회의 전사 한도(100,000자)를 넘었습니다.", CloseStatus.POLICY_VIOLATION);
+                    fail(live, "transcript_limit", LIMIT_MESSAGE, CloseStatus.POLICY_VIOLATION);
                     return;
                 }
                 switch (repository.complete(meetingId, id, text)) {

@@ -14,6 +14,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
@@ -53,6 +54,7 @@ class MeetingLiveIntegrationTest {
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired StringRedisTemplate redisTemplate;
+    @Autowired JdbcTemplate jdbc;
     @Autowired JwtTokenProvider jwtTokenProvider;
     @LocalServerPort int port;
 
@@ -195,7 +197,34 @@ class MeetingLiveIntegrationTest {
         assertThat(createMeeting(key)).isEqualTo(first);
     }
 
+    @Test
+    void transcriptLimitReached_refusesConnectionWithoutLosingStoredTranscript() throws Exception {
+        String meetingId = createMeeting();
+        fillSegments(meetingId, MeetingLiveHandler.MAX_SEGMENTS);
+        Browser browser = connect(meetingId);
+
+        // 한도에 닿은 회의는 연결을 받자마자 거절한다(연결마다 실패 기록이 쌓이지 않는다).
+        assertThat(browser.untilType("error").path("code").asText()).isEqualTo("transcript_limit");
+        browser.untilClosed();
+        assertThat(browser.closeStatus().getCode()).isEqualTo(CloseStatus.POLICY_VIOLATION.getCode());
+        JsonNode meeting = awaitLiveReleased(meetingId);
+        assertThat(meeting.path("streams")).hasSize(1);  // 미리 채운 연결 하나뿐, 새 실패 기록이 없다
+        assertThat(meeting.path("status").asText()).isEqualTo("open");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM meeting_segments WHERE meeting_id = ?",
+                Integer.class, meetingId)).isEqualTo(MeetingLiveHandler.MAX_SEGMENTS);
+    }
+
     // ---------- helpers
+
+    /** 한도 검사용으로 확정 구간을 미리 채운다. 글자 수 한도에는 걸리지 않게 짧은 문장을 쓴다. */
+    private void fillSegments(String meetingId, int count) {
+        jdbc.update("INSERT INTO meeting_streams (id, meeting_id, stream_order, end_reason, started_at) VALUES (?, ?, 0, 'finished', now())",
+                "seed_" + meetingId, meetingId);
+        jdbc.update("""
+                INSERT INTO meeting_segments (meeting_id, id, stream_id, position, text, created_at)
+                SELECT ?, 's0_u' || n, ?, n, '네.', now() FROM generate_series(1, ?) AS n
+                """, meetingId, "seed_" + meetingId, count);
+    }
 
     private String createMeeting() throws Exception {
         return createMeeting(UUID.randomUUID().toString());
