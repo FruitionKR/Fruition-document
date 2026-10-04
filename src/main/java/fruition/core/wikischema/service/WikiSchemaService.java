@@ -29,6 +29,11 @@ public class WikiSchemaService {
         return requester.createDraft(request.rawMarkdown(), request.name(), workspaceId, userId);
     }
 
+    public JsonNode listDrafts(String workspaceId, String userId) {
+        verifyWorkspaceMembership(workspaceId, userId);
+        return requester.listDrafts(workspaceId, userId);
+    }
+
     public JsonNode activate(String workspaceId, String userId, String schemaId) {
         verifyWorkspaceMembership(workspaceId, userId);
         return requester.activate(schemaId);

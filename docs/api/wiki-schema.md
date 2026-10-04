@@ -5,13 +5,14 @@
 Wiki 스키마 조회·초안·미리보기·활성화 Gateway API다. Backend가 워크스페이스 권한을 검증하고
 사용자·워크스페이스 정보를 추가해 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 4
+- API 수: 5
 
 ## API 목차
 
 | API | 목적 |
 |---|---|
 | [`GET /api/workspaces/{workspace_id}/wiki-schema/active`](#summary-get-api-workspaces-workspace-id-wiki-schema-active) | 활성 Schema가 없으면 null을 포함한 200 응답을 반환합니다. |
+| [`GET /api/workspaces/{workspace_id}/wiki-schema/drafts`](#summary-get-api-workspaces-workspace-id-wiki-schema-drafts) | 워크스페이스에서 내가 저장한 초안 Schema를 최신순으로 반환합니다. |
 | [`POST /api/workspaces/{workspace_id}/wiki-schema/drafts`](#summary-post-api-workspaces-workspace-id-wiki-schema-drafts) | 검토할 Wiki 생성 규칙을 초안 상태로 저장합니다. |
 | [`POST /api/workspaces/{workspace_id}/wiki-schema/preview`](#summary-post-api-workspaces-workspace-id-wiki-schema-preview) | Schema 규칙을 저장하지 않고 적용해 예상 Wiki 구조를 반환합니다. |
 | [`POST /api/workspaces/{workspace_id}/wiki-schema/{schema_id}/activate`](#summary-post-api-workspaces-workspace-id-wiki-schema-schema-id-activate) | 선택한 Wiki Schema ID의 활성화를 요청합니다. |
@@ -162,6 +163,162 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki-s
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getActive`)
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-schema-active)
+
+</details>
+
+<a id="summary-get-api-workspaces-workspace-id-wiki-schema-drafts"></a>
+### `GET /api/workspaces/{workspace_id}/wiki-schema/drafts`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 워크스페이스에서 내가 저장한 초안 Schema를 최신순으로 반환합니다. |
+| 입력 | **Path** — `workspace_id`: `string` |
+| 출력 | `200` 초안 목록 조회 성공(없으면 빈 배열) — `WikiSchemaDraftListResponse` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
+| 주요 오류 | `404` 워크스페이스를 찾을 수 없음 — `JsonNode` / `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-get-api-workspaces-workspace-id-wiki-schema-drafts"></a>
+### `GET /api/workspaces/{workspace_id}/wiki-schema/drafts` 상세
+
+#### 1. Method + Path
+
+`GET /api/workspaces/{workspace_id}/wiki-schema/drafts`
+
+#### 2. 목적
+
+워크스페이스에서 내가 저장한 초안 Schema를 최신순으로 반환합니다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+
+- Body: 없음
+
+#### 5. Response body
+
+- HTTP `200`: 초안 목록 조회 성공(없으면 빈 배열)
+- Content-Type: `*/*` (`WikiSchemaDraftListResponse`)
+
+```json
+{
+  "wiki_schemas": [
+    {
+      "activated_at": "string",
+      "created_at": "2026-08-13T04:25:24.371948Z",
+      "fragments": {
+        "concept_markdown": "string",
+        "edit_markdown": "string",
+        "global_markdown": "string",
+        "ingest_markdown": "string",
+        "query_markdown": "string",
+        "template_markdown": "string"
+      },
+      "has_blocked_issues": false,
+      "id": "string",
+      "issues": [
+        {
+          "category": "string",
+          "reason": "string",
+          "section": "string",
+          "severity": "unclear",
+          "text": "string"
+        }
+      ],
+      "name": "설계 문서 스키마",
+      "preview_markdown": "string",
+      "raw_markdown": "string",
+      "schema_version": "v1",
+      "status": "draft",
+      "user_id": "user_123",
+      "workspace_id": "ws_9d47a0e9a6324341b47562553b75f92a"
+    }
+  ]
+}
+```
+
+#### 6. Error response
+
+| HTTP 상태 | 설명 | 응답 스키마 |
+|---|---|---|
+| `404` | 워크스페이스를 찾을 수 없음 | `없음` |
+| `503` | llmPipeline 사용 불가 | `ErrorResponse` |
+
+```json
+{
+}
+```
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음. 조회 대상은 path의 `workspace_id`와 access token의 사용자로 고정된다.
+
+#### 8. 권한 규칙
+
+- 인증된 사용자만 호출할 수 있다.
+- path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 조회 대상 `user_id`는 access token에서만 가져온다. 클라이언트가 `user_id`를 보내도 무시하므로 다른 사용자의 초안은 조회할 수 없다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki-schema/drafts" \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+```json
+{
+  "wiki_schemas": [
+    {
+      "activated_at": "string",
+      "created_at": "2026-08-13T04:25:24.371948Z",
+      "fragments": {
+        "concept_markdown": "string",
+        "edit_markdown": "string",
+        "global_markdown": "string",
+        "ingest_markdown": "string",
+        "query_markdown": "string",
+        "template_markdown": "string"
+      },
+      "has_blocked_issues": false,
+      "id": "string",
+      "issues": [
+        {
+          "category": "string",
+          "reason": "string",
+          "section": "string",
+          "severity": "unclear",
+          "text": "string"
+        }
+      ],
+      "name": "설계 문서 스키마",
+      "preview_markdown": "string",
+      "raw_markdown": "string",
+      "schema_version": "v1",
+      "status": "draft",
+      "user_id": "user_123",
+      "workspace_id": "ws_9d47a0e9a6324341b47562553b75f92a"
+    }
+  ]
+}
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/wikischema/controller/WikiSchemaController.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: listDrafts`)
+
+[↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-schema-drafts)
 
 </details>
 

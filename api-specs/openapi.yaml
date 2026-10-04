@@ -3971,6 +3971,41 @@ paths:
       tags:
       - Wiki Schema
   /api/workspaces/{workspace_id}/wiki-schema/drafts:
+    get:
+      description: 워크스페이스에서 내가 저장한 초안 Schema를 최신순으로 반환합니다.
+      operationId: listDrafts
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/WikiSchemaDraftListResponse"
+          description: 초안 목록 조회 성공(없으면 빈 배열)
+        "404":
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/JsonNode"
+                - $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+        "503":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: llmPipeline 사용 불가
+      summary: Wiki Schema 초안 목록 조회
+      tags:
+      - Wiki Schema
     post:
       description: 검토할 Wiki 생성 규칙을 초안 상태로 저장합니다.
       operationId: createDraft
@@ -7957,6 +7992,17 @@ components:
           type: string
           description: 페이지 제목
           example: 역색인
+    WikiSchemaDraftListResponse:
+      type: object
+      description: 초안 Schema 목록. 초안이 없으면 빈 배열이다.
+      properties:
+        wiki_schemas:
+          type: array
+          description: 최신순으로 정렬된 초안 스키마 목록
+          items:
+            $ref: "#/components/schemas/WikiSchemaResponse"
+      required:
+      - wiki_schemas
     WikiSchemaDraftRequest:
       type: object
       description: Wiki 스키마 초안 생성 요청

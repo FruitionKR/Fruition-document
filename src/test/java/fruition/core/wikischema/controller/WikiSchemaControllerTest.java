@@ -6,6 +6,7 @@ import fruition.shared.security.JwtTokenProvider;
 import fruition.core.config.SecurityConfig;
 import fruition.core.CoreExceptionHandler;
 import fruition.core.wikischema.dto.WikiSchemaDraftRequest;
+import fruition.core.wikischema.exception.PipelineWikiSchemaException;
 import fruition.core.wikischema.dto.WikiSchemaPreviewRequest;
 import fruition.core.wikischema.service.WikiSchemaService;
 import io.swagger.v3.core.converter.ModelConverters;
@@ -19,6 +20,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -85,6 +88,61 @@ class WikiSchemaControllerTest {
                         .header("Authorization", bearer()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("sch_1"));
+    }
+
+    @Test
+    void listDrafts_authenticatedPassesEnvelopeThrough() throws Exception {
+        when(wikiSchemaService.listDrafts(WORKSPACE_ID, USER_ID))
+                .thenReturn(objectMapper.readTree(
+                        "{\"wiki_schemas\":[{\"id\":\"sch_1\",\"status\":\"draft\"}]}"));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/wiki-schema/drafts")
+                        .header("Authorization", bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.wiki_schemas[0].id").value("sch_1"))
+                .andExpect(jsonPath("$.wiki_schemas[0].status").value("draft"));
+    }
+
+    @Test
+    void listDrafts_emptyResultKeepsWikiSchemasArray() throws Exception {
+        when(wikiSchemaService.listDrafts(WORKSPACE_ID, USER_ID))
+                .thenReturn(objectMapper.readTree("{\"wiki_schemas\":[]}"));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/wiki-schema/drafts")
+                        .header("Authorization", bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.wiki_schemas").isArray())
+                .andExpect(jsonPath("$.wiki_schemas").isEmpty());
+    }
+
+    @Test
+    void listDrafts_ignoresClientSuppliedUserId() throws Exception {
+        when(wikiSchemaService.listDrafts(WORKSPACE_ID, USER_ID))
+                .thenReturn(objectMapper.readTree("{\"wiki_schemas\":[]}"));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/wiki-schema/drafts")
+                        .param("user_id", "user_victim")
+                        .header("Authorization", bearer()))
+                .andExpect(status().isOk());
+
+        verify(wikiSchemaService).listDrafts(WORKSPACE_ID, USER_ID);
+        verify(wikiSchemaService, never()).listDrafts(eq(WORKSPACE_ID), eq("user_victim"));
+    }
+
+    @Test
+    void listDrafts_pipelineUnavailableReturns503() throws Exception {
+        when(wikiSchemaService.listDrafts(WORKSPACE_ID, USER_ID))
+                .thenThrow(new PipelineWikiSchemaException("Wiki 스키마 파이프라인을 사용할 수 없습니다.", 503, null));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/wiki-schema/drafts")
+                        .header("Authorization", bearer()))
+                .andExpect(status().isServiceUnavailable());
+    }
+
+    @Test
+    void listDrafts_unauthenticatedReturns401() throws Exception {
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/wiki-schema/drafts"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
