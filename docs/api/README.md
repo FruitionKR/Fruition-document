@@ -19,12 +19,12 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Speech](speech.md) | 1 | 채팅 음성 입력(음성 → 텍스트, 저장 없음) |
 | [Skills](skills.md) | 8 | Skill 작성·게시·설정과 참조 읽기 |
 | [Wiki](wiki.md) | 8 | Wiki 조회·기여·유지보수 |
-| [Wiki Schema](wiki-schema.md) | 4 | Wiki 스키마 초안·미리보기·활성화 |
+| [Wiki Schema](wiki-schema.md) | 5 | Wiki 스키마 초안·미리보기·활성화 |
 | [Usage](agent.md#본인-모델-사용량-조회) | 1 | 본인 모델별 토큰 사용량 조회 |
 
-기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 96개(`/api/**` 87 + `/internal/**` 9), operation 107개**다.
+기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 96개(`/api/**` 87 + `/internal/**` 9), operation 108개**다.
 위 표의 "API 수"는 각 도메인 문서가 다루는 API 수이고, 충돌할 경우 실행 코드와 생성된 OpenAPI를 우선한다.
-표의 HTTP 합계는 106이고 위의 operation 107개와 1 차이가 난다. 96개 path 전부가 문서에 있음은 확인했으므로
+표의 HTTP 합계는 107이고 위의 operation 108개와 1 차이가 난다. 96개 path 전부가 문서에 있음은 확인했으므로
 누락된 API가 아니라 도메인별 집계 단위(같은 path의 여러 method를 1개로 세는지)가 섞인 결과다. 정확한 수는 OpenAPI를 본다.
 
 ## 호출 관계(배선) 요약
@@ -34,9 +34,9 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 
 | 구분 | path 수 | 호출자 확인 | 호출자 없음 |
 |---|---:|---:|---:|
-| `/api/**` (프론트엔드 전용 표면) | 87 | 53 | **34** |
+| `/api/**` (프론트엔드 전용 표면) | 87 | 59 | **28** |
 | `/internal/**` (서비스 간 표면) | 9 | 9 | 0 |
-| 합계 | 96 | 62 | **34** |
+| 합계 | 96 | 68 | **28** |
 
 ### 호출 주체
 
@@ -46,17 +46,15 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 - 주의: `/internal/agent/runs`와 `/internal/ai/tasks`는 이 서비스의 경로가 **아니다**. ai-svc가 노출하고 이 서비스가 호출하는 경로다
   (`pipeline/app/modules/agent_run/interfaces/http/routes.py:30`, `pipeline/app/modules/task_cancellation/interfaces/http/routes.py:10`).
 
-### 호출자 없는 34개
+### 호출자 없는 28개
 
-의도된 미사용과 실제 공백을 구분한다. path 기준 집계이므로 한 path의 여러 method는 1개로 센다(9+4+1+4+2+4+2+2+1+5 = 34).
+의도된 미사용과 실제 공백을 구분한다. path 기준 집계이므로 한 path의 여러 method는 1개로 센다(9+1+4+4+2+2+1+5 = 28).
 
 | 분류 | API | 판정 |
 |---|---|---|
 | 회의·음성 (9) | `meetings`, `meetings/{id}`, `meetings/{id}/live-tickets`, `meetings/{id}/notes`, `meetings/{id}/notes/{version}/append-preview`, `meetings/{id}/notes/{version}/apply`, `meetings/{id}/recording`, `meetings/{id}/recording-url`, `speech/transcriptions` | **공백** — 서버 기능은 완성되어 있으나 프론트엔드에 화면·호출 지점이 없다 |
-| Wiki Schema (4) | `wiki-schema/active`, `wiki-schema/drafts`, `wiki-schema/preview`, `wiki-schema/{schema_id}/activate` | **의도된 미사용(한시적)** — 화면은 있으나 클라이언트 목업으로 동작한다. `src/entities/schema/api/schema.ts:5-7`에 "실제 배선 시 이 파일의 함수 본문만 apiFetch 호출로 교체하면 된다"고 적혀 있다 |
 | 동기 Query (1) | `chat/sessions/{id}/query` | **의도된 미사용** — 프론트엔드가 비동기 `query/runs` + SSE `GET /api/query/runs/{request_id}/events`를 쓴다. 결함이 아니다 |
 | 삭제 되돌리기 (4) | `documents/trash`, `documents/{id}/restore`, `folders/{id}/restore`, `documents/{id}/versions/{version}` | **공백** — 휴지통·복구 API가 있는데 UI에 되돌리기 경로가 없다 |
-| 편집 잠금 (2) | `documents/{id}/edit-lock`(POST·DELETE 두 operation), `documents/{id}/edit-lock/heartbeat` | **공백** — 동시 편집 보호 장치가 클라이언트에 연결되지 않았다 |
 | 탐색 (4) | `navigation`, `navigation/breadcrumb`, `navigation/search`, `folders/{id}/children` | **의도된 미사용** — 프론트엔드는 `GET .../document-tree` 하나로 트리를 통째로 받는다 |
 | Wiki 페이지 편집 (2) | `wiki/pages/{id}/rename`, `wiki/pages/{id}/diff` | **공백** |
 | Agent 계획 (2) | `agent/runs/{run_id}/cancel`, `agent/runs/{run_id}/revise` | **공백** — `decideAgentPlan`은 `approve`·`reject`만 보낸다 |
@@ -73,4 +71,5 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 - Next.js BFF route(`app/api/document-transport/route.ts`)와 middleware(`middleware.ts`)가 존재하며 **전수 추적하지 않았다**.
   확인한 범위에서 BFF는 `{ origin, directUpload }`만 반환하고 프록시하지 않으며, middleware는 `/api/:path*`에 대한 접근 코드 게이트다.
   `next.config.*` rewrite와 배포 프록시 설정은 확인하지 않았다.
-- `GET /api/workspaces/{workspace_id}/wiki-schema/drafts`는 다른 작업에서 **추가 작업 중**이며 `main`에 없다. 현재 `main`의 `drafts`는 `POST`뿐이다.
+- 이 문서를 쓴 뒤 wiki-schema 4개와 편집 잠금 2개가 배선되어 미호출 목록에서 빠졌다.
+  `GET /api/workspaces/{workspace_id}/wiki-schema/drafts`도 함께 추가되어 `drafts`는 `GET`·`POST` 둘을 갖는다.
