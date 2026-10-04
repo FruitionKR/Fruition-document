@@ -157,6 +157,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/g
 
 - 진입점: `src/main/java/fruition/core/wiki/controller/WikiController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getGraph`)
+- 호출자: 프론트엔드 — `src/entities/wiki/api/wiki.ts:21`(`fetchWikiGraph`)
+- 하위 호출: ai-svc `GET ${WIKI_STATE_ENDPOINT}/graph?workspace_id` (`PipelineWikiStateRequester`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-graph)
 
@@ -309,6 +312,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
 
 - 진입점: `src/main/java/fruition/core/wiki/controller/WikiController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getPage`)
+- 호출자: 프론트엔드 — `src/entities/wiki/api/wiki.ts:112`(`fetchWikiPage`)
+- 하위 호출: ai-svc `GET ${WIKI_STATE_ENDPOINT}/pages/{pageId}?workspace_id` (`PipelineWikiStateRequester`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-pages-wiki-page-id)
 
@@ -449,6 +455,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
 
 - 진입점: `src/main/java/fruition/core/wiki/controller/WikiController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: diff`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-pages-wiki-page-id-diff)
 
@@ -577,6 +586,9 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki
 
 - 진입점: `src/main/java/fruition/core/wiki/controller/WikiController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: rename`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: ai-svc `PATCH ${WIKI_PAGE_ENDPOINT}/{wikiPageId}/rename` (`PipelineWikiPageRequester`)
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-patch-api-workspaces-workspace-id-wiki-pages-wiki-page-id-rename)
 
@@ -694,6 +706,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/
 
 - 진입점: `src/main/java/fruition/core/wikimaintenance/controller/WikiMaintenanceController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: lint`)
+- 호출자: 프론트엔드 — `src/features/document-notifications/api/wikiLint.ts:25`(`requestWikiLint`)
+- 하위 호출: HTTP 호출 없음. Kafka `ai.maintenance.command`로 전달한다. 모델 선택에 access-svc `WorkspaceAiModelClient`를 쓴다
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-wiki-maintenance-lint)
 
@@ -789,6 +804,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/m
 
 - 진입점: `src/main/java/fruition/core/wikimaintenance/controller/WikiMaintenanceController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: run`)
+- 호출자: 프론트엔드 — `src/features/document-notifications/api/wikiLint.ts:39`(폴링)
+- 하위 호출: ai-svc `GET ${PROCESSING_ENDPOINT}/{runId}` (`PipelineRunStatusRequester`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-maintenance-runs-run-id)
 
@@ -889,6 +907,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/m
 
 - 진입점: `src/main/java/fruition/core/wikimaintenance/controller/WikiMaintenanceController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: status`)
+- 호출자: 프론트엔드 — `src/features/document-notifications/api/wikiLint.ts:17`(`fetchWikiMaintenanceStatus`)
+- 하위 호출: ai-svc `GET ${WIKI_STATE_ENDPOINT}/workspaces/{wsId}/last-updated` (`PipelineWikiStateRequester`) — 서비스 계층을 한 줄씩 확인하지는 않았다
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-maintenance-status)
 
@@ -985,6 +1006,9 @@ curl -X POST "$DOCUMENT/internal/wiki/contributions" \
 
 - 진입점: `src/main/java/fruition/core/wiki/controller/InternalWikiContributionController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: find`)
+- 호출자: ai-svc — `pipeline/app/modules/wiki_ingestion/infrastructure/backend_document_reader.py:52`(`read_contributions`), 호출 지점 `postgres_wiki_ingestion_repository.py:1482`, `app/workers/task_worker.py:449`
+- 하위 호출: 없음. core DB만 읽는다
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-internal-wiki-contributions)
 

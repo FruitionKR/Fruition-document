@@ -75,6 +75,22 @@ public class WikiSchemaController {
         return ResponseEntity.ok(wikiSchemaService.createDraft(workspaceId, userId, request));
     }
 
+    @Operation(summary = "Wiki Schema 초안 목록 조회", description = "워크스페이스에서 내가 저장한 초안 Schema를 최신순으로 반환합니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "초안 목록 조회 성공(없으면 빈 배열)",
+            content = @Content(schema = @Schema(implementation = WikiSchemaDraftListResponseSchema.class))),
+        @ApiResponse(responseCode = "404", description = "워크스페이스를 찾을 수 없음",
+            content = @Content(mediaType = "application/json", schema = @Schema(oneOf = {JsonNode.class, ErrorResponse.class}))),
+        @ApiResponse(responseCode = "503", description = "llmPipeline 사용 불가",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @GetMapping("/drafts")
+    public ResponseEntity<JsonNode> listDrafts(
+            @PathVariable("workspace_id") String workspaceId,
+            @AuthenticationPrincipal String userId) {
+        return ResponseEntity.ok(wikiSchemaService.listDrafts(workspaceId, userId));
+    }
+
     @Operation(summary = "Wiki Schema 활성화", description = "선택한 Wiki Schema ID의 활성화를 요청합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "활성화 성공",
@@ -127,6 +143,13 @@ public class WikiSchemaController {
     private static final class WikiSchemaDraftResponseSchema {
         @Schema(description = "생성된 스키마 초안")
         public WikiSchemaResponseSchema wiki_schema;
+    }
+
+    @Schema(name = "WikiSchemaDraftListResponse", description = "초안 Schema 목록. 초안이 없으면 빈 배열이다.",
+            requiredProperties = "wiki_schemas")
+    private static final class WikiSchemaDraftListResponseSchema {
+        @Schema(description = "최신순으로 정렬된 초안 스키마 목록")
+        public java.util.List<WikiSchemaResponseSchema> wiki_schemas;
     }
 
     @Schema(name = "WikiSchemaResponse", description = "Wiki 스키마 하나. 활성화되면 Wiki 생성·질의에 쓰인다.",

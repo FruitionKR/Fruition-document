@@ -112,6 +112,9 @@ curl -X GET "$DOCUMENT/api/ai-models" \
 
 - 진입점: `src/main/java/fruition/core/ai/AiModelCatalogController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: list_4`)
+- 호출자: 프론트엔드 — `src/entities/ai/api/aiModels.ts:6`(`fetchAiModels`)
+- 하위 호출: 없음. `app.ai.enabled-providers` 설정에서 정적 목록을 만든다
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-ai-models)
 
@@ -217,6 +220,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
 
 - 진입점: `src/main/java/fruition/core/ai/WorkspaceAiModelSettingsController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: get`)
+- 호출자: 프론트엔드 — `src/entities/ai/api/aiModels.ts:15`(`fetchWorkspaceAiModelSettings`)
+- 하위 호출: access-svc `GET /internal/workspaces/{workspaceId}/ai-model-settings` (`WorkspaceAiModelClient`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-ai-model-settings)
 
@@ -341,6 +347,9 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
 
 - 진입점: `src/main/java/fruition/core/ai/WorkspaceAiModelSettingsController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: update`)
+- 호출자: 프론트엔드 — `src/entities/ai/api/aiModels.ts:27`(`updateWorkspaceAiModelSettings`)
+- 하위 호출: access-svc `PUT /internal/workspaces/{workspaceId}/ai-model-settings` (`WorkspaceAiModelClient`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-put-api-workspaces-workspace-id-ai-model-settings)
 
@@ -471,6 +480,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 
 - 진입점: `src/main/java/fruition/core/aihistory/controller/OperationQueryController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: list_3`)
+- 호출자: 프론트엔드 — `src/entities/operation-log/api/operationLog.ts:15`(`fetchOperationLogs`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-ai-operation-logs)
 
@@ -626,6 +638,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 
 - 진입점: `src/main/java/fruition/core/aihistory/controller/OperationQueryController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: detail`)
+- 호출자: 프론트엔드 — `src/entities/operation-log/api/operationLog.ts:23`(`fetchOperationLogDetail`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-ai-operation-logs-operation-id)
 
@@ -754,6 +769,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-op
 
 - 진입점: `src/main/java/fruition/core/aihistory/controller/OperationQueryController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: restore_2`)
+- 호출자: 프론트엔드 — `src/entities/operation-log/api/operationLog.ts:39`(`restoreOperation`)
+- 하위 호출: ai-svc `PipelineWikiStateRequester`(`${WIKI_STATE_ENDPOINT}`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-ai-operation-logs-operation-id-restore)
 
@@ -887,6 +905,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 
 - 진입점: `src/main/java/fruition/core/aihistory/controller/OperationQueryController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: restorePreview`)
+- 호출자: 프론트엔드 — `src/entities/operation-log/api/operationLog.ts:31`(`fetchRestorePreview`)
+- 하위 호출: ai-svc `PipelineWikiStateRequester`(`${WIKI_STATE_ENDPOINT}`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-ai-operation-logs-operation-id-restore-preview)
 
@@ -1012,6 +1033,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: convertMarkdown`)
+- 호출자: 프론트엔드 — `src/entities/document/api/document.ts:97`(`convertDocumentToMarkdown`)
+- 하위 호출: 동기 구간에서는 없음(`202` 반환). 커밋 후 비동기로 converter-svc `POST /convert`·`POST /convert-source-batch`(`ConverterClient`, `${CONVERTER_ENDPOINT}`, 인증 헤더 없음·NetworkPolicy 격리)와 access-svc `WorkspaceAiModelClient`를 호출한다
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-convert-markdown)
 
@@ -1122,6 +1146,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: ingest`)
+- 호출자: 프론트엔드 — `src/entities/document/api/document.ts:84`(`startDocumentIngest`, `reflectDocumentToWiki` 경유)
+- 하위 호출: HTTP 호출 없음. Kafka `ai.ingest.command`로 ai-svc에 전달한다
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-ingest)
 

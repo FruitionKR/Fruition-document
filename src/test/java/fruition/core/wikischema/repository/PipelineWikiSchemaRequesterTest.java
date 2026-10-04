@@ -100,6 +100,53 @@ class PipelineWikiSchemaRequesterTest {
     }
 
     @Test
+    void listDrafts_passesQueryParamsAndKeepsEnvelope() {
+        responseBody.set("{\"wiki_schemas\":[{\"id\":\"sch_1\",\"status\":\"draft\"}]}");
+
+        JsonNode response = requester().listDrafts("ws_1", "user_1");
+
+        assertThat(response.path("wiki_schemas").get(0).path("id").asText()).isEqualTo("sch_1");
+        assertThat(capturedUri.get())
+                .startsWith("/wiki-schema/drafts?")
+                .contains("workspace_id=ws_1")
+                .contains("user_id=user_1");
+    }
+
+    @Test
+    void listDrafts_keepsEmptyArrayEnvelope() {
+        responseBody.set("{\"wiki_schemas\":[]}");
+
+        JsonNode response = requester().listDrafts("ws_1", "user_1");
+
+        assertThat(response.path("wiki_schemas").isArray()).isTrue();
+        assertThat(response.path("wiki_schemas")).isEmpty();
+    }
+
+    @Test
+    void listDrafts_mapsServerErrorTo503() {
+        responseStatus.set(500);
+        responseBody.set("{\"detail\":\"boom\"}");
+
+        assertThatThrownBy(() -> requester().listDrafts("ws_1", "user_1"))
+                .isInstanceOfSatisfying(PipelineWikiSchemaException.class, error -> {
+                    assertThat(error.getHttpStatus()).isEqualTo(503);
+                    assertThat(error.getResponseBody()).isNull();
+                });
+    }
+
+    @Test
+    void listDrafts_preservesPipeline422Body() {
+        responseStatus.set(422);
+        responseBody.set("{\"detail\":[{\"loc\":[\"query\",\"user_id\"],\"msg\":\"field required\"}]}");
+
+        assertThatThrownBy(() -> requester().listDrafts("ws_1", ""))
+                .isInstanceOfSatisfying(PipelineWikiSchemaException.class, error -> {
+                    assertThat(error.getHttpStatus()).isEqualTo(422);
+                    assertThat(error.getResponseBody()).contains("field required");
+                });
+    }
+
+    @Test
     void preview_preservesPipeline422Body() {
         responseStatus.set(422);
         responseBody.set("{\"detail\":[{\"loc\":[\"body\",\"raw_markdown\"],\"msg\":\"too short\"}]}");

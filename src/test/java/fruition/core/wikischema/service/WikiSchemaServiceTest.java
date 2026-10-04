@@ -59,6 +59,28 @@ class WikiSchemaServiceTest {
     }
 
     @Test
+    void listDrafts_forwardsPathWorkspaceAndPrincipalUser() throws Exception {
+        doNothing().when(workspaceAccessGuard).requireMember("ws_1", "user_1");
+        when(requester.listDrafts("ws_1", "user_1"))
+                .thenReturn(new ObjectMapper().readTree("{\"wiki_schemas\":[{\"id\":\"sch_1\"}]}"));
+
+        var result = service.listDrafts("ws_1", "user_1");
+
+        assertThat(result.path("wiki_schemas").get(0).path("id").asText()).isEqualTo("sch_1");
+        verify(requester).listDrafts("ws_1", "user_1");
+    }
+
+    @Test
+    void listDrafts_rejectsNonMemberBeforePipelineCall() {
+        doThrow(new WorkspaceNotFoundException("ws_1"))
+                .when(workspaceAccessGuard).requireMember("ws_1", "user_2");
+
+        assertThatThrownBy(() -> service.listDrafts("ws_1", "user_2"))
+                .isInstanceOf(WorkspaceNotFoundException.class);
+        verify(requester, never()).listDrafts("ws_1", "user_2");
+    }
+
+    @Test
     void preview_rejectsNonMemberBeforePipelineCall() {
         doThrow(new WorkspaceNotFoundException("ws_1"))
                 .when(workspaceAccessGuard).requireMember("ws_1", "user_2");

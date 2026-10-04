@@ -4,7 +4,7 @@
 
 문서 본문·원본·asset·편집 잠금 API다.
 
-- API 수: 9
+- API 수: 10
 
 채팅 Wiki page화로 만들어진 `chat_export` 문서는 읽기 전용이다(`editable: false`). 편집 잠금 획득·본문 저장은
 400 `INVALID_MARKDOWN_CONTENT`로 거절한다. 본문을 고치면 문답 provenance가 끊기기 때문이다.
@@ -22,6 +22,7 @@ Ingest는 `POST /api/workspaces/{workspace_id}/documents/{document_id}/ingest`�
 | [`PUT /api/workspaces/{workspace_id}/documents/{document_id}/content`](#summary-put-api-workspaces-workspace-id-documents-document-id-content) | 전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision과 일치할 때만 반영하며 revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/export`](#summary-get-api-workspaces-workspace-id-documents-document-id-export) | 최신 Markdown 편집본을 내보냅니다. 관리 이미지가 있으면 이미지와 Markdown을 ZIP으로 반환합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/original`](#summary-get-api-workspaces-workspace-id-documents-document-id-original) | MinIO에 저장된 원본 파일을 스트리밍합니다. PDF는 inline, 그 외는 attachment로 반환됩니다. |
+| [`GET /api/workspaces/{workspace_id}/documents/{document_id}/original-url`](#summary-get-api-workspaces-workspace-id-documents-document-id-original-url) | 원본 PDF를 브라우저에서 바로 열 수 있는 1시간짜리 presigned 주소를 반환합니다. AWS 모드가 아니거나 PDF가 아니면 `null`입니다. |
 | [`GET /internal/documents/{document_id}/pipeline-source`](#summary-get-internal-documents-document-id-pipeline-source) | AI pipeline이 사용할 문서 원본 위치와 소유 범위를 조회합니다. |
 
 ## 한눈에 보기
@@ -110,6 +111,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/assets
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentAssetController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getContent`)
+- 호출자: 프론트엔드 — `src/shared/api/assets.ts:42`(`acquireAssetObjectUrl`). 경로는 문서 Markdown을 정규식으로 훑어 만들어지므로(`src/shared/api/assets.ts:4-5`) 호출식에 리터럴로 나타나지 않는다
+- 하위 호출: 객체 저장소(MinIO/S3) 읽기
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-assets-asset-id-content)
 
@@ -213,6 +217,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentEditLockController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: acquire`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: access-svc `GET /internal/users/{userId}` (`AccessUserClient`, 잠금 보유자 표시 이름, best-effort)
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-edit-lock)
 
@@ -289,6 +296,9 @@ curl -X DELETE "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/doc
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentEditLockController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: release`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-delete-api-workspaces-workspace-id-documents-document-id-edit-lock)
 
@@ -390,6 +400,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentEditLockController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: heartbeat`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-edit-lock-heartbeat)
 
@@ -499,6 +512,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: blocks`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-documents-document-id-blocks)
 
@@ -648,6 +664,9 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: saveContent`)
+- 호출자: 프론트엔드 — `src/features/note-editing/api/note.ts:75`(`saveNoteDraft`, FormData)
+- 하위 호출: 객체 저장소(MinIO/S3) 쓰기, Kafka `app.document-edit.event-topic`
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-put-api-workspaces-workspace-id-documents-document-id-content)
 
@@ -741,6 +760,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: export`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 객체 저장소(MinIO/S3) 읽기
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-documents-document-id-export)
 
@@ -834,8 +856,116 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getOriginal`)
+- 호출자: 프론트엔드 — `src/entities/document/api/document.ts:186`(`fetchDocumentOriginal`, blob)
+- 하위 호출: 객체 저장소(MinIO/S3) 읽기
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-documents-document-id-original)
+
+</details>
+
+<a id="summary-get-api-workspaces-workspace-id-documents-document-id-original-url"></a>
+### `GET /api/workspaces/{workspace_id}/documents/{document_id}/original-url`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 원본 PDF를 브라우저에서 바로 열 수 있는 1시간짜리 presigned 주소를 반환합니다. AWS 모드가 아니거나 PDF가 아니면 `null`입니다. |
+| 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string` |
+| 출력 | `200` 주소 발급 또는 `url: null` — `OriginalReadUrl` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>워크스페이스 소유 관계를 검증한다. |
+| 주요 오류 | `404` 문서를 찾을 수 없음 또는 삭제됨 — `ErrorResponse`<br>`500` 원본 읽기 URL 발급 실패 — `ErrorResponse` |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-get-api-workspaces-workspace-id-documents-document-id-original-url"></a>
+### `GET /api/workspaces/{workspace_id}/documents/{document_id}/original-url` 상세
+
+#### 1. Method + Path
+
+`GET /api/workspaces/{workspace_id}/documents/{document_id}/original-url`
+
+#### 2. 목적
+
+PDF 원본을 document-svc를 거쳐 스트리밍하는 대신(`GET .../original`) 객체 저장소에서 직접 받도록 presigned 주소를 넘긴다. 대용량 PDF 열기에서 서버 대역폭과 지연을 줄이는 용도다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| path | `document_id` | `string` | 예 | - |
+
+- 없음(GET)
+
+#### 5. Response body
+
+- HTTP `200`: 주소 발급
+- Content-Type: `*/*` (`OriginalReadUrl`)
+- 응답에는 `Cache-Control: no-store`가 붙는다.
+- `app.storage.credentials-mode`가 `aws`가 아니거나 문서가 PDF가 아니면 `url`은 `null`이다. 클라이언트는 이때 `GET .../original` 스트리밍으로 넘어간다.
+- 주소는 1시간 유효하며 `response-content-type=application/pdf`, `response-content-disposition=inline`을 포함한다.
+
+```json
+{
+  "url": "https://<bucket>.s3.<region>.amazonaws.com/<key>?X-Amz-Expires=3600&..."
+}
+```
+
+#### 6. Error response
+
+| HTTP 상태 | 설명 | 응답 스키마 |
+|---|---|---|
+| `404` | 문서를 찾을 수 없음 또는 삭제됨 | `ErrorResponse` |
+| `500` | 원본 읽기 URL 발급 실패 | `ErrorResponse` |
+
+```json
+{
+  "error": {
+    "code": "REQUEST_FAILED",
+    "message": "원본 읽기 URL 발급 실패"
+  }
+}
+```
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 워크스페이스 소유 관계를 검증한 뒤(`verifyWorkspaceOwnership`) 해당 워크스페이스의 삭제되지 않은 문서만 조회한다.
+- 발급한 주소는 그 자체로 원본 접근 권한이므로 응답을 캐시하지 않는다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/documents/<value>/original-url" \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+```json
+{
+  "url": null
+}
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java:78`
+- 서비스: `src/main/java/fruition/core/document/service/DocumentService.java:913` (`originalReadUrl`)
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: originalReadUrl`)
+- 호출자: 프론트엔드 — `src/entities/document/api/document.ts:196`(`fetchDocumentReadUrl`)
+- 하위 호출: 객체 저장소(MinIO/S3) `GetPresignedObjectUrl`. ai-svc·access-svc 호출 없음
+- 배선 상태: 배선됨
+
+[↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-documents-document-id-original-url)
 
 </details>
 
@@ -920,6 +1050,9 @@ curl -X GET "$DOCUMENT/internal/documents/<value>/pipeline-source" \
 
 - 진입점: `src/main/java/fruition/core/document/controller/InternalDocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: findPipelineSource`)
+- 호출자: ai-svc — `pipeline/app/modules/wiki_ingestion/infrastructure/backend_document_reader.py:19`(`read_document`, `X-Internal-Token`, base URL `DOCUMENT_INTERNAL_BASE_URL`), 호출 지점 `postgres_wiki_ingestion_repository.py:578`
+- 하위 호출: 객체 저장소(MinIO/S3) 읽기·presign
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-internal-documents-document-id-pipeline-source)
 

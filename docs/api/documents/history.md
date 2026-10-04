@@ -135,6 +135,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: trash`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-documents-trash)
 
@@ -259,6 +262,9 @@ curl -X DELETE "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/doc
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: delete_2`)
+- 호출자: 프론트엔드 — `src/entities/document/api/document.ts:131`/`:144`(`deleteDocument`)
+- 하위 호출: ai-svc `DELETE ${WIKI_STATE_ENDPOINT}/workspaces/{wsId}/documents/{docId}` (`PipelineWikiStateRequester`)
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-delete-api-workspaces-workspace-id-documents-document-id)
 
@@ -406,6 +412,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: compareVersions`)
+- 호출자: 프론트엔드 — `src/features/document-history/api/versions.ts:54`(`fetchDocumentVersionDiff`, `?from_version&to_version`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-documents-document-id-diff)
 
@@ -530,6 +539,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: restore_1`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-restore)
 
@@ -652,6 +664,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: listVersions`)
+- 호출자: 프론트엔드 — `src/features/document-history/api/versions.ts:43`(`fetchDocumentVersions`)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-documents-document-id-versions)
 
@@ -760,6 +775,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getVersion`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. 프론트엔드는 목록과 diff만 쓴다
+- 하위 호출: 객체 저장소(MinIO/S3) 읽기
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-documents-document-id-versions-version)
 
@@ -899,6 +917,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: restoreVersion`)
+- 호출자: 프론트엔드 — `src/features/document-history/api/versions.ts:67`(`restoreDocumentVersion`)
+- 하위 호출: 객체 저장소(MinIO/S3) 읽기·쓰기
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-versions-version-restore)
 

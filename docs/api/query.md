@@ -308,6 +308,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 
 - 진입점: `src/main/java/fruition/core/query/controller/QueryController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: query`)
+- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다. 프론트엔드는 의도적으로 비동기 `POST .../query/runs` + SSE `GET /api/query/runs/{request_id}/events`를 쓴다(`src/entities/wiki/api/wiki.ts:71`, `:90`). 동기 변형을 쓰지 않는 것은 결함이 아니다
+- 하위 호출: HTTP 호출 없음. Kafka `ai.query.command`로 전달하고, 취소·복구 경로에서 `PipelineTaskCancellationClient`를 쓴다
+- 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-chat-sessions-session-id-query)
 
@@ -425,6 +428,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 
 - 진입점: `src/main/java/fruition/core/query/controller/QueryController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: createRun`)
+- 호출자: 프론트엔드 — `src/entities/wiki/api/wiki.ts:71`(`runQueryStream`)
+- 하위 호출: HTTP 호출 없음. Kafka `ai.query.command`로 ai-svc에 전달한다
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-chat-sessions-session-id-query-runs)
 
@@ -710,6 +716,9 @@ curl -X GET "$DOCUMENT/api/query/runs/<value>" \
 
 - 진입점: `src/main/java/fruition/core/query/controller/QueryRunController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getRun_1`)
+- 호출자: 프론트엔드 — `src/entities/wiki/api/wiki.ts:102`(`runQueryStream`)
+- 하위 호출: 없음. Redis 기반 `QueryRunStore`에서 읽는다
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-query-runs-requestid)
 
@@ -814,6 +823,9 @@ string
 
 - 진입점: `src/main/java/fruition/core/query/controller/QueryRunController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: subscribe`)
+- 호출자: 프론트엔드 — `src/entities/wiki/api/wiki.ts:90`(`runQueryStream`, 인증된 `fetch` 스트림)
+- 하위 호출: 없음. Redis 기반 SSE broker
+- 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-query-runs-requestid-events)
 
