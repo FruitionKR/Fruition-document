@@ -16,7 +16,7 @@ API 계약을 의도적으로 바꾸면 `./gradlew test -DupdateOpenApiSnapshot=
 
 `SPEECH_LIVE_ENDPOINT`에 AI 실시간 전사 WebSocket 주소를 설정한다(기본 `ws://localhost:8000/speech/transcriptions/live`). 연결할 때 `INTERNAL_CALLBACK_TOKEN`을 `X-Internal-Token`으로 보낸다. 브라우저 접속 Origin은 `CORS_ALLOWED_ORIGINS`로 검사한다. 배포 경로의 WebSocket 허용·idle timeout은 platform이 관리한다([ADR-0022](https://github.com/FruitionKR/Fruition-flatform/blob/main/docs/adr/0022-realtime-speech-transcription.md)).
 
-녹음 파일 전사는 `SPEECH_TRANSCRIPTION_ENDPOINT`(기본 `http://localhost:8000/speech/transcriptions`, 대기 `SPEECH_TRANSCRIPTION_TIMEOUT_SECONDS` 150초)를 쓴다. 작업자 주기는 `app.meeting.transcription-poll-interval-ms`(기본 2000)다. 회의록 초안은 `MEETING_NOTES_ENDPOINT`(기본 `http://localhost:8000/meeting-notes/preview`)로 AI를 호출하며 `MEETING_NOTES_TIMEOUT_SECONDS`(기본 150초)까지 기다린다.
+녹음 파일 전사는 `SPEECH_TRANSCRIPTION_ENDPOINT`(기본 `http://localhost:8000/speech/transcriptions`, 대기 `SPEECH_TRANSCRIPTION_TIMEOUT_SECONDS` 150초)를 쓴다. 작업자 주기는 `app.meeting.transcription-poll-interval-ms`(기본 2000)다. 회의록 초안은 `MEETING_NOTES_ENDPOINT`(기본 `http://localhost:8000/meeting-notes/preview`)로 AI를 호출하며 `MEETING_NOTES_TIMEOUT_SECONDS`(기본 270초)까지 기다린다. 생성은 요청 스레드 밖에서 하고 요청은 `202`로 끝난다(결과는 조회로 기다린다).
 
 ```bash
 ./gradlew test --tests 'fruition.core.meeting.*'

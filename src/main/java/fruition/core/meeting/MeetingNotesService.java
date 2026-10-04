@@ -3,6 +3,7 @@ package fruition.core.meeting;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.exception.DocumentLockedException;
@@ -18,6 +19,9 @@ import fruition.core.document.repository.PostgresDocumentEditStore;
 import fruition.core.document.service.DocumentEditLockService;
 import fruition.core.document.service.DocumentService;
 import fruition.shared.util.DuplicateResourceName;
+import jakarta.annotation.PreDestroy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -25,20 +29,33 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 회의록 초안 생성·조회와 문서 저장.
  *
- * <p>AI 호출은 트랜잭션 밖에서 하고 결과는 자기 버전 행에만 쓴다. 저장은 기존 문서 생성·본문 저장 함수를 그대로 쓰며,
+ * <p>AI 호출은 요청 스레드·트랜잭션 밖에서 하고 결과는 자기 버전 행에만 쓴다. 생성 요청은 {@code generating} 버전을
+ * 만들고 바로 끝나며(202), 클라이언트는 조회로 결과를 기다린다. 저장은 기존 문서 생성·본문 저장 함수를 그대로 쓰며,
  * 저장 전에 대상·본문을 기록해 같은 요청의 재시도가 같은 저장을 반복하게 한다(중복 생성·중복 추가 없음).
  */
 @Service
 public class MeetingNotesService {
     static final Duration GENERATION_TIMEOUT = Duration.ofMinutes(5);
+    /**
+     * 확정 구간을 약 1,000자까지 묶어 보낸다. 실시간 받아쓰기는 발화 하나가 구간 하나라 긴 회의가 회의록 AI의
+     * 1,000구간 한도를 넘기 때문이다. 저장·순서·화면 표시는 발화 단위를 그대로 쓴다(ADR-0023 결정 7).
+     */
+    static final int BUNDLE_CHARS = 1_000;
+    private static final Logger log = LoggerFactory.getLogger(MeetingNotesService.class);
     private static final String[][] SECTIONS = {
             {"summary", "요약"}, {"decisions", "결정 사항"}, {"action_items", "할 일"}, {"open_questions", "미결 사항"}};
 
@@ -49,6 +66,22 @@ public class MeetingNotesService {
     private final DocumentEditLockService documentEditRules;
     private final PostgresDocumentEditStore editStore;
     private final ObjectMapper objectMapper;
+    /**
+     * 생성은 요청 스레드 밖에서 한다. 한 Pod에서 동시 4건까지만 만들고 큐를 두지 않아, 넘치면 기다리지 않고 바로
+     * 거절해 그 버전을 {@code failed}로 남긴다(generating으로 멈춰 있는 행을 만들지 않는다).
+     */
+    private final ThreadPoolExecutor generator = new ThreadPoolExecutor(0, 4, 60, TimeUnit.SECONDS,
+            new SynchronousQueue<>(), runnable -> {
+                Thread thread = new Thread(runnable, "meeting-notes-gen");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    /** 종료 시 진행 중 생성은 버린다. 남은 generating은 조회의 5분 정리가 failed로 바꾼다. */
+    @PreDestroy
+    void shutdownGenerator() {
+        generator.shutdownNow();
+    }
 
     public MeetingNotesService(MeetingService meetingService, MeetingNotesRepository notes, MeetingNotesClient client,
                                DocumentService documentService, DocumentEditLockService documentEditRules,
@@ -78,9 +111,9 @@ public class MeetingNotesService {
         if (meeting.liveConnected()) {
             throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "받아쓰기가 끝난 뒤 회의록을 만들 수 있습니다.");
         }
-        List<Map<String, String>> segments = meeting.segments().stream()
-                .filter(segment -> segment.text() != null && !segment.text().isBlank())
-                .map(segment -> Map.of("id", segment.id(), "text", segment.text()))
+        List<Bundle> bundles = bundles(meeting.segments());
+        List<Map<String, String>> segments = bundles.stream()
+                .map(bundle -> Map.of("id", bundle.id(), "text", bundle.text()))
                 .toList();
         if (segments.isEmpty()) {
             throw new MeetingException(HttpStatus.UNPROCESSABLE_ENTITY, "MEETING_TRANSCRIPT_EMPTY", "확정된 전사가 없습니다.");
@@ -100,16 +133,30 @@ public class MeetingNotesService {
             return toResponse(current);  // 같은 요청 ID의 동시 재시도
         }
         try {
-            JsonNode draft = client.preview(workspaceId, userId, meeting.displayName(), segments);
-            notes.markReady(meetingId, version, json(stored(draft)));
+            generator.execute(() -> generate(workspaceId, userId, meeting.displayName(), meetingId, version,
+                    segments, bundles));
+        } catch (RejectedExecutionException e) {
+            notes.markFailed(meetingId, version, "MEETING_NOTES_BUSY");
+            return toResponse(notes.find(meetingId, version).orElseThrow());
+        }
+        return toResponse(current);
+    }
+
+    /**
+     * 배경에서 초안을 만든다. {@code markReady}·{@code markFailed}는 {@code generating}인 자기 버전 행만 바꾸므로
+     * 늦게 끝난 이전 생성이 새 초안이나 정리된 행을 덮어쓰지 않는다. 실패는 그 버전의 {@code failed}로만 알린다.
+     */
+    private void generate(String workspaceId, String userId, String displayName, String meetingId, int version,
+                          List<Map<String, String>> segments, List<Bundle> bundles) {
+        try {
+            JsonNode draft = client.preview(workspaceId, userId, displayName, segments);
+            notes.markReady(meetingId, version, json(stored(draft, bundles)));
         } catch (MeetingException e) {
             notes.markFailed(meetingId, version, e.getCode());
-            throw e;
         } catch (RuntimeException e) {
+            log.warn("[회의록 초안 생성 실패] meetingId={} version={}", meetingId, version, e);
             notes.markFailed(meetingId, version, "MEETING_NOTES_FAILED");
-            throw e;
         }
-        return toResponse(notes.find(meetingId, version).orElseThrow());
     }
 
     public MeetingNotesResponse latest(String workspaceId, String userId, String meetingId) {
@@ -297,12 +344,62 @@ public class MeetingNotesService {
         return markdown.toString();
     }
 
-    /** 저장할 결과: 이름과 네 배열만 둔다(AI markdown은 버린다). */
-    private ObjectNode stored(JsonNode draft) {
+    /**
+     * AI에 보낼 묶음 하나. {@code id}는 묶인 첫 구간의 ID라, AI가 돌려준 근거 ID도 실제 저장된 구간을 가리킨다.
+     */
+    record Bundle(String id, String text, List<String> segmentIds) {}
+
+    /**
+     * 확정 구간을 발화 순서대로 약 {@link #BUNDLE_CHARS}자까지 이어 묶는다. 이어진 두 묶음의 합은 항상 이 길이를
+     * 넘으므로 100,000자 전사는 묶음 약 100개 이하가 되어 회의록 AI의 1,000구간 한도에 걸리지 않는다.
+     * 이미 약 1,000자 단위로 저장된 파일 전사는 묶이지 않고 그대로 간다.
+     */
+    static List<Bundle> bundles(List<MeetingResponse.SegmentItem> segments) {
+        List<Bundle> result = new ArrayList<>();
+        StringBuilder text = new StringBuilder();
+        List<String> ids = new ArrayList<>();
+        for (MeetingResponse.SegmentItem segment : segments) {
+            if (segment.text() == null || segment.text().isBlank()) {
+                continue;
+            }
+            String sentence = segment.text().strip();
+            if (!ids.isEmpty() && text.length() + 1 + sentence.length() > BUNDLE_CHARS) {
+                result.add(new Bundle(ids.get(0), text.toString(), List.copyOf(ids)));
+                text.setLength(0);
+                ids.clear();
+            }
+            if (!ids.isEmpty()) {
+                text.append(' ');
+            }
+            text.append(sentence);
+            ids.add(segment.id());
+        }
+        if (!ids.isEmpty()) {
+            result.add(new Bundle(ids.get(0), text.toString(), List.copyOf(ids)));
+        }
+        return result;
+    }
+
+    /**
+     * 저장할 결과: 이름과 네 배열만 둔다(AI markdown은 버린다). 근거는 묶음 ID로 돌아오므로 묶인 원래 구간
+     * ID들로 되돌려 저장한다. 모르는 ID는 그대로 둔다.
+     */
+    private ObjectNode stored(JsonNode draft, List<Bundle> bundles) {
+        Map<String, List<String>> sources = new LinkedHashMap<>();
+        bundles.forEach(bundle -> sources.put(bundle.id(), bundle.segmentIds()));
         ObjectNode result = objectMapper.createObjectNode();
         result.put("display_name", draft.path("display_name").asText("회의록"));
         for (String[] section : SECTIONS) {
-            result.set(section[0], draft.path(section[0]).isArray() ? draft.get(section[0]) : objectMapper.createArrayNode());
+            ArrayNode items = objectMapper.createArrayNode();
+            for (JsonNode item : draft.path(section[0])) {
+                LinkedHashSet<String> refs = new LinkedHashSet<>();
+                item.path("source_segment_ids").forEach(ref ->
+                        refs.addAll(sources.getOrDefault(ref.asText(), List.of(ref.asText()))));
+                ArrayNode ids = objectMapper.createArrayNode();
+                refs.forEach(ids::add);
+                items.addObject().put("text", item.path("text").asText()).set("source_segment_ids", ids);
+            }
+            result.set(section[0], items);
         }
         return result;
     }
