@@ -39,12 +39,25 @@ public class PipelineWikiSchemaRequester {
         return requireBody(post(endpoint + "/" + schemaId + "/activate", null));
     }
 
+    /** 초안 목록은 pipeline이 wiki_schemas 봉투로 감싸 주므로 그대로 전달한다. */
+    public JsonNode listDrafts(String workspaceId, String userId) {
+        String uri = UriComponentsBuilder.fromHttpUrl(endpoint + "/drafts")
+                .queryParam("workspace_id", workspaceId)
+                .queryParam("user_id", userId)
+                .toUriString();
+        return requireBody(get(uri));
+    }
+
     /** 활성 스키마가 없으면 pipeline이 null을 반환하므로 그대로 전달한다. */
     public JsonNode getActive(String workspaceId, String userId) {
         String uri = UriComponentsBuilder.fromHttpUrl(endpoint + "/active")
                 .queryParam("workspace_id", workspaceId)
                 .queryParam("user_id", userId)
                 .toUriString();
+        return get(uri);
+    }
+
+    private JsonNode get(String uri) {
         try {
             return restClient.get()
                     .uri(uri)

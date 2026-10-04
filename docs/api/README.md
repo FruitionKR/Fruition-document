@@ -19,4 +19,4 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Speech](speech.md) | 1 | 채팅 음성 입력(음성 → 텍스트, 저장 없음) |
 | [Skills](skills.md) | 8 | Skill 작성·게시·설정과 참조 읽기 |
 | [Wiki](wiki.md) | 8 | Wiki 조회·기여·유지보수 |
-| [Wiki Schema](wiki-schema.md) | 4 | Wiki 스키마 초안·미리보기·활성화 |
+| [Wiki Schema](wiki-schema.md) | 5 | Wiki 스키마 초안·미리보기·활성화 |
