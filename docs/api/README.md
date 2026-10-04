@@ -24,6 +24,8 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 
 기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 96개(`/api/**` 87 + `/internal/**` 9), operation 107개**다.
 위 표의 "API 수"는 각 도메인 문서가 다루는 API 수이고, 충돌할 경우 실행 코드와 생성된 OpenAPI를 우선한다.
+표의 HTTP 합계는 106이고 위의 operation 107개와 1 차이가 난다. 96개 path 전부가 문서에 있음은 확인했으므로
+누락된 API가 아니라 도메인별 집계 단위(같은 path의 여러 method를 1개로 세는지)가 섞인 결과다. 정확한 수는 OpenAPI를 본다.
 
 ## 호출 관계(배선) 요약
 
@@ -63,7 +65,7 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 
 ### 근거와 한계
 
-- 프론트엔드 근거: `/Users/mireutale/coding/git/Fruition-frontend`를 읽기 전용으로 확인했다. `src/` 전체의 `apiFetch(` 호출 지점 85개를 모두 해석했고,
+- 프론트엔드 근거: `/Users/mireutale/coding/git/Fruition-frontend`를 읽기 전용으로 확인했다. `src/` 전체의 `apiFetch(` 호출 지점 84개를 모두 해석했고,
   경로는 `src/shared/api/client.ts:144-149`의 `workspacePath(workspaceId, ...segments)`와 지역 helper(`documentPath()`, `mutateTreeItem()`,
   `uploadPdfMultipart()`)·템플릿 리터럴을 거쳐 조립된다. **리터럴 grep만으로는 과소 집계된다.**
 - 이 동적 조립 때문에 프론트엔드 근거는 원칙적으로 과소 집계될 수 있다. 예로 `assets/{asset_id}/content`는 문서 Markdown을 정규식으로 훑어
