@@ -28,6 +28,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -138,6 +139,8 @@ class DocumentEditLockServiceTest {
 
         assertThat(res.expiresAt()).isEqualTo(NOW.plusMillis(44_500));
         assertThat(res.ttlMs()).isEqualTo(44_500L);
+        // 저장소에 넘기는 시각도 주입한 Clock 기준이어야 한다.
+        verify(lockRepository).acquire(DOC, USER, NOW, NOW.plusSeconds(45));
     }
 
     @Test
