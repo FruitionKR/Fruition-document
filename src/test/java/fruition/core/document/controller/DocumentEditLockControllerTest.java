@@ -1,5 +1,7 @@
 package fruition.core.document.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.document.dto.EditLockResponse;
 import fruition.core.document.service.DocumentEditLockService;
 import org.junit.jupiter.api.Test;
@@ -28,7 +30,7 @@ class DocumentEditLockControllerTest {
     @Test
     void acquire_whenHeldBySelf_returns200() {
         when(editLockService.acquire(WS, USER, DOC))
-                .thenReturn(new EditLockResponse(USER, "나", Instant.now().plusSeconds(45)));
+                .thenReturn(new EditLockResponse(USER, "나", Instant.now().plusSeconds(45), 45_000L));
 
         ResponseEntity<EditLockResponse> res = controller.acquire(WS, USER, DOC);
 
@@ -39,11 +41,22 @@ class DocumentEditLockControllerTest {
     @Test
     void acquire_whenHeldByOther_returns423() {
         when(editLockService.acquire(WS, USER, DOC))
-                .thenReturn(new EditLockResponse("other", "다른사람", Instant.now().plusSeconds(45)));
+                .thenReturn(new EditLockResponse("other", "다른사람", Instant.now().plusSeconds(45), 45_000L));
 
         ResponseEntity<EditLockResponse> res = controller.acquire(WS, USER, DOC);
 
         assertThat(res.getStatusCode()).isEqualTo(HttpStatus.LOCKED);
         assertThat(res.getBody().holderUserId()).isEqualTo("other");
+    }
+
+    @Test
+    void response_serializesTtlMsAlongsideExpiresAt() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        EditLockResponse lock = new EditLockResponse(USER, "나", Instant.parse("2026-08-13T04:25:45Z"), 45_000L);
+
+        JsonNode json = mapper.readTree(mapper.writeValueAsString(lock));
+
+        assertThat(json.get("ttl_ms").asLong()).isEqualTo(45_000L);
+        assertThat(json.has("expires_at")).isTrue();
     }
 }
