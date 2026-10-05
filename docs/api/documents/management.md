@@ -961,7 +961,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
   "edit_lock": {
     "expires_at": "2026-08-13T04:25:24.371948Z",
     "holder_display_name": "표시 이름",
-    "holder_user_id": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081"
+    "holder_user_id": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081",
+    "ttl_ms": 45000
   },
   "edit_revision": 12,
   "editable": true,
@@ -1013,7 +1014,8 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
   "edit_lock": {
     "expires_at": "2026-08-13T04:25:24.371948Z",
     "holder_display_name": "표시 이름",
-    "holder_user_id": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081"
+    "holder_user_id": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081",
+    "ttl_ms": 45000
   },
   "edit_revision": 12,
   "editable": true,

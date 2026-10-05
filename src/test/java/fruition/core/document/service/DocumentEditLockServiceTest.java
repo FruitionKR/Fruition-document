@@ -14,7 +14,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,6 +36,7 @@ class DocumentEditLockServiceTest {
     private static final String WS = "ws_1";
     private static final String USER = "user_1";
     private static final String DOC = "doc_1";
+    private static final Instant NOW = Instant.parse("2026-08-13T04:25:00Z");
 
     @Mock DocumentEditLockRepository lockRepository;
     @Mock DocumentRepository documentRepository;
@@ -42,7 +45,7 @@ class DocumentEditLockServiceTest {
 
     private DocumentEditLockService service() {
         return new DocumentEditLockService(lockRepository, documentRepository,
-                workspaceAccessGuard, accessUserClient, 45);
+                workspaceAccessGuard, accessUserClient, 45, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     private void stubOwnedEditable() {
@@ -53,9 +56,13 @@ class DocumentEditLockServiceTest {
     }
 
     private DocumentEditLock lock(String holder, boolean expired) {
+        return lock(holder, expired, NOW.plusSeconds(45));
+    }
+
+    private DocumentEditLock lock(String holder, boolean expired, Instant expiresAt) {
         DocumentEditLock l = mock(DocumentEditLock.class);
         lenient().when(l.getHolderUserId()).thenReturn(holder);
-        lenient().when(l.getExpiresAt()).thenReturn(Instant.now().plusSeconds(45));
+        lenient().when(l.getExpiresAt()).thenReturn(expiresAt);
         lenient().when(l.isExpiredAt(any())).thenReturn(expired);
         lenient().when(l.isHeldBy(anyString())).thenAnswer(inv -> holder.equals(inv.getArgument(0)));
         return l;
@@ -118,5 +125,46 @@ class DocumentEditLockServiceTest {
         DocumentEditLock l = lock("other", true);
         when(lockRepository.findById(DOC)).thenReturn(Optional.of(l));
         assertThat(service().getStatus(DOC)).isNull();
+    }
+
+    @Test
+    void acquire_ttlMsIsRemainingTimeByServerClock() {
+        stubOwnedEditable();
+        DocumentEditLock l = lock(USER, false, NOW.plusMillis(44_500));
+        when(lockRepository.acquire(eq(DOC), eq(USER), any(), any())).thenReturn(1);
+        when(lockRepository.findById(DOC)).thenReturn(Optional.of(l));
+
+        EditLockResponse res = service().acquire(WS, USER, DOC);
+
+        assertThat(res.expiresAt()).isEqualTo(NOW.plusMillis(44_500));
+        assertThat(res.ttlMs()).isEqualTo(44_500L);
+    }
+
+    @Test
+    void heartbeat_ttlMsIsRemainingTimeByServerClock() {
+        stubOwnedEditable();
+        DocumentEditLock l = lock(USER, false, NOW.plusSeconds(45));
+        when(lockRepository.heartbeat(eq(DOC), eq(USER), any(), any())).thenReturn(1);
+        when(lockRepository.findById(DOC)).thenReturn(Optional.of(l));
+
+        assertThat(service().heartbeat(WS, USER, DOC).ttlMs()).isEqualTo(45_000L);
+    }
+
+    @Test
+    void getStatus_ttlMsIsRemainingTimeByServerClock() {
+        DocumentEditLock l = lock("other", false, NOW.plusSeconds(10));
+        when(lockRepository.findById(DOC)).thenReturn(Optional.of(l));
+
+        assertThat(service().getStatus(DOC).ttlMs()).isEqualTo(10_000L);
+    }
+
+    @Test
+    void ttlMs_whenAlreadyPastExpiry_isZero() {
+        stubOwnedEditable();
+        DocumentEditLock l = lock("other", false, NOW.minusSeconds(1));
+        when(lockRepository.acquire(eq(DOC), eq(USER), any(), any())).thenReturn(0);
+        when(lockRepository.findById(DOC)).thenReturn(Optional.of(l));
+
+        assertThat(service().acquire(WS, USER, DOC).ttlMs()).isZero();
     }
 }

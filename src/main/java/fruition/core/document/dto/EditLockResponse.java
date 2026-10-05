@@ -21,5 +21,10 @@ public record EditLockResponse(
         @JsonProperty("expires_at")
         @Schema(description = "잠금 만료 시각(ISO-8601 UTC). 이 시각이 지나면 다른 사용자가 잠글 수 있다.",
                 example = "2026-08-13T04:25:24.371948Z")
-        Instant expiresAt
+        Instant expiresAt,
+
+        @JsonProperty("ttl_ms")
+        @Schema(description = "응답 시점 기준 남은 잠금 시간(ms). 클라이언트는 시계 차이에 영향받지 않도록 이 값을 우선 사용한다.",
+                example = "45000")
+        Long ttlMs
 ) {}

@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 
@@ -32,24 +33,27 @@ public class DocumentEditLockService {
     private final WorkspaceAccessGuard workspaceAccessGuard;
     private final AccessUserClient accessUserClient;
     private final long ttlSeconds;
+    private final Clock clock;
 
     public DocumentEditLockService(DocumentEditLockRepository lockRepository,
                                    DocumentRepository documentRepository,
                                    WorkspaceAccessGuard workspaceAccessGuard,
                                    AccessUserClient accessUserClient,
-                                   @Value("${app.document.edit-lock.ttl-seconds:45}") long ttlSeconds) {
+                                   @Value("${app.document.edit-lock.ttl-seconds:45}") long ttlSeconds,
+                                   Clock clock) {
         this.lockRepository = lockRepository;
         this.documentRepository = documentRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.accessUserClient = accessUserClient;
         this.ttlSeconds = ttlSeconds;
+        this.clock = clock;
     }
 
     /** 잠금 획득/갱신. 성립하면 본인 보유 잠금을, 다른 사용자가 보유 중이면 그 사용자 잠금을 그대로 반환한다. */
     @Transactional
     public EditLockResponse acquire(String workspaceId, String userId, String documentId) {
         requireEditableOwned(workspaceId, userId, documentId);
-        Instant now = Instant.now();
+        Instant now = Instant.now(clock);
         lockRepository.acquire(documentId, userId, now, now.plus(Duration.ofSeconds(ttlSeconds)));
         return toResponse(currentLock(documentId));
     }
@@ -58,7 +62,7 @@ public class DocumentEditLockService {
     @Transactional
     public EditLockResponse heartbeat(String workspaceId, String userId, String documentId) {
         requireEditableOwned(workspaceId, userId, documentId);
-        Instant now = Instant.now();
+        Instant now = Instant.now(clock);
         int renewed = lockRepository.heartbeat(documentId, userId, now, now.plus(Duration.ofSeconds(ttlSeconds)));
         if (renewed == 0) {
             throw new EditLockLostException("편집 잠금이 만료되었거나 다른 사용자에게 넘어갔습니다. 다시 획득해 주세요.");
@@ -77,7 +81,7 @@ public class DocumentEditLockService {
     @Transactional(readOnly = true)
     public EditLockResponse getStatus(String documentId) {
         DocumentEditLock lock = lockRepository.findById(documentId).orElse(null);
-        if (lock == null || lock.isExpiredAt(Instant.now())) {
+        if (lock == null || lock.isExpiredAt(Instant.now(clock))) {
             return null;
         }
         return toResponse(lock);
@@ -90,7 +94,7 @@ public class DocumentEditLockService {
     @Transactional(readOnly = true)
     public void requireWritable(String documentId, String userId) {
         DocumentEditLock lock = lockRepository.findById(documentId).orElse(null);
-        if (lock == null || lock.isExpiredAt(Instant.now()) || lock.isHeldBy(userId)) {
+        if (lock == null || lock.isExpiredAt(Instant.now(clock)) || lock.isHeldBy(userId)) {
             return;
         }
         String holder = holderDisplayName(lock.getHolderUserId());
@@ -104,7 +108,10 @@ public class DocumentEditLockService {
     }
 
     private EditLockResponse toResponse(DocumentEditLock lock) {
-        return new EditLockResponse(lock.getHolderUserId(), holderDisplayName(lock.getHolderUserId()), lock.getExpiresAt());
+        // 클라이언트 시계와 무관하게 쓸 수 있도록 서버 시계 기준 남은 시간을 함께 내려준다.
+        long ttlMs = Math.max(0L, Duration.between(Instant.now(clock), lock.getExpiresAt()).toMillis());
+        return new EditLockResponse(lock.getHolderUserId(), holderDisplayName(lock.getHolderUserId()),
+                lock.getExpiresAt(), ttlMs);
     }
 
     private String holderDisplayName(String userId) {
