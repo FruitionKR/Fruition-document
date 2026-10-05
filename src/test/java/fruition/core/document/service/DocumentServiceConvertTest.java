@@ -265,34 +265,95 @@ class DocumentServiceConvertTest {
                 .isInstanceOf(IdempotencyConflictException.class);
     }
 
-    @Test
-    void largePdfResumesAtCompletedPagesAndQueuesIndependentAiInputs() throws Exception {
-        var parent = placeholderDocument();
-        var source = sourcePdf();
-        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
-        queue.checkpoint(10, 20);
-        var rows = new java.util.HashMap<String, Document>();
+    /** 변환 재시작·묶음 저장 테스트용 stub. 편집 상태는 문서 ID별 map으로 흉내 낸다. */
+    private java.util.Map<String, Document> stubBatchConvert(Document parent, Document source, DocumentConvertQueue queue,
+                                                            java.util.Map<String, DocumentEditState> states) throws Exception {
+        var rows = new java.util.LinkedHashMap<String, Document>();
         rows.put(parent.getId(), parent); rows.put(source.getId(), source);
         when(storageProps.getCredentialsMode()).thenReturn("aws");
         when(convertQueueRepository.findById(7L)).thenReturn(Optional.of(queue));
         when(documentRepository.findByIdInActiveWorkspace(parent.getId())).thenReturn(Optional.of(parent));
         when(documentRepository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(rows.get(inv.getArgument(0))));
-        when(documentRepository.save(any())).thenAnswer(inv -> { Document doc = inv.getArgument(0); rows.put(doc.getId(), doc); return doc; });
+        lenient().when(documentRepository.save(any())).thenAnswer(inv -> { Document doc = inv.getArgument(0); rows.put(doc.getId(), doc); return doc; });
         when(documentRepository.findByIdAndWorkspaceIdForUpdate(anyString(), eq(WORKSPACE_ID)))
                 .thenAnswer(inv -> Optional.ofNullable(rows.get(inv.getArgument(0))));
         when(documentRepository.findConvertedParts(WORKSPACE_ID, parent.getId())).thenAnswer(inv -> rows.values().stream()
                 .filter(doc -> "convert_part".equals(doc.getOrigin())).toList());
-        when(editStateRepository.findById(anyString())).thenAnswer(inv -> Optional.of(new DocumentEditState(
-                inv.getArgument(0), "# bounded input", "hash", 1)));
+        when(editStateRepository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(states.get(inv.<String>getArgument(0))));
+        lenient().when(editStateRepository.save(any())).thenAnswer(inv -> {
+            DocumentEditState state = inv.getArgument(0); states.put(state.getDocumentId(), state); return state; });
+        lenient().when(postgresDocumentEditStore.save(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyString(), any()))
+                .thenAnswer(inv -> { states.put(inv.getArgument(1), new DocumentEditState(inv.getArgument(1), inv.getArgument(2),
+                        inv.getArgument(3), inv.<Long>getArgument(4) + 1)); return null; });
         when(minioClient.getPresignedObjectUrl(any())).thenReturn("https://storage.example.test/signed");
+        return rows;
+    }
+
+    @Test
+    @DisplayName("재시작한 페이지 묶음은 원본 문서에 이어 붙고, 문서 하나만 AI 큐에 한 번 등록된다")
+    void largePdfResumesAtCompletedPagesAndAppendsToSingleDocument() throws Exception {
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        queue.checkpoint(10, 20);
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), "<!-- page 10 -->\n\n# first pages\n", "hash", 2));
+        var rows = stubBatchConvert(parent, source, queue, states);
         when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
-                .thenReturn(new ConverterClient.Batch(11, 20, 20, "# next pages", false, true, null));
+                .thenReturn(new ConverterClient.Batch(11, 20, 20, "<!-- page 1 -->\n\n# next pages\n", false, true, null));
+
         documentService.doConvert(7L, parent.getId(), source.getId());
+
         assertThat(queue.getCompletedPages()).isEqualTo(20);
         assertThat(queue.getAttempts()).isZero();
-        assertThat(rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).count()).isEqualTo(1);
-        verify(converterClient).convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any());
+        assertThat(rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).count()).isZero();
+        assertThat(states.get(parent.getId()).getMarkdown())
+                .isEqualTo("<!-- page 10 -->\n\n# first pages\n\n<!-- page 11 -->\n\n# next pages\n");
+        verify(postgresDocumentEditStore).save(eq(WORKSPACE_ID), eq(parent.getId()), anyString(), anyString(),
+                eq(2L), eq("convert:7:20:0"), eq(USER_ID), any());
+        verify(contentVersionRepository).insertIfAbsent(eq(parent.getId()), eq(3L), anyString(), anyString(), eq(USER_ID), any());
         verify(minioClient, never()).getObject(any());
+        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+    }
+
+    @Test
+    @DisplayName("첫 페이지 묶음은 변환 중 placeholder를 대체한다")
+    void firstBatchReplacesPlaceholder() throws Exception {
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
+        stubBatchConvert(parent, source, queue, states);
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any()))
+                .thenReturn(new ConverterClient.Batch(1, 3, 3, "<!-- page 1 -->\n\n# 본문\n", true, true, null));
+
+        documentService.doConvert(7L, parent.getId(), source.getId());
+
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 1 -->\n\n# 본문\n");
+        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+    }
+
+    @Test
+    @DisplayName("이어 붙인 본문이 편집 상한을 넘으면 다음 파트 문서로 넘어가고 파트마다 AI 큐에 등록된다")
+    void batchOverEditLimitStartsNextPart() throws Exception {
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        queue.checkpoint(10, 20);
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        String nearlyFull = "<!-- page 10 -->\n\n" + "가".repeat((DocumentEditingRules.MAX_MARKDOWN_BYTES - 100) / 3);
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), nearlyFull, "hash", 2));
+        var rows = stubBatchConvert(parent, source, queue, states);
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
+                .thenReturn(new ConverterClient.Batch(11, 20, 20, "<!-- page 1 -->\n\n" + "나".repeat(100) + "\n", false, true, null));
+
+        documentService.doConvert(7L, parent.getId(), source.getId());
+
+        var parts = rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).toList();
+        assertThat(parts).hasSize(1);
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo(nearlyFull);
+        assertThat(states.get(parts.getFirst().getId()).getMarkdown()).startsWith("<!-- page 11 -->");
         verify(ingestCommandOutbox, times(2)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
     }
 

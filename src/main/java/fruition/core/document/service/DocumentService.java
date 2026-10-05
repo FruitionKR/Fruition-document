@@ -1044,7 +1044,7 @@ public class DocumentService {
                     });
                     return null;
                 });
-                // 각각의 본문 묶음을 기존 AI 큐로 보낸다. 한 LLM 요청에 전체 PDF를 넣지 않는다.
+                // 원본 문서와 상한을 넘어 생긴 파트를 각각 한 번씩 AI 큐로 보낸다.
                 java.util.List<Document> parts = new java.util.ArrayList<>();
                 parts.add(documentRepository.findById(placeholder.getId()).orElseThrow());
                 parts.addAll(documentRepository.findConvertedParts(placeholder.getWorkspaceId(), placeholder.getId()));
@@ -1053,8 +1053,11 @@ public class DocumentService {
                         if (!taskWriter.join("convert:" + placeholder.getId())) return null;
                         Document doc = documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
                                 .filter(value -> value.getDeletedAt() == null).orElse(null);
-                        if (doc != null && (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:"))) {
-                            var content = editStateRepository.findById(doc.getId()).orElseThrow();
+                        if (doc == null) return null;
+                        var content = editStateRepository.findById(doc.getId()).orElseThrow();
+                        recordContentVersion(doc.getId(), content.getRevision(), content.getMarkdown(),
+                                content.getContentHash(), doc.getUserId(), Instant.now());
+                        if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
                             doc.reopenForReingest(content.getContentHash(), content.getMarkdown().getBytes(StandardCharsets.UTF_8).length);
                             enqueueIngest(doc);
                         }
@@ -1075,35 +1078,29 @@ public class DocumentService {
             if (!taskWriter.join("convert:" + parent.getId())) return null;
             var checkpoint = convertQueueRepository.findById(queueId).orElseThrow();
             if (checkpoint.getCompletedPages() >= batch.page_end()) return null;
-            var chunks = ConvertedMarkdownChunks.split(externalizeConvertedImages(parent, batch.markdown()));
-            for (int index = 0; index < chunks.size(); index++) {
-                var content = DocumentEditingRules.markdown(chunks.get(index));
-                boolean first = batch.page_start() == 1 && index == 0;
-                String id = first ? parent.getId() : "doc_" + UUID.nameUUIDFromBytes(
-                        (parent.getId() + ":" + batch.page_start() + ":" + index).getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
-                if (first) {
-                    var result = postgresDocumentEditStore.save(parent.getWorkspaceId(), id, content.markdown(),
-                            content.contentHash(), 1L, "convert:" + queueId, parent.getUserId(), null);
-                    if (!result.replayed()) projectContentVersions(id, content.markdown(), result);
-                    storeMarkdownSource(id, content.bytes());
-                } else if (!documentRepository.existsById(id)) {
-                    String base = parent.getDisplayName();
-                    base = base.substring(0, Math.min(170, base.length()));
-                    String filename = base + " [" + batch.page_start() + "-" + batch.page_end() + ", " + (index + 1)
-                            + ", " + parent.getId().substring(parent.getId().length() - 6) + "].md";
-                    var child = new Document(id, parent.getWorkspaceId(), parent.getUserId(), filename, "text/markdown",
-                            content.bytes().length, storeMarkdownSource(id, content.bytes()), content.contentHash(), "convert_part");
-                    child.initializeDuplicate(parent.getId(), parent.getFolderId(), content.contentHash(), content.bytes().length,
-                            placementSortOrder(parent.getWorkspaceId(), parent.getFolderId(), DocumentRole.EDITABLE));
-                    documentRepository.save(child);
-                    editStateRepository.save(new DocumentEditState(id, content.markdown(), content.contentHash(), 1));
+            String markdown = ConvertedMarkdownChunks.renumberPages(
+                    externalizeConvertedImages(parent, batch.markdown()), batch.page_start());
+            // PDF 하나를 문서 하나로 이어 붙이고, 편집 문서 상한을 넘을 때만 다음 파트 문서로 넘어간다.
+            // 버전 기록은 변환 완료 시 한 번만 남겨 묶음마다 누적 본문이 쌓이지 않게 한다.
+            var parts = documentRepository.findConvertedParts(parent.getWorkspaceId(), parent.getId());
+            int partCount = parts.size();
+            String targetId = parts.isEmpty() ? parent.getId() : parts.getLast().getId();
+            var pieces = ConvertedMarkdownChunks.split(markdown, DocumentEditingRules.MAX_MARKDOWN_BYTES);
+            for (int index = 0; index < pieces.size(); index++) {
+                var state = editStateRepository.findById(targetId).orElseThrow();
+                String existing = CONVERT_PLACEHOLDER_MARKDOWN.equals(state.getMarkdown()) ? "" : state.getMarkdown();
+                String merged = existing.isEmpty() ? pieces.get(index) : existing.stripTrailing() + "\n\n" + pieces.get(index);
+                if (merged.getBytes(StandardCharsets.UTF_8).length > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
+                    targetId = createConvertedPart(parent, ++partCount, pieces.get(index));
+                    continue;
                 }
-            }
-                // 모든 분할 문서의 이미지 참조를 등록해 조회 권한·orphan 수거와 연결한다.
-            for (int index = 0; index < chunks.size(); index++) {
-                String id = batch.page_start() == 1 && index == 0 ? parent.getId() : "doc_" + UUID.nameUUIDFromBytes(
-                        (parent.getId() + ":" + batch.page_start() + ":" + index).getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
-                assetReferenceSynchronizer.synchronize(id, parent.getWorkspaceId(), assetReferenceParser.parse(chunks.get(index)));
+                var content = DocumentEditingRules.markdown(merged);
+                postgresDocumentEditStore.save(parent.getWorkspaceId(), targetId, content.markdown(),
+                        content.contentHash(), state.getRevision(), "convert:" + queueId + ":" + batch.page_end() + ":" + index,
+                        parent.getUserId(), null);
+                storeMarkdownSource(targetId, content.bytes());
+                // 이미지 참조를 등록해 조회 권한·orphan 수거와 연결한다.
+                assetReferenceSynchronizer.synchronize(targetId, parent.getWorkspaceId(), assetReferenceParser.parse(content.markdown()));
             }
             checkpoint.checkpoint(batch.page_end(), batch.total_pages());
             convertQueueRepository.save(checkpoint);
@@ -1111,6 +1108,24 @@ public class DocumentService {
                     "PDF " + batch.page_end() + "/" + batch.total_pages() + "페이지 변환 완료", Instant.now()));
             return null;
         });
+    }
+
+    private String createConvertedPart(Document parent, int partNumber, String markdown) {
+        var content = DocumentEditingRules.markdown(markdown);
+        String id = "doc_" + UUID.nameUUIDFromBytes((parent.getId() + ":part:" + partNumber)
+                .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
+        String base = parent.getDisplayName();
+        base = base.substring(0, Math.min(170, base.length()));
+        String filename = base + " [파트 " + (partNumber + 1) + ", "
+                + parent.getId().substring(parent.getId().length() - 6) + "].md";
+        var part = new Document(id, parent.getWorkspaceId(), parent.getUserId(), filename, "text/markdown",
+                content.bytes().length, storeMarkdownSource(id, content.bytes()), content.contentHash(), "convert_part");
+        part.initializeDuplicate(parent.getId(), parent.getFolderId(), content.contentHash(), content.bytes().length,
+                placementSortOrder(parent.getWorkspaceId(), parent.getFolderId(), DocumentRole.EDITABLE));
+        documentRepository.save(part);
+        editStateRepository.save(new DocumentEditState(id, content.markdown(), content.contentHash(), 1));
+        assetReferenceSynchronizer.synchronize(id, parent.getWorkspaceId(), assetReferenceParser.parse(content.markdown()));
+        return id;
     }
 
     private String externalizeConvertedImages(Document parent, String markdown) {

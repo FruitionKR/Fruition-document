@@ -936,7 +936,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 
 #### 2. 목적
 
-PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을 편집 가능 placeholder 문서를 즉시 만들어 반환하고, 실제 변환은 백그라운드에서 진행됩니다. worker는 실행 시점의 workspace `ingest_lint` provider/model을 converter에 전달하며 converter는 선택 provider의 API key로 복원합니다.
+PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을 편집 가능 placeholder 문서를 즉시 만들어 반환하고, 실제 변환은 백그라운드에서 진행됩니다. worker는 실행 시점의 workspace `ingest_lint` provider/model을 converter에 전달하며 converter는 선택 provider의 API key로 복원합니다. AWS 모드에서는 10페이지 묶음 결과를 placeholder 문서 하나에 이어 붙이고(페이지 주석은 원본 PDF 기준 번호), Markdown이 5MB를 넘을 때만 다음 파트 문서(`origin=convert_part`)를 만듭니다. 변환이 끝나면 문서마다 최종 버전을 한 번 기록하고 AI 큐에 한 번 등록합니다([ADR-0024](../adr/0024-converted-pdf-single-document.md)).
 
 #### 3. Auth 필요 여부
 
