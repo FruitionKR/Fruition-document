@@ -109,9 +109,11 @@ public class PipelineWikiStateRequester {
             String status
     ) {}
 
+    /** @param sourceContentHash 이 block 집합을 만든 ingest의 입력 해시. AI가 아직 주지 않으면 null이다. */
     public record DocumentWikiContext(
             List<DocumentPage> pages,
-            @JsonProperty("source_blocks") List<SourceBlock> sourceBlocks
+            @JsonProperty("source_blocks") List<SourceBlock> sourceBlocks,
+            @JsonProperty("source_content_hash") String sourceContentHash
     ) {}
 
     public record DocumentPage(
@@ -123,8 +125,13 @@ public class PipelineWikiStateRequester {
             double confidence
     ) {}
 
+    /** 위치 필드는 block을 만든 Markdown 스냅샷 기준이다. AI가 아직 주지 않거나 위치가 없는 block이면 null이다. */
     public record SourceBlock(
             @JsonProperty("block_id") String blockId,
+            Integer position,
+            @JsonProperty("line_start") Integer lineStart,
+            @JsonProperty("line_end") Integer lineEnd,
+            @JsonProperty("block_type") String blockType,
             String text
     ) {}
 }

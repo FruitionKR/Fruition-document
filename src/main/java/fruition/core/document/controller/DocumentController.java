@@ -238,7 +238,7 @@ public class DocumentController {
                 .body(new InputStreamResource(result.content()));
     }
 
-    @Operation(summary = "원본 문서 block 목록 조회", description = "원본 문서를 block 단위로 나눈 텍스트 목록을 반환합니다. 답변 인용 클릭 시 원본 block 하이라이트에 사용됩니다.")
+    @Operation(summary = "원본 문서 block 목록 조회", description = "원본 문서를 block 단위로 나눈 텍스트 목록을 문서 순서대로 반환합니다. 각 block의 스냅샷 기준 줄 범위와 stale 여부를 함께 주어, 답변 인용 클릭 시 원본 block 하이라이트에 사용됩니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "조회 성공",
             content = @Content(schema = @Schema(implementation = DocumentBlocksResponse.class))),

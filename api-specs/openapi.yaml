@@ -1542,7 +1542,7 @@ paths:
       - Documents
   /api/workspaces/{workspace_id}/documents/{document_id}/blocks:
     get:
-      description: 원본 문서를 block 단위로 나눈 텍스트 목록을 반환합니다. 답변 인용 클릭 시 원본 block 하이라이트에 사용됩니다.
+      description: "원본 문서를 block 단위로 나눈 텍스트 목록을 문서 순서대로 반환합니다. 각 block의 스냅샷 기준 줄 범위와 stale 여부를 함께 주어, 답변 인용 클릭 시 원본 block 하이라이트에 사용됩니다."
       operationId: blocks
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -5303,22 +5303,51 @@ components:
       properties:
         block_id:
           type: string
-          description: block ID. Wiki 근거가 이 값으로 원문 위치를 가리킨다.
+          description: "영구 block ID. 채팅 근거의 source_block_ids, source_refs[].source_block_id와 같은 값이다."
+          example: B0440
+        block_type:
+          type: string
+          description: "block 종류(heading, paragraph, list, code). 알 수 없으면 null"
+          example: paragraph
+        line_end:
+          type: integer
+          format: int32
+          description: "스냅샷 기준 끝 줄(1부터, 포함). 위치 정보가 없는 block이면 null"
+          example: 5
+        line_start:
+          type: integer
+          format: int32
+          description: "스냅샷 기준 시작 줄(1부터, 포함). 위치 정보가 없는 block(chat_export 등)이면 null"
+          example: 3
+        position:
+          type: integer
+          format: int32
+          description: block을 만든 Markdown 스냅샷 안에서의 순서(1부터). 위치 정보가 없는 block이면 null
+          example: 2
         text:
           type: string
-          description: block 본문 텍스트
+          description: 저장된 block 텍스트(공백 정규화됨)
     DocumentBlocksResponse:
       type: object
       properties:
         blocks:
           type: array
-          description: 원문에서 추출한 block 목록. Wiki 근거 링크가 이 block을 가리킨다.
+          description: 원문 block 목록. 문서 내 순서(position) 오름차순이다. Wiki 근거 링크가 이 block을 가리킨다.
           items:
             $ref: "#/components/schemas/DocumentBlockResponse"
+        current_content_hash:
+          type: string
+          description: "source_content_hash와 비교하는 현재 해시. 편집 문서는 현재 본문, chat_export는 AI 입력 Markdown의 SHA-256"
         document_id:
           type: string
           description: 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        is_stale:
+          type: boolean
+          description: block을 만든 뒤 문서가 바뀌었으면 true. source_content_hash를 모르면 판단할 수 없어 null
+        source_content_hash:
+          type: string
+          description: 이 block 집합을 만든 ingest 입력 Markdown의 SHA-256(AI가 저장한 값). 알 수 없으면 null
     DocumentContentDiffResponse:
       type: object
       description: 두 버전 사이의 본문 차이. 줄 단위 hunk로 준다.
