@@ -64,6 +64,7 @@ public class DocumentAssetController {
                 .cacheControl(PRIVATE_CACHE)
                 .eTag(metadata.etag())
                 .header("X-Content-Type-Options", "nosniff")
+                .header("Content-Security-Policy", DocumentController.SANDBOX_CSP)
                 .body(new InputStreamResource(readService.openStream(metadata)));
     }
 }

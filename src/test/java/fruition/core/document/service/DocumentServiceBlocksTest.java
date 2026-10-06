@@ -63,6 +63,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
+import fruition.core.document.exception.InvalidDocumentFilenameException;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -665,7 +667,7 @@ class DocumentServiceBlocksTest {
         when(storageProps.getBucket()).thenReturn("test-bucket");
         when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.EDITABLE)).thenReturn(-1L);
         MockMultipartFile file = new MockMultipartFile(
-                "file", "메모.txt", "text/plain", "메모 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                "file", "메모.TXT", "text/plain", "메모 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-txt-key", null, file);
@@ -677,6 +679,46 @@ class DocumentServiceBlocksTest {
         assertThat(storedDocument.getValue().getFilename()).isEqualTo("메모.md");
         assertThat(response.editable()).isTrue();
         assertThat(response.documentRole()).isEqualTo(DocumentRole.EDITABLE);
+    }
+
+    @Test
+    void upload_storesMimeFromExtensionNotClientContentType() throws Exception {
+        stubOwnedWorkspace();
+        when(storageProps.getBucket()).thenReturn("test-bucket");
+        when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.EDITABLE)).thenReturn(-1L);
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "노트.md", "text/html", "<script>alert(1)</script>".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        documentService.upload(WORKSPACE_ID, USER_ID, "upload-html-key", null, file);
+
+        ArgumentCaptor<Document> storedDocument = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(storedDocument.capture());
+        assertThat(storedDocument.getValue().getMimeType()).isEqualTo("text/markdown");
+    }
+
+    @Test
+    void upload_rejectsUnsupportedExtensionAndFakePdf() {
+        stubOwnedWorkspace();
+        MockMultipartFile log = new MockMultipartFile(
+                "file", "app.log", "text/plain", "# 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        MockMultipartFile fakePdf = new MockMultipartFile(
+                "file", "자료.pdf", "application/pdf", new byte[]{'M', 'Z', 0, 0, 0});
+
+        assertThatThrownBy(() -> documentService.upload(WORKSPACE_ID, USER_ID, "upload-log", null, log))
+                .isInstanceOf(fruition.core.document.exception.UnsupportedDocumentFileException.class);
+        assertThatThrownBy(() -> documentService.upload(WORKSPACE_ID, USER_ID, "upload-fake-pdf", null, fakePdf))
+                .isInstanceOf(fruition.core.document.exception.UnsupportedDocumentFileException.class);
+        verify(documentRepository, never()).save(any(Document.class));
+    }
+
+    @Test
+    void upload_rejectsControlCharactersInFilename() {
+        stubOwnedWorkspace();
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "노트\r\n가짜 로그.md", "text/markdown", "# 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        assertThatThrownBy(() -> documentService.upload(WORKSPACE_ID, USER_ID, "upload-crlf", null, file))
+                .isInstanceOf(InvalidDocumentFilenameException.class);
     }
 
     @Test
@@ -702,7 +744,7 @@ class DocumentServiceBlocksTest {
         when(storageProps.getBucket()).thenReturn("test-bucket");
         when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.ORIGINAL)).thenReturn(-1L);
         MockMultipartFile file = new MockMultipartFile(
-                "file", "자료.pdf", "application/pdf", new byte[]{1, 2, 3});
+                "file", "자료.pdf", "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-pdf-key", null, file);
@@ -728,8 +770,10 @@ class DocumentServiceBlocksTest {
         when(file.getContentType()).thenReturn("application/pdf");
         long size = 60L * 1024 * 1024;
         when(file.getSize()).thenReturn(size);
-        when(file.getInputStream()).thenAnswer(inv -> new java.io.InputStream() {
-            long remaining = size;
+        byte[] signature = "%PDF-".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        when(file.getInputStream()).thenAnswer(inv -> new java.io.SequenceInputStream(
+                new java.io.ByteArrayInputStream(signature), new java.io.InputStream() {
+            long remaining = size - signature.length;
             public int read() { return remaining-- > 0 ? 0 : -1; }
             public int read(byte[] b, int off, int len) {
                 if (remaining <= 0) return -1;
@@ -738,10 +782,10 @@ class DocumentServiceBlocksTest {
                 remaining -= count;
                 return count;
             }
-        });
+        }));
         documentService.upload(WORKSPACE_ID, USER_ID, "large-pdf-key", null, file);
         verify(file, never()).getBytes();
-        verify(file, times(2)).getInputStream();
+        verify(file, times(3)).getInputStream();
         verify(minioClient).putObject(org.mockito.ArgumentMatchers.argThat(args -> args.objectSize() == size));
     }
 
@@ -1816,7 +1860,7 @@ class DocumentServiceBlocksTest {
         when(storageProps.getBucket()).thenReturn("test-bucket");
         when(minioClient.putObject(any(PutObjectArgs.class))).thenThrow(new RuntimeException("storage failure"));
         MockMultipartFile file = new MockMultipartFile(
-                "file", "자료.pdf", "application/pdf", new byte[]{1, 2, 3});
+                "file", "자료.pdf", "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 
         assertThatThrownBy(() -> documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, file))
                 .isInstanceOf(DocumentUploadException.class);
@@ -1833,7 +1877,7 @@ class DocumentServiceBlocksTest {
         when(storageProps.getBucket()).thenReturn("test-bucket");
         when(documentRepository.save(any(Document.class))).thenThrow(new RuntimeException("database failure"));
         MockMultipartFile file = new MockMultipartFile(
-                "file", "자료.pdf", "application/pdf", new byte[]{1, 2, 3});
+                "file", "자료.pdf", "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 
         assertThatThrownBy(() -> documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, file))
                 .isInstanceOf(DocumentUploadException.class);
@@ -1855,7 +1899,7 @@ class DocumentServiceBlocksTest {
                 .thenThrow(new RuntimeException("database failure"))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         MockMultipartFile file = new MockMultipartFile(
-                "file", "자료.pdf", "application/pdf", new byte[]{1, 2, 3});
+                "file", "자료.pdf", "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 
         assertThatThrownBy(() -> documentService.upload(
                 WORKSPACE_ID, USER_ID, "upload-key", null, file))

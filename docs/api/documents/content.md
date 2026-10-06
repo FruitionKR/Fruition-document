@@ -21,7 +21,7 @@ Ingest는 `POST /api/workspaces/{workspace_id}/documents/{document_id}/ingest`�
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/blocks`](#summary-get-api-workspaces-workspace-id-documents-document-id-blocks) | 원본 문서를 block 단위로 나눈 텍스트 목록을 반환합니다. 답변 인용 클릭 시 원본 block 하이라이트에 사용됩니다. |
 | [`PUT /api/workspaces/{workspace_id}/documents/{document_id}/content`](#summary-put-api-workspaces-workspace-id-documents-document-id-content) | 전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision과 일치할 때만 반영하며 revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/export`](#summary-get-api-workspaces-workspace-id-documents-document-id-export) | 최신 Markdown 편집본을 내보냅니다. 관리 이미지가 있으면 이미지와 Markdown을 ZIP으로 반환합니다. |
-| [`GET /api/workspaces/{workspace_id}/documents/{document_id}/original`](#summary-get-api-workspaces-workspace-id-documents-document-id-original) | MinIO에 저장된 원본 파일을 스트리밍합니다. PDF는 inline, 그 외는 attachment로 반환됩니다. |
+| [`GET /api/workspaces/{workspace_id}/documents/{document_id}/original`](#summary-get-api-workspaces-workspace-id-documents-document-id-original) | MinIO에 저장된 원본 파일을 스트리밍합니다. PDF와 Markdown은 inline, 그 외는 application/octet-stream 첨부로 반환합니다. PDF가 아닌 응답에는 CSP sandbox를 붙입니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/original-url`](#summary-get-api-workspaces-workspace-id-documents-document-id-original-url) | 원본 PDF를 브라우저에서 바로 열 수 있는 1시간짜리 presigned 주소를 반환합니다. AWS 모드가 아니거나 PDF가 아니면 `null`입니다. |
 | [`GET /internal/documents/{document_id}/pipeline-source`](#summary-get-internal-documents-document-id-pipeline-source) | AI pipeline이 사용할 문서 원본 위치와 소유 범위를 조회합니다. |
 
@@ -777,7 +777,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | MinIO에 저장된 원본 파일을 스트리밍합니다. PDF는 inline, 그 외는 attachment로 반환됩니다. |
+| 목적 | MinIO에 저장된 원본 파일을 스트리밍합니다. PDF와 Markdown은 inline, 그 외는 application/octet-stream 첨부로 반환합니다. PDF가 아닌 응답에는 CSP sandbox를 붙입니다. |
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string` |
 | 출력 | `200` 원본 파일 반환 — `string` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
@@ -795,7 +795,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 #### 2. 목적
 
-MinIO에 저장된 원본 파일을 스트리밍합니다. PDF는 inline, 그 외는 attachment로 반환됩니다.
+MinIO에 저장된 원본 파일을 스트리밍합니다. PDF와 Markdown은 inline, 그 외는 application/octet-stream 첨부로 반환합니다. PDF가 아닌 응답에는 CSP sandbox를 붙입니다.
 
 #### 3. Auth 필요 여부
 

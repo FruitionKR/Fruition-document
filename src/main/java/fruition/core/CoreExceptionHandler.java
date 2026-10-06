@@ -57,6 +57,7 @@ import fruition.core.document.exception.DocumentAssetStorageException;
 import fruition.core.document.exception.DocumentAssetTooLargeException;
 import fruition.core.document.exception.InvalidDocumentAssetException;
 import fruition.core.document.exception.UnsupportedDocumentAssetException;
+import fruition.core.document.exception.UnsupportedDocumentFileException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -261,6 +262,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("DOCUMENT_ORIGINAL_NOT_FOUND", e.getMessage()));
+    }
+
+    @ExceptionHandler(UnsupportedDocumentFileException.class)
+    public ResponseEntity<ErrorResponse> handleUnsupportedDocumentFile(UnsupportedDocumentFileException e) {
+        logHandled(e, HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_FILE_TYPE");
+        return ResponseEntity
+                .status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(ErrorResponse.of("UNSUPPORTED_FILE_TYPE", e.getMessage()));
     }
 
     @ExceptionHandler(InvalidDocumentFilenameException.class)

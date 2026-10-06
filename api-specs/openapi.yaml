@@ -1173,7 +1173,7 @@ paths:
       tags:
       - Documents
     post:
-      description: "PDF, Markdown 또는 txt 파일을 업로드합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다."
+      description: "PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다."
       operationId: upload
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1234,7 +1234,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 지원하지 않는 파일 형식
+          description: 지원하지 않는 확장자 또는 올바르지 않은 PDF 내용
         "500":
           content:
             '*/*':
@@ -2016,7 +2016,7 @@ paths:
       - Documents
   /api/workspaces/{workspace_id}/documents/{document_id}/original:
     get:
-      description: "MinIO에 저장된 원본 파일을 스트리밍합니다. PDF는 inline, 그 외는 attachment로 반환됩니다."
+      description: "MinIO에 저장된 원본 파일을 스트리밍합니다. PDF와 Markdown은 inline, 그 외는 application/octet-stream 첨부로 반환합니다. PDF가 아닌 응답에는 CSP sandbox를 붙입니다."
       operationId: getOriginal
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a

@@ -53,11 +53,14 @@ import java.util.Set;
 @Tag(name = "Documents", description = "Markdown 편집 문서와 업로드 원본 관리 API")
 public class DocumentController {
 
-    private static final Set<String> ALLOWED_MIME_TYPES = Set.of(
+    // 사용자 파일이 HTML로 열려도 스크립트가 돌지 않게 한다. Chrome은 sandbox 문서의 PDF 뷰어를 막으므로 PDF에는 붙이지 않는다.
+    static final String SANDBOX_CSP = "sandbox; default-src 'none'";
+
+    // 예전 업로드는 클라이언트 Content-Type을 그대로 저장했다. 이 목록 밖의 값은 내려받기로만 돌려준다.
+    private static final Set<String> INLINE_MIME_TYPES = Set.of(
             "application/pdf",
             "text/markdown",
-            "text/x-markdown",
-            "text/plain"
+            "text/x-markdown"
     );
 
     private final DocumentService documentService;
@@ -85,7 +88,7 @@ public class DocumentController {
 
     @Operation(
         summary = "문서 업로드",
-        description = "PDF, Markdown 또는 txt 파일을 업로드합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다.")
+        description = "PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "201", description = "업로드 성공",
             content = @Content(schema = @Schema(implementation = DocumentUploadResponse.class))),
@@ -95,7 +98,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Idempotency-Key 충돌",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "415", description = "지원하지 않는 파일 형식",
+        @ApiResponse(responseCode = "415", description = "지원하지 않는 확장자 또는 올바르지 않은 PDF 내용",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "500", description = "서버 내부 오류",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
@@ -112,20 +115,6 @@ public class DocumentController {
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)
                     .body(ErrorResponse.of("INVALID_REQUEST", "파일이 없거나 비어 있습니다."));
-        }
-
-        String mimeType = file.getContentType();
-        String normalizedFilename = file.getOriginalFilename() == null
-                ? ""
-                : file.getOriginalFilename().toLowerCase(java.util.Locale.ROOT);
-        boolean isMdByExtension = normalizedFilename.endsWith(".md")
-                || normalizedFilename.endsWith(".markdown")
-                || normalizedFilename.endsWith(".txt");
-
-        if (!ALLOWED_MIME_TYPES.contains(mimeType) && !isMdByExtension) {
-            return ResponseEntity
-                    .status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
-                    .body(ErrorResponse.of("UNSUPPORTED_FILE_TYPE", "PDF, Markdown 또는 txt 파일만 업로드할 수 있습니다."));
         }
 
         DocumentUploadResponse response = documentService.upload(workspaceId, userId, idempotencyKey, folderId, file);
@@ -194,7 +183,7 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.findById(workspaceId, userId, documentId));
     }
 
-    @Operation(summary = "원본 문서 조회", description = "MinIO에 저장된 원본 파일을 스트리밍합니다. PDF는 inline, 그 외는 attachment로 반환됩니다.")
+    @Operation(summary = "원본 문서 조회", description = "MinIO에 저장된 원본 파일을 스트리밍합니다. PDF와 Markdown은 inline, 그 외는 application/octet-stream 첨부로 반환합니다. PDF가 아닌 응답에는 CSP sandbox를 붙입니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "원본 파일 반환"),
         @ApiResponse(responseCode = "404", description = "문서, 원본 파일 또는 워크스페이스를 찾을 수 없음",
@@ -208,18 +197,18 @@ public class DocumentController {
             @PathVariable("document_id") String documentId) {
         DocumentOriginalResult result = documentService.getOriginal(workspaceId, userId, documentId);
 
-        String disposition = isInlineable(result.mimeType())
-                ? "inline; filename=\"" + result.filename() + "\""
-                : "attachment; filename=\"" + result.filename() + "\"";
+        boolean inline = INLINE_MIME_TYPES.contains(result.mimeType());
+        ContentDisposition disposition = (inline ? ContentDisposition.inline() : ContentDisposition.attachment())
+                .filename(result.filename(), StandardCharsets.UTF_8)
+                .build();
 
-        return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(result.mimeType()))
-                .header(HttpHeaders.CONTENT_DISPOSITION, disposition)
-                .body(new InputStreamResource(result.inputStream()));
-    }
-
-    private boolean isInlineable(String mimeType) {
-        return mimeType != null && (mimeType.startsWith("text/") || mimeType.equals("application/pdf"));
+        var response = ResponseEntity.ok()
+                .contentType(inline ? MediaType.parseMediaType(result.mimeType()) : MediaType.APPLICATION_OCTET_STREAM)
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString());
+        if (!MediaType.APPLICATION_PDF_VALUE.equals(result.mimeType())) {
+            response.header("Content-Security-Policy", SANDBOX_CSP);
+        }
+        return response.body(new InputStreamResource(result.inputStream()));
     }
 
     @Operation(

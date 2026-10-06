@@ -13,7 +13,7 @@
 | API | 목적 |
 |---|---|
 | [`GET /api/workspaces/{workspace_id}/documents`](#summary-get-api-workspaces-workspace-id-documents) | 활성 문서의 호환용 평면 목록을 반환하며 파일명 검색을 지원합니다. |
-| [`POST /api/workspaces/{workspace_id}/documents`](#summary-post-api-workspaces-workspace-id-documents) | PDF, Markdown 또는 txt 파일을 업로드합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. |
+| [`POST /api/workspaces/{workspace_id}/documents`](#summary-post-api-workspaces-workspace-id-documents) | PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/uploads`](#summary-post-api-workspaces-workspace-id-documents-uploads) | 대용량 PDF를 객체 저장소에 직접 올리기 위한 업로드 티켓과 조각 크기를 발급합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/uploads/parts`](#summary-post-api-workspaces-workspace-id-documents-uploads-parts) | 업로드 티켓으로 조각 번호 범위에 대한 15분짜리 presigned PUT 주소를 발급합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/uploads/complete`](#summary-post-api-workspaces-workspace-id-documents-uploads-complete) | 조각 업로드를 조립해 PDF를 검증하고 문서로 확정합니다. |
@@ -163,11 +163,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | PDF, Markdown 또는 txt 파일을 업로드합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. |
+| 목적 | PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. |
 | 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Query** — `folder_id`(선택): `string`<br>**Body** — `file` |
 | 출력 | `201` 업로드 성공 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 파일 없음 또는 잘못된 요청 — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse`<br>`415` 지원하지 않는 파일 형식 — `ErrorResponse`<br>`500` 서버 내부 오류 — `ErrorResponse` |
+| 주요 오류 | `400` 파일 없음 또는 잘못된 요청 — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse`<br>`415` 지원하지 않는 확장자 또는 올바르지 않은 PDF 내용 — `ErrorResponse`<br>`500` 서버 내부 오류 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -181,7 +181,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 #### 2. 목적
 
-PDF, Markdown 또는 txt 파일을 업로드합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다.
+PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다.
 
 #### 3. Auth 필요 여부
 
@@ -231,7 +231,7 @@ PDF, Markdown 또는 txt 파일을 업로드합니다. Markdown과 txt(.md 이�
 | `400` | 파일 없음 또는 잘못된 요청 | `ErrorResponse` |
 | `404` | 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 | `ErrorResponse` |
-| `415` | 지원하지 않는 파일 형식 | `ErrorResponse` |
+| `415` | 지원하지 않는 확장자 또는 올바르지 않은 PDF 내용 | `ErrorResponse` (`UNSUPPORTED_FILE_TYPE`) |
 | `500` | 서버 내부 오류 | `ErrorResponse` |
 
 ```json
