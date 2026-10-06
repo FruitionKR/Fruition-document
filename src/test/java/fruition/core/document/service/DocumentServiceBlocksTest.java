@@ -28,7 +28,7 @@ import fruition.shared.idempotency.IdempotencyConflictException;
 import fruition.shared.idempotency.IdempotencyInProgressException;
 import fruition.shared.idempotency.InvalidIdempotencyKeyException;
 import fruition.core.document.exception.MarkdownContentTooLargeException;
-import fruition.core.document.repository.PostgresDocumentEditSaveResult;
+import fruition.core.document.repository.DocumentContentVersionRepository; import fruition.core.document.repository.PostgresDocumentEditSaveResult;
 import fruition.core.document.repository.PostgresDocumentEditStore;
 import fruition.core.document.repository.IngestCommandOutbox;
 import fruition.core.document.repository.DocumentEditStateRepository;
@@ -342,6 +342,48 @@ class DocumentServiceBlocksTest {
         assertThat(response.documentId()).isEqualTo(document.getId());
         assertThat(response.currentVersion()).isEqualTo(2);
         assertThat(response.versions()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("버전 목록은 복원으로 만든 버전의 복원 출처를 함께 반환하고 일반 저장은 null로 둔다")
+    void listContentVersions_includesRestoredFromVersion() throws Exception {
+        stubOwnedWorkspace();
+        Document document = new Document(
+                "doc_versions_restored", WORKSPACE_ID, USER_ID, "노트.md", "text/markdown", 10,
+                "sources/documents/doc_versions_restored/original", "source-hash");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(
+                document.getId(), WORKSPACE_ID)).thenReturn(Optional.of(document));
+        when(postgresDocumentEditStore.findState(document.getId())).thenReturn(Optional.of(
+                new DocumentEditState(document.getId(), "# 노트", "edit-hash", 5)));
+        Instant createdAt = Instant.parse("2026-10-06T04:25:24Z");
+        when(contentVersionRepository.findSummaries(document.getId())).thenReturn(List.of(
+                versionSummary(5, "hash-5", createdAt, 2L),
+                versionSummary(4, "hash-4", createdAt, null)));
+
+        DocumentContentVersionListResponse response = documentService.listContentVersions(
+                WORKSPACE_ID, USER_ID, document.getId());
+
+        assertThat(response.versions())
+                .extracting(DocumentContentVersionListResponse.Item::version,
+                        DocumentContentVersionListResponse.Item::restoredFromVersion)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(5L, 2L),
+                        org.assertj.core.groups.Tuple.tuple(4L, null));
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules()
+                .valueToTree(response).path("versions");
+        assertThat(json.get(0).path("restored_from_version").asLong()).isEqualTo(2);
+        assertThat(json.get(1).has("restored_from_version")).isTrue();
+        assertThat(json.get(1).path("restored_from_version").isNull()).isTrue();
+    }
+
+    private DocumentContentVersionRepository.Summary versionSummary(
+            long version, String contentHash, Instant createdAt, Long restoredFromVersion) {
+        return new DocumentContentVersionRepository.Summary() {
+            @Override public long getVersion() { return version; }
+            @Override public String getContentHash() { return contentHash; }
+            @Override public String getCreatedBy() { return USER_ID; }
+            @Override public Instant getCreatedAt() { return createdAt; }
+            @Override public Long getRestoredFromVersion() { return restoredFromVersion; }
+        };
     }
 
     @Test
@@ -1194,6 +1236,7 @@ class DocumentServiceBlocksTest {
                 "write-retry-transient", null);
 
         assertThat(response.changed()).isTrue();
+        verify(contentVersionRepository, never()).markRestoredFrom(anyString(), anyLong(), anyLong());
         verify(postgresDocumentEditStore, times(2)).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
                 eq(1L), eq("write-retry-transient"), eq(USER_ID), isNull());
@@ -1225,6 +1268,7 @@ class DocumentServiceBlocksTest {
         verify(postgresDocumentEditStore).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 예전\n"), anyString(),
                 eq(1L), eq("restore:5:1"), eq(USER_ID), isNull());
+        verify(contentVersionRepository).markRestoredFrom(document.getId(), 2L, 5L);
     }
 
     @Test
