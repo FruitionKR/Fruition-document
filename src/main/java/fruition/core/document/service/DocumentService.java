@@ -1086,18 +1086,24 @@ public class DocumentService {
             int partCount = parts.size();
             String targetId = parts.isEmpty() ? parent.getId() : parts.getLast().getId();
             var pieces = ConvertedMarkdownChunks.split(markdown, DocumentEditingRules.MAX_MARKDOWN_BYTES);
+            // 저장은 JDBC라 같은 트랜잭션에서 JPA로 다시 읽으면 갱신 전 값이 온다. 대상 본문·revision은 한 번만 읽고 직접 갱신한다.
+            var state = editStateRepository.findById(targetId).orElseThrow();
+            String existing = CONVERT_PLACEHOLDER_MARKDOWN.equals(state.getMarkdown()) ? "" : state.getMarkdown();
+            long revision = state.getRevision();
             for (int index = 0; index < pieces.size(); index++) {
-                var state = editStateRepository.findById(targetId).orElseThrow();
-                String existing = CONVERT_PLACEHOLDER_MARKDOWN.equals(state.getMarkdown()) ? "" : state.getMarkdown();
                 String merged = existing.isEmpty() ? pieces.get(index) : existing.stripTrailing() + "\n\n" + pieces.get(index);
                 if (merged.getBytes(StandardCharsets.UTF_8).length > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
                     targetId = createConvertedPart(parent, ++partCount, pieces.get(index));
+                    existing = pieces.get(index);
+                    revision = 1;
                     continue;
                 }
                 var content = DocumentEditingRules.markdown(merged);
-                postgresDocumentEditStore.save(parent.getWorkspaceId(), targetId, content.markdown(),
-                        content.contentHash(), state.getRevision(), "convert:" + queueId + ":" + batch.page_end() + ":" + index,
+                var saved = postgresDocumentEditStore.save(parent.getWorkspaceId(), targetId, content.markdown(),
+                        content.contentHash(), revision, "convert:" + queueId + ":" + batch.page_end() + ":" + index,
                         parent.getUserId(), null);
+                existing = content.markdown();
+                revision = saved.revision();
                 storeMarkdownSource(targetId, content.bytes());
                 // 이미지 참조를 등록해 조회 권한·orphan 수거와 연결한다.
                 assetReferenceSynchronizer.synchronize(targetId, parent.getWorkspaceId(), assetReferenceParser.parse(content.markdown()));

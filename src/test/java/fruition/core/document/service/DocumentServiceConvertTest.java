@@ -283,8 +283,13 @@ class DocumentServiceConvertTest {
         lenient().when(editStateRepository.save(any())).thenAnswer(inv -> {
             DocumentEditState state = inv.getArgument(0); states.put(state.getDocumentId(), state); return state; });
         lenient().when(postgresDocumentEditStore.save(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyString(), any()))
-                .thenAnswer(inv -> { states.put(inv.getArgument(1), new DocumentEditState(inv.getArgument(1), inv.getArgument(2),
-                        inv.getArgument(3), inv.<Long>getArgument(4) + 1)); return null; });
+                .thenAnswer(inv -> {
+                    long base = inv.<Long>getArgument(4);
+                    states.put(inv.getArgument(1), new DocumentEditState(inv.getArgument(1), inv.getArgument(2),
+                            inv.getArgument(3), base + 1));
+                    return new fruition.core.document.repository.PostgresDocumentEditSaveResult(
+                            base, "", "", base + 1, inv.getArgument(3), Instant.now(), inv.getArgument(6), true, false);
+                });
         when(minioClient.getPresignedObjectUrl(any())).thenReturn("https://storage.example.test/signed");
         return rows;
     }
@@ -314,6 +319,32 @@ class DocumentServiceConvertTest {
         verify(contentVersionRepository).insertIfAbsent(eq(parent.getId()), eq(3L), anyString(), anyString(), eq(USER_ID), any());
         verify(minioClient, never()).getObject(any());
         verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+    }
+
+    @Test
+    @DisplayName("상한을 넘는 한 묶음은 앞 조각을 이어 붙인 뒤의 본문 기준으로 다음 조각의 파트 전환을 판단한다")
+    void oversizedBatchUsesAppendedContentForNextPiece() throws Exception {
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        queue.checkpoint(10, 20);
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        int mib = 1024 * 1024;
+        String existing = "<!-- page 10 -->\n\n" + "가".repeat(mib / 3);
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), existing, "hash", 2));
+        // 11쪽(약 3.5MiB) + 12쪽(약 2MiB): 함께는 상한을 넘어 두 조각이 된다.
+        String batchMarkdown = "<!-- page 1 -->\n\n" + "나".repeat(mib * 7 / 6) + "\n\n<!-- page 2 -->\n\n" + "다".repeat(mib * 2 / 3) + "\n";
+        var rows = stubBatchConvert(parent, source, queue, states);
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
+                .thenReturn(new ConverterClient.Batch(11, 20, 20, batchMarkdown, false, true, null));
+
+        documentService.doConvert(7L, parent.getId(), source.getId());
+
+        var parts = rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).toList();
+        assertThat(parts).hasSize(1);
+        assertThat(states.get(parent.getId()).getMarkdown()).contains("<!-- page 11 -->").doesNotContain("<!-- page 12 -->");
+        assertThat(states.get(parts.getFirst().getId()).getMarkdown()).startsWith("<!-- page 12 -->");
+        verify(postgresDocumentEditStore, times(1)).save(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyString(), any());
     }
 
     @Test
