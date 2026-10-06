@@ -427,6 +427,37 @@ class DocumentServiceConvertTest {
     }
 
     @Test
+    @DisplayName("크기 상한을 넘는 변환 이미지는 저장하지 않고 생략 문구로 바꾼다")
+    void oversizedConvertedImageIsReplacedWithNotice() throws Exception {
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
+        stubBatchConvert(parent, source, queue, states);
+        String png = java.util.Base64.getEncoder().encodeToString(pngHeader(20_000, 10));
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any()))
+                .thenReturn(new ConverterClient.Batch(1, 1, 1,
+                        "앞\n\n![figure](data:image/png;base64," + png + ")\n\n뒤\n", true, true, null));
+
+        documentService.doConvert(7L, parent.getId(), source.getId());
+
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("앞\n\n(이미지가 너무 커서 생략됨)\n\n뒤\n");
+        verify(assetRepository, never()).save(any());
+    }
+
+    /** 크기 판정은 머리 정보만 읽으므로 IHDR까지만 있는 PNG로 충분하다. */
+    private static byte[] pngHeader(int width, int height) {
+        var ihdr = java.nio.ByteBuffer.allocate(17).put("IHDR".getBytes(StandardCharsets.US_ASCII))
+                .putInt(width).putInt(height).put(new byte[] {8, 2, 0, 0, 0}).array();
+        var crc = new java.util.zip.CRC32();
+        crc.update(ihdr);
+        return java.nio.ByteBuffer.allocate(8 + 4 + 17 + 4)
+                .put(new byte[] {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+                .putInt(13).put(ihdr).putInt((int) crc.getValue()).array();
+    }
+
+    @Test
     @DisplayName("이어 붙인 본문이 편집 상한을 넘으면 다음 파트 문서로 넘어가고 파트마다 AI 큐에 등록된다")
     void batchOverEditLimitStartsNextPart() throws Exception {
         var parent = placeholderDocument();

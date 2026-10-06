@@ -110,6 +110,8 @@ public class DocumentService {
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
     private static final String INITIAL_NOTE_FILENAME = "새 노트.md";
     private static final String CONVERT_PLACEHOLDER_MARKDOWN = "PDF 변환 중...\n";
+    // 크기 상한을 넘은 변환 이미지 자리 표시. 정규식·치환 특수 문자가 없는 값이어야 한다.
+    private static final String OVERSIZED_CONVERTED_IMAGE = "fruition-oversized-converted-image";
     private static final String PDF_MIME_TYPE = "application/pdf";
     private static final String MARKDOWN_MIME_TYPE = "text/markdown";
     private static final byte[] PDF_SIGNATURE = "%PDF-".getBytes(StandardCharsets.US_ASCII);
@@ -1171,12 +1173,20 @@ public class DocumentService {
                 .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
     }
 
+    /**
+     * 변환 결과의 {@code data:} 이미지를 asset으로 저장하고 내부 주소로 바꾼다. 업로드 PDF는 사용자가 만들 수 있어
+     * 첨부 이미지와 같은 크기 상한을 둔다. 넘는 이미지는 변환 전체를 실패시키지 않고 생략 문구로 바꾼다.
+     */
     private String externalizeConvertedImages(Document parent, String markdown) {
         var pattern = java.util.regex.Pattern.compile("data:(image/(?:png|jpeg|gif));base64,([A-Za-z0-9+/=]+)");
         var matcher = pattern.matcher(markdown);
         StringBuilder output = new StringBuilder();
         while (matcher.find()) {
             byte[] bytes = java.util.Base64.getDecoder().decode(matcher.group(2));
+            if (bytes.length > DocumentAssetValidator.MAX_FILE_BYTES) {
+                matcher.appendReplacement(output, OVERSIZED_CONVERTED_IMAGE);
+                continue;
+            }
             String hash = sha256(bytes);
             UUID id = UUID.nameUUIDFromBytes((parent.getWorkspaceId() + ":" + hash).getBytes(StandardCharsets.UTF_8));
             String key = "assets/" + parent.getWorkspaceId() + "/" + id + "/content";
@@ -1188,6 +1198,10 @@ public class DocumentService {
                     int width, height;
                     try { reader.setInput(image); width = reader.getWidth(0); height = reader.getHeight(0); }
                     finally { reader.dispose(); }
+                    if (width > DocumentAssetValidator.MAX_DIMENSION || height > DocumentAssetValidator.MAX_DIMENSION) {
+                        matcher.appendReplacement(output, OVERSIZED_CONVERTED_IMAGE);
+                        continue;
+                    }
                     RetryingObjectPut.put(minioClient, storageProps.getBucket(), key, bytes, matcher.group(1));
                     registerMinioRollbackCleanup(key);
                     assetRepository.save(new fruition.core.document.domain.DocumentAsset(id, parent.getWorkspaceId(),
@@ -1198,7 +1212,10 @@ public class DocumentService {
                     "/api/workspaces/" + parent.getWorkspaceId() + "/assets/" + id + "/content"));
         }
         matcher.appendTail(output);
-        return output.toString();
+        // 생략한 이미지는 이미지·링크 문법째 문구로 바꾸고, 문법 밖에 남은 표시는 지운다.
+        return output.toString()
+                .replaceAll("!?\\[[^\\]\\n]*\\]\\(" + OVERSIZED_CONVERTED_IMAGE + "\\)", "(이미지가 너무 커서 생략됨)")
+                .replace(OVERSIZED_CONVERTED_IMAGE, "");
     }
 
     private byte[] readOriginalBytes(Document source) {
