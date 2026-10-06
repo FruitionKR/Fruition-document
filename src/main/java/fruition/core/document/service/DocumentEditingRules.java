@@ -82,17 +82,37 @@ final class DocumentEditingRules {
      * 복제의 {@code 복사본 (N)}과 달리 원래 이름을 그대로 두고 구분만 더한다.
      */
     static Filename uniqueFilename(String displayName, Set<String> existingNormalizedFilenames) {
-        String baseName = normalizeDisplayName(displayName);
-        for (int number = 1; ; number++) {
+        return numberedFilename(normalizeDisplayName(displayName), MARKDOWN_EXTENSION, existingNormalizedFilenames, 1);
+    }
+
+    /**
+     * 업로드 파일명이 겹치지 않으면 그대로 쓰고, 겹칠 때만 확장자 앞에 {@code (2)}부터 번호를 붙인다
+     * ({@code a.pdf} → {@code a (2).pdf}). 이름 검증은 업로드가 이미 했으므로 다시 하지 않는다.
+     */
+    static Filename uniqueUploadFilename(String filename, Set<String> existingNormalizedFilenames) {
+        String trimmed = filename.trim();
+        String extension = extensionOf(trimmed);
+        String baseName = trimmed.substring(0, trimmed.length() - extension.length());
+        String normalizedFilename = Normalizer.normalize(trimmed, Normalizer.Form.NFC).toLowerCase(Locale.ROOT);
+        if (!existingNormalizedFilenames.contains(normalizedFilename)) {
+            return new Filename(baseName, trimmed, normalizedFilename);
+        }
+        return numberedFilename(Normalizer.normalize(baseName, Normalizer.Form.NFC), extension,
+                existingNormalizedFilenames, 2);
+    }
+
+    private static Filename numberedFilename(String baseName, String extension,
+                                             Set<String> existingNormalizedFilenames, int firstNumber) {
+        for (int number = firstNumber; ; number++) {
             String suffix = number == 1 ? "" : " (" + number + ")";
-            int maxBaseLength = MAX_FILENAME_LENGTH - suffix.length() - MARKDOWN_EXTENSION.length();
+            int maxBaseLength = MAX_FILENAME_LENGTH - suffix.length() - extension.length();
             int baseCodePointCount = baseName.codePointCount(0, baseName.length());
             int endIndex = baseCodePointCount > maxBaseLength
                     ? baseName.offsetByCodePoints(0, maxBaseLength)
                     : baseName.length();
             String truncatedBase = baseName.substring(0, endIndex).stripTrailing();
             String candidate = truncatedBase + suffix;
-            String filename = candidate + MARKDOWN_EXTENSION;
+            String filename = candidate + extension;
             String normalizedFilename = filename.toLowerCase(Locale.ROOT);
             if (!existingNormalizedFilenames.contains(normalizedFilename)) {
                 return new Filename(candidate, filename, normalizedFilename);

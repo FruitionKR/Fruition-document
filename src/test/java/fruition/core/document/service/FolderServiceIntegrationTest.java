@@ -474,8 +474,8 @@ class FolderServiceIntegrationTest {
         var second = documentService.upload(workspaceId, userId, "upload-b", b.id(), file);
         assertThat(first.folderId()).isEqualTo(a.id());
         assertThat(second.folderId()).isEqualTo(b.id());
-        assertThatThrownBy(() -> documentService.upload(workspaceId, userId, "duplicate-a", a.id(), file))
-                .satisfies(error -> assertThat(fruition.shared.util.DuplicateResourceName.message(error)).isNotNull());
+        assertThat(documentService.upload(workspaceId, userId, "duplicate-a", a.id(), file).filename())
+                .isEqualTo("Report (2).md");
         folderService.create(workspaceId, userId, "reserved", new FolderCreateRequest("Reserved.md", a.id()));
         assertThatThrownBy(() -> documentService.rename(workspaceId, userId, first.id(),
                 new fruition.core.document.dto.DocumentRenameRequest("reserved", first.currentVersion())))
