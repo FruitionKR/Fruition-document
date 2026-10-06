@@ -7,7 +7,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 final class ConvertedMarkdownChunks {
-    private static final Pattern PAGE_COMMENT = Pattern.compile("<!-- page (\\d+) -->");
+    private static final Pattern PAGE_COMMENT = Pattern.compile("<!-- page (\\d{1,6}) -->");
 
     private ConvertedMarkdownChunks() {}
 

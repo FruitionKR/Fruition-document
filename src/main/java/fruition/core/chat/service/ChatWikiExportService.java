@@ -9,6 +9,7 @@ import fruition.core.chat.exception.InvalidChatWikiExportRequestException;
 import fruition.core.chat.repository.ChatMessageRepository;
 import fruition.core.chat.service.ChatWikiMarkdownSerializer.ChatSourceBlock;
 import fruition.core.chat.service.ChatWikiMarkdownSerializer.ChatWikiSource;
+import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.core.document.service.DocumentService;
 import fruition.shared.util.SecretMasker;
 import org.slf4j.Logger;
@@ -117,7 +118,8 @@ public class ChatWikiExportService {
                         .map(block -> new ChatSourceBlock(block.blockId(), secretMasker.mask(block.text())))
                         .toList());
         String title = secretMasker.mask(titleOf(masked, session)).replaceAll("\\s+", " ").strip();
-        return new ChatWikiSource("# " + title + "\n\n" + masked.markdown(), masked.blocks());
+        // 문서 본문만 거른다. 블록은 Wiki 생성 입력이라 이번 범위에서 그대로 둔다.
+        return new ChatWikiSource(AiMarkdownSanitizer.sanitize("# " + title + "\n\n" + masked.markdown()), masked.blocks());
     }
 
     private List<DocumentService.PipelineSourceBlock> pipelineBlocks(ChatWikiSource source) {

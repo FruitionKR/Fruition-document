@@ -462,6 +462,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 - `create`는 기존 Markdown 문서 생성, `append`는 기존 본문 저장(`base_revision`, `revision_write_id`)을 그대로 쓴다. 문서 권한·편집 잠금·revision·이름 검증을 우회하지 않으며 Agent 적용 표·`source`를 쓰지 않는다.
 - 사용자가 본 버전이 마지막 성공 초안이 아니면 `409 MEETING_NOTES_OUTDATED`. 한 버전은 한 번 저장하며 다른 키로 다시 저장하면 `409 MEETING_NOTES_ALREADY_APPLIED`.
 - `append`에서 미리보기 이후 문서가 바뀌었으면 `409 DOCUMENT_REVISION_CHANGED`(저장하지 않음). revision 충돌·권한·잠금·본문 검증·이름 중복처럼 문서가 바뀌지 않은 거절은 저장 선점을 풀어 새 키로 다시 시도할 수 있다.
+- 회의록 본문(초안 또는 사용자가 수정한 `markdown`)은 미리보기·저장 전에 거른다. 원시 HTML 중 서식 태그(`<u>`, `<span>` 등)는 태그만 지우고 글자를 남기며, 줄·칸을 나누던 태그(`<br>`, `<td>` 등)는 공백으로, 실행·삽입 태그(`<script>`, `<img>` 등)는 지우고, 그 밖의 태그는 글자로 보이게 escape한다. HTML 주석은 남긴다. 링크·이미지 주소는 http·https·mailto·상대 경로·이미지 `data:`만 남기고, 그 밖의 주소(`javascript:` 등)는 링크를 빼고 글자만 남긴다. 외부 이미지는 허용한다. 코드 블록과 인라인 코드는 바꾸지 않는다.
 - 응답 `200`: `MeetingNotesResponse`(`status: "applied"`, `applied` 채움).
 
 <a id="ws-api-meetings-meeting-id-live"></a>

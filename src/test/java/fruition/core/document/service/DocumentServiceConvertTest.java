@@ -409,6 +409,24 @@ class DocumentServiceConvertTest {
     }
 
     @Test
+    @DisplayName("페이지 묶음 변환 결과의 원시 HTML과 위험한 링크를 걷어내고 페이지 주석은 남긴다")
+    void batchConvertSanitizesMarkdown() throws Exception {
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
+        stubBatchConvert(parent, source, queue, states);
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any()))
+                .thenReturn(new ConverterClient.Batch(1, 3, 3,
+                        "<!-- page 1 -->\n\n<u>임시명세서</u> [보기](javascript:alert(1))\n", true, true, null));
+
+        documentService.doConvert(7L, parent.getId(), source.getId());
+
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 1 -->\n\n임시명세서 보기\n");
+    }
+
+    @Test
     @DisplayName("이어 붙인 본문이 편집 상한을 넘으면 다음 파트 문서로 넘어가고 파트마다 AI 큐에 등록된다")
     void batchOverEditLimitStartsNextPart() throws Exception {
         var parent = placeholderDocument();
@@ -465,7 +483,7 @@ class DocumentServiceConvertTest {
                 source.getSourceUri(), new ByteArrayInputStream(pdfBytes)));
         when(converterClient.convertPdf(
                 eq("보고서.pdf"), eq(pdfBytes), eq("gemini"), eq("gemini-3.1-flash-lite"), any(java.util.function.BooleanSupplier.class)))
-                .thenReturn("# 변환된 본문\n");
+                .thenReturn("# 변환된 <u>본문</u>\n");  // 저장 전에 원시 HTML을 걷어낸다
         when(postgresDocumentEditStore.save(
                 anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
                 anyString(), any()))
