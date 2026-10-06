@@ -2016,7 +2016,7 @@ paths:
       - Documents
   /api/workspaces/{workspace_id}/documents/{document_id}/original:
     get:
-      description: "MinIO에 저장된 원본 파일을 스트리밍합니다. PDF는 inline, 그 외는 attachment로 반환됩니다."
+      description: "MinIO에 저장된 원본 파일을 스트리밍합니다. PDF와 Markdown은 inline, 그 외는 application/octet-stream 첨부로 반환합니다. PDF가 아닌 응답에는 CSP sandbox를 붙입니다."
       operationId: getOriginal
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a

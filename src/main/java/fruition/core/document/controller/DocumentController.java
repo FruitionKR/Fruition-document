@@ -183,7 +183,7 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.findById(workspaceId, userId, documentId));
     }
 
-    @Operation(summary = "원본 문서 조회", description = "MinIO에 저장된 원본 파일을 스트리밍합니다. PDF는 inline, 그 외는 attachment로 반환됩니다.")
+    @Operation(summary = "원본 문서 조회", description = "MinIO에 저장된 원본 파일을 스트리밍합니다. PDF와 Markdown은 inline, 그 외는 application/octet-stream 첨부로 반환합니다. PDF가 아닌 응답에는 CSP sandbox를 붙입니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "원본 파일 반환"),
         @ApiResponse(responseCode = "404", description = "문서, 원본 파일 또는 워크스페이스를 찾을 수 없음",
