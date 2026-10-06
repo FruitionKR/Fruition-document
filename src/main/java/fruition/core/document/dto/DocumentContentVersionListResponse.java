@@ -34,6 +34,11 @@ public record DocumentContentVersionListResponse(
 
             @JsonProperty("created_at")
             @Schema(description = "저장 시각(ISO-8601 UTC)", example = "2026-08-13T04:25:24.371948Z")
-            Instant createdAt
+            Instant createdAt,
+
+            @JsonProperty("restored_from_version")
+            @Schema(description = "버전 복원으로 만든 버전이면 복원 대상 버전 번호. 일반 저장·AI 적용·기록 이전 버전은 null",
+                    example = "2", nullable = true)
+            Long restoredFromVersion
     ) {}
 }

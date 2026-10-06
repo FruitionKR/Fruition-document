@@ -5,6 +5,7 @@ import fruition.core.document.domain.Document;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.domain.DocumentProcessingState;
 import fruition.core.document.domain.DocumentRole;
+import fruition.core.document.dto.DocumentBlockResponse;
 import fruition.core.document.dto.DocumentBlocksResponse;
 import fruition.core.document.dto.DocumentContentSaveResponse;
 import fruition.core.document.dto.DocumentContentDiffResponse;
@@ -28,7 +29,7 @@ import fruition.shared.idempotency.IdempotencyConflictException;
 import fruition.shared.idempotency.IdempotencyInProgressException;
 import fruition.shared.idempotency.InvalidIdempotencyKeyException;
 import fruition.core.document.exception.MarkdownContentTooLargeException;
-import fruition.core.document.repository.PostgresDocumentEditSaveResult;
+import fruition.core.document.repository.DocumentContentVersionRepository; import fruition.core.document.repository.PostgresDocumentEditSaveResult;
 import fruition.core.document.repository.PostgresDocumentEditStore;
 import fruition.core.document.repository.IngestCommandOutbox;
 import fruition.core.document.repository.DocumentEditStateRepository;
@@ -62,6 +63,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+
+import fruition.core.document.exception.InvalidDocumentFilenameException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -150,7 +153,7 @@ class DocumentServiceBlocksTest {
                 ingestOperationStarter,
                 workspaceAiModelClient, taskWriter, documentWikiRetirement);
         lenient().when(pipelineWikiStateRequester.documentContext(anyString(), anyString()))
-                .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of()));
+                .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(), null));
         // 직접 생성·복제·변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.
         lenient().when(storageProps.getBucket()).thenReturn("test-bucket");
         lenient().when(documentRepository.findByIdAndWorkspaceIdForUpdate(anyString(), anyString()))
@@ -203,8 +206,9 @@ class DocumentServiceBlocksTest {
                 .thenReturn(Optional.of(document));
         when(pipelineWikiStateRequester.documentContext(WORKSPACE_ID, "doc_1f9a74af")).thenReturn(
                 new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(
-                        new PipelineWikiStateRequester.SourceBlock("B0005", "다섯 번째 block 본문"),
-                        new PipelineWikiStateRequester.SourceBlock("B0006", "여섯 번째 block 본문"))));
+                        new PipelineWikiStateRequester.SourceBlock("B0005", null, null, null, null, "다섯 번째 block 본문"),
+                        new PipelineWikiStateRequester.SourceBlock("B0006", null, null, null, null, "여섯 번째 block 본문")),
+                        null));
 
         DocumentBlocksResponse response = documentService.blocks(WORKSPACE_ID, USER_ID, "doc_1f9a74af");
 
@@ -213,6 +217,81 @@ class DocumentServiceBlocksTest {
         assertThat(response.blocks().get(0).blockId()).isEqualTo("B0005");
         assertThat(response.blocks().get(0).text()).isEqualTo("다섯 번째 block 본문");
         assertThat(response.blocks().get(1).blockId()).isEqualTo("B0006");
+        // AI가 위치·스냅샷 해시를 아직 주지 않으면 받은 순서를 유지하고 stale 여부는 알 수 없다.
+        assertThat(response.blocks().get(0).position()).isNull();
+        assertThat(response.sourceContentHash()).isNull();
+        assertThat(response.currentContentHash()).isEqualTo("hash1");
+        assertThat(response.isStale()).isNull();
+    }
+
+    @Test
+    @DisplayName("block은 영구 ID가 아니라 문서 순서로 정렬하고 위치가 없는 block은 뒤에 둔다")
+    void blocks_sortsByPositionAndKeepsLineRange() {
+        stubOwnedWorkspace();
+        Document document = new Document("doc_rbt", WORKSPACE_ID, USER_ID, "rbt.md", "text/markdown", 100L,
+                "sources/documents/doc_rbt/original", "hash-current");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_rbt", WORKSPACE_ID))
+                .thenReturn(Optional.of(document));
+        when(pipelineWikiStateRequester.documentContext(WORKSPACE_ID, "doc_rbt")).thenReturn(
+                new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(
+                        new PipelineWikiStateRequester.SourceBlock("B0001", 1, 1, 1, "heading", "레드블랙트리"),
+                        new PipelineWikiStateRequester.SourceBlock("B0002", null, null, null, null, "위치 없음"),
+                        new PipelineWikiStateRequester.SourceBlock("B0440", 2, 3, 5, "paragraph", "균형 규칙")),
+                        "hash-current"));
+
+        DocumentBlocksResponse response = documentService.blocks(WORKSPACE_ID, USER_ID, "doc_rbt");
+
+        assertThat(response.blocks()).extracting(DocumentBlockResponse::blockId)
+                .containsExactly("B0001", "B0440", "B0002");
+        DocumentBlockResponse paragraph = response.blocks().get(1);
+        assertThat(paragraph.position()).isEqualTo(2);
+        assertThat(paragraph.lineStart()).isEqualTo(3);
+        assertThat(paragraph.lineEnd()).isEqualTo(5);
+        assertThat(paragraph.blockType()).isEqualTo("paragraph");
+        assertThat(response.sourceContentHash()).isEqualTo("hash-current");
+        assertThat(response.isStale()).isFalse();
+    }
+
+    @Test
+    @DisplayName("chat_export 문서는 AI에 보낸 입력 Markdown의 SHA-256과 비교한다")
+    void blocks_chatExport_comparesWithPipelineInputHash() {
+        stubOwnedWorkspace();
+        Document document = new Document("doc_chat", WORKSPACE_ID, USER_ID, "chat.md", "text/markdown", 10L,
+                "sources/documents/doc_chat/original", "session-based-hash", "chat_export");
+        String input = "Q : 질문\nA : 답변\n";
+        document.assignPipelineInput(input, "[]");
+        String inputHash = DocumentEditingRules.markdown(input).contentHash();
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_chat", WORKSPACE_ID))
+                .thenReturn(Optional.of(document));
+        when(pipelineWikiStateRequester.documentContext(WORKSPACE_ID, "doc_chat")).thenReturn(
+                new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(
+                        new PipelineWikiStateRequester.SourceBlock(
+                                "session_1:pair_1", 1, null, null, null, "Q : 질문 A : 답변")),
+                        inputHash));
+
+        DocumentBlocksResponse response = documentService.blocks(WORKSPACE_ID, USER_ID, "doc_chat");
+
+        assertThat(response.currentContentHash()).isEqualTo(inputHash);
+        assertThat(response.isStale()).isFalse();
+    }
+
+    @Test
+    @DisplayName("block을 만든 스냅샷 해시가 현재 문서 해시와 다르면 stale이다")
+    void blocks_differentSnapshotHash_isStale() {
+        stubOwnedWorkspace();
+        Document document = new Document("doc_edited", WORKSPACE_ID, USER_ID, "edited.md", "text/markdown", 100L,
+                "sources/documents/doc_edited/original", "hash-after-edit");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_edited", WORKSPACE_ID))
+                .thenReturn(Optional.of(document));
+        when(pipelineWikiStateRequester.documentContext(WORKSPACE_ID, "doc_edited")).thenReturn(
+                new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(
+                        new PipelineWikiStateRequester.SourceBlock("B0001", 1, 1, 1, "heading", "제목")),
+                        "hash-at-ingest"));
+
+        DocumentBlocksResponse response = documentService.blocks(WORKSPACE_ID, USER_ID, "doc_edited");
+
+        assertThat(response.currentContentHash()).isEqualTo("hash-after-edit");
+        assertThat(response.isStale()).isTrue();
     }
 
     @Test
@@ -340,6 +419,48 @@ class DocumentServiceBlocksTest {
         assertThat(response.documentId()).isEqualTo(document.getId());
         assertThat(response.currentVersion()).isEqualTo(2);
         assertThat(response.versions()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("버전 목록은 복원으로 만든 버전의 복원 출처를 함께 반환하고 일반 저장은 null로 둔다")
+    void listContentVersions_includesRestoredFromVersion() throws Exception {
+        stubOwnedWorkspace();
+        Document document = new Document(
+                "doc_versions_restored", WORKSPACE_ID, USER_ID, "노트.md", "text/markdown", 10,
+                "sources/documents/doc_versions_restored/original", "source-hash");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(
+                document.getId(), WORKSPACE_ID)).thenReturn(Optional.of(document));
+        when(postgresDocumentEditStore.findState(document.getId())).thenReturn(Optional.of(
+                new DocumentEditState(document.getId(), "# 노트", "edit-hash", 5)));
+        Instant createdAt = Instant.parse("2026-10-06T04:25:24Z");
+        when(contentVersionRepository.findSummaries(document.getId())).thenReturn(List.of(
+                versionSummary(5, "hash-5", createdAt, 2L),
+                versionSummary(4, "hash-4", createdAt, null)));
+
+        DocumentContentVersionListResponse response = documentService.listContentVersions(
+                WORKSPACE_ID, USER_ID, document.getId());
+
+        assertThat(response.versions())
+                .extracting(DocumentContentVersionListResponse.Item::version,
+                        DocumentContentVersionListResponse.Item::restoredFromVersion)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(5L, 2L),
+                        org.assertj.core.groups.Tuple.tuple(4L, null));
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules()
+                .valueToTree(response).path("versions");
+        assertThat(json.get(0).path("restored_from_version").asLong()).isEqualTo(2);
+        assertThat(json.get(1).has("restored_from_version")).isTrue();
+        assertThat(json.get(1).path("restored_from_version").isNull()).isTrue();
+    }
+
+    private DocumentContentVersionRepository.Summary versionSummary(
+            long version, String contentHash, Instant createdAt, Long restoredFromVersion) {
+        return new DocumentContentVersionRepository.Summary() {
+            @Override public long getVersion() { return version; }
+            @Override public String getContentHash() { return contentHash; }
+            @Override public String getCreatedBy() { return USER_ID; }
+            @Override public Instant getCreatedAt() { return createdAt; }
+            @Override public Long getRestoredFromVersion() { return restoredFromVersion; }
+        };
     }
 
     @Test
@@ -665,7 +786,7 @@ class DocumentServiceBlocksTest {
         when(storageProps.getBucket()).thenReturn("test-bucket");
         when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.EDITABLE)).thenReturn(-1L);
         MockMultipartFile file = new MockMultipartFile(
-                "file", "메모.txt", "text/plain", "메모 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                "file", "메모.TXT", "text/plain", "메모 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-txt-key", null, file);
@@ -677,6 +798,46 @@ class DocumentServiceBlocksTest {
         assertThat(storedDocument.getValue().getFilename()).isEqualTo("메모.md");
         assertThat(response.editable()).isTrue();
         assertThat(response.documentRole()).isEqualTo(DocumentRole.EDITABLE);
+    }
+
+    @Test
+    void upload_storesMimeFromExtensionNotClientContentType() throws Exception {
+        stubOwnedWorkspace();
+        when(storageProps.getBucket()).thenReturn("test-bucket");
+        when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.EDITABLE)).thenReturn(-1L);
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "노트.md", "text/html", "<script>alert(1)</script>".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        documentService.upload(WORKSPACE_ID, USER_ID, "upload-html-key", null, file);
+
+        ArgumentCaptor<Document> storedDocument = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(storedDocument.capture());
+        assertThat(storedDocument.getValue().getMimeType()).isEqualTo("text/markdown");
+    }
+
+    @Test
+    void upload_rejectsUnsupportedExtensionAndFakePdf() {
+        stubOwnedWorkspace();
+        MockMultipartFile log = new MockMultipartFile(
+                "file", "app.log", "text/plain", "# 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        MockMultipartFile fakePdf = new MockMultipartFile(
+                "file", "자료.pdf", "application/pdf", new byte[]{'M', 'Z', 0, 0, 0});
+
+        assertThatThrownBy(() -> documentService.upload(WORKSPACE_ID, USER_ID, "upload-log", null, log))
+                .isInstanceOf(fruition.core.document.exception.UnsupportedDocumentFileException.class);
+        assertThatThrownBy(() -> documentService.upload(WORKSPACE_ID, USER_ID, "upload-fake-pdf", null, fakePdf))
+                .isInstanceOf(fruition.core.document.exception.UnsupportedDocumentFileException.class);
+        verify(documentRepository, never()).save(any(Document.class));
+    }
+
+    @Test
+    void upload_rejectsControlCharactersInFilename() {
+        stubOwnedWorkspace();
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "노트\r\n가짜 로그.md", "text/markdown", "# 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        assertThatThrownBy(() -> documentService.upload(WORKSPACE_ID, USER_ID, "upload-crlf", null, file))
+                .isInstanceOf(InvalidDocumentFilenameException.class);
     }
 
     @Test
@@ -702,7 +863,7 @@ class DocumentServiceBlocksTest {
         when(storageProps.getBucket()).thenReturn("test-bucket");
         when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.ORIGINAL)).thenReturn(-1L);
         MockMultipartFile file = new MockMultipartFile(
-                "file", "자료.pdf", "application/pdf", new byte[]{1, 2, 3});
+                "file", "자료.pdf", "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-pdf-key", null, file);
@@ -728,8 +889,10 @@ class DocumentServiceBlocksTest {
         when(file.getContentType()).thenReturn("application/pdf");
         long size = 60L * 1024 * 1024;
         when(file.getSize()).thenReturn(size);
-        when(file.getInputStream()).thenAnswer(inv -> new java.io.InputStream() {
-            long remaining = size;
+        byte[] signature = "%PDF-".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        when(file.getInputStream()).thenAnswer(inv -> new java.io.SequenceInputStream(
+                new java.io.ByteArrayInputStream(signature), new java.io.InputStream() {
+            long remaining = size - signature.length;
             public int read() { return remaining-- > 0 ? 0 : -1; }
             public int read(byte[] b, int off, int len) {
                 if (remaining <= 0) return -1;
@@ -738,10 +901,10 @@ class DocumentServiceBlocksTest {
                 remaining -= count;
                 return count;
             }
-        });
+        }));
         documentService.upload(WORKSPACE_ID, USER_ID, "large-pdf-key", null, file);
         verify(file, never()).getBytes();
-        verify(file, times(2)).getInputStream();
+        verify(file, times(3)).getInputStream();
         verify(minioClient).putObject(org.mockito.ArgumentMatchers.argThat(args -> args.objectSize() == size));
     }
 
@@ -1150,6 +1313,7 @@ class DocumentServiceBlocksTest {
                 "write-retry-transient", null);
 
         assertThat(response.changed()).isTrue();
+        verify(contentVersionRepository, never()).markRestoredFrom(anyString(), anyLong(), anyLong());
         verify(postgresDocumentEditStore, times(2)).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
                 eq(1L), eq("write-retry-transient"), eq(USER_ID), isNull());
@@ -1181,6 +1345,7 @@ class DocumentServiceBlocksTest {
         verify(postgresDocumentEditStore).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 예전\n"), anyString(),
                 eq(1L), eq("restore:5:1"), eq(USER_ID), isNull());
+        verify(contentVersionRepository).markRestoredFrom(document.getId(), 2L, 5L);
     }
 
     @Test
@@ -1816,7 +1981,7 @@ class DocumentServiceBlocksTest {
         when(storageProps.getBucket()).thenReturn("test-bucket");
         when(minioClient.putObject(any(PutObjectArgs.class))).thenThrow(new RuntimeException("storage failure"));
         MockMultipartFile file = new MockMultipartFile(
-                "file", "자료.pdf", "application/pdf", new byte[]{1, 2, 3});
+                "file", "자료.pdf", "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 
         assertThatThrownBy(() -> documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, file))
                 .isInstanceOf(DocumentUploadException.class);
@@ -1833,7 +1998,7 @@ class DocumentServiceBlocksTest {
         when(storageProps.getBucket()).thenReturn("test-bucket");
         when(documentRepository.save(any(Document.class))).thenThrow(new RuntimeException("database failure"));
         MockMultipartFile file = new MockMultipartFile(
-                "file", "자료.pdf", "application/pdf", new byte[]{1, 2, 3});
+                "file", "자료.pdf", "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 
         assertThatThrownBy(() -> documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, file))
                 .isInstanceOf(DocumentUploadException.class);
@@ -1855,7 +2020,7 @@ class DocumentServiceBlocksTest {
                 .thenThrow(new RuntimeException("database failure"))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         MockMultipartFile file = new MockMultipartFile(
-                "file", "자료.pdf", "application/pdf", new byte[]{1, 2, 3});
+                "file", "자료.pdf", "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 
         assertThatThrownBy(() -> documentService.upload(
                 WORKSPACE_ID, USER_ID, "upload-key", null, file))

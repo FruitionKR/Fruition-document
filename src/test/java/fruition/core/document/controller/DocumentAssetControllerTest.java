@@ -42,6 +42,7 @@ class DocumentAssetControllerTest {
         assertThat(response.getHeaders().getETag()).isEqualTo("\"hash\"");
         assertThat(response.getHeaders().getCacheControl()).contains("private");
         assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+        assertThat(response.getHeaders().getFirst("Content-Security-Policy")).isEqualTo("sandbox; default-src 'none'");
         assertThat(response.getBody()).isInstanceOf(InputStreamResource.class);
     }
 

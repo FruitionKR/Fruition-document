@@ -97,6 +97,27 @@ class DocumentEditingRulesTest {
     }
 
     @Test
+    @DisplayName("업로드 파일명이 겹치면 확장자 앞에 번호를 붙인다")
+    void uniqueUploadFilename_whenTaken_appendsNumberBeforeExtension() {
+        assertThat(DocumentEditingRules.uniqueUploadFilename(" 보고서.PDF ", java.util.Set.of()).filename())
+                .isEqualTo("보고서.PDF");
+        assertThat(DocumentEditingRules.uniqueUploadFilename(
+                "보고서.PDF", java.util.Set.of("보고서.pdf", "보고서 (2).pdf")).filename())
+                .isEqualTo("보고서 (3).PDF");
+    }
+
+    @Test
+    @DisplayName("업로드 파일명이 겹치지 않으면 원래 이름을 그대로 둔다")
+    void uniqueUploadFilename_whenFree_keepsOriginalName() {
+        assertThat(DocumentEditingRules.uniqueUploadFilename("보고서 .pdf", java.util.Set.of("보고서.pdf")).filename())
+                .isEqualTo("보고서 .pdf");
+        assertThat(DocumentEditingRules.uniqueUploadFilename("..pdf", java.util.Set.of()).filename())
+                .isEqualTo("..pdf");
+        assertThat(DocumentEditingRules.uniqueUploadFilename("보고서 .pdf", java.util.Set.of("보고서 .pdf")).filename())
+                .isEqualTo("보고서 (2).pdf");
+    }
+
+    @Test
     @DisplayName("이름이 비어 있으면 번호를 붙이지 않는다")
     void uniqueFilename_whenFree_keepsName() {
         DocumentEditingRules.Filename result =

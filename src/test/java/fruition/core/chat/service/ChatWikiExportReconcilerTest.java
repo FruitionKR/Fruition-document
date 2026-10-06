@@ -78,7 +78,8 @@ class ChatWikiExportReconcilerTest {
                 List.of(new PipelineWikiStateRequester.DocumentPage(
                         "wiki_1", "source", pageTitle, "title", "source_of", 1.0)),
                 // 파이프라인이 새로 부여한 block ID다. 후처리는 더 이상 이 값을 보지 않는다.
-                List.of(new PipelineWikiStateRequester.SourceBlock("B0001", "Q : 질문\nA : 답변")));
+                List.of(new PipelineWikiStateRequester.SourceBlock("B0001", null, null, null, null, "Q : 질문\nA : 답변")),
+                null);
     }
 
     @Test
@@ -234,7 +235,7 @@ class ChatWikiExportReconcilerTest {
         when(documentRepository.findAllByOriginAndStatusAndReconciledAtIsNull("chat_export", DocumentStatus.completed))
                 .thenReturn(List.of(doc));
         when(wikiStateRequester.documentContext("ws_1", "chatdoc_1")).thenReturn(
-                new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of()));
+                new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(), null));
 
         reconciler.reconcile();
 

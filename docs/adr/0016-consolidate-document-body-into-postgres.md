@@ -1,6 +1,6 @@
 # ADR-0016: 문서 본문·편집 저장소를 PostgreSQL로 통합
 
-- 상태: 적용됨
+- 상태: 적용됨 (5절의 1 replica 전제·다중 publisher 미도입 결정은 [ADR-0025](0025-multi-replica-document-edit-outbox.md)로 대체)
 - 관련: [ADR-0001](https://github.com/FruitionKR/Fruition-flatform/blob/main/docs/adr/0001-choose-primary-database.md), [ADR-0003](https://github.com/FruitionKR/Fruition-flatform/blob/main/docs/adr/0003-choose-event-processing-strategy.md), V39 `consolidate_document_edit_storage`
 - 대체: ADR-0001의 MongoDB 문서 본문 저장 결정과 ADR-0003의 MongoDB 편집 outbox 결정
 
@@ -110,6 +110,7 @@ Kafka 전송이 성공한 뒤에만 `published = true`와 `published_at`을 갱�
 
 현재 document service와 edit-event consumer가 각각 1 replica인 운영 전제를 유지한다. 다중
 publisher를 위한 claim/lease나 `FOR UPDATE SKIP LOCKED`는 이번 결정에 추가하지 않는다.
+(대체됨: 다중 replica 운영과 `FOR UPDATE SKIP LOCKED` 발행은 [ADR-0025](0025-multi-replica-document-edit-outbox.md)를 따른다.)
 
 ## 대안과 기각 사유
 

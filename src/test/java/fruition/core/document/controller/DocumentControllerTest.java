@@ -93,9 +93,9 @@ class DocumentControllerTest {
 
     @Test
     void getBlocks_existingDocument_returnsDocumentIdAndBlocksInOrder() throws Exception {
-        DocumentBlocksResponse response = new DocumentBlocksResponse("doc_1f9a74af", List.of(
-                new DocumentBlockResponse("B0005", "원본 문서의 다섯 번째 block 본문"),
-                new DocumentBlockResponse("B0006", "원본 문서의 여섯 번째 block 본문")
+        DocumentBlocksResponse response = new DocumentBlocksResponse("doc_1f9a74af", "hash-a", "hash-b", true, List.of(
+                new DocumentBlockResponse("B0005", 1, 3, 5, "paragraph", "원본 문서의 다섯 번째 block 본문"),
+                new DocumentBlockResponse("B0006", null, null, null, null, "원본 문서의 여섯 번째 block 본문")
         ));
         when(documentService.blocks(WORKSPACE_ID, USER_ID, "doc_1f9a74af")).thenReturn(response);
 
@@ -105,7 +105,15 @@ class DocumentControllerTest {
                 .andExpect(jsonPath("$.document_id").value("doc_1f9a74af"))
                 .andExpect(jsonPath("$.blocks[0].block_id").value("B0005"))
                 .andExpect(jsonPath("$.blocks[0].text").value("원본 문서의 다섯 번째 block 본문"))
-                .andExpect(jsonPath("$.blocks[1].block_id").value("B0006"));
+                .andExpect(jsonPath("$.blocks[1].block_id").value("B0006"))
+                .andExpect(jsonPath("$.source_content_hash").value("hash-a"))
+                .andExpect(jsonPath("$.current_content_hash").value("hash-b"))
+                .andExpect(jsonPath("$.is_stale").value(true))
+                .andExpect(jsonPath("$.blocks[0].position").value(1))
+                .andExpect(jsonPath("$.blocks[0].line_start").value(3))
+                .andExpect(jsonPath("$.blocks[0].line_end").value(5))
+                .andExpect(jsonPath("$.blocks[0].block_type").value("paragraph"))
+                .andExpect(jsonPath("$.blocks[1].line_start").value(org.hamcrest.Matchers.nullValue()));
     }
 
     @Test
@@ -215,6 +223,35 @@ class DocumentControllerTest {
 
         verify(documentService).createMarkdown(
                 eq(WORKSPACE_ID), eq(USER_ID), eq("create-key"), any(MarkdownDocumentCreateRequest.class));
+    }
+
+    @Test
+    void getOriginal_servesLegacyUnknownMimeAsAttachment() throws Exception {
+        when(documentService.getOriginal(WORKSPACE_ID, USER_ID, "doc_legacy")).thenReturn(
+                new fruition.core.document.dto.DocumentOriginalResult(
+                        "text/html", "노트\".md", new java.io.ByteArrayInputStream(new byte[0])));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/documents/doc_legacy/original")
+                        .header("Authorization", bearerToken()))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "application/octet-stream"))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, containsString("attachment;")))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, containsString("filename*=UTF-8''")))
+                .andExpect(header().string("Content-Security-Policy", "sandbox; default-src 'none'"));
+    }
+
+    @Test
+    void getOriginal_servesPdfInlineWithoutSandbox() throws Exception {
+        when(documentService.getOriginal(WORKSPACE_ID, USER_ID, "doc_pdf")).thenReturn(
+                new fruition.core.document.dto.DocumentOriginalResult(
+                        "application/pdf", "자료.pdf", new java.io.ByteArrayInputStream(new byte[0])));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/documents/doc_pdf/original")
+                        .header("Authorization", bearerToken()))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "application/pdf"))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, containsString("inline;")))
+                .andExpect(header().doesNotExist("Content-Security-Policy"));
     }
 
     @Test

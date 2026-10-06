@@ -153,6 +153,21 @@ class DocumentAssetValidatorTest {
         assertThat(validated.get(second).width()).isEqualTo(4);
     }
 
+    @Test
+    void validate_readsDimensionsFromHeaderWithoutDecodingPixels() throws Exception {
+        // 헤더만 남기고 픽셀 데이터를 잘라도 크기를 읽는다. 디코딩했다면 손상 이미지로 거절됐을 것이다.
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(8000, 6000, BufferedImage.TYPE_BYTE_BINARY), "png", output);
+        byte[] png = output.toByteArray();
+        byte[] headerOnly = java.util.Arrays.copyOf(png, 33);
+
+        var result = validator.validate(new MockMultipartFile(
+                "attachment", "large.png", "image/png", headerOnly));
+
+        assertThat(result.width()).isEqualTo(8000);
+        assertThat(result.height()).isEqualTo(6000);
+    }
+
     private byte[] imageBytes(String format, int width, int height) throws Exception {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         ByteArrayOutputStream output = new ByteArrayOutputStream();

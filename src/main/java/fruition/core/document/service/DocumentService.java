@@ -25,6 +25,7 @@ import fruition.shared.idempotency.IdempotencyConflictException;
 import fruition.shared.idempotency.IdempotencyInProgressException;
 import fruition.core.document.exception.InvalidMarkdownContentException;
 import fruition.core.document.exception.MarkdownContentTooLargeException;
+import fruition.core.document.exception.UnsupportedDocumentFileException;
 import fruition.core.document.dto.DocumentDetailResponse;
 import fruition.core.document.dto.DocumentContentSaveResponse;
 import fruition.core.document.dto.DocumentContentDiffResponse;
@@ -92,6 +93,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.Arrays; import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -108,6 +110,11 @@ public class DocumentService {
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
     private static final String INITIAL_NOTE_FILENAME = "새 노트.md";
     private static final String CONVERT_PLACEHOLDER_MARKDOWN = "PDF 변환 중...\n";
+    // 크기 상한을 넘은 변환 이미지 자리 표시. 정규식·치환 특수 문자가 없는 값이어야 한다.
+    private static final String OVERSIZED_CONVERTED_IMAGE = "fruition-oversized-converted-image";
+    private static final String PDF_MIME_TYPE = "application/pdf";
+    private static final String MARKDOWN_MIME_TYPE = "text/markdown";
+    private static final byte[] PDF_SIGNATURE = "%PDF-".getBytes(StandardCharsets.US_ASCII);
 
     private final DocumentRepository documentRepository;
     private final FolderRepository folderRepository;
@@ -216,9 +223,13 @@ public class DocumentService {
         try {
             String filename = file.getOriginalFilename();
             validateFilename(filename);
+            // txt는 내용상 Markdown이므로 .md 이름의 편집 문서로 받는다.
             filename = filename.trim().replaceFirst("(?i)\\.txt$", ".md");
-            String mimeType = resolveMimeType(file);
-            boolean markdownUpload = isMarkdown(filename, mimeType);
+            String mimeType = resolveMimeType(filename);
+            boolean markdownUpload = MARKDOWN_MIME_TYPE.equals(mimeType);
+            if (!markdownUpload && !(file instanceof StoredOriginal)) {
+                requirePdfSignature(file);
+            }
             DocumentEditingRules.MarkdownContent markdownContent =
                     markdownUpload ? readUploadedMarkdown(file) : null;
             String contentHash = markdownUpload ? markdownContent.contentHash()
@@ -232,6 +243,11 @@ public class DocumentService {
             if (replay.isPresent()) {
                 return replay.get();
             }
+
+            // 같은 폴더에 같은 이름이 있으면 거절하지 않고 "이름 (2).pdf"처럼 번호를 붙인다.
+            // 동시에 같은 이름을 고르는 경합은 DB 고유 제약이 막는다.
+            String storedFilename = DocumentEditingRules.uniqueUploadFilename(filename,
+                    new java.util.HashSet<>(documentRepository.findActiveSiblingNames(workspaceId, folderId))).filename();
 
             log.info("[문서 업로드 요청] workspaceId={} userId={} filename={} contentType={} size={}",
                     workspaceId, userId, file.getOriginalFilename(), file.getContentType(), file.getSize());
@@ -261,7 +277,7 @@ public class DocumentService {
                     documentId,
                     workspaceId,
                     userId,
-                    filename.trim(),
+                    storedFilename,
                     mimeType,
                     file.getSize(),
                     objectPath,
@@ -286,7 +302,8 @@ public class DocumentService {
                  | IdempotencyConflictException
                  | IdempotencyInProgressException
                  | InvalidMarkdownContentException
-                 | MarkdownContentTooLargeException e) {
+                 | MarkdownContentTooLargeException
+                 | UnsupportedDocumentFileException e) {
             throw e;
         } catch (Exception e) {
             if (objectStored) {
@@ -442,21 +459,24 @@ public class DocumentService {
         }
     }
 
-    /** txt는 .md 이름의 Markdown 편집 문서로 받으므로 text/markdown으로 정규화한다. */
-    private String resolveMimeType(MultipartFile file) {
-        String contentType = file.getContentType();
-        String filename = file.getOriginalFilename();
-        String normalizedFilename = filename == null ? "" : filename.toLowerCase(java.util.Locale.ROOT);
-        if ("text/plain".equals(contentType) || normalizedFilename.endsWith(".txt")) {
-            return "text/markdown";
-        }
-        if (contentType != null && !contentType.equals("application/octet-stream")) {
-            return contentType;
+    /** 클라이언트가 보낸 Content-Type은 믿지 않고, 확장자로 서버가 정한 MIME만 저장한다. */
+    private String resolveMimeType(String filename) {
+        String normalizedFilename = filename.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalizedFilename.endsWith(".pdf")) {
+            return PDF_MIME_TYPE;
         }
         if (normalizedFilename.endsWith(".md") || normalizedFilename.endsWith(".markdown")) {
-            return "text/markdown";
+            return MARKDOWN_MIME_TYPE;
         }
-        return contentType != null ? contentType : "application/octet-stream";
+        throw new UnsupportedDocumentFileException("PDF, Markdown 또는 txt 파일만 업로드할 수 있습니다.");
+    }
+
+    private void requirePdfSignature(MultipartFile file) throws IOException {
+        try (InputStream stream = file.getInputStream()) {
+            if (!Arrays.equals(stream.readNBytes(PDF_SIGNATURE.length), PDF_SIGNATURE)) {
+                throw new UnsupportedDocumentFileException("PDF 파일 내용이 올바르지 않습니다.");
+            }
+        }
     }
 
     private DocumentUploadResponse createMarkdownDocument(
@@ -511,14 +531,6 @@ public class DocumentService {
                 && folderRepository.findActiveForUpdate(folderId, workspaceId).isEmpty()) {
             throw new HierarchyItemNotFoundException("대상 폴더를 찾을 수 없습니다.");
         }
-    }
-
-    private boolean isMarkdown(String filename, String mimeType) {
-        String normalizedFilename = filename.toLowerCase(java.util.Locale.ROOT);
-        return "text/markdown".equals(mimeType)
-                || "text/x-markdown".equals(mimeType)
-                || normalizedFilename.endsWith(".md")
-                || normalizedFilename.endsWith(".markdown");
     }
 
     private DocumentUploadResponse toUploadResponse(Document document, boolean editable) {
@@ -983,10 +995,11 @@ public class DocumentService {
             String markdown = converterClient.convertPdf(
                     source.getFilename(), pdfBytes, aiModel.provider(), aiModel.model(),
                     () -> taskWriter.active("convert:" + documentId));
-            DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(markdown);
-            applyConvertedMarkdown(queueId, placeholder, content);
-            log.info("[문서 변환 완료] documentId={} sourceDocumentId={} markdownByteSize={}",
-                    documentId, sourceDocumentId, content.bytes().length);
+            DocumentEditingRules.MarkdownContent content = applyConvertedMarkdown(queueId, placeholder, markdown);
+            if (content != null) {
+                log.info("[문서 변환 완료] documentId={} sourceDocumentId={} markdownByteSize={}",
+                        documentId, sourceDocumentId, content.bytes().length);
+            }
         } catch (Exception e) {
             // DocumentConvertException 메시지에 변환기 상태 코드(422/504/503 등) 원인이 담겨 온다.
             Instant now = Instant.now();
@@ -1095,8 +1108,9 @@ public class DocumentService {
             if (!taskWriter.join("convert:" + parent.getId())) return null;
             var checkpoint = convertQueueRepository.findById(queueId).orElseThrow();
             if (checkpoint.getCompletedPages() >= batch.page_end()) return null;
-            String markdown = ConvertedMarkdownChunks.renumberPages(
-                    externalizeConvertedImages(parent, batch.markdown()), batch.page_start());
+            // data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다.
+            String markdown = ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitize(
+                    externalizeConvertedImages(parent, batch.markdown())), batch.page_start());
             // PDF 하나를 문서 하나로 이어 붙이고, 편집 문서 상한을 넘을 때만 다음 파트 문서로 넘어간다.
             // 버전 기록은 변환 완료 시 한 번만 남겨 묶음마다 누적 본문이 쌓이지 않게 한다.
             var parts = documentRepository.findConvertedParts(parent.getWorkspaceId(), parent.getId());
@@ -1159,12 +1173,20 @@ public class DocumentService {
                 .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
     }
 
+    /**
+     * 변환 결과의 {@code data:} 이미지를 asset으로 저장하고 내부 주소로 바꾼다. 업로드 PDF는 사용자가 만들 수 있어
+     * 첨부 이미지와 같은 크기 상한을 둔다. 넘는 이미지는 변환 전체를 실패시키지 않고 생략 문구로 바꾼다.
+     */
     private String externalizeConvertedImages(Document parent, String markdown) {
         var pattern = java.util.regex.Pattern.compile("data:(image/(?:png|jpeg|gif));base64,([A-Za-z0-9+/=]+)");
         var matcher = pattern.matcher(markdown);
         StringBuilder output = new StringBuilder();
         while (matcher.find()) {
             byte[] bytes = java.util.Base64.getDecoder().decode(matcher.group(2));
+            if (bytes.length > DocumentAssetValidator.MAX_FILE_BYTES) {
+                matcher.appendReplacement(output, OVERSIZED_CONVERTED_IMAGE);
+                continue;
+            }
             String hash = sha256(bytes);
             UUID id = UUID.nameUUIDFromBytes((parent.getWorkspaceId() + ":" + hash).getBytes(StandardCharsets.UTF_8));
             String key = "assets/" + parent.getWorkspaceId() + "/" + id + "/content";
@@ -1176,6 +1198,10 @@ public class DocumentService {
                     int width, height;
                     try { reader.setInput(image); width = reader.getWidth(0); height = reader.getHeight(0); }
                     finally { reader.dispose(); }
+                    if (width > DocumentAssetValidator.MAX_DIMENSION || height > DocumentAssetValidator.MAX_DIMENSION) {
+                        matcher.appendReplacement(output, OVERSIZED_CONVERTED_IMAGE);
+                        continue;
+                    }
                     RetryingObjectPut.put(minioClient, storageProps.getBucket(), key, bytes, matcher.group(1));
                     registerMinioRollbackCleanup(key);
                     assetRepository.save(new fruition.core.document.domain.DocumentAsset(id, parent.getWorkspaceId(),
@@ -1186,7 +1212,10 @@ public class DocumentService {
                     "/api/workspaces/" + parent.getWorkspaceId() + "/assets/" + id + "/content"));
         }
         matcher.appendTail(output);
-        return output.toString();
+        // 생략한 이미지는 이미지·링크 문법째 문구로 바꾸고, 문법 밖에 남은 표시는 지운다.
+        return output.toString()
+                .replaceAll("!?\\[[^\\]\\n]*\\]\\(" + OVERSIZED_CONVERTED_IMAGE + "\\)", "(이미지가 너무 커서 생략됨)")
+                .replace(OVERSIZED_CONVERTED_IMAGE, "");
     }
 
     private byte[] readOriginalBytes(Document source) {
@@ -1205,17 +1234,23 @@ public class DocumentService {
     }
 
     /**
-     * 변환 Markdown을 placeholder 문서에 반영한다. 시스템 쓰기라 revision 충돌 우려가 없어 base_revision 1로
+     * 변환 Markdown을 placeholder 문서에 반영하고 저장한 본문을 돌려준다(작업이 취소됐으면 null).
+     * 묶음 경로와 같이 data: 이미지를 asset으로 옮겨 크기·해상도 상한을 적용하고, 저장·asset 참조를 한
+     * 트랜잭션에 묶어 저장이 실패하면 옮긴 이미지도 함께 되돌린다.
+     *
+     * <p>시스템 쓰기라 revision 충돌 우려가 없어 base_revision 1로
      * 저장하고, write_id({@code convert:<queueId>}) 재시도는 PostgreSQL write receipt가 멱등하게 처리한다.
      */
-    private void applyConvertedMarkdown(
+    private DocumentEditingRules.MarkdownContent applyConvertedMarkdown(
             long queueId,
             Document placeholder,
-            DocumentEditingRules.MarkdownContent content
+            String convertedMarkdown
     ) {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
-        executeWithSaveRetry(() -> saveTransaction.execute(status -> {
+        return executeWithSaveRetry(() -> saveTransaction.execute(status -> {
             if (!taskWriter.join("convert:" + placeholder.getId())) return null;
+            DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(
+                    AiMarkdownSanitizer.sanitize(externalizeConvertedImages(placeholder, convertedMarkdown)));
             PostgresDocumentEditSaveResult result = postgresDocumentEditStore.save(
                     placeholder.getWorkspaceId(),
                     placeholder.getId(),
@@ -1231,9 +1266,11 @@ public class DocumentService {
                 Instant now = Instant.now();
                 documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc ->
                         doc.completeConvert(content.contentHash(), content.bytes().length, now));
+                assetReferenceSynchronizer.synchronize(placeholder.getId(), placeholder.getWorkspaceId(),
+                        assetReferenceParser.parse(content.markdown()));
             }
             taskWriter.complete("convert:" + placeholder.getId());
-            return null;
+            return content;
         }));
     }
 
@@ -1393,7 +1430,7 @@ public class DocumentService {
             String applyOperationId
     ) {
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                source, applyOperationId, false);
+                source, applyOperationId, false, null);
     }
 
     private DocumentContentSaveResponse saveContent(
@@ -1405,13 +1442,14 @@ public class DocumentService {
             String revisionWriteId,
             String source,
             String applyOperationId,
-            boolean applyOperationClaimed
+            boolean applyOperationClaimed,
+            Long restoredFromVersion
     ) {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
         try {
             return executeWithSaveRetry(() -> saveTransaction.execute(status -> saveContentInTransaction(
                     workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                    source, applyOperationId, applyOperationClaimed)));
+                    source, applyOperationId, applyOperationClaimed, restoredFromVersion)));
         } catch (DocumentVersionConflictException conflict) {
             if (applyOperationId != null && !applyOperationId.isBlank()) {
                 recordConflictInIndependentTransaction(
@@ -1441,7 +1479,7 @@ public class DocumentService {
         }
         return saveContentInTransaction(
                 workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                source, null, false);
+                source, null, false, null);
     }
 
     private DocumentContentSaveResponse saveContentInTransaction(
@@ -1453,7 +1491,8 @@ public class DocumentService {
             String revisionWriteId,
             String source,
             String applyOperationId,
-            boolean applyOperationClaimed
+            boolean applyOperationClaimed,
+            Long restoredFromVersion
     ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         if (applyOperationId != null && !applyOperationId.isBlank()
@@ -1522,6 +1561,9 @@ public class DocumentService {
             projectContentVersions(documentId, content.markdown(), result);
         }
         if (result.changed()) {
+            if (restoredFromVersion != null) {
+                contentVersionRepository.markRestoredFrom(documentId, result.revision(), restoredFromVersion);
+            }
             // 재ingest 필요 판단용 projection: 목록 API가 PG만으로 현재 편집본 해시를 비교할 수 있게 한다.
             documentRepository.updateCurrentContentHash(documentId, result.contentHash(), result.updatedAt());
             // 이미지를 첨부하지 않는 저장에서도 본문에 남은 관리 이미지를 기준으로 참조를 맞춘다.
@@ -1647,7 +1689,7 @@ public class DocumentService {
                 assetRepository.saveAll(assets);
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),
-                        baseVersion, revisionWriteId, null, applyOperationId, false);
+                        baseVersion, revisionWriteId, null, applyOperationId, false, null);
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
                     assetRepository.deleteAllInBatch(assets);
@@ -1738,7 +1780,8 @@ public class DocumentService {
                         "현재 Markdown 편집 상태를 찾을 수 없습니다."));
         List<DocumentContentVersionListResponse.Item> items = contentVersionRepository.findSummaries(documentId).stream()
                 .map(s -> new DocumentContentVersionListResponse.Item(
-                        s.getVersion(), s.getContentHash(), s.getCreatedBy(), s.getCreatedAt()))
+                        s.getVersion(), s.getContentHash(), s.getCreatedBy(), s.getCreatedAt(),
+                        s.getRestoredFromVersion()))
                 .toList();
         return new DocumentContentVersionListResponse(documentId, editRevision, items);
     }
@@ -1788,7 +1831,10 @@ public class DocumentService {
                 target.getMarkdown(),
                 baseVersion,
                 "restore:" + version + ":" + baseVersion,
-                null
+                null,
+                null,
+                false,
+                version
         );
     }
 
@@ -2123,15 +2169,29 @@ public class DocumentService {
 
     public DocumentBlocksResponse blocks(String workspaceId, String userId, String documentId) {
         verifyWorkspaceOwnership(workspaceId, userId);
-        documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+        Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
 
-        List<DocumentBlockResponse> blocks = pipelineWikiStateRequester.documentContext(workspaceId, documentId)
-                .sourceBlocks().stream()
-                .map(block -> new DocumentBlockResponse(block.blockId(), block.text()))
+        PipelineWikiStateRequester.DocumentWikiContext context =
+                pipelineWikiStateRequester.documentContext(workspaceId, documentId);
+        // block_id는 영구 ID라 문서 순서와 다르다. 위치가 없는 block은 받은 순서대로 뒤에 둔다.
+        List<DocumentBlockResponse> blocks = context.sourceBlocks().stream()
+                .sorted(Comparator.comparing(PipelineWikiStateRequester.SourceBlock::position,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .map(block -> new DocumentBlockResponse(block.blockId(), block.position(), block.lineStart(),
+                        block.lineEnd(), block.blockType(), block.text()))
                 .toList();
+        // AI는 block을 만든 ingest 입력 Markdown의 SHA-256을 준다. 편집 문서의 current_content_hash는 같은 방식이다.
+        // chat_export는 current_content_hash가 세션 기반이라, AI에 보낸 입력 Markdown의 해시와 비교한다.
+        String sourceContentHash = context.sourceContentHash();
+        String currentContentHash = "chat_export".equals(document.getOrigin())
+                ? Optional.ofNullable(document.getPipelineInputMarkdown())
+                        .map(markdown -> sha256(markdown.getBytes(StandardCharsets.UTF_8)))
+                        .orElse(null)
+                : document.getCurrentContentHash();
+        Boolean stale = sourceContentHash == null ? null : !sourceContentHash.equals(currentContentHash);
 
-        return new DocumentBlocksResponse(documentId, blocks);
+        return new DocumentBlocksResponse(documentId, sourceContentHash, currentContentHash, stale, blocks);
     }
 
     public DocumentOriginalResult getOriginal(String workspaceId, String userId, String documentId) {
@@ -2172,7 +2232,7 @@ public class DocumentService {
         if (trimmed.isEmpty() || trimmed.length() > 255) {
             throw new InvalidDocumentFilenameException("문서 이름은 1자 이상 255자 이하여야 합니다.");
         }
-        if (trimmed.contains("/") || trimmed.contains("\\") || trimmed.indexOf('\0') >= 0) {
+        if (trimmed.contains("/") || trimmed.contains("\\") || trimmed.codePoints().anyMatch(Character::isISOControl)) {
             throw new InvalidDocumentFilenameException("문서 이름에 허용되지 않는 문자가 포함되어 있습니다.");
         }
     }

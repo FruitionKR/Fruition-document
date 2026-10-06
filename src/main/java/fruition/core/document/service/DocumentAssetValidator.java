@@ -7,12 +7,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -56,7 +58,7 @@ public class DocumentAssetValidator {
             ImageType type = detect(bytes);
             Dimensions dimensions = type == ImageType.WEBP
                     ? webpDimensions(bytes)
-                    : decodedDimensions(bytes);
+                    : headerDimensions(bytes);
             if (dimensions.width() > MAX_DIMENSION || dimensions.height() > MAX_DIMENSION) {
                 throw tooLarge("이미지의 가로와 세로는 16,384px를 초과할 수 없습니다.");
             }
@@ -79,13 +81,21 @@ public class DocumentAssetValidator {
         throw new UnsupportedDocumentAssetException("PNG, JPEG, WebP, GIF 이미지만 첨부할 수 있습니다.");
     }
 
-    private Dimensions decodedDimensions(byte[] bytes) {
-        try {
-            BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
-            if (image == null || image.getWidth() < 1 || image.getHeight() < 1) {
-                throw invalid("손상되었거나 해석할 수 없는 이미지입니다.");
+    /**
+     * 헤더에서 크기만 읽고 픽셀은 디코딩하지 않는다. 작은 파일이 거대한 픽셀 버퍼로 풀리는 것을 막는다.
+     * 원본 bytes를 그대로 저장하므로 디코딩은 안전성을 더하지 않는다. 응답의 타입 고정·nosniff·CSP가 막는다.
+     */
+    private Dimensions headerDimensions(byte[] bytes) {
+        try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) throw invalid("손상되었거나 해석할 수 없는 이미지입니다.");
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(input, true, true);
+                return dimensions(reader.getWidth(0), reader.getHeight(0));
+            } finally {
+                reader.dispose();
             }
-            return new Dimensions(image.getWidth(), image.getHeight());
         } catch (IOException exception) {
             throw invalid("손상되었거나 해석할 수 없는 이미지입니다.");
         }

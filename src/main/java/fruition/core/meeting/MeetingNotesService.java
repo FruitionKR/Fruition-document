@@ -18,6 +18,7 @@ import fruition.core.document.dto.MarkdownDocumentCreateRequest;
 import fruition.core.document.repository.PostgresDocumentEditStore;
 import fruition.core.document.service.DocumentEditLockService;
 import fruition.core.document.service.DocumentService;
+import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.shared.util.DuplicateResourceName;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -318,8 +319,10 @@ public class MeetingNotesService {
                 new MeetingException(HttpStatus.CONFLICT, "DOCUMENT_NOT_EDITABLE", "편집 가능한 Markdown 본문을 찾을 수 없습니다."));
     }
 
+    /** 미리보기·저장·재시도 비교가 모두 이 본문을 쓴다. AI 초안이라 원시 HTML·위험한 링크를 걷어낸다. */
     private String body(MeetingNotesRepository.Note note, String editedMarkdown) {
-        return editedMarkdown != null && !editedMarkdown.isBlank() ? editedMarkdown.strip() : render(result(note));
+        return AiMarkdownSanitizer.sanitize(
+                editedMarkdown != null && !editedMarkdown.isBlank() ? editedMarkdown.strip() : render(result(note)));
     }
 
     /** 기존 본문 끝에 빈 줄 하나를 두고 붙인다. 미리보기와 저장이 같은 규칙을 쓴다. */

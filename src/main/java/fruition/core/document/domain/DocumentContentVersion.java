@@ -30,6 +30,10 @@ public class DocumentContentVersion {
     @Column(name = "operation_id")
     private String operationId;
 
+    /** 버전 복원으로 만든 버전이면 복원 대상 버전 번호. 그 밖의 저장이면 NULL이다. */
+    @Column(name = "restored_from_version")
+    private Long restoredFromVersion;
+
     protected DocumentContentVersion() {}
 
     public DocumentContentVersion(String documentId, long version, String markdown,
@@ -48,4 +52,5 @@ public class DocumentContentVersion {
     public String getCreatedBy() { return createdBy; }
     public Instant getCreatedAt() { return createdAt; }
     public String getOperationId() { return operationId; }
+    public Long getRestoredFromVersion() { return restoredFromVersion; }
 }

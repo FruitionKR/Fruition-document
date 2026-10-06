@@ -197,6 +197,19 @@ class MeetingNotesIntegrationTest {
     }
 
     @Test
+    void create_sanitizesNotesMarkdownAndRetriesWithSameBody() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        generated(meetingId, "k1");
+        String body = "{\"mode\":\"create\",\"markdown\":\"# 회의록\\n\\n<u>결정</u> [보기](javascript:alert(1))\"}";
+
+        String documentId = json(apply(meetingId, 1, "a1", body).andExpect(status().isOk()))
+                .path("applied").path("document_id").asText();
+        apply(meetingId, 1, "a1", body).andExpect(status().isOk());  // 거른 본문으로 기록해 재시도도 같은 요청이다
+
+        assertThat(markdownOf(documentId)).isEqualTo("# 회의록\n\n결정 보기");
+    }
+
+    @Test
     void append_mergesOnceAndRejectsChangedDocument() throws Exception {
         String documentId = createDocument("# 주간 회의\n\n- 기존 본문");
         String meetingId = meetingWithTranscript(documentId, "finished");
