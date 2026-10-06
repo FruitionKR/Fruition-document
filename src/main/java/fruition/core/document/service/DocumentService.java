@@ -242,6 +242,11 @@ public class DocumentService {
                 return replay.get();
             }
 
+            // 같은 폴더에 같은 이름이 있으면 거절하지 않고 "이름 (2).pdf"처럼 번호를 붙인다.
+            // 동시에 같은 이름을 고르는 경합은 DB 고유 제약이 막는다.
+            String storedFilename = DocumentEditingRules.uniqueUploadFilename(filename,
+                    new java.util.HashSet<>(documentRepository.findActiveSiblingNames(workspaceId, folderId))).filename();
+
             log.info("[문서 업로드 요청] workspaceId={} userId={} filename={} contentType={} size={}",
                     workspaceId, userId, file.getOriginalFilename(), file.getContentType(), file.getSize());
 
@@ -270,7 +275,7 @@ public class DocumentService {
                     documentId,
                     workspaceId,
                     userId,
-                    filename.trim(),
+                    storedFilename,
                     mimeType,
                     file.getSize(),
                     objectPath,

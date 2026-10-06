@@ -82,17 +82,30 @@ final class DocumentEditingRules {
      * 복제의 {@code 복사본 (N)}과 달리 원래 이름을 그대로 두고 구분만 더한다.
      */
     static Filename uniqueFilename(String displayName, Set<String> existingNormalizedFilenames) {
+        return uniqueFilename(displayName, MARKDOWN_EXTENSION, existingNormalizedFilenames);
+    }
+
+    /** 업로드 파일처럼 확장자가 정해진 이름에 쓴다. 번호는 확장자 앞에 붙는다({@code a (2).pdf}). */
+    static Filename uniqueUploadFilename(String filename, Set<String> existingNormalizedFilenames) {
+        String trimmed = filename.trim();
+        String extension = extensionOf(trimmed);
+        return uniqueFilename(trimmed.substring(0, trimmed.length() - extension.length()), extension,
+                existingNormalizedFilenames);
+    }
+
+    private static Filename uniqueFilename(String displayName, String extension,
+                                           Set<String> existingNormalizedFilenames) {
         String baseName = normalizeDisplayName(displayName);
         for (int number = 1; ; number++) {
             String suffix = number == 1 ? "" : " (" + number + ")";
-            int maxBaseLength = MAX_FILENAME_LENGTH - suffix.length() - MARKDOWN_EXTENSION.length();
+            int maxBaseLength = MAX_FILENAME_LENGTH - suffix.length() - extension.length();
             int baseCodePointCount = baseName.codePointCount(0, baseName.length());
             int endIndex = baseCodePointCount > maxBaseLength
                     ? baseName.offsetByCodePoints(0, maxBaseLength)
                     : baseName.length();
             String truncatedBase = baseName.substring(0, endIndex).stripTrailing();
             String candidate = truncatedBase + suffix;
-            String filename = candidate + MARKDOWN_EXTENSION;
+            String filename = candidate + extension;
             String normalizedFilename = filename.toLowerCase(Locale.ROOT);
             if (!existingNormalizedFilenames.contains(normalizedFilename)) {
                 return new Filename(candidate, filename, normalizedFilename);
