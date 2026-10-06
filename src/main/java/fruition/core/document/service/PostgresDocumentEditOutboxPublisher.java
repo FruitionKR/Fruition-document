@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -41,9 +42,11 @@ public class PostgresDocumentEditOutboxPublisher {
     }
 
     @Scheduled(fixedDelayString = "${app.document-edit.outbox-poll-interval-ms:1000}")
+    @Transactional
     public void publishPending() {
         List<Event> events;
         try {
+            // Kafka ACK 후 published 표시가 커밋될 때까지 락을 유지해 다른 Pod의 경쟁 발행을 막는다.
             events = jdbcTemplate.query("""
                     SELECT event_id, document_id, workspace_id, revision, content_hash,
                            event_type, schema_version, created_at
@@ -51,6 +54,7 @@ public class PostgresDocumentEditOutboxPublisher {
                     WHERE published = false
                     ORDER BY created_at, event_id
                     LIMIT ?
+                    FOR UPDATE SKIP LOCKED
                     """, (rs, rowNum) -> new Event(
                     rs.getString("event_id"), rs.getString("event_type"),
                     rs.getInt("schema_version"), rs.getString("document_id"),
