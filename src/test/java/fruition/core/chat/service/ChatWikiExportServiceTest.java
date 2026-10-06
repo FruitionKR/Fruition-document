@@ -144,6 +144,19 @@ class ChatWikiExportServiceTest {
     }
 
     @Test
+    @DisplayName("내보낼 본문의 원시 HTML과 위험한 링크를 걷어낸다")
+    void previewSanitizesAnswerMarkdown() {
+        ChatSession s = session();
+        when(chatSessionService.verifyOwnedSession(WS, USER, SESSION)).thenReturn(s);
+        when(chatMessageRepository.findAllBySessionIdInTurnOrder(SESSION)).thenReturn(List.of(
+                msg(s, "u1", "p1", "user", "질문", "completed"),
+                msg(s, "a1", "p1", "assistant", "<span>답변</span> [보기](javascript:alert(1))", "completed")));
+
+        assertThat(service.previewMarkdown(WS, USER, SESSION))
+                .contains("답변 보기").doesNotContain("<span>", "javascript:");
+    }
+
+    @Test
     @DisplayName("완료된 문답이 없는 미리보기도 기본 제목으로 반환한다")
     void emptyPreviewHasSessionTitle() {
         ChatSession s = session();

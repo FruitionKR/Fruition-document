@@ -110,6 +110,8 @@ public class DocumentService {
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
     private static final String INITIAL_NOTE_FILENAME = "새 노트.md";
     private static final String CONVERT_PLACEHOLDER_MARKDOWN = "PDF 변환 중...\n";
+    // 크기 상한을 넘은 변환 이미지 자리 표시. 정규식·치환 특수 문자가 없는 값이어야 한다.
+    private static final String OVERSIZED_CONVERTED_IMAGE = "fruition-oversized-converted-image";
     private static final String PDF_MIME_TYPE = "application/pdf";
     private static final String MARKDOWN_MIME_TYPE = "text/markdown";
     private static final byte[] PDF_SIGNATURE = "%PDF-".getBytes(StandardCharsets.US_ASCII);
@@ -993,10 +995,11 @@ public class DocumentService {
             String markdown = converterClient.convertPdf(
                     source.getFilename(), pdfBytes, aiModel.provider(), aiModel.model(),
                     () -> taskWriter.active("convert:" + documentId));
-            DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(markdown);
-            applyConvertedMarkdown(queueId, placeholder, content);
-            log.info("[문서 변환 완료] documentId={} sourceDocumentId={} markdownByteSize={}",
-                    documentId, sourceDocumentId, content.bytes().length);
+            DocumentEditingRules.MarkdownContent content = applyConvertedMarkdown(queueId, placeholder, markdown);
+            if (content != null) {
+                log.info("[문서 변환 완료] documentId={} sourceDocumentId={} markdownByteSize={}",
+                        documentId, sourceDocumentId, content.bytes().length);
+            }
         } catch (Exception e) {
             // DocumentConvertException 메시지에 변환기 상태 코드(422/504/503 등) 원인이 담겨 온다.
             Instant now = Instant.now();
@@ -1105,8 +1108,9 @@ public class DocumentService {
             if (!taskWriter.join("convert:" + parent.getId())) return null;
             var checkpoint = convertQueueRepository.findById(queueId).orElseThrow();
             if (checkpoint.getCompletedPages() >= batch.page_end()) return null;
-            String markdown = ConvertedMarkdownChunks.renumberPages(
-                    externalizeConvertedImages(parent, batch.markdown()), batch.page_start());
+            // data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다.
+            String markdown = ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitize(
+                    externalizeConvertedImages(parent, batch.markdown())), batch.page_start());
             // PDF 하나를 문서 하나로 이어 붙이고, 편집 문서 상한을 넘을 때만 다음 파트 문서로 넘어간다.
             // 버전 기록은 변환 완료 시 한 번만 남겨 묶음마다 누적 본문이 쌓이지 않게 한다.
             var parts = documentRepository.findConvertedParts(parent.getWorkspaceId(), parent.getId());
@@ -1169,12 +1173,20 @@ public class DocumentService {
                 .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
     }
 
+    /**
+     * 변환 결과의 {@code data:} 이미지를 asset으로 저장하고 내부 주소로 바꾼다. 업로드 PDF는 사용자가 만들 수 있어
+     * 첨부 이미지와 같은 크기 상한을 둔다. 넘는 이미지는 변환 전체를 실패시키지 않고 생략 문구로 바꾼다.
+     */
     private String externalizeConvertedImages(Document parent, String markdown) {
         var pattern = java.util.regex.Pattern.compile("data:(image/(?:png|jpeg|gif));base64,([A-Za-z0-9+/=]+)");
         var matcher = pattern.matcher(markdown);
         StringBuilder output = new StringBuilder();
         while (matcher.find()) {
             byte[] bytes = java.util.Base64.getDecoder().decode(matcher.group(2));
+            if (bytes.length > DocumentAssetValidator.MAX_FILE_BYTES) {
+                matcher.appendReplacement(output, OVERSIZED_CONVERTED_IMAGE);
+                continue;
+            }
             String hash = sha256(bytes);
             UUID id = UUID.nameUUIDFromBytes((parent.getWorkspaceId() + ":" + hash).getBytes(StandardCharsets.UTF_8));
             String key = "assets/" + parent.getWorkspaceId() + "/" + id + "/content";
@@ -1186,6 +1198,10 @@ public class DocumentService {
                     int width, height;
                     try { reader.setInput(image); width = reader.getWidth(0); height = reader.getHeight(0); }
                     finally { reader.dispose(); }
+                    if (width > DocumentAssetValidator.MAX_DIMENSION || height > DocumentAssetValidator.MAX_DIMENSION) {
+                        matcher.appendReplacement(output, OVERSIZED_CONVERTED_IMAGE);
+                        continue;
+                    }
                     RetryingObjectPut.put(minioClient, storageProps.getBucket(), key, bytes, matcher.group(1));
                     registerMinioRollbackCleanup(key);
                     assetRepository.save(new fruition.core.document.domain.DocumentAsset(id, parent.getWorkspaceId(),
@@ -1196,7 +1212,10 @@ public class DocumentService {
                     "/api/workspaces/" + parent.getWorkspaceId() + "/assets/" + id + "/content"));
         }
         matcher.appendTail(output);
-        return output.toString();
+        // 생략한 이미지는 이미지·링크 문법째 문구로 바꾸고, 문법 밖에 남은 표시는 지운다.
+        return output.toString()
+                .replaceAll("!?\\[[^\\]\\n]*\\]\\(" + OVERSIZED_CONVERTED_IMAGE + "\\)", "(이미지가 너무 커서 생략됨)")
+                .replace(OVERSIZED_CONVERTED_IMAGE, "");
     }
 
     private byte[] readOriginalBytes(Document source) {
@@ -1215,17 +1234,23 @@ public class DocumentService {
     }
 
     /**
-     * 변환 Markdown을 placeholder 문서에 반영한다. 시스템 쓰기라 revision 충돌 우려가 없어 base_revision 1로
+     * 변환 Markdown을 placeholder 문서에 반영하고 저장한 본문을 돌려준다(작업이 취소됐으면 null).
+     * 묶음 경로와 같이 data: 이미지를 asset으로 옮겨 크기·해상도 상한을 적용하고, 저장·asset 참조를 한
+     * 트랜잭션에 묶어 저장이 실패하면 옮긴 이미지도 함께 되돌린다.
+     *
+     * <p>시스템 쓰기라 revision 충돌 우려가 없어 base_revision 1로
      * 저장하고, write_id({@code convert:<queueId>}) 재시도는 PostgreSQL write receipt가 멱등하게 처리한다.
      */
-    private void applyConvertedMarkdown(
+    private DocumentEditingRules.MarkdownContent applyConvertedMarkdown(
             long queueId,
             Document placeholder,
-            DocumentEditingRules.MarkdownContent content
+            String convertedMarkdown
     ) {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
-        executeWithSaveRetry(() -> saveTransaction.execute(status -> {
+        return executeWithSaveRetry(() -> saveTransaction.execute(status -> {
             if (!taskWriter.join("convert:" + placeholder.getId())) return null;
+            DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(
+                    AiMarkdownSanitizer.sanitize(externalizeConvertedImages(placeholder, convertedMarkdown)));
             PostgresDocumentEditSaveResult result = postgresDocumentEditStore.save(
                     placeholder.getWorkspaceId(),
                     placeholder.getId(),
@@ -1241,9 +1266,11 @@ public class DocumentService {
                 Instant now = Instant.now();
                 documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc ->
                         doc.completeConvert(content.contentHash(), content.bytes().length, now));
+                assetReferenceSynchronizer.synchronize(placeholder.getId(), placeholder.getWorkspaceId(),
+                        assetReferenceParser.parse(content.markdown()));
             }
             taskWriter.complete("convert:" + placeholder.getId());
-            return null;
+            return content;
         }));
     }
 
