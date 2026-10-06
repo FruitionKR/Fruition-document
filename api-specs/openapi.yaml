@@ -1173,7 +1173,7 @@ paths:
       tags:
       - Documents
     post:
-      description: "PDF 또는 Markdown 파일을 업로드합니다. Markdown은 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다."
+      description: "PDF, Markdown 또는 txt 파일을 업로드합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다."
       operationId: upload
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a

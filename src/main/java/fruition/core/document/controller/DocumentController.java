@@ -56,7 +56,8 @@ public class DocumentController {
     private static final Set<String> ALLOWED_MIME_TYPES = Set.of(
             "application/pdf",
             "text/markdown",
-            "text/x-markdown"
+            "text/x-markdown",
+            "text/plain"
     );
 
     private final DocumentService documentService;
@@ -84,7 +85,7 @@ public class DocumentController {
 
     @Operation(
         summary = "문서 업로드",
-        description = "PDF 또는 Markdown 파일을 업로드합니다. Markdown은 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다.")
+        description = "PDF, Markdown 또는 txt 파일을 업로드합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "201", description = "업로드 성공",
             content = @Content(schema = @Schema(implementation = DocumentUploadResponse.class))),
@@ -118,12 +119,13 @@ public class DocumentController {
                 ? ""
                 : file.getOriginalFilename().toLowerCase(java.util.Locale.ROOT);
         boolean isMdByExtension = normalizedFilename.endsWith(".md")
-                || normalizedFilename.endsWith(".markdown");
+                || normalizedFilename.endsWith(".markdown")
+                || normalizedFilename.endsWith(".txt");
 
         if (!ALLOWED_MIME_TYPES.contains(mimeType) && !isMdByExtension) {
             return ResponseEntity
                     .status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
-                    .body(ErrorResponse.of("UNSUPPORTED_FILE_TYPE", "PDF 또는 Markdown 파일만 업로드할 수 있습니다."));
+                    .body(ErrorResponse.of("UNSUPPORTED_FILE_TYPE", "PDF, Markdown 또는 txt 파일만 업로드할 수 있습니다."));
         }
 
         DocumentUploadResponse response = documentService.upload(workspaceId, userId, idempotencyKey, folderId, file);
