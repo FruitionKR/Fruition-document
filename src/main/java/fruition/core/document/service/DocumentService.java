@@ -764,6 +764,20 @@ public class DocumentService {
         }
     }
 
+    /**
+     * PDF 변환 중에는 묶음마다 본문이 이어 붙어 revision이 오르므로 그동안의 사용자·Agent 저장은 막는다.
+     * 파트 문서는 부모(변환 placeholder)의 변환 상태를 따른다.
+     */
+    private void requireNotConverting(Document document) {
+        Document converting = "convert_part".equals(document.getOrigin()) && document.getSourceDocumentId() != null
+                ? documentRepository.findById(document.getSourceDocumentId()).orElse(null)
+                : document;
+        if (converting != null && converting.getStatus() == DocumentStatus.processing
+                && converting.getPipelineRunId() != null && converting.getPipelineRunId().startsWith("convert:")) {
+            throw new DocumentAlreadyProcessingException("PDF 변환 중에는 편집할 수 없습니다.");
+        }
+    }
+
     /** command payload와 같은 snake_case 키로 저장한다. 꺼낼 때 변환 없이 그대로 실어 보낸다. */
     private String serializePipelineBlocks(List<PipelineSourceBlock> blocks) {
         List<Map<String, String>> payload = blocks.stream()
@@ -1118,8 +1132,11 @@ public class DocumentService {
 
     private String createConvertedPart(Document parent, int partNumber, String markdown) {
         var content = DocumentEditingRules.markdown(markdown);
-        String id = "doc_" + UUID.nameUUIDFromBytes((parent.getId() + ":part:" + partNumber)
-                .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
+        // 변환 중 삭제된 파트도 행이 남아 있으므로, 그 ID를 덮어쓰지 않게 비어 있는 번호까지 넘긴다.
+        String id = convertedPartId(parent, partNumber);
+        while (documentRepository.existsById(id)) {
+            id = convertedPartId(parent, ++partNumber);
+        }
         String base = parent.getDisplayName();
         base = base.substring(0, Math.min(170, base.length()));
         String filename = base + " [파트 " + (partNumber + 1) + ", "
@@ -1132,6 +1149,11 @@ public class DocumentService {
         editStateRepository.save(new DocumentEditState(id, content.markdown(), content.contentHash(), 1));
         assetReferenceSynchronizer.synchronize(id, parent.getWorkspaceId(), assetReferenceParser.parse(content.markdown()));
         return id;
+    }
+
+    private String convertedPartId(Document parent, int partNumber) {
+        return "doc_" + UUID.nameUUIDFromBytes((parent.getId() + ":part:" + partNumber)
+                .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
     }
 
     private String externalizeConvertedImages(Document parent, String markdown) {
@@ -1448,6 +1470,7 @@ public class DocumentService {
             throw new InvalidMarkdownContentException("편집 가능한 Markdown 문서만 저장할 수 있습니다.");
         }
         requireNotChatExport(document, "채팅 Wiki page화 문서는 편집할 수 없습니다.");
+        requireNotConverting(document);
         editLockService.requireWritable(documentId, userId);
 
         DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(markdown);
@@ -1584,6 +1607,7 @@ public class DocumentService {
             throw new InvalidMarkdownContentException("편집 가능한 Markdown 문서만 저장할 수 있습니다.");
         }
         requireNotChatExport(document, "채팅 Wiki page화 문서는 편집할 수 없습니다.");
+        requireNotConverting(document);
         editLockService.requireWritable(documentId, userId);
     }
 

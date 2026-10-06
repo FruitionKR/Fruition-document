@@ -42,6 +42,7 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.ByteArrayInputStream;
+import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -345,6 +346,48 @@ class DocumentServiceConvertTest {
         assertThat(states.get(parent.getId()).getMarkdown()).contains("<!-- page 11 -->").doesNotContain("<!-- page 12 -->");
         assertThat(states.get(parts.getFirst().getId()).getMarkdown()).startsWith("<!-- page 12 -->");
         verify(postgresDocumentEditStore, times(1)).save(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("PDF 변환 중인 문서는 저장을 거부하고, 변환이 실패한 뒤에는 저장을 허용한다")
+    void convertingDocumentRejectsContentSave() {
+        stubOwnedWorkspace();
+        var parent = placeholderDocument();
+        parent.markPipelineStarted("convert:" + parent.getId(), Instant.now());
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(parent.getId(), WORKSPACE_ID))
+                .thenReturn(Optional.of(parent));
+
+        assertThatThrownBy(() -> documentService.validateContentSavePreconditions(WORKSPACE_ID, USER_ID, parent.getId()))
+                .isInstanceOf(DocumentAlreadyProcessingException.class)
+                .hasMessageContaining("PDF 변환 중");
+
+        parent.markProcessingFailed("PDF 변환에 실패했습니다", Instant.now());
+        documentService.validateContentSavePreconditions(WORKSPACE_ID, USER_ID, parent.getId());
+    }
+
+    @Test
+    @DisplayName("변환 중 삭제된 파트의 ID는 다시 쓰지 않고 다음 번호로 새 파트를 만든다")
+    void deletedPartIdIsNotReused() throws Exception {
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        queue.checkpoint(10, 20);
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        String nearlyFull = "<!-- page 10 -->\n\n" + "가".repeat((DocumentEditingRules.MAX_MARKDOWN_BYTES - 100) / 3);
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), nearlyFull, "hash", 2));
+        var rows = stubBatchConvert(parent, source, queue, states);
+        String deletedPartId = "doc_" + java.util.UUID.nameUUIDFromBytes((parent.getId() + ":part:1")
+                .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
+        when(documentRepository.existsById(anyString())).thenAnswer(inv -> deletedPartId.equals(inv.getArgument(0)));
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
+                .thenReturn(new ConverterClient.Batch(11, 20, 20, "<!-- page 1 -->\n\n" + "나".repeat(100) + "\n", false, true, null));
+
+        documentService.doConvert(7L, parent.getId(), source.getId());
+
+        var parts = rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).toList();
+        assertThat(parts).hasSize(1);
+        assertThat(parts.getFirst().getId()).isNotEqualTo(deletedPartId);
+        assertThat(parts.getFirst().getFilename()).contains("[파트 3,");
     }
 
     @Test

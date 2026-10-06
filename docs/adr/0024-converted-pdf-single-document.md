@@ -18,9 +18,10 @@ AWS 모드의 PDF 변환은 converter `POST /convert-source-batch`로 10페이�
 1. 묶음 결과를 원본 문서에 이어 붙인다. 첫 묶음은 변환 중 placeholder를 대체한다.
 2. 이어 붙인 본문이 편집 문서 상한(`DocumentEditingRules.MAX_MARKDOWN_BYTES`, 5MB)을 넘을 때만 다음 파트 문서를 만든다. 자르는 위치는 페이지 주석 경계를 우선한다.
 3. 묶음의 페이지 주석을 원본 PDF 기준 번호로 바꿔 저장한다.
-4. 묶음 저장은 편집 저장소의 revision CAS(`revision_write_id = convert:<queue>:<page_end>:<index>`)로 한다. 변환 중 사용자 편집이 있으면 최신 본문 뒤에 붙인다. 동시 저장 충돌은 그 묶음을 실패시키고 체크포인트부터 다시 시도한다.
-5. `document_content_versions`는 묶음마다 남기지 않는다. 변환이 끝날 때 문서마다 최종 본문을 한 번 기록한다.
-6. 변환이 끝나면 원본 문서와 파트를 각각 한 번씩 AI 큐에 등록한다.
+4. 묶음 저장은 편집 저장소의 revision CAS(`revision_write_id = convert:<queue>:<page_end>:<index>`)로 한다. 묶음마다 revision이 오르므로, 변환이 진행 중인 문서(파트는 부모 기준)에 대한 사용자·Agent 저장은 `409 DOCUMENT_ALREADY_PROCESSING`으로 거부하고 프론트는 그동안 읽기 전용으로 보여준다. 변환이 실패하면 다시 편집할 수 있다.
+5. 파트 ID는 부모 ID와 파트 번호로 결정적으로 만들되, 변환 중 삭제된 파트의 ID와 겹치면 다음 번호를 쓴다.
+6. `document_content_versions`는 묶음마다 남기지 않는다. 변환이 끝날 때 문서마다 최종 본문을 한 번 기록한다.
+7. 변환이 끝나면 원본 문서와 파트를 각각 한 번씩 AI 큐에 등록한다.
 
 ## 대안과 기각 사유
 
@@ -34,5 +35,6 @@ AWS 모드의 PDF 변환은 converter `POST /convert-source-batch`로 10페이�
 - 5MB 이하 PDF(영어 논문 기준 약 1,000페이지)는 문서 하나, 위키 소스 하나가 된다.
 - AI 인제스트가 한 번에 받는 문서가 최대 5MB로 커진다. 문서 전체를 요청 하나에 넣는 AI 단계가 큰 입력을 처리할 수 있어야 하며, AI 쪽 변경이 먼저 배포돼야 한다.
 - 변환 중에는 편집 이벤트가 묶음마다 발행된다. 소비자는 revision 기준으로 멱등하게 처리한다.
+- 변환 중에는 문서를 편집할 수 없다. 기존에는 첫 묶음 이후 편집할 수 있었다.
 - 이미 파트로 나뉘어 편입된 기존 문서는 그대로 둔다.
 - 로컬 모드(`credentials-mode`가 `aws`가 아님)는 PDF 전체를 한 번에 변환하는 기존 경로를 쓰며 이 결정의 대상이 아니다.
