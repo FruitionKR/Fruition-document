@@ -216,6 +216,7 @@ public class DocumentService {
         try {
             String filename = file.getOriginalFilename();
             validateFilename(filename);
+            filename = filename.trim().replaceFirst("(?i)\\.txt$", ".md");
             String mimeType = resolveMimeType(file);
             boolean markdownUpload = isMarkdown(filename, mimeType);
             DocumentEditingRules.MarkdownContent markdownContent =
@@ -441,17 +442,19 @@ public class DocumentService {
         }
     }
 
+    /** txt는 .md 이름의 Markdown 편집 문서로 받으므로 text/markdown으로 정규화한다. */
     private String resolveMimeType(MultipartFile file) {
         String contentType = file.getContentType();
+        String filename = file.getOriginalFilename();
+        String normalizedFilename = filename == null ? "" : filename.toLowerCase(java.util.Locale.ROOT);
+        if ("text/plain".equals(contentType) || normalizedFilename.endsWith(".txt")) {
+            return "text/markdown";
+        }
         if (contentType != null && !contentType.equals("application/octet-stream")) {
             return contentType;
         }
-        String filename = file.getOriginalFilename();
-        if (filename != null) {
-            String normalizedFilename = filename.toLowerCase(java.util.Locale.ROOT);
-            if (normalizedFilename.endsWith(".md") || normalizedFilename.endsWith(".markdown")) {
-                return "text/markdown";
-            }
+        if (normalizedFilename.endsWith(".md") || normalizedFilename.endsWith(".markdown")) {
+            return "text/markdown";
         }
         return contentType != null ? contentType : "application/octet-stream";
     }
