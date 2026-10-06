@@ -21,6 +21,17 @@ class AiModelCatalogTest {
     }
 
     @Test
+    void enabledModels_putsExistingDefaultModelFirst() {
+        // 프론트는 저장된 선택이 없으면 첫 항목을 고르므로 목록이 늘어도 기본 선택이 바뀌지 않아야 한다.
+        assertThat(new AiModelCatalog("openai,gemini,claude").enabledModels().get(0))
+                .isEqualTo(new AiModelCatalog("openai").resolve(null, null));
+        assertThat(new AiModelCatalog("gemini,claude").enabledModels().get(0).model())
+                .isEqualTo("gemini-3.1-flash-lite");
+        assertThat(new AiModelCatalog("claude").enabledModels().get(0).model())
+                .isEqualTo("claude-sonnet-5");
+    }
+
+    @Test
     void enabledModels_returnsOnlyEnabledProviders() {
         AiModelCatalog catalog = new AiModelCatalog("gemini");
 

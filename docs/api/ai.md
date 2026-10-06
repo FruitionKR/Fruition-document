@@ -68,30 +68,30 @@
 {
   "models": [
     {
-      "display_name": "GPT-6.1 Sol",
-      "model": "gpt-6.1-sol",
-      "provider": "openai"
-    },
-    {
       "display_name": "GPT-5 nano",
       "model": "gpt-5-nano",
       "provider": "openai"
     },
     {
-      "display_name": "Gemini 3.8 Flash",
-      "model": "gemini-3.8-flash",
+      "display_name": "GPT-6.1 Sol",
+      "model": "gpt-6.1-sol",
+      "provider": "openai"
+    },
+    {
+      "display_name": "Gemini 3.1 Flash-Lite",
+      "model": "gemini-3.1-flash-lite",
       "provider": "gemini"
     },
     {
-      "display_name": "Claude Opus 5.5",
-      "model": "claude-opus-5-5",
+      "display_name": "Claude Sonnet 5",
+      "model": "claude-sonnet-5",
       "provider": "claude"
     }
   ]
 }
 ```
 
-- provider마다 여러 모델을 반환한다(2026-10-06 기준 OpenAI 21개, Gemini 8개, Claude 9개). 순서는 provider별로 묶여 있고, 각 provider 안에서는 최신 모델이 먼저 온다. 위 예시는 일부만 보여준다.
+- provider마다 여러 모델을 반환한다(2026-10-06 기준 OpenAI 21개, Gemini 8개, Claude 9개). 순서는 provider별로 묶여 있다. 각 provider의 첫 항목은 기존 기본 모델(`gpt-5-nano`, `gemini-3.1-flash-lite`, `claude-sonnet-5`)이고, 그 뒤로 최신 모델부터 온다. 프론트는 저장된 선택이 없으면 첫 항목을 고르므로 기본 선택이 바뀌지 않는다. 위 예시는 일부만 보여준다.
 - 목록은 `AiModelCatalog`의 정적 화이트리스트다. 실제 호출에서 JSON 응답을 확인한 텍스트 생성 모델만 넣는다. 폐기된 모델(`gpt-5-chat-latest`, `gemini-2.5-*` 등), JSON 모드를 지원하지 않는 모델(`gpt-4`), image·tts·audio·embedding 계열은 넣지 않는다.
 - `app.ai.enabled-providers`에서 비활성화한 provider의 모델은 빠진다. 같은 목록이 질의·Agent 요청과 워크스페이스 모델 설정의 `provider`/`model` 검증에도 쓰인다.
 - provider/model을 생략했을 때의 기본값은 `openai` / `gpt-5-nano`다.
@@ -120,23 +120,23 @@ curl -X GET "$DOCUMENT/api/ai-models" \
 {
   "models": [
     {
-      "display_name": "GPT-6.1 Sol",
-      "model": "gpt-6.1-sol",
-      "provider": "openai"
-    },
-    {
       "display_name": "GPT-5 nano",
       "model": "gpt-5-nano",
       "provider": "openai"
     },
     {
-      "display_name": "Gemini 3.8 Flash",
-      "model": "gemini-3.8-flash",
+      "display_name": "GPT-6.1 Sol",
+      "model": "gpt-6.1-sol",
+      "provider": "openai"
+    },
+    {
+      "display_name": "Gemini 3.1 Flash-Lite",
+      "model": "gemini-3.1-flash-lite",
       "provider": "gemini"
     },
     {
-      "display_name": "Claude Opus 5.5",
-      "model": "claude-opus-5-5",
+      "display_name": "Claude Sonnet 5",
+      "model": "claude-sonnet-5",
       "provider": "claude"
     }
   ]
