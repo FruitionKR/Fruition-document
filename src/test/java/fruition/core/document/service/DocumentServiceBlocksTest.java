@@ -660,6 +660,26 @@ class DocumentServiceBlocksTest {
     }
 
     @Test
+    void uploadTxt_isStoredAsEditableMarkdown() throws Exception {
+        stubOwnedWorkspace();
+        when(storageProps.getBucket()).thenReturn("test-bucket");
+        when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.EDITABLE)).thenReturn(-1L);
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "메모.txt", "text/plain", "메모 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        DocumentUploadResponse response =
+                documentService.upload(WORKSPACE_ID, USER_ID, "upload-txt-key", null, file);
+
+        ArgumentCaptor<Document> storedDocument = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(storedDocument.capture());
+        verify(editStateRepository).save(any(DocumentEditState.class));
+        assertThat(storedDocument.getValue().getMimeType()).isEqualTo("text/markdown");
+        assertThat(storedDocument.getValue().getFilename()).isEqualTo("메모.md");
+        assertThat(response.editable()).isTrue();
+        assertThat(response.documentRole()).isEqualTo(DocumentRole.EDITABLE);
+    }
+
+    @Test
     void upload_inProgressExceptionIsNotWrapped() {
         stubOwnedWorkspace();
         MockMultipartFile file = new MockMultipartFile(
