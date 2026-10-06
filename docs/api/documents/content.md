@@ -495,7 +495,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | `is_stale` | `source_content_hash`와 `current_content_hash`가 다르면 `true`, 같으면 `false`. `source_content_hash`가 `null`이면 판단할 수 없어 `null`이다. |
 
 - `true`나 `null`이면 줄 범위가 현재 본문과 맞지 않을 수 있다. 이때 프론트는 정규화된 `text`로 현재 본문에서 block을 찾고, 찾지 못하면 하이라이트를 생략한다.
-- 재분석 중이거나 실패한 경우에는 직전 성공 스냅샷의 block을 반환한다. 문서 해시는 ingest 요청 시점에 바뀌므로 이때는 `is_stale: true`다.
+- 재분석 중이거나 실패한 경우에는 직전 성공 스냅샷의 block을 반환한다. 그 스냅샷 이후 본문이 바뀌었으면 `is_stale: true`이고, 바뀌지 않았으면 `false`다(같은 본문을 다시 편입하는 경우).
 - ingest된 적 없는 문서는 `blocks: []`다. 페이지네이션 없이 전체를 반환한다.
 - 위치 필드와 `source_content_hash`는 AI 선행 변경([Fruition-ai#42](https://github.com/FruitionKR/Fruition-ai/issues/42))이 배포된 뒤 재편입한 문서부터 채워진다. 그 전에는 모두 `null`이다.
 
