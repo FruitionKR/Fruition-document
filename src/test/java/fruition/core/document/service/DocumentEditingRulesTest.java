@@ -107,6 +107,17 @@ class DocumentEditingRulesTest {
     }
 
     @Test
+    @DisplayName("업로드 파일명이 겹치지 않으면 원래 이름을 그대로 둔다")
+    void uniqueUploadFilename_whenFree_keepsOriginalName() {
+        assertThat(DocumentEditingRules.uniqueUploadFilename("보고서 .pdf", java.util.Set.of("보고서.pdf")).filename())
+                .isEqualTo("보고서 .pdf");
+        assertThat(DocumentEditingRules.uniqueUploadFilename("..pdf", java.util.Set.of()).filename())
+                .isEqualTo("..pdf");
+        assertThat(DocumentEditingRules.uniqueUploadFilename("보고서 .pdf", java.util.Set.of("보고서 .pdf")).filename())
+                .isEqualTo("보고서 (2).pdf");
+    }
+
+    @Test
     @DisplayName("이름이 비어 있으면 번호를 붙이지 않는다")
     void uniqueFilename_whenFree_keepsName() {
         DocumentEditingRules.Filename result =
