@@ -5,6 +5,7 @@ import fruition.core.document.domain.Document;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.domain.DocumentProcessingState;
 import fruition.core.document.domain.DocumentRole;
+import fruition.core.document.dto.DocumentBlockResponse;
 import fruition.core.document.dto.DocumentBlocksResponse;
 import fruition.core.document.dto.DocumentContentSaveResponse;
 import fruition.core.document.dto.DocumentContentDiffResponse;
@@ -152,7 +153,7 @@ class DocumentServiceBlocksTest {
                 ingestOperationStarter,
                 workspaceAiModelClient, taskWriter, documentWikiRetirement);
         lenient().when(pipelineWikiStateRequester.documentContext(anyString(), anyString()))
-                .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of()));
+                .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(), null));
         // 직접 생성·복제·변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.
         lenient().when(storageProps.getBucket()).thenReturn("test-bucket");
         lenient().when(documentRepository.findByIdAndWorkspaceIdForUpdate(anyString(), anyString()))
@@ -205,8 +206,9 @@ class DocumentServiceBlocksTest {
                 .thenReturn(Optional.of(document));
         when(pipelineWikiStateRequester.documentContext(WORKSPACE_ID, "doc_1f9a74af")).thenReturn(
                 new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(
-                        new PipelineWikiStateRequester.SourceBlock("B0005", "다섯 번째 block 본문"),
-                        new PipelineWikiStateRequester.SourceBlock("B0006", "여섯 번째 block 본문"))));
+                        new PipelineWikiStateRequester.SourceBlock("B0005", null, null, null, null, "다섯 번째 block 본문"),
+                        new PipelineWikiStateRequester.SourceBlock("B0006", null, null, null, null, "여섯 번째 block 본문")),
+                        null));
 
         DocumentBlocksResponse response = documentService.blocks(WORKSPACE_ID, USER_ID, "doc_1f9a74af");
 
@@ -215,6 +217,58 @@ class DocumentServiceBlocksTest {
         assertThat(response.blocks().get(0).blockId()).isEqualTo("B0005");
         assertThat(response.blocks().get(0).text()).isEqualTo("다섯 번째 block 본문");
         assertThat(response.blocks().get(1).blockId()).isEqualTo("B0006");
+        // AI가 위치·스냅샷 해시를 아직 주지 않으면 받은 순서를 유지하고 stale 여부는 알 수 없다.
+        assertThat(response.blocks().get(0).position()).isNull();
+        assertThat(response.sourceContentHash()).isNull();
+        assertThat(response.currentContentHash()).isEqualTo("hash1");
+        assertThat(response.isStale()).isNull();
+    }
+
+    @Test
+    @DisplayName("block은 영구 ID가 아니라 문서 순서로 정렬하고 위치가 없는 block은 뒤에 둔다")
+    void blocks_sortsByPositionAndKeepsLineRange() {
+        stubOwnedWorkspace();
+        Document document = new Document("doc_rbt", WORKSPACE_ID, USER_ID, "rbt.md", "text/markdown", 100L,
+                "sources/documents/doc_rbt/original", "hash-current");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_rbt", WORKSPACE_ID))
+                .thenReturn(Optional.of(document));
+        when(pipelineWikiStateRequester.documentContext(WORKSPACE_ID, "doc_rbt")).thenReturn(
+                new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(
+                        new PipelineWikiStateRequester.SourceBlock("B0001", 1, 1, 1, "heading", "레드블랙트리"),
+                        new PipelineWikiStateRequester.SourceBlock("B0002", null, null, null, null, "위치 없음"),
+                        new PipelineWikiStateRequester.SourceBlock("B0440", 2, 3, 5, "paragraph", "균형 규칙")),
+                        "hash-current"));
+
+        DocumentBlocksResponse response = documentService.blocks(WORKSPACE_ID, USER_ID, "doc_rbt");
+
+        assertThat(response.blocks()).extracting(DocumentBlockResponse::blockId)
+                .containsExactly("B0001", "B0440", "B0002");
+        DocumentBlockResponse paragraph = response.blocks().get(1);
+        assertThat(paragraph.position()).isEqualTo(2);
+        assertThat(paragraph.lineStart()).isEqualTo(3);
+        assertThat(paragraph.lineEnd()).isEqualTo(5);
+        assertThat(paragraph.blockType()).isEqualTo("paragraph");
+        assertThat(response.sourceContentHash()).isEqualTo("hash-current");
+        assertThat(response.isStale()).isFalse();
+    }
+
+    @Test
+    @DisplayName("block을 만든 스냅샷 해시가 현재 문서 해시와 다르면 stale이다")
+    void blocks_differentSnapshotHash_isStale() {
+        stubOwnedWorkspace();
+        Document document = new Document("doc_edited", WORKSPACE_ID, USER_ID, "edited.md", "text/markdown", 100L,
+                "sources/documents/doc_edited/original", "hash-after-edit");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_edited", WORKSPACE_ID))
+                .thenReturn(Optional.of(document));
+        when(pipelineWikiStateRequester.documentContext(WORKSPACE_ID, "doc_edited")).thenReturn(
+                new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(
+                        new PipelineWikiStateRequester.SourceBlock("B0001", 1, 1, 1, "heading", "제목")),
+                        "hash-at-ingest"));
+
+        DocumentBlocksResponse response = documentService.blocks(WORKSPACE_ID, USER_ID, "doc_edited");
+
+        assertThat(response.currentContentHash()).isEqualTo("hash-after-edit");
+        assertThat(response.isStale()).isTrue();
     }
 
     @Test

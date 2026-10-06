@@ -93,7 +93,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.Arrays;
+import java.util.Arrays; import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -2133,15 +2133,24 @@ public class DocumentService {
 
     public DocumentBlocksResponse blocks(String workspaceId, String userId, String documentId) {
         verifyWorkspaceOwnership(workspaceId, userId);
-        documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+        Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
 
-        List<DocumentBlockResponse> blocks = pipelineWikiStateRequester.documentContext(workspaceId, documentId)
-                .sourceBlocks().stream()
-                .map(block -> new DocumentBlockResponse(block.blockId(), block.text()))
+        PipelineWikiStateRequester.DocumentWikiContext context =
+                pipelineWikiStateRequester.documentContext(workspaceId, documentId);
+        // block_id는 영구 ID라 문서 순서와 다르다. 위치가 없는 block은 받은 순서대로 뒤에 둔다.
+        List<DocumentBlockResponse> blocks = context.sourceBlocks().stream()
+                .sorted(Comparator.comparing(PipelineWikiStateRequester.SourceBlock::position,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .map(block -> new DocumentBlockResponse(block.blockId(), block.position(), block.lineStart(),
+                        block.lineEnd(), block.blockType(), block.text()))
                 .toList();
+        // 문서 content_hash는 ingest 요청 시점에 바뀌므로, block을 만든 스냅샷 해시와 비교해야 한다.
+        String sourceContentHash = context.sourceContentHash();
+        String currentContentHash = document.getCurrentContentHash();
+        Boolean stale = sourceContentHash == null ? null : !sourceContentHash.equals(currentContentHash);
 
-        return new DocumentBlocksResponse(documentId, blocks);
+        return new DocumentBlocksResponse(documentId, sourceContentHash, currentContentHash, stale, blocks);
     }
 
     public DocumentOriginalResult getOriginal(String workspaceId, String userId, String documentId) {

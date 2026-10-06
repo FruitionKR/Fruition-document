@@ -435,7 +435,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 
 #### 2. 목적
 
-원본 문서를 block 단위로 나눈 텍스트 목록을 반환합니다. 답변 인용 클릭 시 원본 block 하이라이트에 사용됩니다.
+원본 문서를 block 단위로 나눈 텍스트 목록을 문서 순서대로 반환합니다. 각 block의 스냅샷 기준 줄 범위와 stale 여부를 함께 주어, 답변 인용 클릭 시 원본 block 하이라이트에 사용됩니다.
 
 #### 3. Auth 필요 여부
 
@@ -460,13 +460,44 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 {
   "blocks": [
     {
-      "block_id": "string",
-      "text": "string"
+      "block_id": "B0001",
+      "block_type": "heading",
+      "line_end": 1,
+      "line_start": 1,
+      "position": 1,
+      "text": "레드블랙트리"
+    },
+    {
+      "block_id": "B0440",
+      "block_type": "paragraph",
+      "line_end": 5,
+      "line_start": 3,
+      "position": 2,
+      "text": "레드블랙트리의 균형 규칙(색상)은 …"
     }
   ],
-  "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83"
+  "current_content_hash": "9f2c…",
+  "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+  "is_stale": false,
+  "source_content_hash": "9f2c…"
 }
 ```
+
+| 필드 | 설명 |
+|---|---|
+| `block_id` | 영구 block ID. 채팅 근거의 `source_block_ids`, `source_refs[].source_block_id`와 같은 값이다. 재편입해도 바뀌지 않은 block은 ID를 유지하므로 **문서 순서와 ID 순서는 다르다.** |
+| `position` | block을 만든 Markdown 스냅샷 안에서의 순서(1부터). `blocks`는 이 값의 오름차순이고, 값이 없는 block은 AI가 준 순서대로 뒤에 붙는다. |
+| `line_start`, `line_end` | 그 스냅샷 기준 1-based 줄 범위(양끝 포함). 위치가 없는 block(chat_export 등)은 `null` |
+| `block_type` | `heading` / `paragraph` / `list` / `code`. 모르면 `null` |
+| `text` | 저장된 block 텍스트(공백 정규화됨). 원문과 글자 단위로 같지 않을 수 있다. |
+| `source_content_hash` | 이 block 집합을 만든 ingest 입력의 해시. AI가 ingest command의 `source_content_hash`를 그대로 저장해 돌려준 값이다. 모르면 `null` |
+| `current_content_hash` | 현재 문서 해시(`documents.current_content_hash`). ingest command의 `source_content_hash`와 같은 값이다. |
+| `is_stale` | `source_content_hash`와 `current_content_hash`가 다르면 `true`, 같으면 `false`. `source_content_hash`가 `null`이면 판단할 수 없어 `null`이다. |
+
+- `true`나 `null`이면 줄 범위가 현재 본문과 맞지 않을 수 있다. 이때 프론트는 정규화된 `text`로 현재 본문에서 block을 찾고, 찾지 못하면 하이라이트를 생략한다.
+- 재분석 중이거나 실패한 경우에는 직전 성공 스냅샷의 block을 반환한다. 문서 해시는 ingest 요청 시점에 바뀌므로 이때는 `is_stale: true`다.
+- ingest된 적 없는 문서는 `blocks: []`다. 페이지네이션 없이 전체를 반환한다.
+- 위치 필드와 `source_content_hash`는 AI 선행 변경([Fruition-ai#42](https://github.com/FruitionKR/Fruition-ai/issues/42))이 배포된 뒤 재편입한 문서부터 채워진다. 그 전에는 모두 `null`이다.
 
 #### 6. Error response
 
@@ -504,11 +535,26 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 {
   "blocks": [
     {
-      "block_id": "string",
-      "text": "string"
+      "block_id": "B0001",
+      "block_type": "heading",
+      "line_end": 1,
+      "line_start": 1,
+      "position": 1,
+      "text": "레드블랙트리"
+    },
+    {
+      "block_id": "B0440",
+      "block_type": "paragraph",
+      "line_end": 5,
+      "line_start": 3,
+      "position": 2,
+      "text": "레드블랙트리의 균형 규칙(색상)은 …"
     }
   ],
-  "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83"
+  "current_content_hash": "9f2c…",
+  "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+  "is_stale": false,
+  "source_content_hash": "9f2c…"
 }
 ```
 
