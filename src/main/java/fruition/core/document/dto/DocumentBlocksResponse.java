@@ -11,12 +11,13 @@ public record DocumentBlocksResponse(
         String documentId,
 
         @JsonProperty("source_content_hash")
-        @Schema(description = "이 block 집합을 만든 ingest 입력의 해시(AI가 저장한 값). 알 수 없으면 null",
+        @Schema(description = "이 block 집합을 만든 ingest 입력 Markdown의 SHA-256(AI가 저장한 값). 알 수 없으면 null",
                 nullable = true)
         String sourceContentHash,
 
         @JsonProperty("current_content_hash")
-        @Schema(description = "현재 문서 해시", nullable = true)
+        @Schema(description = "source_content_hash와 비교하는 현재 해시. 편집 문서는 현재 본문, chat_export는 AI 입력 Markdown의 SHA-256",
+                nullable = true)
         String currentContentHash,
 
         @JsonProperty("is_stale")

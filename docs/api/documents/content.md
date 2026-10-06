@@ -490,8 +490,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | `line_start`, `line_end` | 그 스냅샷 기준 1-based 줄 범위(양끝 포함). 위치가 없는 block(chat_export 등)은 `null` |
 | `block_type` | `heading` / `paragraph` / `list` / `code`. 모르면 `null` |
 | `text` | 저장된 block 텍스트(공백 정규화됨). 원문과 글자 단위로 같지 않을 수 있다. |
-| `source_content_hash` | 이 block 집합을 만든 ingest 입력의 해시. AI가 ingest command의 `source_content_hash`를 그대로 저장해 돌려준 값이다. 모르면 `null` |
-| `current_content_hash` | 현재 문서 해시(`documents.current_content_hash`). ingest command의 `source_content_hash`와 같은 값이다. |
+| `source_content_hash` | 이 block 집합을 만든 ingest 입력 Markdown의 SHA-256 hex. AI가 편입에 성공한 스냅샷 기준으로 계산해 저장한 값이다. block이 없거나 기록 이전에 편입한 문서는 `null` |
+| `current_content_hash` | `source_content_hash`와 비교하는 현재 해시. 편집 가능 문서·변환 PDF는 현재 본문의 SHA-256(`documents.current_content_hash`)이다. chat_export 문서는 AI에 보내는 입력 Markdown의 SHA-256이다(`documents.current_content_hash`는 세션 기반 값이라 비교할 수 없음). |
 | `is_stale` | `source_content_hash`와 `current_content_hash`가 다르면 `true`, 같으면 `false`. `source_content_hash`가 `null`이면 판단할 수 없어 `null`이다. |
 
 - `true`나 `null`이면 줄 범위가 현재 본문과 맞지 않을 수 있다. 이때 프론트는 정규화된 `text`로 현재 본문에서 block을 찾고, 찾지 못하면 하이라이트를 생략한다.

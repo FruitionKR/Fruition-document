@@ -2145,9 +2145,14 @@ public class DocumentService {
                 .map(block -> new DocumentBlockResponse(block.blockId(), block.position(), block.lineStart(),
                         block.lineEnd(), block.blockType(), block.text()))
                 .toList();
-        // 문서 content_hash는 ingest 요청 시점에 바뀌므로, block을 만든 스냅샷 해시와 비교해야 한다.
+        // AI는 block을 만든 ingest 입력 Markdown의 SHA-256을 준다. 편집 문서의 current_content_hash는 같은 방식이다.
+        // chat_export는 current_content_hash가 세션 기반이라, AI에 보낸 입력 Markdown의 해시와 비교한다.
         String sourceContentHash = context.sourceContentHash();
-        String currentContentHash = document.getCurrentContentHash();
+        String currentContentHash = "chat_export".equals(document.getOrigin())
+                ? Optional.ofNullable(document.getPipelineInputMarkdown())
+                        .map(markdown -> sha256(markdown.getBytes(StandardCharsets.UTF_8)))
+                        .orElse(null)
+                : document.getCurrentContentHash();
         Boolean stale = sourceContentHash == null ? null : !sourceContentHash.equals(currentContentHash);
 
         return new DocumentBlocksResponse(documentId, sourceContentHash, currentContentHash, stale, blocks);

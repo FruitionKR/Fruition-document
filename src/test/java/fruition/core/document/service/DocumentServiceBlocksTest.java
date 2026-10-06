@@ -253,6 +253,29 @@ class DocumentServiceBlocksTest {
     }
 
     @Test
+    @DisplayName("chat_export 문서는 AI에 보낸 입력 Markdown의 SHA-256과 비교한다")
+    void blocks_chatExport_comparesWithPipelineInputHash() {
+        stubOwnedWorkspace();
+        Document document = new Document("doc_chat", WORKSPACE_ID, USER_ID, "chat.md", "text/markdown", 10L,
+                "sources/documents/doc_chat/original", "session-based-hash", "chat_export");
+        String input = "Q : 질문\nA : 답변\n";
+        document.assignPipelineInput(input, "[]");
+        String inputHash = DocumentEditingRules.markdown(input).contentHash();
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_chat", WORKSPACE_ID))
+                .thenReturn(Optional.of(document));
+        when(pipelineWikiStateRequester.documentContext(WORKSPACE_ID, "doc_chat")).thenReturn(
+                new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(
+                        new PipelineWikiStateRequester.SourceBlock(
+                                "session_1:pair_1", 1, null, null, null, "Q : 질문 A : 답변")),
+                        inputHash));
+
+        DocumentBlocksResponse response = documentService.blocks(WORKSPACE_ID, USER_ID, "doc_chat");
+
+        assertThat(response.currentContentHash()).isEqualTo(inputHash);
+        assertThat(response.isStale()).isFalse();
+    }
+
+    @Test
     @DisplayName("block을 만든 스냅샷 해시가 현재 문서 해시와 다르면 stale이다")
     void blocks_differentSnapshotHash_isStale() {
         stubOwnedWorkspace();

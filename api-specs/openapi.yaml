@@ -5337,7 +5337,7 @@ components:
             $ref: "#/components/schemas/DocumentBlockResponse"
         current_content_hash:
           type: string
-          description: 현재 문서 해시
+          description: "source_content_hash와 비교하는 현재 해시. 편집 문서는 현재 본문, chat_export는 AI 입력 Markdown의 SHA-256"
         document_id:
           type: string
           description: 문서 ID
@@ -5347,7 +5347,7 @@ components:
           description: block을 만든 뒤 문서가 바뀌었으면 true. source_content_hash를 모르면 판단할 수 없어 null
         source_content_hash:
           type: string
-          description: 이 block 집합을 만든 ingest 입력의 해시(AI가 저장한 값). 알 수 없으면 null
+          description: 이 block 집합을 만든 ingest 입력 Markdown의 SHA-256(AI가 저장한 값). 알 수 없으면 null
     DocumentContentDiffResponse:
       type: object
       description: 두 버전 사이의 본문 차이. 줄 단위 hunk로 준다.
