@@ -543,6 +543,8 @@ class DocumentServiceConvertTest {
                 eq("doc_placeholder"), eq(1L), anyString(), anyString(), eq(USER_ID), any());
         verify(contentVersionRepository).insertIfAbsent(
                 eq("doc_placeholder"), eq(2L), eq("# 변환된 본문\n"), anyString(), eq(USER_ID), any());
+        // 묶음 경로와 같이 본문이 가리키는 asset 참조를 맞춘다. 그래야 문서 삭제 후 변환 이미지가 정리된다.
+        verify(assetReferenceSynchronizer).synchronize(eq("doc_placeholder"), eq(WORKSPACE_ID), any());
         assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.completed);
         assertThat(placeholder.getProcessedAt()).isNotNull();
         assertThat(placeholder.getByteSize())
