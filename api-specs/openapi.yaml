@@ -5412,6 +5412,11 @@ components:
           type: string
           description: 저장한 사용자 ID
           example: user_3f1c8a6b52d7411e9c04ab5d2e7f6081
+        restored_from_version:
+          type: integer
+          format: int64
+          description: 버전 복원으로 만든 버전이면 복원 대상 버전 번호. 일반 저장·AI 적용·기록 이전 버전은 null
+          example: 2
         version:
           type: integer
           format: int64

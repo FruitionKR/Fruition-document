@@ -600,11 +600,14 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
       "content_hash": "string",
       "created_at": "2026-08-13T04:25:24.371948Z",
       "created_by": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081",
+      "restored_from_version": 2,
       "version": 3
     }
   ]
 }
 ```
+
+- `restored_from_version`: 버전 복원(`POST .../versions/{version}/restore`)으로 만든 버전이면 복원 대상 버전 번호, 그 밖에는 `null`이다. 일반 저장·Agent 적용·복원 직후 이어진 저장은 `null`이다. 이 필드를 추가하기 전(V57 이전)에 만든 버전은 복원 여부를 알 수 없어 모두 `null`이다. 대상 버전이 나중에 정리되어도 번호는 그대로 남는다.
 
 #### 6. Error response
 
@@ -654,6 +657,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
       "content_hash": "string",
       "created_at": "2026-08-13T04:25:24.371948Z",
       "created_by": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081",
+      "restored_from_version": 2,
       "version": 3
     }
   ]

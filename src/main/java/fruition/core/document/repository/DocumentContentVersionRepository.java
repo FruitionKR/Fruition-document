@@ -44,10 +44,24 @@ public interface DocumentContentVersionRepository
             @Param("operationId") String operationId
     );
 
+    /** 버전 복원으로 만든 버전에 복원 대상 버전을 기록한다. */
+    @Modifying
+    @Query("""
+            UPDATE DocumentContentVersion v SET v.restoredFromVersion = :restoredFromVersion
+            WHERE v.id.documentId = :documentId AND v.id.version = :version
+              AND v.restoredFromVersion IS NULL
+            """)
+    int markRestoredFrom(
+            @Param("documentId") String documentId,
+            @Param("version") long version,
+            @Param("restoredFromVersion") long restoredFromVersion
+    );
+
     /** 이력 목록. markdown 본문을 제외한 메타데이터만 최신 버전 순으로 반환한다. */
     @Query("""
             SELECT v.id.version AS version, v.contentHash AS contentHash,
-                   v.createdBy AS createdBy, v.createdAt AS createdAt
+                   v.createdBy AS createdBy, v.createdAt AS createdAt,
+                   v.restoredFromVersion AS restoredFromVersion
             FROM DocumentContentVersion v
             WHERE v.id.documentId = :documentId
             ORDER BY v.id.version DESC
@@ -59,5 +73,6 @@ public interface DocumentContentVersionRepository
         String getContentHash();
         String getCreatedBy();
         Instant getCreatedAt();
+        Long getRestoredFromVersion();
     }
 }

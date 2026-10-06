@@ -1430,7 +1430,7 @@ public class DocumentService {
             String applyOperationId
     ) {
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                source, applyOperationId, false);
+                source, applyOperationId, false, null);
     }
 
     private DocumentContentSaveResponse saveContent(
@@ -1442,13 +1442,14 @@ public class DocumentService {
             String revisionWriteId,
             String source,
             String applyOperationId,
-            boolean applyOperationClaimed
+            boolean applyOperationClaimed,
+            Long restoredFromVersion
     ) {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
         try {
             return executeWithSaveRetry(() -> saveTransaction.execute(status -> saveContentInTransaction(
                     workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                    source, applyOperationId, applyOperationClaimed)));
+                    source, applyOperationId, applyOperationClaimed, restoredFromVersion)));
         } catch (DocumentVersionConflictException conflict) {
             if (applyOperationId != null && !applyOperationId.isBlank()) {
                 recordConflictInIndependentTransaction(
@@ -1478,7 +1479,7 @@ public class DocumentService {
         }
         return saveContentInTransaction(
                 workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                source, null, false);
+                source, null, false, null);
     }
 
     private DocumentContentSaveResponse saveContentInTransaction(
@@ -1490,7 +1491,8 @@ public class DocumentService {
             String revisionWriteId,
             String source,
             String applyOperationId,
-            boolean applyOperationClaimed
+            boolean applyOperationClaimed,
+            Long restoredFromVersion
     ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         if (applyOperationId != null && !applyOperationId.isBlank()
@@ -1559,6 +1561,9 @@ public class DocumentService {
             projectContentVersions(documentId, content.markdown(), result);
         }
         if (result.changed()) {
+            if (restoredFromVersion != null) {
+                contentVersionRepository.markRestoredFrom(documentId, result.revision(), restoredFromVersion);
+            }
             // 재ingest 필요 판단용 projection: 목록 API가 PG만으로 현재 편집본 해시를 비교할 수 있게 한다.
             documentRepository.updateCurrentContentHash(documentId, result.contentHash(), result.updatedAt());
             // 이미지를 첨부하지 않는 저장에서도 본문에 남은 관리 이미지를 기준으로 참조를 맞춘다.
@@ -1684,7 +1689,7 @@ public class DocumentService {
                 assetRepository.saveAll(assets);
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),
-                        baseVersion, revisionWriteId, null, applyOperationId, false);
+                        baseVersion, revisionWriteId, null, applyOperationId, false, null);
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
                     assetRepository.deleteAllInBatch(assets);
@@ -1775,7 +1780,8 @@ public class DocumentService {
                         "현재 Markdown 편집 상태를 찾을 수 없습니다."));
         List<DocumentContentVersionListResponse.Item> items = contentVersionRepository.findSummaries(documentId).stream()
                 .map(s -> new DocumentContentVersionListResponse.Item(
-                        s.getVersion(), s.getContentHash(), s.getCreatedBy(), s.getCreatedAt()))
+                        s.getVersion(), s.getContentHash(), s.getCreatedBy(), s.getCreatedAt(),
+                        s.getRestoredFromVersion()))
                 .toList();
         return new DocumentContentVersionListResponse(documentId, editRevision, items);
     }
@@ -1825,7 +1831,10 @@ public class DocumentService {
                 target.getMarkdown(),
                 baseVersion,
                 "restore:" + version + ":" + baseVersion,
-                null
+                null,
+                null,
+                false,
+                version
         );
     }
 
