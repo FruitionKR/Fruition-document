@@ -218,6 +218,35 @@ class DocumentControllerTest {
     }
 
     @Test
+    void getOriginal_servesLegacyUnknownMimeAsAttachment() throws Exception {
+        when(documentService.getOriginal(WORKSPACE_ID, USER_ID, "doc_legacy")).thenReturn(
+                new fruition.core.document.dto.DocumentOriginalResult(
+                        "text/html", "노트\".md", new java.io.ByteArrayInputStream(new byte[0])));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/documents/doc_legacy/original")
+                        .header("Authorization", bearerToken()))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "application/octet-stream"))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, containsString("attachment;")))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, containsString("filename*=UTF-8''")))
+                .andExpect(header().string("Content-Security-Policy", "sandbox; default-src 'none'"));
+    }
+
+    @Test
+    void getOriginal_servesPdfInlineWithoutSandbox() throws Exception {
+        when(documentService.getOriginal(WORKSPACE_ID, USER_ID, "doc_pdf")).thenReturn(
+                new fruition.core.document.dto.DocumentOriginalResult(
+                        "application/pdf", "자료.pdf", new java.io.ByteArrayInputStream(new byte[0])));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/documents/doc_pdf/original")
+                        .header("Authorization", bearerToken()))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "application/pdf"))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, containsString("inline;")))
+                .andExpect(header().doesNotExist("Content-Security-Policy"));
+    }
+
+    @Test
     void upload_passesFolderIdToService() throws Exception {
         java.util.UUID folderId = java.util.UUID.fromString("55555555-5555-5555-5555-555555555555");
         MockMultipartFile file = new MockMultipartFile(

@@ -25,6 +25,7 @@ import fruition.shared.idempotency.IdempotencyConflictException;
 import fruition.shared.idempotency.IdempotencyInProgressException;
 import fruition.core.document.exception.InvalidMarkdownContentException;
 import fruition.core.document.exception.MarkdownContentTooLargeException;
+import fruition.core.document.exception.UnsupportedDocumentFileException;
 import fruition.core.document.dto.DocumentDetailResponse;
 import fruition.core.document.dto.DocumentContentSaveResponse;
 import fruition.core.document.dto.DocumentContentDiffResponse;
@@ -92,6 +93,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -108,6 +110,9 @@ public class DocumentService {
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
     private static final String INITIAL_NOTE_FILENAME = "새 노트.md";
     private static final String CONVERT_PLACEHOLDER_MARKDOWN = "PDF 변환 중...\n";
+    private static final String PDF_MIME_TYPE = "application/pdf";
+    private static final String MARKDOWN_MIME_TYPE = "text/markdown";
+    private static final byte[] PDF_SIGNATURE = "%PDF-".getBytes(StandardCharsets.US_ASCII);
 
     private final DocumentRepository documentRepository;
     private final FolderRepository folderRepository;
@@ -216,9 +221,13 @@ public class DocumentService {
         try {
             String filename = file.getOriginalFilename();
             validateFilename(filename);
+            // txt는 내용상 Markdown이므로 .md 이름의 편집 문서로 받는다.
             filename = filename.trim().replaceFirst("(?i)\\.txt$", ".md");
-            String mimeType = resolveMimeType(file);
-            boolean markdownUpload = isMarkdown(filename, mimeType);
+            String mimeType = resolveMimeType(filename);
+            boolean markdownUpload = MARKDOWN_MIME_TYPE.equals(mimeType);
+            if (!markdownUpload && !(file instanceof StoredOriginal)) {
+                requirePdfSignature(file);
+            }
             DocumentEditingRules.MarkdownContent markdownContent =
                     markdownUpload ? readUploadedMarkdown(file) : null;
             String contentHash = markdownUpload ? markdownContent.contentHash()
@@ -286,7 +295,8 @@ public class DocumentService {
                  | IdempotencyConflictException
                  | IdempotencyInProgressException
                  | InvalidMarkdownContentException
-                 | MarkdownContentTooLargeException e) {
+                 | MarkdownContentTooLargeException
+                 | UnsupportedDocumentFileException e) {
             throw e;
         } catch (Exception e) {
             if (objectStored) {
@@ -442,21 +452,24 @@ public class DocumentService {
         }
     }
 
-    /** txt는 .md 이름의 Markdown 편집 문서로 받으므로 text/markdown으로 정규화한다. */
-    private String resolveMimeType(MultipartFile file) {
-        String contentType = file.getContentType();
-        String filename = file.getOriginalFilename();
-        String normalizedFilename = filename == null ? "" : filename.toLowerCase(java.util.Locale.ROOT);
-        if ("text/plain".equals(contentType) || normalizedFilename.endsWith(".txt")) {
-            return "text/markdown";
-        }
-        if (contentType != null && !contentType.equals("application/octet-stream")) {
-            return contentType;
+    /** 클라이언트가 보낸 Content-Type은 믿지 않고, 확장자로 서버가 정한 MIME만 저장한다. */
+    private String resolveMimeType(String filename) {
+        String normalizedFilename = filename.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalizedFilename.endsWith(".pdf")) {
+            return PDF_MIME_TYPE;
         }
         if (normalizedFilename.endsWith(".md") || normalizedFilename.endsWith(".markdown")) {
-            return "text/markdown";
+            return MARKDOWN_MIME_TYPE;
         }
-        return contentType != null ? contentType : "application/octet-stream";
+        throw new UnsupportedDocumentFileException("PDF, Markdown 또는 txt 파일만 업로드할 수 있습니다.");
+    }
+
+    private void requirePdfSignature(MultipartFile file) throws IOException {
+        try (InputStream stream = file.getInputStream()) {
+            if (!Arrays.equals(stream.readNBytes(PDF_SIGNATURE.length), PDF_SIGNATURE)) {
+                throw new UnsupportedDocumentFileException("PDF 파일 내용이 올바르지 않습니다.");
+            }
+        }
     }
 
     private DocumentUploadResponse createMarkdownDocument(
@@ -511,14 +524,6 @@ public class DocumentService {
                 && folderRepository.findActiveForUpdate(folderId, workspaceId).isEmpty()) {
             throw new HierarchyItemNotFoundException("대상 폴더를 찾을 수 없습니다.");
         }
-    }
-
-    private boolean isMarkdown(String filename, String mimeType) {
-        String normalizedFilename = filename.toLowerCase(java.util.Locale.ROOT);
-        return "text/markdown".equals(mimeType)
-                || "text/x-markdown".equals(mimeType)
-                || normalizedFilename.endsWith(".md")
-                || normalizedFilename.endsWith(".markdown");
     }
 
     private DocumentUploadResponse toUploadResponse(Document document, boolean editable) {
@@ -2172,7 +2177,7 @@ public class DocumentService {
         if (trimmed.isEmpty() || trimmed.length() > 255) {
             throw new InvalidDocumentFilenameException("문서 이름은 1자 이상 255자 이하여야 합니다.");
         }
-        if (trimmed.contains("/") || trimmed.contains("\\") || trimmed.indexOf('\0') >= 0) {
+        if (trimmed.contains("/") || trimmed.contains("\\") || trimmed.codePoints().anyMatch(Character::isISOControl)) {
             throw new InvalidDocumentFilenameException("문서 이름에 허용되지 않는 문자가 포함되어 있습니다.");
         }
     }
