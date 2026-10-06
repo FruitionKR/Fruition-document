@@ -64,4 +64,46 @@ class AiMarkdownSanitizerTest {
                 + "[source crop](data:image/png;base64,AAAA)";
         assertThat(AiMarkdownSanitizer.sanitize(safe)).isEqualTo(safe);
     }
+
+    @Test
+    @DisplayName("수천 자짜리 태그도 스택을 넘치지 않고 처리한다")
+    void handlesVeryLongTagsWithoutStackOverflow() throws Exception {
+        String[] inputs = {
+                "<div " + "a=b ".repeat(5000) + ">x</div>",
+                "<div ".repeat(20000),
+                "<div " + "a=\"b\" ".repeat(20000) + ">x</div>",
+                "<div><img src=data:image/png;base64," + "A".repeat(100000) + "></div>"
+        };
+        // 운영(Linux x64) 기본 스레드 스택 1MB에서도 넘치지 않아야 한다.
+        for (String input : inputs) {
+            var result = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            Thread thread = new Thread(null, () -> {
+                try {
+                    AiMarkdownSanitizer.sanitize(input);
+                } catch (Throwable throwable) {
+                    result.set(throwable);
+                }
+            }, "sanitize", 1024 * 1024);
+            thread.start();
+            thread.join();
+            assertThat(result.get()).isNull();
+        }
+        assertThat(AiMarkdownSanitizer.sanitize("<div " + "a=b ".repeat(5000) + ">x</div>").strip()).isEqualTo("x");
+    }
+
+    @Test
+    @DisplayName("닫히지 않은 태그가 남은 HTML 블록도 글자로 보이게 escape한다")
+    void escapesUnclosedTagsInHtmlBlocks() {
+        assertThat(AiMarkdownSanitizer.sanitize("<div onmouseover=alert(1)\n\nhello"))
+                .isEqualTo("\\<div onmouseover=alert(1)\n\nhello");
+        assertThat(AiMarkdownSanitizer.sanitize("<div>\n<img src=x onerror=alert(1)\n\nhello"))
+                .doesNotContainPattern("(?<!\\\\)<img").contains("\\<img");
+    }
+
+    @Test
+    @DisplayName("접기 태그는 지우고 안의 글자를 남긴다")
+    void stripsDetailsAndSummaryTags() {
+        assertThat(AiMarkdownSanitizer.sanitize("a <details><summary>요약</summary> b"))
+                .isEqualTo("a 요약 b");
+    }
 }

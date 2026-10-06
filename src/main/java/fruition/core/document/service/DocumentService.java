@@ -995,8 +995,11 @@ public class DocumentService {
             String markdown = converterClient.convertPdf(
                     source.getFilename(), pdfBytes, aiModel.provider(), aiModel.model(),
                     () -> taskWriter.active("convert:" + documentId));
+            // 묶음 경로와 같이 data: 이미지를 asset으로 옮겨 크기·해상도 상한을 적용한다. 저장이 실패해 참조가
+            // 남지 않은 asset은 DocumentAssetCleanupWorker가 정리한다.
+            String externalized = transactionTemplate.execute(status -> externalizeConvertedImages(placeholder, markdown));
             DocumentEditingRules.MarkdownContent content =
-                    DocumentEditingRules.markdown(AiMarkdownSanitizer.sanitize(markdown));
+                    DocumentEditingRules.markdown(AiMarkdownSanitizer.sanitize(externalized));
             applyConvertedMarkdown(queueId, placeholder, content);
             log.info("[문서 변환 완료] documentId={} sourceDocumentId={} markdownByteSize={}",
                     documentId, sourceDocumentId, content.bytes().length);
