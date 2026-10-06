@@ -995,11 +995,11 @@ public class DocumentService {
             String markdown = converterClient.convertPdf(
                     source.getFilename(), pdfBytes, aiModel.provider(), aiModel.model(),
                     () -> taskWriter.active("convert:" + documentId));
-            DocumentEditingRules.MarkdownContent content =
-                    DocumentEditingRules.markdown(AiMarkdownSanitizer.sanitize(markdown));
-            applyConvertedMarkdown(queueId, placeholder, content);
-            log.info("[문서 변환 완료] documentId={} sourceDocumentId={} markdownByteSize={}",
-                    documentId, sourceDocumentId, content.bytes().length);
+            DocumentEditingRules.MarkdownContent content = applyConvertedMarkdown(queueId, placeholder, markdown);
+            if (content != null) {
+                log.info("[문서 변환 완료] documentId={} sourceDocumentId={} markdownByteSize={}",
+                        documentId, sourceDocumentId, content.bytes().length);
+            }
         } catch (Exception e) {
             // DocumentConvertException 메시지에 변환기 상태 코드(422/504/503 등) 원인이 담겨 온다.
             Instant now = Instant.now();
@@ -1234,17 +1234,23 @@ public class DocumentService {
     }
 
     /**
-     * 변환 Markdown을 placeholder 문서에 반영한다. 시스템 쓰기라 revision 충돌 우려가 없어 base_revision 1로
+     * 변환 Markdown을 placeholder 문서에 반영하고 저장한 본문을 돌려준다(작업이 취소됐으면 null).
+     * 묶음 경로와 같이 data: 이미지를 asset으로 옮겨 크기·해상도 상한을 적용하고, 저장·asset 참조를 한
+     * 트랜잭션에 묶어 저장이 실패하면 옮긴 이미지도 함께 되돌린다.
+     *
+     * <p>시스템 쓰기라 revision 충돌 우려가 없어 base_revision 1로
      * 저장하고, write_id({@code convert:<queueId>}) 재시도는 PostgreSQL write receipt가 멱등하게 처리한다.
      */
-    private void applyConvertedMarkdown(
+    private DocumentEditingRules.MarkdownContent applyConvertedMarkdown(
             long queueId,
             Document placeholder,
-            DocumentEditingRules.MarkdownContent content
+            String convertedMarkdown
     ) {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
-        executeWithSaveRetry(() -> saveTransaction.execute(status -> {
+        return executeWithSaveRetry(() -> saveTransaction.execute(status -> {
             if (!taskWriter.join("convert:" + placeholder.getId())) return null;
+            DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(
+                    AiMarkdownSanitizer.sanitize(externalizeConvertedImages(placeholder, convertedMarkdown)));
             PostgresDocumentEditSaveResult result = postgresDocumentEditStore.save(
                     placeholder.getWorkspaceId(),
                     placeholder.getId(),
@@ -1260,9 +1266,11 @@ public class DocumentService {
                 Instant now = Instant.now();
                 documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc ->
                         doc.completeConvert(content.contentHash(), content.bytes().length, now));
+                assetReferenceSynchronizer.synchronize(placeholder.getId(), placeholder.getWorkspaceId(),
+                        assetReferenceParser.parse(content.markdown()));
             }
             taskWriter.complete("convert:" + placeholder.getId());
-            return null;
+            return content;
         }));
     }
 

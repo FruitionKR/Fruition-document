@@ -543,10 +543,44 @@ class DocumentServiceConvertTest {
                 eq("doc_placeholder"), eq(1L), anyString(), anyString(), eq(USER_ID), any());
         verify(contentVersionRepository).insertIfAbsent(
                 eq("doc_placeholder"), eq(2L), eq("# 변환된 본문\n"), anyString(), eq(USER_ID), any());
+        // 묶음 경로와 같이 본문이 가리키는 asset 참조를 맞춘다. 그래야 문서 삭제 후 변환 이미지가 정리된다.
+        verify(assetReferenceSynchronizer).synchronize(eq("doc_placeholder"), eq(WORKSPACE_ID), any());
         assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.completed);
         assertThat(placeholder.getProcessedAt()).isNotNull();
         assertThat(placeholder.getByteSize())
                 .isEqualTo("# 변환된 본문\n".getBytes(StandardCharsets.UTF_8).length);
+    }
+
+    @Test
+    @DisplayName("단일 변환 경로도 해상도 상한을 넘는 data: 이미지를 저장하지 않고 생략 문구로 바꾼다")
+    void doConvert_singlePath_replacesOversizedImage() throws Exception {
+        Document placeholder = placeholderDocument();
+        Document source = sourcePdf();
+        byte[] pdfBytes = "%PDF-1.4".getBytes(StandardCharsets.US_ASCII);
+        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder"))
+                .thenReturn(Optional.of(placeholder));
+        when(documentRepository.findById(SOURCE_DOCUMENT_ID)).thenReturn(Optional.of(source));
+        when(storageProps.getBucket()).thenReturn("fruition-storage");
+        when(minioClient.getObject(any())).thenReturn(new GetObjectResponse(
+                Headers.of(), "fruition-storage", "us-east-1",
+                source.getSourceUri(), new ByteArrayInputStream(pdfBytes)));
+        String png = java.util.Base64.getEncoder().encodeToString(pngHeader(20_000, 10));
+        when(converterClient.convertPdf(anyString(), any(), anyString(), anyString(),
+                any(java.util.function.BooleanSupplier.class)))
+                .thenReturn("앞\n\n![figure](data:image/png;base64," + png + ")\n\n뒤\n");
+        when(postgresDocumentEditStore.save(
+                anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
+                anyString(), any()))
+                .thenAnswer(invocation -> new PostgresDocumentEditSaveResult(
+                        1L, "", "", 2L, invocation.getArgument(3), Instant.now(),
+                        invocation.getArgument(6), true, false));
+
+        documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
+
+        verify(postgresDocumentEditStore).save(
+                eq(WORKSPACE_ID), eq("doc_placeholder"), eq("앞\n\n(이미지가 너무 커서 생략됨)\n\n뒤\n"),
+                anyString(), eq(1L), eq("convert:7"), eq(USER_ID), isNull());
+        verify(assetRepository, never()).save(any());
     }
 
     @Test

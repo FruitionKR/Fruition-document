@@ -38,8 +38,11 @@ public final class AiMarkdownSanitizer {
     private static final Parser PARSER = Parser.builder()
             .includeSourceSpans(IncludeSourceSpans.BLOCKS_AND_INLINES)
             .build();
+    // 속성 부분은 소유 수량자로 쓴다. 일반 반복은 글자마다 재귀해 수천 자짜리 태그 하나로 StackOverflowError가 난다.
+    // 세 갈래의 첫 글자가 겹치지 않아 되돌아갈 필요가 없으므로 매칭 결과는 같다.
     private static final Pattern TAG = Pattern.compile(
-            "<!--[\\s\\S]*?-->|<(/?)([A-Za-z][A-Za-z0-9-]*)(?:[^>\"']|\"[^\"]*\"|'[^']*')*>");
+            "<!--[\\s\\S]*?-->|<(/?)([A-Za-z][A-Za-z0-9-]*)(?:[^>\"']++|\"[^\"]*+\"|'[^']*+')*+>");
+    private static final Pattern STRAY_LT = Pattern.compile("(?<!\\\\)<(?!!--)");
     private static final Pattern TAG_NAME = Pattern.compile("^</?([A-Za-z][A-Za-z0-9-]*)");
     private static final Pattern RAW_TEXT_BLOCK = Pattern.compile("^\\s*<(script|style|textarea)\\b",
             Pattern.CASE_INSENSITIVE);
@@ -53,7 +56,7 @@ public final class AiMarkdownSanitizer {
             "u", "b", "i", "em", "strong", "span", "font", "sup", "sub", "small", "big", "mark", "s", "strike",
             "del", "ins", "center", "a", "abbr", "cite", "code", "kbd", "var", "q", "table", "thead", "tbody",
             "tfoot", "caption", "colgroup", "col", "ul", "ol", "dl", "dt", "dd", "blockquote", "pre", "section",
-            "article", "header", "footer", "figure", "figcaption");
+            "article", "header", "footer", "figure", "figcaption", "details", "summary");
     private static final Set<String> DROP_TAGS = Set.of(
             "script", "style", "iframe", "frame", "frameset", "object", "embed", "applet", "img", "svg", "math",
             "video", "audio", "source", "track", "picture", "canvas", "form", "input", "button", "select", "option",
@@ -106,15 +109,14 @@ public final class AiMarkdownSanitizer {
                 }
                 Matcher tag = TAG.matcher(source);
                 StringBuilder replaced = new StringBuilder();
+                int last = 0;
                 while (tag.find()) {
-                    String replacement = tag.group(2) == null ? tag.group() : replaceTag(tag.group(), tag.group(2), escapeAll);
-                    tag.appendReplacement(replaced, Matcher.quoteReplacement(replacement));
+                    // 태그로 매칭되지 않은 '<'(닫히지 않은 태그, 선언·처리 명령 등)도 블록을 HTML로 만들 수 있어 escape한다.
+                    replaced.append(escapeStray(source.substring(last, tag.start())));
+                    replaced.append(tag.group(2) == null ? tag.group() : replaceTag(tag.group(), tag.group(2), escapeAll));
+                    last = tag.end();
                 }
-                tag.appendTail(replaced);
-                if (escapeAll) {
-                    // 태그 모양이 아닌 '<'(선언·처리 명령 등)도 블록을 HTML로 만들 수 있다.
-                    replaced = new StringBuilder(replaced.toString().replaceAll("(?<!\\\\)<(?!!--)", "\\\\<"));
-                }
+                replaced.append(escapeStray(source.substring(last)));
                 edits.add(new Edit(range.start(), range.end(), replaced.toString()));
             }
 
@@ -179,6 +181,10 @@ public final class AiMarkdownSanitizer {
             return " ";
         }
         return FORMAT_TAGS.contains(lower) ? "" : "\\" + tag;
+    }
+
+    private static String escapeStray(String text) {
+        return STRAY_LT.matcher(text).replaceAll("\\\\<");
     }
 
     private static boolean isSafe(String destination) {
