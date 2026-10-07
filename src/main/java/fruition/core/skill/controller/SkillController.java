@@ -41,7 +41,9 @@ public class SkillController {
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "초안 작성 성공",
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
-        @ApiResponse(responseCode = "400", description = "잘못된 요청",
+        @ApiResponse(responseCode = "400", description = "AI가 거절한 요청. code: SKILL_INTENT_AMBIGUOUS(작업을 특정할 수 없음), "
+                + "SKILL_INTENT_UNSUPPORTED(지원하지 않는 작업), SKILL_INSTRUCTION_INVALID(지침 길이·이름 형식·참조 문서 오류), "
+                + "SKILL_REQUEST_REJECTED(그 밖의 거절)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "워크스페이스 또는 참조 문서를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
