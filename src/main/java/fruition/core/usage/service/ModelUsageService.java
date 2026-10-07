@@ -29,6 +29,11 @@ public class ModelUsageService {
 
     public JsonNode read(String workspaceId, String userId, Instant from, Instant to) {
         guard.requireMember(workspaceId, userId);
+        return fetch(workspaceId, userId, from, to);
+    }
+
+    /** 멤버 확인 없이 조회한다. 탈퇴·제거된 사용자까지 정산하는 OWNER 경로가 쓴다. */
+    public JsonNode fetch(String workspaceId, String userId, Instant from, Instant to) {
         if (from != null && to != null && !from.isBefore(to)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "조회 시작은 종료보다 앞서야 합니다.");
         }

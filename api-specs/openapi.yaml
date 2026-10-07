@@ -3934,6 +3934,91 @@ paths:
       summary: 본인의 모델별 토큰 사용량 조회
       tags:
       - model-usage-controller
+  /api/workspaces/{workspace_id}/usage/settlement:
+    get:
+      description: "OWNER만 호출합니다. 기간 [from_at, to_at)에 멤버였던 사용자(탈퇴·제거 포함)별로 모델 단가(USD / 1M tokens)를 곱한 금액을 계산하고 저장하지 않습니다. 단가가 없는 모델은 amount_usd가 null이고 price_missing이 true이며 합계에서 빠집니다. 기간은 366일 이하입니다."
+      operationId: preview_1
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: query
+        name: from_at
+        required: true
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: to_at
+        required: true
+        schema:
+          type: string
+          format: date-time
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Settlement"
+          description: OK
+      summary: AI 사용량 정산 미리보기
+      tags:
+      - model-usage-controller
+  /api/workspaces/{workspace_id}/usage/settlements:
+    get:
+      description: OWNER만 호출합니다. 최근 기간부터 반환합니다.
+      operationId: closed
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Settlement"
+          description: OK
+      summary: 마감한 AI 사용량 정산 목록
+      tags:
+      - model-usage-controller
+    post:
+      description: "OWNER만 호출합니다. 계산 결과를 저장해 이후 단가가 바뀌어도 금액이 변하지 않습니다. 같은 기간을 다시 마감하면 저장된 결과를 돌려주고, 마감한 기간과 겹치면 409입니다."
+      operationId: close
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettlementRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Settlement"
+          description: OK
+      summary: AI 사용량 정산 마감
+      tags:
+      - model-usage-controller
   /api/workspaces/{workspace_id}/wiki-schema/active:
     get:
       description: 활성 Schema가 없으면 null을 포함한 200 응답을 반환합니다.
@@ -6773,6 +6858,41 @@ components:
           type: string
           description: 처리 상태
           example: completed
+    ModelLine:
+      type: object
+      properties:
+        amount_usd:
+          type: number
+        cache_creation_tokens:
+          type: integer
+          format: int64
+        cached_input_tokens:
+          type: integer
+          format: int64
+        calls:
+          type: integer
+          format: int64
+        input_tokens:
+          type: integer
+          format: int64
+        model:
+          type: string
+        output_tokens:
+          type: integer
+          format: int64
+        price_missing:
+          type: boolean
+        provider:
+          type: string
+        reasoning_tokens:
+          type: integer
+          format: int64
+        unfinished_calls:
+          type: integer
+          format: int64
+        unknown_usage_calls:
+          type: integer
+          format: int64
     ModelResponse:
       type: object
       description: 선택 가능한 모델 하나
@@ -7352,6 +7472,44 @@ components:
         ingest_lint:
           $ref: "#/components/schemas/AiModelSelectionResponse"
           description: ingest·lint에 쓰는 provider/model 조합
+    Settlement:
+      type: object
+      properties:
+        closed_at:
+          type: string
+          format: date-time
+        closed_by:
+          type: string
+        currency:
+          type: string
+        from_at:
+          type: string
+          format: date-time
+        price_missing:
+          type: boolean
+        to_at:
+          type: string
+          format: date-time
+        total_usd:
+          type: number
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserLine"
+        workspace_id:
+          type: string
+    SettlementRequest:
+      type: object
+      properties:
+        from_at:
+          type: string
+          format: date-time
+        to_at:
+          type: string
+          format: date-time
+      required:
+      - from_at
+      - to_at
     SkillAuthoringRequest:
       type: object
       description: Skill 초안 작성 요청. 실제 작성은 pipeline에 위임한다.
@@ -7734,6 +7892,19 @@ components:
           type: boolean
           description: 이 경로가 실제 답변 생성에 쓰였는지 여부
           example: true
+    UserLine:
+      type: object
+      properties:
+        amount_usd:
+          type: number
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelLine"
+        price_missing:
+          type: boolean
+        user_id:
+          type: string
     WikiGraphEdge:
       type: object
       description: Wiki 페이지 사이의 방향 있는 관계

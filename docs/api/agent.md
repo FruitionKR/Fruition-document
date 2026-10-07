@@ -1130,3 +1130,35 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 - 하위 호출: ai-svc `GET ${MODEL_USAGE_ENDPOINT}?workspace_id&user_id[&from_at&to_at]` (`src/main/java/fruition/core/usage/service/ModelUsageService.java`, `X-Internal-Token`)
 - 진입점: `src/main/java/fruition/core/usage/controller/ModelUsageController.java`
 - 배선 상태: **미배선 — 호출자 없음**
+
+## AI 사용량 정산 (OWNER)
+
+| Method + Path | 동작 |
+|---|---|
+| `GET /api/workspaces/{workspace_id}/usage/settlement?from_at=...&to_at=...` | 미리보기. 계산만 하고 저장하지 않는다. |
+| `POST /api/workspaces/{workspace_id}/usage/settlements` (`{"from_at","to_at"}`) | 마감. 계산 결과를 저장한다. 같은 기간을 다시 마감하면 저장된 결과를 돌려준다. |
+| `GET /api/workspaces/{workspace_id}/usage/settlements` | 마감한 정산 목록(최근 기간부터). |
+
+- 권한: OWNER만. 비멤버 404, MEMBER 403.
+- 대상: 기간 `[from_at, to_at)`에 멤버였던 사용자 전원. 탈퇴·제거된 사용자도 access 멤버십 이력(`GET /internal/workspaces/{id}/member-users`)으로 포함한다. 사용량이 없는 사용자는 응답에 넣지 않는다.
+- 단가: `ai_model_prices`의 실제 응답 모델(`provider`, `model`)별 USD / 1M tokens. 기간 중 단가가 바뀌면 그 시점으로 기간을 나눠 사용자 × 구간마다 AI `/usage/models`를 조회하고 구간마다 그때 단가를 곱한다.
+- 금액: (입력 − 캐시 읽기 − 캐시 생성) × 입력 단가 + 캐시 읽기 × 캐시 읽기 단가 + 캐시 생성 × 캐시 생성 단가 + 출력 × 출력 단가. 입력은 캐시를 포함한 합계이고, reasoning은 출력에 포함돼 따로 과금하지 않는다.
+- 단가가 없는 모델: `amount_usd`가 `null`, `price_missing`이 `true`이며 합계(`total_usd`, 사용자 `amount_usd`)에서 빠진다. 사용량 미확인(`unknown_usage_calls`)·미완료(`unfinished_calls`) 호출은 건수로만 표시한다.
+- 마감 후 단가표를 바꿔도 저장된 금액은 바뀌지 않는다. 마감한 기간과 겹치는 기간을 마감하면 409.
+- 오류: 시작 ≥ 종료 또는 366일 초과 400, access·AI 장애 503.
+
+```json
+{
+  "workspace_id": "ws_1", "from_at": "2026-09-01T00:00:00Z", "to_at": "2026-10-01T00:00:00Z",
+  "currency": "USD", "total_usd": 3.000000, "price_missing": false,
+  "users": [{
+    "user_id": "user_1", "amount_usd": 3.000000, "price_missing": false,
+    "models": [{"provider": "openai", "model": "gpt-5-nano", "calls": 12, "unknown_usage_calls": 0,
+      "unfinished_calls": 0, "input_tokens": 2000000, "cached_input_tokens": 0, "cache_creation_tokens": 0,
+      "output_tokens": 0, "reasoning_tokens": 0, "amount_usd": 3.000000, "price_missing": false}]
+  }],
+  "closed_at": null, "closed_by": null
+}
+```
+
+- 진입점: `src/main/java/fruition/core/usage/controller/ModelUsageController.java`, `src/main/java/fruition/core/usage/service/UsageSettlementService.java`
