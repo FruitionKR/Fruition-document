@@ -123,6 +123,9 @@ class UsageSettlementServiceIntegrationTest {
         assertThat(closed.closedAt()).isNotNull();
         assertThat(settlements.closed(workspace, "owner")).singleElement()
                 .satisfies(saved -> assertThat(saved.totalUsd()).isEqualByComparingTo("1"));
+        // 다시 마감하면 AI가 장애여도 저장된 결과를 돌려준다.
+        when(usage.fetch(workspace, "owner", from, to)).thenThrow(new ResponseStatusException(
+                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE));
         assertThat(settlements.close(workspace, "owner", from, to).totalUsd()).isEqualByComparingTo("1");
         assertThatThrownBy(() -> settlements.close(workspace, "owner",
                 Instant.parse("2034-01-15T00:00:00Z"), Instant.parse("2034-02-15T00:00:00Z")))

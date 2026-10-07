@@ -78,16 +78,19 @@ public class UsageSettlementService {
     public Settlement close(String workspaceId, String actorId, Instant from, Instant to) {
         requireOwner(workspaceId, actorId);
         validatePeriod(from, to);
+        // 이미 마감했으면 AI를 다시 부르지 않는다. AI 장애 중에도 저장된 결과를 돌려준다.
+        Settlement saved = findClosed(workspaceId, from, to);
+        if (saved != null) {
+            return saved;
+        }
         // AI·access 호출은 트랜잭션 밖에서 한다.
         Settlement computed = compute(workspaceId, from, to, Instant.now(), actorId);
         return transaction.execute(tx -> {
             // 같은 workspace의 마감을 직렬화한다. 행이 아직 없어 행 잠금으로는 겹침 검사를 지킬 수 없다.
             jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtext(?))", "ai-usage-settlement:" + workspaceId);
-            var same = jdbc.queryForList("SELECT result::text FROM ai_usage_settlements "
-                    + "WHERE workspace_id = ? AND from_at = ? AND to_at = ?", String.class,
-                    workspaceId, Timestamp.from(from), Timestamp.from(to));
-            if (!same.isEmpty()) {
-                return read(same.getFirst());
+            Settlement concurrent = findClosed(workspaceId, from, to);
+            if (concurrent != null) {
+                return concurrent;
             }
             Boolean overlaps = jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM ai_usage_settlements "
                     + "WHERE workspace_id = ? AND from_at < ? AND to_at > ?)", Boolean.class,
@@ -102,6 +105,13 @@ public class UsageSettlementService {
                     Timestamp.from(computed.closedAt()));
             return computed;
         });
+    }
+
+    private Settlement findClosed(String workspaceId, Instant from, Instant to) {
+        var rows = jdbc.queryForList("SELECT result::text FROM ai_usage_settlements "
+                + "WHERE workspace_id = ? AND from_at = ? AND to_at = ?", String.class,
+                workspaceId, Timestamp.from(from), Timestamp.from(to));
+        return rows.isEmpty() ? null : read(rows.getFirst());
     }
 
     public List<Settlement> closed(String workspaceId, String actorId) {
