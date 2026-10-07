@@ -56,13 +56,58 @@ class AiMarkdownSanitizerTest {
         assertThat(AiMarkdownSanitizer.sanitize("[여기를 클릭](javascript:alert(1))")).isEqualTo("여기를 클릭");
         assertThat(AiMarkdownSanitizer.sanitize("[x](JaVa\tScRiPt:alert(1))")).isEqualTo("[x](JaVa\tScRiPt:alert(1))");
         assertThat(AiMarkdownSanitizer.sanitize("[x](&#106;avascript:alert(1))")).isEqualTo("x");
-        assertThat(AiMarkdownSanitizer.sanitize("![로고](vbscript:x)")).isEqualTo("로고");
+        assertThat(AiMarkdownSanitizer.sanitize("![로고](vbscript:x)")).isEqualTo("외부 이미지");
         assertThat(AiMarkdownSanitizer.sanitize("[문서](data:text/html;base64,PHNjcmlwdD4=)")).isEqualTo("문서");
 
-        String safe = "[웹](https://example.com) [메일](mailto:a@b.c) [목차](#intro) "
-                + "![외부](https://example.com/a.png) ![그림](/api/workspaces/ws/assets/a/content) "
-                + "[source crop](data:image/png;base64,AAAA)";
+        String safe = "[목차](#intro) ![그림](/api/workspaces/ws/assets/a/content) "
+                + "[source crop](data:image/png;base64,AAAA) [상대](docs/a.md)";
         assertThat(AiMarkdownSanitizer.sanitize(safe)).isEqualTo(safe);
+    }
+
+    @Test
+    @DisplayName("외부 이미지·링크는 host만 남긴 글자로 바꾼다")
+    void neutralizesExternalImagesAndLinks() {
+        assertThat(AiMarkdownSanitizer.sanitize("![alt](https://Host.Example/x.png?q=회의록)"))
+                .isEqualTo("외부 이미지(host.example)");
+        assertThat(AiMarkdownSanitizer.sanitize("[자세히](https://attacker.example/?q=내용)"))
+                .isEqualTo("자세히 (attacker.example)");
+        assertThat(AiMarkdownSanitizer.sanitize("[](https://host.example/a)")).isEqualTo("host.example");
+        assertThat(AiMarkdownSanitizer.sanitize("<https://host.example/a>")).isEqualTo("host.example");
+        assertThat(AiMarkdownSanitizer.sanitize("[![i](https://a.example/x.png)](https://b.example)"))
+                .isEqualTo("외부 이미지(a.example) (b.example)");
+        assertThat(AiMarkdownSanitizer.sanitize("[메일](mailto:a@b.example)")).isEqualTo("메일");
+        assertThat(AiMarkdownSanitizer.sanitize("[a](https://user@Host.example:8443/p)")).isEqualTo("a (host.example)");
+        assertThat(AiMarkdownSanitizer.sanitize("[r][1]\n\n[1]: https://host.example/a"))
+                .isEqualTo("r (host.example)\n\n[1]: https://host.example/a");
+        assertThat(AiMarkdownSanitizer.sanitize("[링크](https://예시.한국/a)")).isEqualTo("링크 (xn--vv4b11d.xn--3e0b707e)");
+    }
+
+    @Test
+    @DisplayName("scheme 없이 //·/\\로 시작하는 주소도 외부로 본다")
+    void treatsNetworkPathsAsExternal() {
+        assertThat(AiMarkdownSanitizer.sanitize("![](//attacker.example/x.png)")).isEqualTo("외부 이미지(attacker.example)");
+        assertThat(AiMarkdownSanitizer.sanitize("![](/\\attacker.example/x.png)")).isEqualTo("외부 이미지(attacker.example)");
+        assertThat(AiMarkdownSanitizer.sanitize("![]( \t//attacker.example/x.png)")).isEqualTo("외부 이미지(attacker.example)");
+    }
+
+    @Test
+    @DisplayName("코드 안의 주소와 평문 URL은 그대로 두고, 두 번 걸러도 결과가 같다")
+    void keepsCodeAndPlainUrlsAndIsIdempotent() {
+        String code = "`![](https://x.example/a.png)`\n\n```\n[a](https://x.example)\n```\n\nhttps://x.example/plain\n";
+        assertThat(AiMarkdownSanitizer.sanitize(code)).isEqualTo(code);
+
+        String once = AiMarkdownSanitizer.sanitize("[![i](https://a.example/x.png)](https://b.example) <a@b.example>");
+        assertThat(AiMarkdownSanitizer.sanitize(once)).isEqualTo(once);
+    }
+
+    @Test
+    @DisplayName("PDF 변환 결과는 원문 링크를 남기고 외부 이미지만 바꾼다")
+    void convertedKeepsLinksButDropsExternalImages() {
+        assertThat(AiMarkdownSanitizer.sanitizeConverted(
+                "[웹](https://example.com) [메일](mailto:a@b.c) ![외부](https://example.com/a.png) "
+                        + "![그림](/api/workspaces/ws/assets/a/content) [x](javascript:alert(1))"))
+                .isEqualTo("[웹](https://example.com) [메일](mailto:a@b.c) 외부 이미지(example.com) "
+                        + "![그림](/api/workspaces/ws/assets/a/content) x");
     }
 
     @Test

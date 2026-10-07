@@ -7,6 +7,7 @@ import fruition.core.chat.domain.ChatSession;
 import fruition.core.chat.exception.ChatSessionNotFoundException;
 import fruition.core.chat.repository.ChatMessageRepository;
 import fruition.core.chat.repository.ChatSessionRepository;
+import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.core.query.repository.PipelineQueryResponse;
 import fruition.core.query.dto.QueryResponse;
 import org.slf4j.Logger;
@@ -129,7 +130,8 @@ public class QueryService {
                 .orElseThrow(() -> new IllegalStateException(
                         "처리 중인 assistant 메시지를 찾을 수 없습니다: "
                                 + messageContext.assistantMessageId()));
-        assistantMessage.complete(pipelineResponse.answer());
+        String answer = AiMarkdownSanitizer.sanitize(pipelineResponse.answer());
+        assistantMessage.complete(answer);
         chatMessageRepository.save(assistantMessage);
 
         chatEvidenceRecorder.record(assistantMessage, pipelineResponse);
@@ -140,7 +142,7 @@ public class QueryService {
                 new QueryResponse.MessageSummary(messageContext.userMessageId(), "user", question,
                         "completed", messageContext.createdAt()),
                 new QueryResponse.MessageSummary(messageContext.assistantMessageId(), "assistant",
-                        pipelineResponse.answer(), "completed", assistantMessage.getCreatedAt()),
+                        answer, "completed", assistantMessage.getCreatedAt()),
                 pipelineResponse.relatedPages(), pipelineResponse.evidenceSnippets(),
                 pipelineResponse.graphContext(), pipelineResponse.traversalPaths(),
                 pipelineResponse.webSearchRequested(), pipelineResponse.webSearchExecuted(),
