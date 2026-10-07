@@ -3425,7 +3425,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 잘못된 요청
+          description: "AI가 거절한 요청. code: SKILL_INTENT_AMBIGUOUS(작업을 특정할 수 없음), SKILL_INTENT_UNSUPPORTED(지원하지 않는 작업), SKILL_INSTRUCTION_INVALID(지침 길이·이름 형식·참조 문서 오류), SKILL_REQUEST_REJECTED(그 밖의 거절)"
         "404":
           content:
             '*/*':

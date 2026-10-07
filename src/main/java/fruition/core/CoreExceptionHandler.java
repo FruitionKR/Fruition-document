@@ -86,9 +86,10 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
                     .body(e.getResponseBody());
         }
         if (e.getHttpStatus() >= 400 && e.getHttpStatus() < 500) {
-            logHandled(e, e.getHttpStatus(), "SKILL_REQUEST_REJECTED");
+            String code = e.getCode() == null ? "SKILL_REQUEST_REJECTED" : e.getCode();
+            logHandled(e, e.getHttpStatus(), code);
             return ResponseEntity.status(e.getHttpStatus())
-                    .body(ErrorResponse.of("SKILL_REQUEST_REJECTED", e.getMessage()));
+                    .body(ErrorResponse.of(code, e.getMessage()));
         }
         logHandled(e, e.getHttpStatus(), "SKILL_AI_UNAVAILABLE");
         return ResponseEntity.status(e.getHttpStatus())

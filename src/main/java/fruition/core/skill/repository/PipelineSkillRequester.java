@@ -24,6 +24,24 @@ public class PipelineSkillRequester {
     private final fruition.core.aitask.service.AiTaskCancellationService cancellation;
     private final com.fasterxml.jackson.databind.ObjectMapper mapper;
 
+    private static final Rejection DEFAULT_REJECTION = new Rejection("SKILL_REQUEST_REJECTED", "Skill 요청이 거부되었습니다.");
+
+    /** AI 거절 사유 code → 클라이언트 code와 화면에 그대로 보여 줄 문장. AI 문장(영문)은 내보내지 않는다. */
+    private static final java.util.Map<String, Rejection> REJECTIONS = java.util.Map.of(
+            "intent_ambiguous", new Rejection("SKILL_INTENT_AMBIGUOUS",
+                    "어떤 작업을 반복할지 구체적으로 적어 주세요."),
+            "intent_unsupported", new Rejection("SKILL_INTENT_UNSUPPORTED",
+                    "지원하지 않는 작업입니다. 문서 작성·수정·폴더 정리·템플릿 중에서 골라 주세요."),
+            "invalid_instruction_length", new Rejection("SKILL_INSTRUCTION_INVALID",
+                    "지침이 비어 있거나 너무 깁니다. 길이를 확인해 주세요."),
+            "invalid_name", new Rejection("SKILL_INSTRUCTION_INVALID",
+                    "Skill 이름 형식이 올바르지 않습니다."),
+            "invalid_reference", new Rejection("SKILL_INSTRUCTION_INVALID",
+                    "참조 문서를 확인해 주세요. 접근할 수 없거나 비어 있거나 너무 긴 문서가 있습니다."));
+
+    private record Rejection(String code, String message) {
+    }
+
     public PipelineSkillRequester(
             PipelineClientFactory clientFactory,
             @Value("${app.skill.endpoint}") String endpoint,
@@ -140,10 +158,21 @@ public class PipelineSkillRequester {
     private PipelineSkillException translate(RestClientResponseException exception) {
         int status = exception.getStatusCode().value();
         if (status == 400 || status == 404 || status == 409 || status == 410 || status == 413 || status == 422) {
-            return new PipelineSkillException(
-                    "Skill 요청이 거부되었습니다.", status, exception.getResponseBodyAsString());
+            String body = exception.getResponseBodyAsString();
+            Rejection rejection = status == 400
+                    ? REJECTIONS.getOrDefault(rejectionCode(body), DEFAULT_REJECTION) : DEFAULT_REJECTION;
+            return new PipelineSkillException(rejection.message(), status, body, rejection.code());
         }
         return unavailable("Skill 파이프라인을 사용할 수 없습니다.");
+    }
+
+    /** AI 거절 응답 {@code 400 {"detail": {"code", "message"}}}의 code. 형식이 다르면 빈 문자열이다. */
+    private String rejectionCode(String body) {
+        try {
+            return mapper.readTree(body).path("detail").path("code").asText("");
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private PipelineSkillException unavailable(String message) {

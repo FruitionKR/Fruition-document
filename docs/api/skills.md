@@ -289,13 +289,25 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
-| `400` | 잘못된 요청 | `ErrorResponse` |
+| `400` | AI가 거절한 요청(아래 code 표) | `ErrorResponse` |
 | `404` | 워크스페이스 또는 참조 문서를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Skill 이름 또는 버전 충돌 | `ErrorResponse` |
 | `410` | Skill이 더 이상 유효하지 않음 | `ErrorResponse` |
 | `413` | 참조 문서 또는 요청 본문이 너무 큼 | `없음` |
 | `422` | Skill 요청 검증 실패 | `ErrorResponse` |
 | `503` | llmPipeline 사용 불가 | `ErrorResponse` |
+
+AI가 작성 요청을 거절하면 사유별 `code`로 `400`을 반환합니다. `message`는 화면에 그대로 보여 줄 수 있는 한국어 문장입니다.
+AI가 사유 code를 주지 않거나 응답 형식이 다르면 `SKILL_REQUEST_REJECTED`로 반환합니다.
+위험 표현은 오류가 아니라 `200` `status: "blocked"`와 `issues[]`로 반환합니다(변경 없음).
+
+| code | 의미 | AI code |
+|---|---|---|
+| `SKILL_INTENT_AMBIGUOUS` | 수행할 작업을 특정할 수 없음(무의미한 입력 포함) | `intent_ambiguous` |
+| `SKILL_INTENT_UNSUPPORTED` | 지원하지 않는 작업 | `intent_unsupported` |
+| `SKILL_INSTRUCTION_INVALID` | 지침 길이, 이름 형식, 참조 문서 오류. `message`가 항목별로 다름 | `invalid_instruction_length`, `invalid_name`, `invalid_reference` |
+| `SKILL_REQUEST_REJECTED` | 그 밖의 거절 | `skill_request_invalid`, 그 밖의 값 |
+| `SKILL_AI_UNAVAILABLE` | AI 장애·타임아웃(`503`) | - |
 
 ```json
 {
