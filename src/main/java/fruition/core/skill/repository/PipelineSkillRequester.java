@@ -37,7 +37,7 @@ public class PipelineSkillRequester {
             "invalid_name", new Rejection("SKILL_INSTRUCTION_INVALID",
                     "Skill 이름 형식이 올바르지 않습니다."),
             "invalid_reference", new Rejection("SKILL_INSTRUCTION_INVALID",
-                    "참조 문서를 확인해 주세요. 접근할 수 있는 문서를 3개까지, 문서당 40,000자·합계 80,000자 이하로 고를 수 있습니다."));
+                    "참조 문서를 확인해 주세요. 접근할 수 없거나 비어 있거나 너무 긴 문서가 있습니다."));
 
     private record Rejection(String code, String message) {
     }
