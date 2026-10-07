@@ -123,22 +123,20 @@ public class ChangeDiffLoader {
     }
 
     private Map<DocumentContentVersionId, String> loadDocumentMarkdown(List<OperationChange> changes) {
-        List<DocumentContentVersionId> ids = new ArrayList<>();
+        Map<String, java.util.Set<Long>> revisions = new java.util.HashMap<>();
         for (OperationChange change : changes) {
             if (diffable(change) && change.getResourceType() == ResourceType.document) {
-                if (change.getBeforeRevision() != null) {
-                    ids.add(new DocumentContentVersionId(change.getResourceId(), change.getBeforeRevision()));
-                }
-                ids.add(new DocumentContentVersionId(change.getResourceId(), change.getAfterRevision()));
+                var documentRevisions = revisions.computeIfAbsent(change.getResourceId(), id -> new java.util.HashSet<>());
+                if (change.getBeforeRevision() != null) documentRevisions.add(change.getBeforeRevision());
+                documentRevisions.add(change.getAfterRevision());
             }
         }
         Map<DocumentContentVersionId, String> markdown = new HashMap<>();
-        if (!ids.isEmpty()) {
-            for (DocumentContentVersion version : documentVersionRepository.findAllById(ids)) {
-                markdown.put(new DocumentContentVersionId(version.getDocumentId(), version.getVersion()),
-                        version.getMarkdown());
+        revisions.forEach((documentId, values) -> {
+            for (DocumentContentVersion version : documentVersionRepository.findByRevisions(documentId, values)) {
+                markdown.put(new DocumentContentVersionId(version.getDocumentId(), version.getRevision()), version.getMarkdown());
             }
-        }
+        });
         return markdown;
     }
 

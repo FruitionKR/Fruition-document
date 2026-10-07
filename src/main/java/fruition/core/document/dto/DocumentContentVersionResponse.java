@@ -27,6 +27,17 @@ public record DocumentContentVersionResponse(
 
         @JsonProperty("created_at")
         @Schema(description = "저장 시각(ISO-8601 UTC)", example = "2026-08-13T04:25:24.371948Z")
-        Instant createdAt
+        Instant createdAt,
+
+        @Schema(description = "이 본문의 내부 편집 revision")
+        long revision,
+
+        @JsonProperty("record_type")
+        @Schema(description = "이력 기록 유형")
+        String recordType
 ) {
+    public DocumentContentVersionResponse(String documentId, long version, String markdown, String contentHash,
+                                         String createdBy, Instant createdAt) {
+        this(documentId, version, markdown, contentHash, createdBy, createdAt, version, "legacy");
+    }
 }

@@ -4,6 +4,10 @@
 
 문서 본문·원본·asset·편집 잠금 API다.
 
+본문 저장 응답의 기존 `current_version`은 내부 편집 revision이며 새 `current_revision`과 같은 값이다.
+화면 이력 번호와 구분한다. 일반 자동저장은 최신 본문을 갱신하고 이력은 10분 조건으로 기록한다.
+승인된 AI 적용과 복원 정책은 [문서 이력 정책](../../design/document-history-policy.md)을 따른다.
+
 - API 수: 10
 
 채팅 Wiki page화로 만들어진 `chat_export` 문서는 읽기 전용이다(`editable: false`). 편집 잠금 획득·본문 저장은

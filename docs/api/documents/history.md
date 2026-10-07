@@ -4,6 +4,11 @@
 
 문서 삭제·복구와 콘텐츠 버전 이력 API다.
 
+일반 이력은 10분 단위로, 승인된 AI 적용은 즉시 기록한다. 내부 revision과 이력 version은 분리된다.
+번호 의미와 프론트 연결 변경은 [문서 이력 정책](../../design/document-history-policy.md)을 따른다.
+이력 목록의 `current_revision`을 복원 충돌 검사에 사용하고, `current_version`은 현재 이력 번호 또는 null이다.
+`to_version=0`은 미기록 편집을 포함한 최신 본문과 비교한다.
+
 - API 수: 7
 
 ## API 목차
@@ -16,7 +21,7 @@
 | [`POST /api/workspaces/{workspace_id}/documents/{document_id}/restore`](#summary-post-api-workspaces-workspace-id-documents-document-id-restore) | 삭제 문서를 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/versions`](#summary-get-api-workspaces-workspace-id-documents-document-id-versions) | 편집 가능 Markdown 문서의 콘텐츠 버전 이력을 최신 순으로 반환합니다. 본문은 제외한 메타데이터만 제공합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/versions/{version}`](#summary-get-api-workspaces-workspace-id-documents-document-id-versions-version) | 특정 버전의 전체 Markdown 본문을 반환합니다. |
-| [`POST /api/workspaces/{workspace_id}/documents/{document_id}/versions/{version}/restore`](#summary-post-api-workspaces-workspace-id-documents-document-id-versions-version-restore) | 과거 버전을 새 버전으로 복원합니다(비파괴적). base_version이 현재 version과 일치할 때만 반영합니다. |
+| [`POST /api/workspaces/{workspace_id}/documents/{document_id}/versions/{version}/restore`](#summary-post-api-workspaces-workspace-id-documents-document-id-versions-version-restore) | 과거 버전을 새 버전으로 복원합니다(비파괴적). base_revision(기존 base_version)이 현재 편집 revision과 일치할 때만 반영합니다. |
 
 ## 한눈에 보기
 
@@ -594,6 +599,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 ```json
 {
   "current_version": 4,
+  "current_revision": 4,
   "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "versions": [
     {
@@ -601,6 +607,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
       "created_at": "2026-08-13T04:25:24.371948Z",
       "created_by": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081",
       "restored_from_version": 2,
+      "revision": 3,
+      "record_type": "restore",
       "version": 3
     }
   ]
@@ -651,6 +659,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 ```json
 {
   "current_version": 4,
+  "current_revision": 4,
   "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "versions": [
     {
@@ -658,6 +667,8 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
       "created_at": "2026-08-13T04:25:24.371948Z",
       "created_by": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081",
       "restored_from_version": 2,
+      "revision": 3,
+      "record_type": "restore",
       "version": 3
     }
   ]
@@ -792,7 +803,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | 과거 버전을 새 버전으로 복원합니다(비파괴적). base_version이 현재 version과 일치할 때만 반영합니다. |
+| 목적 | 과거 버전을 새 버전으로 복원합니다(비파괴적). base_revision(기존 base_version)이 현재 편집 revision과 일치할 때만 반영합니다. |
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`, `version`: `integer`<br>**Body** — `DocumentContentRestoreRequest` |
 | 출력 | `200` 복원 성공 또는 동일 본문 no-op — `DocumentContentSaveResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
@@ -810,7 +821,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 #### 2. 목적
 
-과거 버전을 새 버전으로 복원합니다(비파괴적). base_version이 현재 version과 일치할 때만 반영합니다.
+과거 버전을 새 버전으로 복원합니다(비파괴적). base_revision(기존 base_version)이 현재 편집 revision과 일치할 때만 반영합니다.
 
 #### 3. Auth 필요 여부
 
@@ -850,6 +861,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
   "changed": true,
   "content_hash": "string",
   "current_version": 4,
+  "current_revision": 4,
   "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "markdown": "string",
   "updated_at": "2026-08-13T04:25:24.371948Z"
@@ -911,6 +923,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
   "changed": true,
   "content_hash": "string",
   "current_version": 4,
+  "current_revision": 4,
   "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "markdown": "string",
   "updated_at": "2026-08-13T04:25:24.371948Z"

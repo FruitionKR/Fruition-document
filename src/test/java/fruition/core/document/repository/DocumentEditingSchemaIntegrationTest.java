@@ -138,6 +138,10 @@ class DocumentEditingSchemaIntegrationTest {
     @Autowired
     PlatformTransactionManager transactionManager;
 
+    @Autowired DocumentContentVersionRepository historyRepository;
+    @Autowired fruition.core.document.service.DocumentHistoryWorker historyWorker;
+    @Autowired fruition.core.aihistory.service.ChangeDiffLoader changeDiffLoader;
+
     @BeforeEach
     void resetSpies() {
         reset(operationRecorder, operationChangeRepository);
@@ -262,8 +266,8 @@ class DocumentEditingSchemaIntegrationTest {
                 VALUES (?, '현재 본문', 'current-hash', 1, now(), now())
                 """, documentId);
         jdbcTemplate.update("""
-                INSERT INTO document_content_versions(document_id, version, markdown, content_hash, created_by, created_at)
-                VALUES (?, 1, '복원 본문', 'restore-hash', ?, now())
+                INSERT INTO document_content_versions(document_id, version, revision, markdown, content_hash, created_by, created_at)
+                VALUES (?, 1, 1, '복원 본문', 'restore-hash', ?, now())
                 """, documentId, userId);
         doThrow(new IllegalStateException("late operation change failure"))
                 .when(operationChangeRepository).save(any());
@@ -306,8 +310,8 @@ class DocumentEditingSchemaIntegrationTest {
                 VALUES (?, '현재 본문', 'current-hash', 1, now(), now())
                 """, documentId);
         jdbcTemplate.update("""
-                INSERT INTO document_content_versions(document_id, version, markdown, content_hash, created_by, created_at)
-                VALUES (?, 1, '복원 본문', 'restore-hash', ?, now())
+                INSERT INTO document_content_versions(document_id, version, revision, markdown, content_hash, created_by, created_at)
+                VALUES (?, 1, 1, '복원 본문', 'restore-hash', ?, now())
                 """, documentId, userId);
         jdbcTemplate.update("""
                 INSERT INTO ai_operation_logs(
@@ -356,9 +360,9 @@ class DocumentEditingSchemaIntegrationTest {
                 VALUES (?, '현재 본문', 'current-hash', 2, now(), now())
                 """, documentId);
         jdbcTemplate.update("""
-                INSERT INTO document_content_versions(document_id, version, markdown, content_hash, created_by, created_at)
-                VALUES (?, 1, '복원 본문', 'restore-hash', ?, now()),
-                       (?, 2, '현재 본문', 'current-hash', ?, now())
+                INSERT INTO document_content_versions(document_id, version, revision, markdown, content_hash, created_by, created_at)
+                VALUES (?, 1, 1, '복원 본문', 'restore-hash', ?, now()),
+                       (?, 2, 2, '현재 본문', 'current-hash', ?, now())
                 """, documentId, userId, documentId, userId);
         OperationLog target = OperationLog.completed(
                 targetOperationId, workspaceId, userId, fruition.core.aihistory.domain.OperationType.document_edit,
@@ -1645,6 +1649,157 @@ class DocumentEditingSchemaIntegrationTest {
                 objectMapper.readTree("""
                         {"document_id":"%s","display_name":"%s","base_version":1}
                         """.formatted(documentId, displayName)));
+    }
+
+    @Test
+    void manualHistoryIsRecordedAfterTenMinutesAndCanCompareLiveBody() {
+        var f = historyFixture();
+        documentService.saveContent(f[1], f[0], f[2], "old ", 1L, "manual-1", null);
+        documentService.saveContent(f[1], f[0], f[2], "manual", 2L, "manual-2", null);
+        assertThat(historyRepository.findSummaries(f[2])).hasSize(1);
+        var list = documentService.listContentVersions(f[1], f[0], f[2]);
+        assertThat(list.currentVersion()).isNull();
+        assertThat(list.currentRevision()).isEqualTo(3);
+        assertThat(documentService.compareContentVersions(f[1], f[0], f[2], 1, 0).hunks()).isNotEmpty();
+        var at = Instant.now().plusSeconds(86400);
+        jdbcTemplate.update("UPDATE document_content_versions SET created_at = ? WHERE document_id = ?",
+                java.sql.Timestamp.from(at), f[2]);
+        historyWorker.recordDue(at.plusSeconds(599));
+        assertThat(historyRepository.findSummaries(f[2])).hasSize(1);
+        historyWorker.recordDue(at.plusSeconds(600));
+        historyWorker.recordDue(at.plusSeconds(1200));
+        var rows = historyRepository.findSummaries(f[2]);
+        assertThat(rows).hasSize(2);
+        assertThat(rows.getFirst().getVersion()).isEqualTo(2);
+        assertThat(rows.getFirst().getRevision()).isEqualTo(3);
+        var recorded = documentService.listContentVersions(f[1], f[0], f[2]);
+        assertThat(recorded.currentVersion()).isEqualTo(2);
+        assertThat(recorded.currentRevision()).isEqualTo(3);
+    }
+
+    @Test
+    void aiDiffAndRestoreUseRevisionAfterHistoryNumbersDiverge() {
+        var f = historyFixture();
+        for (long revision = 1; revision <= 5; revision++) {
+            documentService.saveContent(f[1], f[0], f[2], "manual-" + revision, revision,
+                    "manual-" + revision, null);
+        }
+        String operationId = readyHistoryAi(f, 6, "ai");
+        documentService.saveContent(f[1], f[0], f[2], "ai", 6L, "ai-write", "agent", operationId);
+        documentService.saveContent(f[1], f[0], f[2], "ai", 6L, "ai-write", "agent", operationId);
+        var rows = historyRepository.findSummaries(f[2]);
+        assertThat(rows).extracting(DocumentContentVersionRepository.Summary::getVersion).containsExactly(3L, 2L, 1L);
+        assertThat(rows).extracting(DocumentContentVersionRepository.Summary::getRevision).containsExactly(7L, 6L, 1L);
+        var diffs = changeDiffLoader.load(operationChangeRepository.findByOperationIdOrderByIdAsc(operationId));
+        assertThat(diffs).hasSize(1);
+        assertThat(diffs.getFirst().hunks()).isNotEmpty();
+        documentService.saveContent(f[1], f[0], f[2], "later", 7L, "later-write", null);
+        String restoreId = "op-history-restore-" + UUID.randomUUID();
+        var restore = OperationLog.applying(restoreId, f[1], f[0], f[2], null, "{}", Instant.now());
+        operationLogRepository.save(restore);
+        assertThat(documentRestoreApplier.apply(restore, new DocumentRestorePlan(f[2], 8, 6))).isEqualTo(9);
+        assertThat(jdbcTemplate.queryForObject("SELECT markdown FROM document_edit_states WHERE document_id = ?",
+                String.class, f[2])).isEqualTo("manual-5");
+        assertThat(historyRepository.findTopByIdDocumentIdOrderByIdVersionDesc(f[2]).orElseThrow().getRevision()).isEqualTo(9);
+    }
+
+    @Test
+    void sameBodyAiCreatesOneHistoryAndReplayDoesNotDuplicateIt() {
+        var f = historyFixture();
+        String operationId = readyHistoryAi(f, 1, "old");
+        var first = documentService.saveContent(f[1], f[0], f[2], "old", 1L, "ai-noop", "agent", operationId);
+        var replay = documentService.saveContent(f[1], f[0], f[2], "old", 1L, "ai-noop", "agent", operationId);
+        assertThat(first.changed()).isFalse();
+        assertThat(replay.currentVersion()).isEqualTo(1);
+        assertThat(historyRepository.findSummaries(f[2])).hasSize(2);
+        var latest = historyRepository.findTopByIdDocumentIdOrderByIdVersionDesc(f[2]).orElseThrow();
+        assertThat(latest.getVersion()).isEqualTo(2);
+        assertThat(latest.getRevision()).isEqualTo(1);
+        assertThat(latest.getOperationId()).isEqualTo(operationId);
+    }
+
+    @Test
+    void concurrentHistoryWorkersCreateOnlyOneVersion() {
+        var f = historyFixture();
+        documentService.saveContent(f[1], f[0], f[2], "manual", 1L, "worker-manual", null);
+        var at = Instant.now().plusSeconds(86400);
+        jdbcTemplate.update("UPDATE document_content_versions SET created_at = ? WHERE document_id = ?",
+                java.sql.Timestamp.from(at), f[2]);
+        var a = java.util.concurrent.CompletableFuture.runAsync(() -> historyWorker.recordDue(at.plusSeconds(600)));
+        var b = java.util.concurrent.CompletableFuture.runAsync(() -> historyWorker.recordDue(at.plusSeconds(600)));
+        java.util.concurrent.CompletableFuture.allOf(a, b).join();
+        assertThat(historyRepository.findSummaries(f[2])).hasSize(2);
+    }
+
+    @Autowired DocumentAssetRepository historyAssets;
+
+    @Test
+    void historyImagesAreProtectedFromOrphanCleanup() {
+        var f = historyFixture();
+        var id = UUID.randomUUID();
+        var asset = new fruition.core.document.domain.DocumentAsset(id, f[1], f[0], "image.png", "image/png",
+                1, 1, 1, "hash", "assets/" + id, Instant.now());
+        asset.markUnreferenced(Instant.now().minusSeconds(864000));
+        historyAssets.save(asset);
+        var tx = new TransactionTemplate(transactionManager);
+        tx.executeWithoutResult(status -> historyRepository.insertSnapshot(f[2], 1, 1,
+                "![](/api/workspaces/" + f[1] + "/assets/" + id + "/content)", "hash", f[0], Instant.now(), "initial", null));
+        var threshold = Instant.now().minusSeconds(604800);
+        assertThat(historyAssets.findTop100ByUnreferencedSinceLessThanEqualOrderByUnreferencedSinceAsc(threshold))
+                .extracting(fruition.core.document.domain.DocumentAsset::getId).doesNotContain(id);
+        assertThat(tx.<Integer>execute(status -> historyAssets.deleteIfStillUnreferenced(id, threshold))).isZero();
+        jdbcTemplate.update("DELETE FROM document_content_versions WHERE document_id = ?", f[2]);
+        assertThat(tx.<Integer>execute(status -> historyAssets.deleteIfStillUnreferenced(id, threshold))).isEqualTo(1);
+    }
+
+    @Test
+    void v58PreservesLegacyHistoryAndAiReferences() throws Exception {
+        String name = "history_v58_" + UUID.randomUUID().toString().replace("-", "");
+        try (Connection admin = DriverManager.getConnection(postgresContainer.getJdbcUrl(),
+                postgresContainer.getUsername(), postgresContainer.getPassword()); Statement sql = admin.createStatement()) {
+            sql.execute("CREATE DATABASE " + name);
+        }
+        String url = "jdbc:postgresql://" + postgresContainer.getHost() + ":"
+                + postgresContainer.getMappedPort(PostgreSQLContainer.POSTGRESQL_PORT) + "/" + name;
+        Flyway.configure().dataSource(url, postgresContainer.getUsername(), postgresContainer.getPassword())
+                .target(MigrationVersion.fromVersion("57")).load().migrate();
+        try (Connection connection = DriverManager.getConnection(url, postgresContainer.getUsername(),
+                postgresContainer.getPassword()); Statement sql = connection.createStatement()) {
+            sql.executeUpdate(v34DocumentInsert("doc_history_legacy", null));
+            sql.executeUpdate("INSERT INTO ai_operation_logs(operation_id, workspace_id, user_id, operation_type, status, changed_resource_count, created_at) VALUES ('op_legacy', 'workspace-v34', 'user-v34', 'document_edit', 'succeeded', 1, now())");
+            sql.executeUpdate("INSERT INTO document_content_versions(document_id, version, markdown, content_hash, created_at, operation_id, restored_from_version) VALUES ('doc_history_legacy', 27, 'legacy body', 'hash', now(), 'op_legacy', 12)");
+        }
+        Flyway.configure().dataSource(url, postgresContainer.getUsername(), postgresContainer.getPassword()).load().migrate();
+        try (Connection connection = DriverManager.getConnection(url, postgresContainer.getUsername(),
+                postgresContainer.getPassword()); Statement sql = connection.createStatement();
+                ResultSet row = sql.executeQuery("SELECT version, revision, markdown, operation_id, restored_from_version, record_type FROM document_content_versions")) {
+            assertThat(row.next()).isTrue();
+            assertThat(row.getLong("version")).isEqualTo(27);
+            assertThat(row.getLong("revision")).isEqualTo(27);
+            assertThat(row.getString("markdown")).isEqualTo("legacy body");
+            assertThat(row.getString("operation_id")).isEqualTo("op_legacy");
+            assertThat(row.getLong("restored_from_version")).isEqualTo(12);
+            assertThat(row.getString("record_type")).isEqualTo("legacy");
+        }
+    }
+
+    private String[] historyFixture() {
+        String suffix = UUID.randomUUID().toString();
+        String[] f = { "user-history-" + suffix, "ws-history-" + suffix, "doc-history-" + suffix };
+        insertWorkspaceMember(f[0], f[1]);
+        insertDocument(f[2], f[1], f[0], "history.md", "hash", "EDITABLE");
+        jdbcTemplate.update("INSERT INTO document_edit_states(document_id, markdown, content_hash, revision, created_at, updated_at) VALUES (?, 'old', ?, 1, now(), now())",
+                f[2], "cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4");
+        return f;
+    }
+
+    private String readyHistoryAi(String[] f, long revision, String markdown) {
+        String run = "agent-history-" + UUID.randomUUID();
+        String operation = "op-history-" + UUID.randomUUID();
+        jdbcTemplate.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind) VALUES (?, ?, ?, 'agent')", run, f[1], f[0]);
+        jdbcTemplate.update("INSERT INTO agent_apply_projections(run_id, workspace_id, user_id, document_id, base_version, apply_operation_id, status, ready_markdown) VALUES (?, ?, ?, ?, ?, ?, 'ready', ?)",
+                run, f[1], f[0], f[2], revision, operation, markdown);
+        return operation;
     }
 
     private void insertWorkspaceMember(String userId, String workspaceId) {

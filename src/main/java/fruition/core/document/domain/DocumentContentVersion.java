@@ -14,6 +14,12 @@ public class DocumentContentVersion {
     @EmbeddedId
     private DocumentContentVersionId id;
 
+    @Column(nullable = false)
+    private long revision;
+
+    @Column(name = "record_type", nullable = false)
+    private String recordType = "legacy";
+
     @Column(nullable = false, columnDefinition = "TEXT")
     private String markdown;
 
@@ -39,14 +45,24 @@ public class DocumentContentVersion {
     public DocumentContentVersion(String documentId, long version, String markdown,
                                   String contentHash, String createdBy, Instant createdAt) {
         this.id = new DocumentContentVersionId(documentId, version);
+        this.revision = version;
         this.markdown = markdown;
         this.contentHash = contentHash;
         this.createdBy = createdBy;
         this.createdAt = createdAt;
     }
 
+    public DocumentContentVersion(String documentId, long version, long revision, String markdown,
+                                  String contentHash, String createdBy, Instant createdAt, String recordType) {
+        this(documentId, version, markdown, contentHash, createdBy, createdAt);
+        this.revision = revision;
+        this.recordType = recordType;
+    }
+
     public String getDocumentId() { return id.getDocumentId(); }
     public long getVersion() { return id.getVersion(); }
+    public long getRevision() { return revision; }
+    public String getRecordType() { return recordType; }
     public String getMarkdown() { return markdown; }
     public String getContentHash() { return contentHash; }
     public String getCreatedBy() { return createdBy; }

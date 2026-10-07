@@ -134,6 +134,7 @@ public class DocumentService {
     private final PostgresDocumentEditStore postgresDocumentEditStore;
     private final DocumentContentVersionRepository contentVersionRepository;
     private final MarkdownDiffService markdownDiffService;
+    private final DocumentHistoryPolicy historyPolicy;
     private final DocumentEditLockService editLockService;
     private final IdempotencyService idempotencyService;
     private final DocumentAssetReferenceSynchronizer assetReferenceSynchronizer;
@@ -191,6 +192,7 @@ public class DocumentService {
         this.documentItemAssembler = documentItemAssembler;
         this.postgresDocumentEditStore = postgresDocumentEditStore;
         this.contentVersionRepository = contentVersionRepository;
+        this.historyPolicy = new DocumentHistoryPolicy(contentVersionRepository);
         this.markdownDiffService = markdownDiffService;
         this.editLockService = editLockService;
         this.idempotencyService = idempotencyService;
@@ -1449,7 +1451,7 @@ public class DocumentService {
         try {
             return executeWithSaveRetry(() -> saveTransaction.execute(status -> saveContentInTransaction(
                     workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                    source, applyOperationId, applyOperationClaimed, restoredFromVersion)));
+                    source, applyOperationId, applyOperationClaimed, restoredFromVersion, false)));
         } catch (DocumentVersionConflictException conflict) {
             if (applyOperationId != null && !applyOperationId.isBlank()) {
                 recordConflictInIndependentTransaction(
@@ -1479,7 +1481,7 @@ public class DocumentService {
         }
         return saveContentInTransaction(
                 workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                source, null, false, null);
+                source, null, false, null, true);
     }
 
     private DocumentContentSaveResponse saveContentInTransaction(
@@ -1492,7 +1494,8 @@ public class DocumentService {
             String source,
             String applyOperationId,
             boolean applyOperationClaimed,
-            Long restoredFromVersion
+            Long restoredFromVersion,
+            boolean internalRestore
     ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         if (applyOperationId != null && !applyOperationId.isBlank()
@@ -1534,36 +1537,24 @@ public class DocumentService {
             return new DocumentContentSaveResponse(
                     documentId, result.revision(), result.contentHash(), result.updatedAt(), result.changed());
         }
+        String historyType = hasApplyOperation ? "ai" : restoredFromVersion != null
+                || internalRestore ? "restore" : "manual";
+        long historyVersion = historyPolicy.recordSave(documentId, content.markdown(), result,
+                historyType, restoredFromVersion, Instant.now());
         if (hasApplyOperation) {
-            transactionTemplate.execute(status -> {
-                projectContentVersions(documentId, content.markdown(), result);
-                if (result.changed()) {
-                    int linked = contentVersionRepository.linkOperation(documentId, result.revision(), applyOperationId);
-                    if (linked == 1) {
-                        operationRecorder.recordDocumentEdit(applyOperationId, workspaceId, userId, documentId,
-                                document.getDisplayName(),
-                                result.baseRevision(), result.revision(), result.baseMarkdown(),
-                                content.markdown(), result.updatedAt());
-                    } else if (!contentVersionRepository.findById(
-                            new DocumentContentVersionId(documentId, result.revision()))
-                            .map(version -> applyOperationId.equals(version.getOperationId()))
-                            .orElse(false)) {
-                        throw new IllegalStateException(
-                                "문서 버전에 Agent 적용 작업을 연결하지 못했습니다: operationId=" + applyOperationId);
-                    }
-                } else {
-                    operationRecorder.completeDocumentEditNoChange(
-                            applyOperationId, workspaceId, userId, documentId, result.updatedAt());
-                }
-                return null;
-            });
-        } else {
-            projectContentVersions(documentId, content.markdown(), result);
+            if (contentVersionRepository.linkOperation(documentId, historyVersion, applyOperationId) != 1) {
+                throw new IllegalStateException("문서 버전에 Agent 적용 작업을 연결하지 못했습니다: " + applyOperationId);
+            }
+            if (result.changed()) {
+                operationRecorder.recordDocumentEdit(applyOperationId, workspaceId, userId, documentId,
+                        document.getDisplayName(), result.baseRevision(), result.revision(),
+                        result.baseMarkdown(), content.markdown(), result.updatedAt());
+            } else {
+                operationRecorder.completeDocumentEditNoChange(
+                        applyOperationId, workspaceId, userId, documentId, result.updatedAt());
+            }
         }
         if (result.changed()) {
-            if (restoredFromVersion != null) {
-                contentVersionRepository.markRestoredFrom(documentId, result.revision(), restoredFromVersion);
-            }
             // 재ingest 필요 판단용 projection: 목록 API가 PG만으로 현재 편집본 해시를 비교할 수 있게 한다.
             documentRepository.updateCurrentContentHash(documentId, result.contentHash(), result.updatedAt());
             // 이미지를 첨부하지 않는 저장에서도 본문에 남은 관리 이미지를 기준으로 참조를 맞춘다.
@@ -1614,25 +1605,8 @@ public class DocumentService {
             String resultMarkdown,
             PostgresDocumentEditSaveResult result
     ) {
-        if (!result.changed()) {
-            return;
-        }
-        recordContentVersion(
-                documentId,
-                result.baseRevision(),
-                result.baseMarkdown(),
-                result.baseContentHash(),
-                result.actorUserId(),
-                result.updatedAt()
-        );
-        recordContentVersion(
-                documentId,
-                result.revision(),
-                resultMarkdown,
-                result.contentHash(),
-                result.actorUserId(),
-                result.updatedAt()
-        );
+        if (!result.changed() || result.replayed()) return;
+        historyPolicy.recordSave(documentId, resultMarkdown, result, "convert", null, Instant.now());
     }
 
     /**
@@ -1689,7 +1663,7 @@ public class DocumentService {
                 assetRepository.saveAll(assets);
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),
-                        baseVersion, revisionWriteId, null, applyOperationId, false, null);
+                        baseVersion, revisionWriteId, null, applyOperationId, false, null, false);
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
                     assetRepository.deleteAllInBatch(assets);
@@ -1711,7 +1685,7 @@ public class DocumentService {
 
     private void recordContentVersion(String documentId, long version, String markdown,
                                       String contentHash, String createdBy, Instant createdAt) {
-        contentVersionRepository.insertIfAbsent(documentId, version, markdown, contentHash, createdBy, createdAt);
+        historyPolicy.ensureRevision(documentId, version, markdown, contentHash, createdBy, createdAt, "convert");
     }
 
     private <T> T executeWithSaveRetry(java.util.function.Supplier<T> operation) {
@@ -1774,16 +1748,15 @@ public class DocumentService {
             String workspaceId, String userId, String documentId) {
         Document document = loadEditableForVersion(workspaceId, userId, documentId);
         editStateInitializer.initializeIfNeeded(document);
-        long editRevision = postgresDocumentEditStore.findState(documentId)
-                .map(DocumentEditState::getRevision)
-                .orElseThrow(() -> new InvalidMarkdownContentException(
-                        "현재 Markdown 편집 상태를 찾을 수 없습니다."));
+        DocumentEditState state = postgresDocumentEditStore.findState(documentId)
+                .orElseThrow(() -> new InvalidMarkdownContentException("현재 Markdown 편집 상태를 찾을 수 없습니다."));
         List<DocumentContentVersionListResponse.Item> items = contentVersionRepository.findSummaries(documentId).stream()
-                .map(s -> new DocumentContentVersionListResponse.Item(
-                        s.getVersion(), s.getContentHash(), s.getCreatedBy(), s.getCreatedAt(),
-                        s.getRestoredFromVersion()))
+                .map(v -> new DocumentContentVersionListResponse.Item(v.getVersion(), v.getContentHash(),
+                        v.getCreatedBy(), v.getCreatedAt(), v.getRestoredFromVersion(), v.getRevision(), v.getRecordType()))
                 .toList();
-        return new DocumentContentVersionListResponse(documentId, editRevision, items);
+        Long currentHistoryVersion = items.isEmpty() || !items.getFirst().contentHash().equals(state.getContentHash())
+                ? null : items.getFirst().version();
+        return new DocumentContentVersionListResponse(documentId, currentHistoryVersion, state.getRevision(), items);
     }
 
     /** 특정 버전의 전체 Markdown. */
@@ -1795,7 +1768,8 @@ public class DocumentService {
                 .findById(new DocumentContentVersionId(documentId, version))
                 .orElseThrow(() -> new DocumentContentVersionNotFoundException(documentId, version));
         return new DocumentContentVersionResponse(documentId, snapshot.getVersion(), snapshot.getMarkdown(),
-                snapshot.getContentHash(), snapshot.getCreatedBy(), snapshot.getCreatedAt());
+                snapshot.getContentHash(), snapshot.getCreatedBy(), snapshot.getCreatedAt(),
+                snapshot.getRevision(), snapshot.getRecordType());
     }
 
     /** 두 콘텐츠 버전의 줄 단위 변경 사항. */
@@ -1806,11 +1780,16 @@ public class DocumentService {
         DocumentContentVersion before = contentVersionRepository
                 .findById(new DocumentContentVersionId(documentId, fromVersion))
                 .orElseThrow(() -> new DocumentContentVersionNotFoundException(documentId, fromVersion));
-        DocumentContentVersion after = contentVersionRepository
-                .findById(new DocumentContentVersionId(documentId, toVersion))
-                .orElseThrow(() -> new DocumentContentVersionNotFoundException(documentId, toVersion));
-        return markdownDiffService.compare(
-                documentId, fromVersion, before.getMarkdown(), toVersion, after.getMarkdown());
+        String afterMarkdown;
+        if (toVersion == 0) {
+            afterMarkdown = postgresDocumentEditStore.findState(documentId)
+                    .orElseThrow(() -> new InvalidMarkdownContentException("현재 Markdown 편집 상태를 찾을 수 없습니다."))
+                    .getMarkdown();
+        } else {
+            afterMarkdown = contentVersionRepository.findById(new DocumentContentVersionId(documentId, toVersion))
+                    .orElseThrow(() -> new DocumentContentVersionNotFoundException(documentId, toVersion)).getMarkdown();
+        }
+        return markdownDiffService.compare(documentId, fromVersion, before.getMarkdown(), toVersion, afterMarkdown);
     }
 
     /**

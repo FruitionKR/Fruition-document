@@ -24,6 +24,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -151,7 +152,7 @@ class ChangeDiffLoaderTest {
             changes.add(change(ResourceType.wiki_page, "wp_" + i, 1L, 2L, ChangeType.updated));
         }
         when(wikiVersionRepository.findAllById(any())).thenReturn(wikiVersions);
-        when(documentVersionRepository.findAllById(any())).thenReturn(documentVersions);
+        when(documentVersionRepository.findByRevisions(anyString(), any())).thenReturn(documentVersions);
 
         List<ChangeDiffLoader.Diff> diffs = loader.load(changes);
 
@@ -173,7 +174,7 @@ class ChangeDiffLoaderTest {
 
     private ChangeDiffLoader.Diff loadOne(OperationChange change) {
         when(wikiVersionRepository.findAllById(any())).thenReturn(wikiVersions);
-        when(documentVersionRepository.findAllById(any())).thenReturn(documentVersions);
+        when(documentVersionRepository.findByRevisions(anyString(), any())).thenReturn(documentVersions);
         return loader.load(List.of(change)).get(0);
     }
 

@@ -128,12 +128,14 @@ class DocumentServiceBlocksTest {
 
     PlatformTransactionManager transactionManager;
     DocumentService documentService;
+    java.util.List<fruition.core.document.domain.DocumentContentVersion> historyRows;
 
     private final fruition.core.document.repository.AiCommandOutboxWriter taskWriter =
             org.mockito.Mockito.mock(fruition.core.document.repository.AiCommandOutboxWriter.class);
 
     @BeforeEach
     void setUp() {
+        historyRows = HistoryRepositoryFixture.install(contentVersionRepository);
         org.mockito.Mockito.lenient().when(applyOperationStore.authorizeSave(anyString(), anyString(), anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.active(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.join(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
@@ -417,7 +419,8 @@ class DocumentServiceBlocksTest {
         order.verify(editStateInitializer).initializeIfNeeded(document);
         order.verify(postgresDocumentEditStore).findState(document.getId());
         assertThat(response.documentId()).isEqualTo(document.getId());
-        assertThat(response.currentVersion()).isEqualTo(2);
+        assertThat(response.currentVersion()).isNull();
+        assertThat(response.currentRevision()).isEqualTo(2);
         assertThat(response.versions()).isEmpty();
     }
 
@@ -460,6 +463,8 @@ class DocumentServiceBlocksTest {
             @Override public String getCreatedBy() { return USER_ID; }
             @Override public Instant getCreatedAt() { return createdAt; }
             @Override public Long getRestoredFromVersion() { return restoredFromVersion; }
+            @Override public long getRevision() { return version; }
+            @Override public String getRecordType() { return "legacy"; }
         };
     }
 
@@ -958,7 +963,7 @@ class DocumentServiceBlocksTest {
     }
 
     @Test
-    @DisplayName("source=agent 저장도 PostgreSQL version read model을 갱신한다")
+    @DisplayName("source 문자열만으로는 AI 이력을 만들지 않고 최초 기준 본문만 보존한다")
     void saveContent_sourceAgent_projectsVersions() {
         stubOwnedWorkspace();
         Document document = new Document(
@@ -977,10 +982,11 @@ class DocumentServiceBlocksTest {
         verify(postgresDocumentEditStore).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), anyString(),
                 eq(1L), eq("write_1"), eq(USER_ID), isNull());
-        verify(contentVersionRepository).insertIfAbsent(
-                eq(document.getId()), eq(1L), eq("old"), eq(editState.getContentHash()), eq(USER_ID), any());
-        verify(contentVersionRepository).insertIfAbsent(
-                eq(document.getId()), eq(2L), eq("# 변경\n"), anyString(), eq(USER_ID), any());
+        verify(contentVersionRepository).insertSnapshot(eq(document.getId()), eq(1L), eq(1L),
+                eq("old"), eq(editState.getContentHash()), eq(USER_ID), any(), eq("initial"), isNull());
+        verify(contentVersionRepository, never()).insertSnapshot(anyString(), eq(2L), anyLong(), anyString(),
+                anyString(), anyString(), any(), anyString(), any());
+
     }
 
     @Test
@@ -1120,15 +1126,17 @@ class DocumentServiceBlocksTest {
                 document.getId(), "old", DocumentEditingRules.markdown("old").contentHash(), 1);
         when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(document.getId(), WORKSPACE_ID))
                 .thenReturn(Optional.of(document));
-        when(editStateRepository.findById(document.getId())).thenReturn(Optional.of(editState));
         when(applyOperationStore.consume("op-replay", USER_ID, document.getId(), "write-replay", 1L, "# 변경\n"))
                 .thenReturn(true);
         when(contentVersionRepository.linkOperation(document.getId(), 2L, "op-replay"))
                 .thenReturn(1)
                 .thenReturn(0);
-        var linkedVersion = mock(fruition.core.document.domain.DocumentContentVersion.class);
-        when(linkedVersion.getOperationId()).thenReturn("op-replay");
-        when(contentVersionRepository.findById(any())).thenReturn(Optional.of(linkedVersion));
+        var first = new PostgresDocumentEditSaveResult(1, "old", editState.getContentHash(), 2,
+                DocumentEditingRules.markdown("# 변경\n").contentHash(), Instant.now(), USER_ID, true, false);
+        var replay = new PostgresDocumentEditSaveResult(1, null, null, 2,
+                first.contentHash(), first.updatedAt(), USER_ID, true, true);
+        when(postgresDocumentEditStore.save(eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), anyString(),
+                eq(1L), eq("write-replay"), eq(USER_ID), eq("op-replay"))).thenReturn(first, replay);
 
         documentService.saveContent(
                 WORKSPACE_ID, USER_ID, document.getId(), "# 변경\n", 1L,
@@ -1141,7 +1149,7 @@ class DocumentServiceBlocksTest {
                 eq("op-replay"), eq(WORKSPACE_ID), eq(USER_ID), eq(document.getId()),
                 eq(document.getDisplayName()),
                 eq(1L), eq(2L), eq("old"), eq("# 변경\n"), any());
-        verify(contentVersionRepository, times(2)).linkOperation(document.getId(), 2L, "op-replay");
+        verify(contentVersionRepository).linkOperation(document.getId(), 2L, "op-replay");
     }
 
     @Test
@@ -1172,6 +1180,7 @@ class DocumentServiceBlocksTest {
                 "write-retry", "agent", "op-retry"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("감사 실패");
+        historyRows.clear(); // emulate the real transaction rollback in this repository mock
         documentService.saveContent(
                 WORKSPACE_ID, USER_ID, document.getId(), "# 변경\n", 1L,
                 "write-retry", "agent", "op-retry");
@@ -1218,7 +1227,7 @@ class DocumentServiceBlocksTest {
     }
 
     @Test
-    @DisplayName("수동 저장은 PostgreSQL version read model의 변경 전후 snapshot을 갱신한다")
+    @DisplayName("일반 자동저장은 최초 기준 본문만 보존하고 10분 이내 결과 이력은 만들지 않는다")
     void saveContent_manualProjectsBeforeAndAfterSnapshots() {
         stubOwnedWorkspace();
         Document document = new Document(
@@ -1233,11 +1242,12 @@ class DocumentServiceBlocksTest {
         documentService.saveContent(
                 WORKSPACE_ID, USER_ID, document.getId(), "# 변경\n", 1L, "write_1", "   ");
 
-        verify(contentVersionRepository).insertIfAbsent(
-                eq(document.getId()), eq(1L), eq("old"), eq(editState.getContentHash()), eq(USER_ID), any());
-        verify(contentVersionRepository).insertIfAbsent(
-                eq(document.getId()), eq(2L), eq("# 변경\n"), anyString(), eq(USER_ID), any());
+        verify(contentVersionRepository).insertSnapshot(eq(document.getId()), eq(1L), eq(1L),
+                eq("old"), eq(editState.getContentHash()), eq(USER_ID), any(), eq("initial"), isNull());
+        verify(contentVersionRepository, never()).insertSnapshot(anyString(), eq(2L), anyLong(), anyString(),
+                anyString(), anyString(), any(), anyString(), any());
         verifyNoInteractions(applyOperationStore, operationRecorder);
+
     }
 
     @Test
@@ -1259,13 +1269,9 @@ class DocumentServiceBlocksTest {
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
                 eq(1L), eq("write_1"), eq(USER_ID), isNull()))
                 .thenReturn(replayResult);
-        when(contentVersionRepository.insertIfAbsent(
-                document.getId(), 1L, "old", editState.getContentHash(), USER_ID, updatedAt))
-                .thenReturn(1);
-        when(contentVersionRepository.insertIfAbsent(
-                document.getId(), 2L, "# 변경\n", resultHash, USER_ID, updatedAt))
-                .thenThrow(new IllegalStateException("projection 실패"))
-                .thenReturn(1);
+        when(contentVersionRepository.insertSnapshot(eq(document.getId()), eq(1L), eq(1L), eq("old"),
+                eq(editState.getContentHash()), eq(USER_ID), any(), eq("initial"), isNull()))
+                .thenThrow(new IllegalStateException("projection 실패")).thenReturn(1);
 
         assertThatThrownBy(() -> documentService.saveContent(
                 WORKSPACE_ID, USER_ID, document.getId(), "# 변경\n", 1L, "write_1", null))
@@ -1279,10 +1285,8 @@ class DocumentServiceBlocksTest {
         verify(postgresDocumentEditStore, times(2)).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
                 eq(1L), eq("write_1"), eq(USER_ID), isNull());
-        verify(contentVersionRepository, times(2)).insertIfAbsent(
-                document.getId(), 1L, "old", editState.getContentHash(), USER_ID, updatedAt);
-        verify(contentVersionRepository, times(2)).insertIfAbsent(
-                document.getId(), 2L, "# 변경\n", resultHash, USER_ID, updatedAt);
+        verify(contentVersionRepository, times(2)).insertSnapshot(eq(document.getId()), eq(1L), eq(1L), eq("old"),
+                eq(editState.getContentHash()), eq(USER_ID), any(), eq("initial"), isNull());
     }
 
     @Test
@@ -1303,10 +1307,9 @@ class DocumentServiceBlocksTest {
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
                 eq(1L), eq("write-retry-transient"), eq(USER_ID), isNull()))
                 .thenReturn(result, result);
-        when(contentVersionRepository.insertIfAbsent(
-                document.getId(), 1L, "old", editState.getContentHash(), USER_ID, updatedAt))
-                .thenThrow(new DuplicateKeyException("transient unique race"))
-                .thenReturn(1);
+        when(contentVersionRepository.insertSnapshot(eq(document.getId()), eq(1L), eq(1L), eq("old"),
+                eq(editState.getContentHash()), eq(USER_ID), any(), eq("initial"), isNull()))
+                .thenThrow(new DuplicateKeyException("transient unique race")).thenReturn(1);
 
         DocumentContentSaveResponse response = documentService.saveContent(
                 WORKSPACE_ID, USER_ID, document.getId(), "# 변경\n", 1L,
@@ -1317,8 +1320,8 @@ class DocumentServiceBlocksTest {
         verify(postgresDocumentEditStore, times(2)).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
                 eq(1L), eq("write-retry-transient"), eq(USER_ID), isNull());
-        verify(contentVersionRepository).insertIfAbsent(
-                document.getId(), 2L, "# 변경\n", resultHash, USER_ID, updatedAt);
+        verify(contentVersionRepository, times(2)).insertSnapshot(eq(document.getId()), eq(1L), eq(1L), eq("old"),
+                eq(editState.getContentHash()), eq(USER_ID), any(), eq("initial"), isNull());
         verify(documentRepository).updateCurrentContentHash(document.getId(), resultHash, updatedAt);
     }
 
@@ -1345,7 +1348,8 @@ class DocumentServiceBlocksTest {
         verify(postgresDocumentEditStore).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 예전\n"), anyString(),
                 eq(1L), eq("restore:5:1"), eq(USER_ID), isNull());
-        verify(contentVersionRepository).markRestoredFrom(document.getId(), 2L, 5L);
+        verify(contentVersionRepository).insertSnapshot(eq(document.getId()), eq(2L), eq(2L),
+                eq("# 예전\n"), anyString(), eq(USER_ID), any(), eq("restore"), eq(5L));
     }
 
     @Test

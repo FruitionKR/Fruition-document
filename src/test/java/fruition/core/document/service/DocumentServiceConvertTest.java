@@ -106,6 +106,7 @@ class DocumentServiceConvertTest {
 
     @BeforeEach
     void setUp() {
+        HistoryRepositoryFixture.install(contentVersionRepository);
         org.mockito.Mockito.lenient().when(applyOperationStore.authorizeSave(anyString(), anyString(), anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.active(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.join(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
@@ -317,7 +318,7 @@ class DocumentServiceConvertTest {
                 .isEqualTo("<!-- page 10 -->\n\n# first pages\n\n<!-- page 11 -->\n\n# next pages\n");
         verify(postgresDocumentEditStore).save(eq(WORKSPACE_ID), eq(parent.getId()), anyString(), anyString(),
                 eq(2L), eq("convert:7:20:0"), eq(USER_ID), any());
-        verify(contentVersionRepository).insertIfAbsent(eq(parent.getId()), eq(3L), anyString(), anyString(), eq(USER_ID), any());
+        verify(contentVersionRepository).insertSnapshot(eq(parent.getId()), eq(1L), eq(3L), anyString(), anyString(), eq(USER_ID), any(), eq("convert"), isNull());
         verify(minioClient, never()).getObject(any());
         verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
     }
@@ -539,10 +540,10 @@ class DocumentServiceConvertTest {
                 eq(WORKSPACE_ID), eq("doc_placeholder"), eq("# 변환된 본문\n"), anyString(),
                 eq(1L), eq("convert:7"), eq(USER_ID), isNull());
         // base(1)와 result(2) 두 버전이 read model로 projection된다.
-        verify(contentVersionRepository).insertIfAbsent(
-                eq("doc_placeholder"), eq(1L), anyString(), anyString(), eq(USER_ID), any());
-        verify(contentVersionRepository).insertIfAbsent(
-                eq("doc_placeholder"), eq(2L), eq("# 변환된 본문\n"), anyString(), eq(USER_ID), any());
+        verify(contentVersionRepository).insertSnapshot(
+                eq("doc_placeholder"), eq(1L), eq(1L), anyString(), anyString(), eq(USER_ID), any(), eq("initial"), isNull());
+        verify(contentVersionRepository).insertSnapshot(
+                eq("doc_placeholder"), eq(2L), eq(2L), eq("# 변환된 본문\n"), anyString(), eq(USER_ID), any(), eq("convert"), isNull());
         // 묶음 경로와 같이 본문이 가리키는 asset 참조를 맞춘다. 그래야 문서 삭제 후 변환 이미지가 정리된다.
         verify(assetReferenceSynchronizer).synchronize(eq("doc_placeholder"), eq(WORKSPACE_ID), any());
         assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.completed);
@@ -613,14 +614,14 @@ class DocumentServiceConvertTest {
 
         documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
         DocumentMetadata completed = metadata(placeholder);
-        verify(contentVersionRepository, times(2)).insertIfAbsent(
-                eq("doc_placeholder"), anyLong(), anyString(), anyString(), eq(USER_ID), any());
+        verify(contentVersionRepository, times(2)).insertSnapshot(
+                eq("doc_placeholder"), anyLong(), anyLong(), anyString(), anyString(), eq(USER_ID), any(), anyString(), isNull());
 
         documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
 
         assertThat(metadata(placeholder)).isEqualTo(completed);
-        verify(contentVersionRepository, times(2)).insertIfAbsent(
-                eq("doc_placeholder"), anyLong(), anyString(), anyString(), eq(USER_ID), any());
+        verify(contentVersionRepository, times(2)).insertSnapshot(
+                eq("doc_placeholder"), anyLong(), anyLong(), anyString(), anyString(), eq(USER_ID), any(), anyString(), isNull());
     }
 
     @Test

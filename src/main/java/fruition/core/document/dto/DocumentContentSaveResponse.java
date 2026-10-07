@@ -12,7 +12,7 @@ public record DocumentContentSaveResponse(
         String documentId,
 
         @JsonProperty("current_version")
-        @Schema(description = "저장 후 버전. 다음 저장의 base_version으로 쓴다.", example = "4")
+        @Schema(description = "저장 후 내부 편집 revision(기존 필드명 유지). 이력 version이 아니다. 다음 저장의 base_revision으로 쓴다.", example = "4")
         long currentVersion,
 
         @JsonProperty("content_hash")
@@ -32,6 +32,10 @@ public record DocumentContentSaveResponse(
         @Schema(description = "본문과 함께 저장된 이미지 asset 목록")
         List<DocumentAttachmentSaveResponse> attachments
 ) {
+    @JsonProperty("current_revision")
+    @Schema(description = "저장 후 내부 편집 revision. current_version과 같은 값인 명시적 필드")
+    public long currentRevision() { return currentVersion; }
+
     public DocumentContentSaveResponse(
             String documentId, long currentVersion, String contentHash, Instant updatedAt, boolean changed
     ) {

@@ -16,7 +16,7 @@ public record DocumentContentDiffResponse(
         long fromVersion,
 
         @JsonProperty("to_version")
-        @Schema(description = "비교 대상 버전", example = "3")
+        @Schema(description = "비교 대상 이력 번호. 0이면 미기록 편집을 포함한 최신 본문", example = "3")
         long toVersion,
 
         @Schema(description = "추가된 줄 수", example = "12")

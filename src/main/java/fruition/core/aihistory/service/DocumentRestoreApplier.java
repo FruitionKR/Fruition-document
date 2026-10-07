@@ -53,7 +53,7 @@ public class DocumentRestoreApplier {
     @Transactional
     public long apply(OperationLog restore, DocumentRestorePlan plan) {
         DocumentContentVersion target = contentVersionRepository
-                .findById(new DocumentContentVersionId(plan.documentId(), plan.toVersion()))
+                .findFirstByIdDocumentIdAndRevisionOrderByIdVersionDesc(plan.documentId(), plan.toVersion())
                 .orElseThrow(() -> new DocumentContentVersionNotFoundException(
                         plan.documentId(), plan.toVersion()));
         String resourceDisplayName = documentRepository

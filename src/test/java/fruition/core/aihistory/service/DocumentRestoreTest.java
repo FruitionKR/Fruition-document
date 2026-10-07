@@ -273,7 +273,7 @@ class DocumentRestoreTest {
     }
 
     private void givenVersion(long version, String markdown) {
-        when(contentVersionRepository.findById(new DocumentContentVersionId(DOCUMENT, version)))
+        when(contentVersionRepository.findFirstByIdDocumentIdAndRevisionOrderByIdVersionDesc(DOCUMENT, version))
                 .thenReturn(Optional.of(new DocumentContentVersion(
                         DOCUMENT, version, markdown, "sha256:old", USER, NOW)));
     }

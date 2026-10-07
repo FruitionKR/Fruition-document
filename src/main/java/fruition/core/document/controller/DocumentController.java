@@ -513,7 +513,7 @@ public class DocumentController {
     }
 
     @Operation(summary = "콘텐츠 버전 비교",
-        description = "두 Markdown 버전을 줄 단위로 비교해 GitHub 스타일 diff hunk를 반환합니다.")
+        description = "두 Markdown 이력을 줄 단위로 비교합니다. to_version=0이면 미기록 편집을 포함한 최신 본문과 비교합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "비교 성공",
             content = @Content(schema = @Schema(implementation = DocumentContentDiffResponse.class))),
@@ -536,7 +536,7 @@ public class DocumentController {
     }
 
     @Operation(summary = "콘텐츠 버전 복원",
-        description = "과거 버전을 새 버전으로 복원합니다(비파괴적). base_version이 현재 version과 일치할 때만 반영합니다.")
+        description = "과거 버전을 새 버전으로 복원합니다(비파괴적). base_revision(기존 base_version)이 현재 편집 revision과 일치할 때만 반영합니다. 이력 version은 복원 대상 선택에만 사용합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "복원 성공 또는 동일 본문 no-op",
             content = @Content(schema = @Schema(implementation = DocumentContentSaveResponse.class))),
