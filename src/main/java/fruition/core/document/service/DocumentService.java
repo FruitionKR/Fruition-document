@@ -1109,7 +1109,7 @@ public class DocumentService {
             var checkpoint = convertQueueRepository.findById(queueId).orElseThrow();
             if (checkpoint.getCompletedPages() >= batch.page_end()) return null;
             // data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다.
-            String markdown = ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitize(
+            String markdown = ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitizeConverted(
                     externalizeConvertedImages(parent, batch.markdown())), batch.page_start());
             // PDF 하나를 문서 하나로 이어 붙이고, 편집 문서 상한을 넘을 때만 다음 파트 문서로 넘어간다.
             // 버전 기록은 변환 완료 시 한 번만 남겨 묶음마다 누적 본문이 쌓이지 않게 한다.
@@ -1250,7 +1250,7 @@ public class DocumentService {
         return executeWithSaveRetry(() -> saveTransaction.execute(status -> {
             if (!taskWriter.join("convert:" + placeholder.getId())) return null;
             DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(
-                    AiMarkdownSanitizer.sanitize(externalizeConvertedImages(placeholder, convertedMarkdown)));
+                    AiMarkdownSanitizer.sanitizeConverted(externalizeConvertedImages(placeholder, convertedMarkdown)));
             PostgresDocumentEditSaveResult result = postgresDocumentEditStore.save(
                     placeholder.getWorkspaceId(),
                     placeholder.getId(),

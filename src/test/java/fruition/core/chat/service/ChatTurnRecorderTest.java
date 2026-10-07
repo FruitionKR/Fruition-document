@@ -63,6 +63,19 @@ class ChatTurnRecorderTest {
     }
 
     @Test
+    void completeAgentTurn_neutralizesExternalLinks() {
+        ChatSession session = new ChatSession("session_abc123", "ws_abc123", "user_abc123", null);
+        ChatMessage assistant = new ChatMessage(
+                "chat_assistant_abc123", session, "pair_abc123", "assistant", "", "pending", Instant.now(), null);
+        when(chatMessageRepository.findById("chat_assistant_abc123")).thenReturn(Optional.of(assistant));
+
+        recorder.completeAgentTurn("chat_assistant_abc123", "conversation_reply", "[자세히](https://attacker.example/?q=x)");
+
+        assertThat(assistant.getContent()).isEqualTo("자세히 (attacker.example)");
+        verify(chatMessageRepository).save(assistant);
+    }
+
+    @Test
     void markFailed_updatesExistingAssistant() {
         ChatSession session = new ChatSession("session_abc123", "ws_abc123", "user_abc123", null);
         ChatMessage assistant = new ChatMessage(

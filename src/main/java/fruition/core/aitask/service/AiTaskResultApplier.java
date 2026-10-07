@@ -21,6 +21,7 @@ import fruition.core.aihistory.repository.OperationLogRepository;
 import fruition.core.aihistory.service.RestoreApplier;
 import fruition.core.aihistory.service.RestoreExecuteService;
 import fruition.core.aihistory.service.RestoreOperationLifecycle;
+import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.core.document.service.DocumentService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -520,7 +521,7 @@ public class AiTaskResultApplier {
                 new QueryResponse.MessageSummary(context.userMessageId(), "user", question,
                         "completed", context.createdAt()),
                 new QueryResponse.MessageSummary(context.assistantMessageId(), "assistant",
-                        result.answer(), "completed", context.createdAt()),
+                        AiMarkdownSanitizer.sanitize(result.answer()), "completed", context.createdAt()),
                 result.relatedPages(), result.evidenceSnippets(), result.graphContext(),
                 result.traversalPaths(), result.webSearchRequested(), result.webSearchExecuted(),
                 result.resultCount(), result.errorCode());

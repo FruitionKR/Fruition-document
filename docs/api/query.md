@@ -167,6 +167,8 @@
 }
 ```
 
+- `assistant_message.content`는 저장 전에 거른다. 외부 주소(scheme이 있거나 `//`·`/\`로 시작)의 이미지는 `외부 이미지(host)`, 링크는 `텍스트 (host)` 글자로 바꾸고, 원시 HTML은 지우거나 escape한다. 코드 블록·인라인 코드·평문 URL은 바꾸지 않는다. Agent 대화 응답 본문도 같은 규칙으로 저장한다.
+
 #### 6. Error response
 
 | HTTP 상태 | 설명 | 응답 스키마 |
