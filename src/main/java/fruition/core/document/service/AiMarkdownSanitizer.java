@@ -67,7 +67,7 @@ public final class AiMarkdownSanitizer {
             "script", "style", "iframe", "frame", "frameset", "object", "embed", "applet", "img", "svg", "math",
             "video", "audio", "source", "track", "picture", "canvas", "form", "input", "button", "select", "option",
             "textarea", "link", "meta", "base", "noscript", "template", "dialog", "portal");
-    // 태그를 지운 자리에서 새 태그가 생길 수 있어(<<u>script>) 바뀌지 않을 때까지 반복한다.
+    // 바꾼 자리에서 새 태그·링크가 생길 수 있어(<<u>script>, [![a](x)](y)) 바뀌지 않을 때까지 반복한다.
     // 이 횟수를 넘기는 입력은 남은 태그를 모두 escape한다. escape는 글자를 지우지 않아 새 태그를 만들지 않는다.
     private static final int MAX_STRIP_PASSES = 5;
 
@@ -87,7 +87,6 @@ public final class AiMarkdownSanitizer {
         if (markdown == null) {
             return null;
         }
-        // 바꾼 자리에서 새 태그·링크가 생길 수 있어([![a](x)](y)) 바뀌지 않을 때까지 반복한다.
         String current = markdown;
         for (int pass = 0; pass < MAX_STRIP_PASSES; pass++) {
             String next = sanitizeOnce(current, false, keepLinks);

