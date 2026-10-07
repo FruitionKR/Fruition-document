@@ -5447,7 +5447,7 @@ components:
           example: user_3f1c8a6b52d7411e9c04ab5d2e7f6081
         record_type:
           type: string
-          description: "initial, manual, ai, before_ai, restore, before_restore, convert, legacy"
+          description: "initial, manual, ai, before_ai, restore, before_restore, convert, before_convert, legacy"
         restored_from_version:
           type: integer
           format: int64

@@ -1036,8 +1036,8 @@ class DocumentServiceBlocksTest {
         verify(postgresDocumentEditStore, never()).save(
                 anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
                 anyString(), any());
-        verify(contentVersionRepository, never()).insertIfAbsent(
-                anyString(), anyLong(), anyString(), anyString(), anyString(), any());
+        verify(contentVersionRepository, never()).insertSnapshot(
+                anyString(), anyLong(), anyLong(), anyString(), anyString(), anyString(), any(), anyString(), any());
     }
 
     @Test
@@ -1316,7 +1316,8 @@ class DocumentServiceBlocksTest {
                 "write-retry-transient", null);
 
         assertThat(response.changed()).isTrue();
-        verify(contentVersionRepository, never()).markRestoredFrom(anyString(), anyLong(), anyLong());
+        verify(contentVersionRepository, never()).insertSnapshot(anyString(), anyLong(), anyLong(), anyString(),
+                anyString(), anyString(), any(), anyString(), org.mockito.ArgumentMatchers.notNull());
         verify(postgresDocumentEditStore, times(2)).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
                 eq(1L), eq("write-retry-transient"), eq(USER_ID), isNull());
@@ -1606,8 +1607,8 @@ class DocumentServiceBlocksTest {
         verify(postgresDocumentEditStore, never()).save(
                 anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
                 anyString(), any());
-        verify(contentVersionRepository, never()).insertIfAbsent(
-                anyString(), anyLong(), anyString(), anyString(), anyString(), any());
+        verify(contentVersionRepository, never()).insertSnapshot(
+                anyString(), anyLong(), anyLong(), anyString(), anyString(), anyString(), any(), anyString(), any());
     }
 
     @Test
@@ -1635,8 +1636,8 @@ class DocumentServiceBlocksTest {
         assertThat(response.changed()).isFalse();
         assertThat(response.currentVersion()).isEqualTo(1);
         assertThat(response.updatedAt()).isEqualTo(editState.getUpdatedAt());
-        verify(contentVersionRepository, never()).insertIfAbsent(
-                anyString(), anyLong(), anyString(), anyString(), anyString(), any());
+        verify(contentVersionRepository, never()).insertSnapshot(
+                anyString(), anyLong(), anyLong(), anyString(), anyString(), anyString(), any(), anyString(), any());
     }
 
     @Test

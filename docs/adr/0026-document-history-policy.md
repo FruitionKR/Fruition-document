@@ -22,7 +22,7 @@
 | before_ai | 승인된 AI 적용 직전 revision의 이력이 없을 때 |
 | ai | 서버가 검증한 AI 적용 성공. 동일 본문도 기록 |
 | before_restore / restore | 복원 직전 미기록 revision과 실제 변경된 복원 결과 |
-| convert | 기존 PDF 변환 완료 시점의 이력 유지 |
+| before_convert / convert | 변환 저장 직전 미기록 revision과 PDF 변환 완료 시점의 이력 |
 | legacy | V58 이전 이력. 기존 번호와 본문 보존 |
 
 일반 저장에서 10분 조건을 검사하며, 서버 worker도 기본 10초마다 최대 100개의 기록 대상을 확인한다.

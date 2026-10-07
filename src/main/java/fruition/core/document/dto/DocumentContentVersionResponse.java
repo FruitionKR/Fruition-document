@@ -36,8 +36,4 @@ public record DocumentContentVersionResponse(
         @Schema(description = "이력 기록 유형")
         String recordType
 ) {
-    public DocumentContentVersionResponse(String documentId, long version, String markdown, String contentHash,
-                                         String createdBy, Instant createdAt) {
-        this(documentId, version, markdown, contentHash, createdBy, createdAt, version, "legacy");
-    }
 }

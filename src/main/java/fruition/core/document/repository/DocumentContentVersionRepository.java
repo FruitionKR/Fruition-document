@@ -6,7 +6,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -15,23 +14,6 @@ import java.util.Collection;
 
 public interface DocumentContentVersionRepository
         extends JpaRepository<DocumentContentVersion, DocumentContentVersionId> {
-
-    /** 콘텐츠 스냅샷을 남긴다. 같은 (document_id, version)이 이미 있으면 무시한다(초기본 중복 기록 방지). */
-    @Transactional
-    @Modifying
-    @Query(value = """
-            INSERT INTO document_content_versions(document_id, version, revision, markdown, content_hash, created_by, created_at)
-            VALUES (:documentId, :version, :version, :markdown, :contentHash, :createdBy, :createdAt)
-            ON CONFLICT (document_id, version) DO NOTHING
-            """, nativeQuery = true)
-    int insertIfAbsent(
-            @Param("documentId") String documentId,
-            @Param("version") long version,
-            @Param("markdown") String markdown,
-            @Param("contentHash") String contentHash,
-            @Param("createdBy") String createdBy,
-            @Param("createdAt") Instant createdAt
-    );
 
     Optional<DocumentContentVersion> findTopByIdDocumentIdOrderByIdVersionDesc(String documentId);
     Optional<DocumentContentVersion> findFirstByIdDocumentIdAndRevisionOrderByIdVersionDesc(String documentId, long revision);
@@ -85,19 +67,6 @@ public interface DocumentContentVersionRepository
             @Param("documentId") String documentId,
             @Param("version") long version,
             @Param("operationId") String operationId
-    );
-
-    /** 버전 복원으로 만든 버전에 복원 대상 버전을 기록한다. */
-    @Modifying
-    @Query("""
-            UPDATE DocumentContentVersion v SET v.restoredFromVersion = :restoredFromVersion
-            WHERE v.id.documentId = :documentId AND v.id.version = :version
-              AND v.restoredFromVersion IS NULL
-            """)
-    int markRestoredFrom(
-            @Param("documentId") String documentId,
-            @Param("version") long version,
-            @Param("restoredFromVersion") long restoredFromVersion
     );
 
     /** 이력 목록. markdown 본문을 제외한 메타데이터만 최신 버전 순으로 반환한다. */

@@ -22,10 +22,6 @@ public record DocumentContentVersionListResponse(
         @Schema(description = "저장 이력. 최신이 먼저 온다.")
         List<Item> versions
 ) {
-    public DocumentContentVersionListResponse(String documentId, long currentVersion, List<Item> versions) {
-        this(documentId, currentVersion, currentVersion, versions);
-    }
-
     // 다른 응답의 중첩 Item과 단순 이름이 겹쳐 명세에서 덮인다 — 스키마 이름을 명시한다.
     @Schema(name = "DocumentContentVersionItem", description = "본문 저장 이력 한 건")
     public record Item(
@@ -53,11 +49,7 @@ public record DocumentContentVersionListResponse(
             long revision,
 
             @JsonProperty("record_type")
-            @Schema(description = "initial, manual, ai, before_ai, restore, before_restore, convert, legacy")
+            @Schema(description = "initial, manual, ai, before_ai, restore, before_restore, convert, before_convert, legacy")
             String recordType
-    ) {
-        public Item(long version, String contentHash, String createdBy, Instant createdAt, Long restoredFromVersion) {
-            this(version, contentHash, createdBy, createdAt, restoredFromVersion, version, "legacy");
-        }
-    }
+    ) {}
 }
