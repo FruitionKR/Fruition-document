@@ -6,7 +6,7 @@
 
 본문 저장 응답의 기존 `current_version`은 내부 편집 revision이며 새 `current_revision`과 같은 값이다.
 화면 이력 번호와 구분한다. 일반 자동저장은 최신 본문을 갱신하고 이력은 10분 조건으로 기록한다.
-승인된 AI 적용과 복원 정책은 [문서 이력 정책](../../design/document-history-policy.md)을 따른다.
+승인된 AI 적용과 복원 정책은 [문서 이력 정책](../../adr/0026-document-history-policy.md)을 따른다.
 
 - API 수: 10
 

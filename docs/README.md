@@ -4,7 +4,7 @@
 
 - [서비스 구조](architecture.md)
 - [데이터 소유권](data-model.md)
-- [문서 자동저장·버전 이력 정책](design/document-history-policy.md)
+- [문서 자동저장·버전 이력 정책](adr/0026-document-history-policy.md)
 - [빌드·테스트·실행](script.md)
 - [API 계약](api/README.md)
 - `adr/`: 이 서비스가 소유하는 설계 결정

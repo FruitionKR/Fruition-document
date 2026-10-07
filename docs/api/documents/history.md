@@ -5,11 +5,40 @@
 문서 삭제·복구와 콘텐츠 버전 이력 API다.
 
 일반 이력은 10분 단위로, 승인된 AI 적용은 즉시 기록한다. 내부 revision과 이력 version은 분리된다.
-번호 의미와 프론트 연결 변경은 [문서 이력 정책](../../design/document-history-policy.md)을 따른다.
+번호 의미와 프론트 연결 변경은 [문서 이력 정책](../../adr/0026-document-history-policy.md)을 따른다.
 이력 목록의 `current_revision`을 복원 충돌 검사에 사용하고, `current_version`은 현재 이력 번호 또는 null이다.
 `to_version=0`은 미기록 편집을 포함한 최신 본문과 비교한다.
 
 - API 수: 7
+
+## API 계약과 필요한 프론트 연결
+
+이번 작업의 코드 변경 범위는 Fruition-document다. 프론트 이력 화면은 다음 계약에 맞춰 연결해야 한다.
+
+| 응답/요청 | 번호 의미 |
+|---|---|
+| 문서 상세 `edit_revision` | 현재 내부 편집 revision, 기존 계약 유지 |
+| 본문 저장 응답 `current_version` | 기존 필드 유지: 내부 편집 revision |
+| 본문 저장 응답 `current_revision` | 위 값과 동일한 명시적 필드 |
+| 이력 목록 `current_version` | 최신 본문과 일치하는 최신 이력 번호. 미기록 편집이 있거나 이력이 없으면 null |
+| 이력 목록 `current_revision` | 최신 편집 revision. 복원 충돌 검사에 사용 |
+| 이력 항목 `version`, `revision`, `record_type` | 이력 번호, 원본 편집 revision, 기록 종류 |
+| `GET .../diff?from_version=N&to_version=M` | 두 이력 번호 비교 |
+| `GET .../diff?from_version=N&to_version=0` | 이력 N과 미기록 편집을 포함한 최신 본문 비교 |
+| `POST .../versions/N/restore` | 복원 대상 N은 이력 번호 |
+| 복원 body `base_revision` (기존 `base_version`도 허용) | 직전에 조회한 목록의 current_revision. 이력 번호를 보내지 않는다 |
+
+필요한 최소 프론트 변경:
+
+1. 이력 응답에서 `current_revision`을 보관하고, 복원 요청의 충돌 검사 값에 사용한다.
+2. `current_version`이 null일 때도 `to_version=0`으로 최신 본문과 비교하고 복원할 수 있게 한다.
+3. 목록의 current_version은 현재 배지에만 사용한다. 마지막 이력 번호를 최신 revision으로 취급하지 않는다.
+4. 자동저장 응답의 기존 current_version은 revision으로 유지되므로 기존 저장 흐름은 그대로 동작한다.
+
+기존 프론트는 이력 목록의 current_version을 복원 base 값으로도 사용하므로, 번호 분리 뒤 프론트 수정 없이
+배포하면 콘텐츠 이력 화면의 복원이 409로 실패하거나 미기록 본문 비교가 표시되지 않을 수 있다.
+서버에서 현재 revision을 임의로 대입해 충돌 검사를 우회하지 않는다. AI 로그의 되돌리기는 별도의 revision
+경로로 처리하므로 이 프론트 이력 화면의 계약과 독립적이다.
 
 ## API 목차
 
