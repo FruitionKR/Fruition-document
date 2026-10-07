@@ -63,6 +63,56 @@ class AiTaskRollbackIntegrationTest {
 
 
     @Test
+    void anotherPodSkipsRunWhileOneIsAdvancingAndCallbacksDoNotBlock() throws Exception {
+        String id = "claim-" + UUID.randomUUID();
+        var command = mapper.createObjectNode().put("run_id", id).put("kind", "query")
+                .put("workspace_id", "ws").put("user_id", "user");
+        cancellation.register(command);
+        jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested' WHERE id = ?", id);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        org.mockito.Mockito.when(pipeline.cancel(id, "ws", "user", command)).thenAnswer(invocation -> {
+            calls.incrementAndGet();
+            // AI가 복구 중 거꾸로 부르는 내부 API. 선점이 행 잠금을 쥐고 있으면 여기서 멈춘다.
+            cancellation.changes(id, "ws", "user");
+            entered.countDown();
+            release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            return new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "rolling_back", null);
+        });
+
+        var first = java.util.concurrent.CompletableFuture.runAsync(cancellation::resume);
+        assertThat(entered.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        cancellation.resume();
+        release.countDown();
+        first.get(10, java.util.concurrent.TimeUnit.SECONDS);
+
+        assertThat(calls).hasValue(1);
+        assertThat(jdbc.queryForMap("SELECT status, resume_claimed_by, resume_claimed_until FROM ai_task_runs WHERE id = ?", id))
+                .containsEntry("status", "rolling_back")
+                .containsEntry("resume_claimed_by", null)
+                .containsEntry("resume_claimed_until", null);
+    }
+
+    @Test
+    void expiredClaimIsTakenOver() {
+        String id = "claim-expired-" + UUID.randomUUID();
+        var command = mapper.createObjectNode().put("run_id", id).put("kind", "query")
+                .put("workspace_id", "ws").put("user_id", "user");
+        cancellation.register(command);
+        jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', resume_claimed_by = 'dead-pod', "
+                + "resume_claimed_until = now() - interval '1 second' WHERE id = ?", id);
+        org.mockito.Mockito.when(pipeline.cancel(id, "ws", "user", command)).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "rolling_back", null));
+
+        cancellation.resume();
+
+        org.mockito.Mockito.verify(pipeline).cancel(id, "ws", "user", command);
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, id))
+                .isEqualTo("rolling_back");
+    }
+
+    @Test
     void reverseCommittedChangesAndRejectLateWrites() {
         String id = "test-" + UUID.randomUUID();
         jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind) VALUES (?, 'ws', 'user', 'query')", id);
