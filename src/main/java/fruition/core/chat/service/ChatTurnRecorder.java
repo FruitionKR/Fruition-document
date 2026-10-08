@@ -5,6 +5,7 @@ import fruition.core.chat.domain.ChatSession;
 import fruition.core.chat.exception.ChatSessionNotFoundException;
 import fruition.core.chat.repository.ChatMessageRepository;
 import fruition.core.chat.repository.ChatSessionRepository;
+import fruition.core.document.service.AiMarkdownSanitizer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -128,7 +129,7 @@ public class ChatTurnRecorder {
         ChatMessage assistantMessage = chatMessageRepository.findById(assistantMessageId)
                 .orElseThrow(() -> new IllegalStateException(
                         "처리 중인 assistant 메시지를 찾을 수 없습니다: " + assistantMessageId));
-        assistantMessage.completeAgentTurn(action, content);
+        assistantMessage.completeAgentTurn(action, AiMarkdownSanitizer.sanitize(content));
         chatMessageRepository.save(assistantMessage);
     }
 

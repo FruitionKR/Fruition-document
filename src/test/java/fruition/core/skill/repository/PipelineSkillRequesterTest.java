@@ -25,6 +25,8 @@ class PipelineSkillRequesterTest {
     private final AtomicReference<String> uri = new AtomicReference<>();
     private final AtomicReference<String> body = new AtomicReference<>();
     private final AtomicReference<String> token = new AtomicReference<>();
+    private int responseStatus = 200;
+    private String responseBody = "{\"status\":\"proposal_ready\"}";
 
     @BeforeEach
     void setUp() throws IOException {
@@ -39,9 +41,9 @@ class PipelineSkillRequesterTest {
                 exchange.close();
                 return;
             }
-            byte[] response = "{\"status\":\"proposal_ready\"}".getBytes(StandardCharsets.UTF_8);
+            byte[] response = responseBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, response.length);
+            exchange.sendResponseHeaders(responseStatus, response.length);
             exchange.getResponseBody().write(response);
             exchange.close();
         });
@@ -122,6 +124,49 @@ class PipelineSkillRequesterTest {
         assertThat(uri.get()).isEqualTo("/skills/skill_1?workspace_id=ws_1&user_id=user_1");
         assertThat(token.get()).isEqualTo("agent-token");
         assertThat(body.get()).isEmpty();
+    }
+
+    @Test
+    void author_mapsAiRejectionCodeToClientCodeAndMessage() {
+        java.util.Map<String, String> expected = java.util.Map.of(
+                "{\"detail\":{\"code\":\"intent_ambiguous\",\"message\":\"Skill request could not be classified.\"}}",
+                "SKILL_INTENT_AMBIGUOUS",
+                "{\"detail\":{\"code\":\"intent_unsupported\",\"message\":\"x\"}}", "SKILL_INTENT_UNSUPPORTED",
+                "{\"detail\":{\"code\":\"invalid_instruction_length\",\"message\":\"x\"}}", "SKILL_INSTRUCTION_INVALID",
+                "{\"detail\":{\"code\":\"invalid_name\",\"message\":\"x\"}}", "SKILL_INSTRUCTION_INVALID",
+                "{\"detail\":{\"code\":\"invalid_reference\",\"message\":\"x\"}}", "SKILL_INSTRUCTION_INVALID",
+                "{\"detail\":{\"code\":\"skill_request_invalid\",\"message\":\"x\"}}", "SKILL_REQUEST_REJECTED",
+                "{\"detail\":\"skill_id is required.\"}", "SKILL_REQUEST_REJECTED",
+                "not json", "SKILL_REQUEST_REJECTED");
+        responseStatus = 400;
+        expected.forEach((aiBody, code) -> {
+            responseBody = aiBody;
+            var exception = org.assertj.core.api.Assertions.catchThrowableOfType(
+                    fruition.core.skill.exception.PipelineSkillException.class, this::author);
+            assertThat(exception.getHttpStatus()).as(aiBody).isEqualTo(400);
+            assertThat(exception.getCode()).as(aiBody).isEqualTo(code);
+            assertThat(exception.getMessage()).as(aiBody).doesNotContain("classified").matches(".*[가-힣].*");
+        });
+    }
+
+    @Test
+    void author_keepsDefaultCodeForNonRejectionStatus() {
+        responseStatus = 409;
+        responseBody = "{\"detail\":{\"code\":\"intent_ambiguous\",\"message\":\"x\"}}";
+        var exception = org.assertj.core.api.Assertions.catchThrowableOfType(
+                fruition.core.skill.exception.PipelineSkillException.class, this::author);
+        assertThat(exception.getCode()).isEqualTo("SKILL_REQUEST_REJECTED");
+
+        responseStatus = 500;
+        exception = org.assertj.core.api.Assertions.catchThrowableOfType(
+                fruition.core.skill.exception.PipelineSkillException.class, this::author);
+        assertThat(exception.getHttpStatus()).isEqualTo(503);
+    }
+
+    private void author() {
+        requester().author("ws_1", "user_1", new SkillAuthoringRequest(
+                "personal", "meeting-notes", null, "ㅁㄴㅇㅁㄴㅇㅁㄴ", "enhance", List.of()),
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run-author");
     }
 
     private PipelineSkillRequester requester() {

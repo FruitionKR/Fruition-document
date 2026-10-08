@@ -97,7 +97,7 @@ public class Document {
     @Column(name = "processing_stage")
     private String processingStage;
 
-    /** 문서 출처. 일반 업로드는 "upload", 채팅 Wiki page화 export는 "chat_export". */
+    /** 문서 출처. 일반 업로드는 "upload", 채팅 Wiki page화 export는 "chat_export", 스킬 참고 문서는 "skill_reference". */
     @Column(name = "origin")
     private String origin;
 
@@ -134,6 +134,8 @@ public class Document {
 
     @Column(name = "delete_operation_id")
     private UUID deleteOperationId;
+
+    public static final String SKILL_REFERENCE_ORIGIN = "skill_reference";
 
     protected Document() {}
 
@@ -312,6 +314,9 @@ public class Document {
     public Instant getProcessingUpdatedAt() { return processingUpdatedAt; }
     public String getProcessingStage() { return processingStage; }
     public String getOrigin() { return origin; }
+
+    /** 스킬 참고 문서는 문서 트리·목록·위키 편입에서 빠지고 스킬 피커에서만 보인다. */
+    public boolean isSkillReference() { return SKILL_REFERENCE_ORIGIN.equals(origin); }
 
     public void assignSelectionMode(String selectionMode) { this.selectionMode = selectionMode; }
 

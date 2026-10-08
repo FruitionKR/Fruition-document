@@ -64,5 +64,28 @@ public class AccessUserClient {
         }
     }
 
+    /**
+     * 기간 [from, to)에 멤버였던 사용자 ID(탈퇴·제거 포함). 정산 대상이 빠지면 안 되므로
+     * 표시명과 달리 실패를 삼키지 않고 503으로 올린다.
+     */
+    public java.util.List<String> memberUserIds(String workspaceId, java.time.Instant from, java.time.Instant to) {
+        try {
+            MemberUsersResponse response = restClient.get()
+                    .uri("/internal/workspaces/{workspaceId}/member-users?from_at={from}&to_at={to}",
+                            workspaceId, from.toString(), to.toString())
+                    .retrieve()
+                    .body(MemberUsersResponse.class);
+            if (response == null || response.userIds() == null) {
+                throw new RestClientException("빈 응답");
+            }
+            return response.userIds();
+        } catch (RestClientException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "워크스페이스 멤버 이력을 조회할 수 없습니다.");
+        }
+    }
+
+    record MemberUsersResponse(@JsonProperty("user_ids") java.util.List<String> userIds) {}
+
     record UserResponse(@JsonProperty("display_name") String displayName) {}
 }

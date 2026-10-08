@@ -17,6 +17,13 @@ public record MarkdownDocumentCreateRequest(
         @JsonProperty("folder_id")
         @Schema(description = "생성 위치 폴더 ID. 생략하면 루트에 만든다.",
                 example = "8d4f1e6c-3b0a-497d-25e4-f831b9f4c7e2")
-        UUID folderId
+        UUID folderId,
+
+        @Schema(description = "skill_reference면 스킬 참고 문서로 만든다. 문서 트리·목록·위키 편입에서 빠지며 folder_id와 함께 쓸 수 없다. 그 밖의 값은 400이다.",
+                example = "skill_reference")
+        String origin
 ) {
+    public MarkdownDocumentCreateRequest(String displayName, String markdown, UUID folderId) {
+        this(displayName, markdown, folderId, null);
+    }
 }

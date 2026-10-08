@@ -105,12 +105,32 @@ public class AiTaskCancellationService {
     @Scheduled(fixedDelay = 1000)
     public void resume() {
         for (String id : jdbc.queryForList("SELECT id FROM ai_task_runs WHERE status IN "
-                + "('cancel_requested', 'rolling_back') ORDER BY updated_at LIMIT 20", String.class)) {
+                + "('cancel_requested', 'rolling_back') AND (resume_claimed_until IS NULL OR resume_claimed_until < now()) "
+                + "ORDER BY updated_at LIMIT 20", String.class)) {
             advance(id);
         }
     }
 
+    /**
+     * 여러 Pod·사용자 요청이 같은 run을 동시에 진행하지 않게 선점한 뒤 진행한다(#48).
+     * 선점은 UPDATE 한 번으로 커밋하고 행 잠금을 바로 놓는다. 잠금을 쥔 채 AI를 호출하면
+     * 복구 중 돌아오는 내부 요청(changes·undo·finalizeEdits)이 같은 행을 기다려 교착한다.
+     * 선점 시간은 AI 호출 두 번(각 30초 timeout)보다 길게 잡는다. 선점한 Pod가 죽으면 시간이 지난 뒤 다른 Pod가 이어받는다.
+     */
     private void advance(String id) {
+        String claim = java.util.UUID.randomUUID().toString();
+        if (jdbc.update("UPDATE ai_task_runs SET resume_claimed_by = ?, resume_claimed_until = now() + interval '3 minutes' "
+                + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back') "
+                + "AND (resume_claimed_until IS NULL OR resume_claimed_until < now())", claim, id) != 1) return;
+        try {
+            advanceClaimed(id);
+        } finally {
+            jdbc.update("UPDATE ai_task_runs SET resume_claimed_by = NULL, resume_claimed_until = NULL "
+                    + "WHERE id = ? AND resume_claimed_by = ?", id, claim);
+        }
+    }
+
+    private void advanceClaimed(String id) {
         Map<String, Object> row = jdbc.queryForMap("SELECT * FROM ai_task_runs WHERE id = ?", id);
         if (!List.of("cancel_requested", "rolling_back").contains(row.get("status"))) return;
         String workspaceId = (String) row.get("workspace_id");

@@ -71,6 +71,18 @@ class CoreExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("Skill 거절은 requester가 정한 code로 응답하고, code가 없으면 SKILL_REQUEST_REJECTED다")
+    void skillRejectionUsesMappedCode() {
+        var mapped = handler.handlePipelineSkill(
+                new PipelineSkillException("어떤 작업을 반복할지 구체적으로 적어 주세요.", 400, "{}", "SKILL_INTENT_AMBIGUOUS"));
+        assertThat(((ErrorResponse) mapped.getBody()).error().code()).isEqualTo("SKILL_INTENT_AMBIGUOUS");
+        assertThat(((ErrorResponse) mapped.getBody()).error().message()).isEqualTo("어떤 작업을 반복할지 구체적으로 적어 주세요.");
+
+        var fallback = handler.handlePipelineSkill(new PipelineSkillException("거부", 404, "{}"));
+        assertThat(((ErrorResponse) fallback.getBody()).error().code()).isEqualTo("SKILL_REQUEST_REJECTED");
+    }
+
+    @Test
     @DisplayName("Skill 413 중계 분기도 같은 규칙을 따른다")
     void relayedSkillPayloadTooLargeFollowsTheSameRule() {
         handler.handlePipelineSkill(

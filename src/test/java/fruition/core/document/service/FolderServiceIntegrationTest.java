@@ -486,6 +486,67 @@ class FolderServiceIntegrationTest {
     }
 
     @Test
+    void skillReferencesStayOutOfTheTreeAndUseTheirOwnNames() {
+        var file = new org.springframework.mock.web.MockMultipartFile("file", "회의록.md", "text/markdown",
+                "# 템플릿".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var normal = documentService.upload(workspaceId, userId, "normal", null, file);
+        var reference = documentService.upload(workspaceId, userId, "ref", null, file, "skill_reference");
+        var second = documentService.upload(workspaceId, userId, "ref-2", null, file, "skill_reference");
+        var created = documentService.createMarkdown(workspaceId, userId, "ref-md",
+                new MarkdownDocumentCreateRequest("회의록 양식", "# 양식", null, "skill_reference"));
+
+        // 일반 문서와 이름이 같아도 번호가 붙지 않고, 참고 문서끼리만 번호가 붙는다.
+        assertThat(normal.filename()).isEqualTo("회의록.md");
+        assertThat(reference.filename()).isEqualTo("회의록.md");
+        assertThat(second.filename()).isEqualTo("회의록 (2).md");
+        assertThatThrownBy(() -> documentService.createMarkdown(workspaceId, userId, "ref-dup",
+                new MarkdownDocumentCreateRequest("회의록 양식", "# 양식", null, "skill_reference")))
+                .isInstanceOf(DataIntegrityViolationException.class);
+
+        List<String> hidden = List.of(reference.id(), second.id(), created.id());
+        assertThat(documentService.findAll(workspaceId, userId, null).documents())
+                .extracting(DocumentListResponse.DocumentItem::id).containsExactly(normal.id());
+        assertThat(documentService.findAll(workspaceId, userId, "회의록").documents())
+                .extracting(DocumentListResponse.DocumentItem::id).containsExactly(normal.id());
+        assertThat(folderService.tree(workspaceId, userId).items())
+                .extracting(DocumentTreeResponse.Item::id).containsExactly(normal.id());
+        assertThat(folderService.children(workspaceId, userId, null).items())
+                .extracting(FolderChildrenResponse.Item::id).containsExactly(normal.id());
+        assertThat(folderService.search(workspaceId, userId, "회의록").results())
+                .extracting(HierarchySearchResponse.Match::id).containsExactly(normal.id());
+        assertThat(documentService.findAll(workspaceId, userId, null, "skill_reference").documents())
+                .extracting(DocumentListResponse.DocumentItem::id)
+                .containsExactly(created.id(), second.id(), reference.id());
+
+        assertThatThrownBy(() -> documentService.ingest(workspaceId, userId, reference.id()))
+                .isInstanceOf(fruition.core.document.exception.InvalidMarkdownContentException.class);
+        assertThatThrownBy(() -> documentPlacementService.move(workspaceId, userId, reference.id(), "move",
+                new DocumentPositionRequest(null, 0, reference.currentVersion())))
+                .isInstanceOf(HierarchyItemNotFoundException.class);
+        assertThat(hidden).allSatisfy(id -> assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM document_tree_names WHERE item_id = ?", Integer.class, id)).isZero());
+    }
+
+    @Test
+    void skillReferenceRejectsUnknownOriginFoldersAndPdf() {
+        var folder = folderService.create(workspaceId, userId, "a", new FolderCreateRequest("A", null));
+        var markdown = new org.springframework.mock.web.MockMultipartFile("file", "양식.md", "text/markdown",
+                "# 양식".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var pdf = new org.springframework.mock.web.MockMultipartFile("file", "양식.pdf", "application/pdf",
+                "%PDF-1.4".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+
+        assertThatThrownBy(() -> documentService.upload(workspaceId, userId, "bad", null, markdown, "chat_export"))
+                .isInstanceOf(fruition.core.document.exception.InvalidDocumentOriginException.class);
+        assertThatThrownBy(() -> documentService.findAll(workspaceId, userId, null, "upload"))
+                .isInstanceOf(fruition.core.document.exception.InvalidDocumentOriginException.class);
+        assertThatThrownBy(() -> documentService.upload(workspaceId, userId, "in-folder", folder.id(), markdown,
+                "skill_reference"))
+                .isInstanceOf(fruition.core.document.exception.InvalidDocumentOriginException.class);
+        assertThatThrownBy(() -> documentService.upload(workspaceId, userId, "pdf", null, pdf, "skill_reference"))
+                .isInstanceOf(fruition.core.document.exception.UnsupportedDocumentFileException.class);
+    }
+
+    @Test
     void failedDocumentMoveRollsBackSiblingReordering() {
         var a = folderService.create(workspaceId, userId, "a", new FolderCreateRequest("A", null));
         var b = folderService.create(workspaceId, userId, "b", new FolderCreateRequest("B", null));
