@@ -28,6 +28,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 /** AI 작업 로그 조회와 복구. */
 @RestController
 @RequestMapping("/api/workspaces/{workspace_id}/ai-operation-logs")
@@ -61,10 +63,10 @@ public class OperationQueryController {
     public ResponseEntity<OperationLogListResponse> list(
             @PathVariable("workspace_id") String workspaceId,
             @AuthenticationPrincipal String userId,
-            @Parameter(description = "작업 유형", example = "ingest")
-            @RequestParam(value = "type", required = false) String type,
-            @Parameter(description = "상태", example = "succeeded")
-            @RequestParam(value = "status", required = false) String status,
+            @Parameter(description = "작업 유형. 쉼표 구분 또는 파라미터 반복으로 여러 값을 받는다", example = "lint,restore")
+            @RequestParam(value = "type", required = false) List<String> type,
+            @Parameter(description = "상태. 쉼표 구분 또는 파라미터 반복으로 여러 값을 받는다", example = "processing,applying")
+            @RequestParam(value = "status", required = false) List<String> status,
             @Parameter(description = "이전 응답의 next_cursor")
             @RequestParam(value = "cursor", required = false) String cursor,
             @Parameter(description = "페이지 크기. 기본 20, 최대 100", example = "20")

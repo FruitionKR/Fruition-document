@@ -6,6 +6,7 @@ import fruition.shared.security.JwtAuthenticationFilter;
 import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import org.springframework.http.HttpHeaders;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -47,7 +48,8 @@ public class SecurityConfig {
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         // 요청 추적 ID는 브라우저 클라이언트가 읽어야 서버 로그와 대조할 수 있다.
-        configuration.setExposedHeaders(List.of(HttpRequestLoggingFilter.REQUEST_ID_HEADER));
+        // ETag는 폴링 클라이언트가 읽어 다음 요청의 If-None-Match로 보낸다.
+        configuration.setExposedHeaders(List.of(HttpRequestLoggingFilter.REQUEST_ID_HEADER, HttpHeaders.ETAG));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", configuration);

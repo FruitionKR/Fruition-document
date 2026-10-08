@@ -239,6 +239,13 @@ public class FolderService {
         return new FolderChildrenResponse(items);
     }
 
+    /** 트리 응답의 ETag 값. 바뀐 것이 없으면 컨트롤러가 트리를 조립하지 않고 304로 답한다. */
+    @Transactional(readOnly = true)
+    public String treeVersion(String workspaceId, String userId) {
+        verifyMembership(workspaceId, userId);
+        return documentRepository.findTreeFingerprint(workspaceId, DocumentItemAssembler.stalledBefore());
+    }
+
     @Transactional(readOnly = true)
     public DocumentTreeResponse tree(String workspaceId, String userId) {
         verifyMembership(workspaceId, userId);

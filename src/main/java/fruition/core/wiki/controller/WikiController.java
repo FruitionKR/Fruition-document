@@ -1,5 +1,7 @@
 package fruition.core.wiki.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.shared.util.ErrorResponse;
 import fruition.core.wiki.service.WikiService;
 import fruition.core.wiki.dto.WikiGraphResponse;
@@ -16,6 +18,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.util.DigestUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,23 +33,32 @@ import org.springframework.web.bind.annotation.RestController;
 public class WikiController {
 
     private final WikiService wikiService;
+    private final ObjectMapper objectMapper;
 
-    public WikiController(WikiService wikiService) {
+    public WikiController(WikiService wikiService, ObjectMapper objectMapper) {
         this.wikiService = wikiService;
+        this.objectMapper = objectMapper;
     }
 
-    @Operation(summary = "Wiki 그래프 조회", description = "모든 Wiki 노드(pages)와 엣지(links)를 반환합니다. 중앙 그래프 렌더링과 답변 후 하이라이트에 사용됩니다.")
+    @Operation(summary = "Wiki 그래프 조회", description = "모든 Wiki 노드(pages)와 엣지(links)를 반환합니다. 중앙 그래프 렌더링과 답변 후 하이라이트에 사용됩니다. "
+            + "응답의 ETag를 If-None-Match로 보내면, 그래프가 같을 때 본문 없이 304를 반환합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "그래프 조회 성공",
             content = @Content(schema = @Schema(implementation = WikiGraphResponse.class))),
+        @ApiResponse(responseCode = "304", description = "If-None-Match의 ETag와 그래프가 같음"),
         @ApiResponse(responseCode = "500", description = "서버 내부 오류",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @GetMapping("/graph")
     public ResponseEntity<WikiGraphResponse> getGraph(
             @PathVariable("workspace_id") String workspaceId,
-            @AuthenticationPrincipal String userId) {
-        return ResponseEntity.ok(wikiService.findGraph(workspaceId, userId));
+            @AuthenticationPrincipal String userId) throws JsonProcessingException {
+        WikiGraphResponse graph = wikiService.findGraph(workspaceId, userId);
+        // 그래프 원본이 pipeline에 있어 호출은 줄이지 못하고 전송만 줄인다. ETag가 맞으면
+        // HttpEntityMethodProcessor가 본문 대신 304를 보낸다. pipeline이 Wiki 버전을 내려주면
+        // 그 값으로 호출 전에 판단할 수 있다.
+        String etag = "\"" + DigestUtils.md5DigestAsHex(objectMapper.writeValueAsBytes(graph)) + "\"";
+        return ResponseEntity.ok().eTag(etag).body(graph);
     }
 
     @Operation(summary = "Wiki 페이지 상세 조회", description = "특정 Wiki 페이지의 상세 정보를 반환합니다. source_documents와 related_pages를 포함합니다.")

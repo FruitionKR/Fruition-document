@@ -32,6 +32,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -162,6 +163,54 @@ class FolderServiceIntegrationTest {
         assertThat(parentItem.children().get(0).children())
                 .extracting(DocumentTreeResponse.Item::id)
                 .containsExactly("doc_child");
+    }
+
+    /** 폴링은 이 값이 같으면 트리 조립을 건너뛴다. 트리에 보이는 변경은 모두 값을 바꿔야 한다. */
+    @Test
+    void treeVersion_changesOnlyWhenTreeContentChanges() {
+        String documentId = "doc_version_" + UUID.randomUUID();
+        insertDocumentInFolder(documentId, "버전.md", "EDITABLE", null, 0);
+        String initial = folderService.treeVersion(workspaceId, userId);
+
+        assertThat(folderService.treeVersion(workspaceId, userId)).isEqualTo(initial);
+
+        // 엔티티를 거치지 않은 SQL 갱신도 잡는다.
+        jdbcTemplate.update("UPDATE documents SET status = 'processing' WHERE id = ?", documentId);
+        String processing = folderService.treeVersion(workspaceId, userId);
+        assertThat(processing).isNotEqualTo(initial);
+
+        FolderResponse folder = folderService.create(workspaceId, userId, "k-version",
+                new FolderCreateRequest("새 폴더", null));
+        String withFolder = folderService.treeVersion(workspaceId, userId);
+        assertThat(withFolder).isNotEqualTo(processing);
+
+        jdbcTemplate.update("UPDATE folders SET name = '바뀐 폴더' WHERE id = ?", folder.id());
+        String renamedFolder = folderService.treeVersion(workspaceId, userId);
+        assertThat(renamedFolder).isNotEqualTo(withFolder);
+
+        jdbcTemplate.update("UPDATE documents SET deleted_at = now() WHERE id = ?", documentId);
+        assertThat(folderService.treeVersion(workspaceId, userId)).isNotEqualTo(renamedFolder);
+    }
+
+    /** 멈춤(stalled)은 DB 변경 없이 시간이 지나 바뀐다. 이것도 값을 바꿔야 화면에 뜬다. */
+    @Test
+    void treeVersion_changesWhenProcessingStalls() {
+        String documentId = "doc_stall_" + UUID.randomUUID();
+        insertDocumentInFolder(documentId, "멈춤.md", "EDITABLE", null, 0);
+        jdbcTemplate.update("UPDATE documents SET status = 'processing', pipeline_run_id = 'run_1', "
+                + "processing_updated_at = now() WHERE id = ?", documentId);
+        String running = folderService.treeVersion(workspaceId, userId);
+
+        String stalled = documentRepository.findTreeFingerprint(
+                workspaceId, Instant.now().plusSeconds(1));
+
+        assertThat(stalled).isNotEqualTo(running);
+    }
+
+    @Test
+    void treeVersion_rejectsNonMember() {
+        assertThatThrownBy(() -> folderService.treeVersion(workspaceId, "user_outsider"))
+                .isInstanceOf(RuntimeException.class);
     }
 
     /**
