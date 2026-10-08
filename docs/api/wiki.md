@@ -27,9 +27,9 @@ lint·복구는 Kafka `ai.maintenance.command`로 전달한다.
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | 모든 Wiki 노드(pages)와 엣지(links)를 반환합니다. 중앙 그래프 렌더링과 답변 후 하이라이트에 사용됩니다. |
-| 입력 | **Path** — `workspace_id`: `string` |
-| 출력 | `200` 그래프 조회 성공 — `WikiGraphResponse` |
+| 목적 | 모든 Wiki 노드(pages)와 엣지(links)를 반환합니다. 중앙 그래프 렌더링과 답변 후 하이라이트에 사용됩니다. 응답의 ETag를 `If-None-Match`로 보내면, 그래프가 같을 때 본문 없이 304를 반환합니다. |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `If-None-Match`(선택): 이전 응답의 `ETag` |
+| 출력 | `200` 그래프 조회 성공 — `WikiGraphResponse`, `ETag` 헤더<br>`304` 그래프가 같음 — 본문 없음 |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
 | 주요 오류 | `500` 서버 내부 오류 — `ErrorResponse` |
 
@@ -46,6 +46,9 @@ lint·복구는 Kafka `ai.maintenance.command`로 전달한다.
 #### 2. 목적
 
 모든 Wiki 노드(pages)와 엣지(links)를 반환합니다. 중앙 그래프 렌더링과 답변 후 하이라이트에 사용됩니다.
+
+**변경 감지(ETag/304)**: 응답에는 그래프 본문의 해시로 만든 `ETag` 헤더가 붙는다. 폴링은 이 값을 `If-None-Match`로 보내고, 304를 받으면 갖고 있던 그래프를 그대로 쓴다.
+그래프 원본은 AI 서비스에 있어 서버는 매 요청 AI 서비스에서 그래프를 받아 비교한다. 304는 전송량과 화면 재렌더링을 줄이며, AI 서비스 호출은 줄이지 않는다.
 
 #### 3. Auth 필요 여부
 

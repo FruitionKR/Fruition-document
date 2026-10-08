@@ -1111,7 +1111,7 @@ paths:
       - Chat Sessions
   /api/workspaces/{workspace_id}/document-tree:
     get:
-      description: 모든 폴더를 펼친 상태의 활성 폴더·문서 계층을 한 번에 반환합니다.
+      description: "모든 폴더를 펼친 상태의 활성 폴더·문서 계층을 한 번에 반환합니다. 응답의 ETag를 If-None-Match로 보내면, 바뀐 것이 없을 때 트리를 조립하지 않고 본문 없이 304를 반환합니다."
       operationId: tree
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1128,6 +1128,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/DocumentTreeResponse"
           description: 전체 트리 조회 성공
+        "304":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentTreeResponse"
+          description: If-None-Match의 ETag 이후 바뀐 것이 없음
         "404":
           content:
             '*/*':
@@ -4272,7 +4278,7 @@ paths:
       - Wiki Schema
   /api/workspaces/{workspace_id}/wiki/graph:
     get:
-      description: 모든 Wiki 노드(pages)와 엣지(links)를 반환합니다. 중앙 그래프 렌더링과 답변 후 하이라이트에 사용됩니다.
+      description: "모든 Wiki 노드(pages)와 엣지(links)를 반환합니다. 중앙 그래프 렌더링과 답변 후 하이라이트에 사용됩니다. 응답의 ETag를 If-None-Match로 보내면, 그래프가 같을 때 본문 없이 304를 반환합니다."
       operationId: getGraph
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -4289,6 +4295,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/WikiGraphResponse"
           description: 그래프 조회 성공
+        "304":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/WikiGraphResponse"
+          description: If-None-Match의 ETag와 그래프가 같음
         "500":
           content:
             '*/*':
