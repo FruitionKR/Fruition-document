@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageRequest;
 
 import java.time.Instant;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -152,10 +153,40 @@ class OperationLogRepositoryVisibilityIntegrationTest {
                 .containsExactlyInAnyOrder(older.getOperationId(), newer.getOperationId());
     }
 
+    @Test
+    void findPage_returnsEveryRequestedStatusInOneQuery() {
+        String workspaceId = "ws_" + UUID.randomUUID();
+        Instant now = Instant.now();
+        OperationLog lint = OperationLog.processing(
+                "op_lint_" + UUID.randomUUID(), workspaceId, "user_1",
+                OperationType.lint, null, now.minusSeconds(2));
+        OperationLog ingest = OperationLog.processing(
+                "op_ingest_" + UUID.randomUUID(), workspaceId, "user_1",
+                OperationType.ingest, null, now.minusSeconds(1));
+        ingest.complete(OperationStatus.failed, "실패", 0, null, now.minusSeconds(1));
+        OperationLog succeeded = OperationLog.completed(
+                "op_done_" + UUID.randomUUID(), workspaceId, "user_1",
+                OperationType.ingest, null, "페이지 1개 반영", 1, now);
+        operationLogRepository.saveAll(List.of(lint, ingest, succeeded));
+
+        List<OperationLog> found = findPageWithStatuses(workspaceId,
+                Set.of(OperationStatus.processing, OperationStatus.failed), now.plusSeconds(1), "", 20);
+
+        assertThat(found).extracting(OperationLog::getOperationId)
+                .containsExactly(ingest.getOperationId(), lint.getOperationId());
+    }
+
     private List<OperationLog> findPage(String workspaceId, OperationStatus status,
                                         Instant cursor, String cursorOperationId, int size) {
-        return operationLogRepository.findPage(workspaceId, null, status, cursor, cursorOperationId,
-                OperationStatus.succeeded, OperationType.document_edit, HIDDEN_BY_DEFAULT,
+        Set<OperationStatus> statuses = status != null ? Set.of(status)
+                : EnumSet.complementOf(EnumSet.copyOf(HIDDEN_BY_DEFAULT));
+        return findPageWithStatuses(workspaceId, statuses, cursor, cursorOperationId, size);
+    }
+
+    private List<OperationLog> findPageWithStatuses(String workspaceId, Set<OperationStatus> statuses,
+                                                    Instant cursor, String cursorOperationId, int size) {
+        return operationLogRepository.findPage(workspaceId, EnumSet.allOf(OperationType.class), statuses,
+                cursor, cursorOperationId, OperationStatus.succeeded, OperationType.document_edit,
                 PageRequest.of(0, size));
     }
 }

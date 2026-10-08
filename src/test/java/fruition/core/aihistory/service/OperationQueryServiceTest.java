@@ -25,6 +25,7 @@ import org.springframework.data.domain.Pageable;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -66,13 +67,13 @@ class OperationQueryServiceTest {
                 OPERATION_ID, WORKSPACE_ID, USER_ID, OperationType.lint, null,
                 "Wiki lint로 페이지 2개를 변경했습니다.", 2,
                 Instant.parse("2026-08-04T01:00:00Z"));
-        when(operationLogRepository.findPage(eq(WORKSPACE_ID), eq(OperationType.lint),
-                eq(null), any(Instant.class), anyString(),
-                eq(OperationStatus.succeeded), eq(OperationType.document_edit), anyCollection(),
+        when(operationLogRepository.findPage(eq(WORKSPACE_ID), eq(Set.of(OperationType.lint)),
+                anyCollection(), any(Instant.class), anyString(),
+                eq(OperationStatus.succeeded), eq(OperationType.document_edit),
                 any(Pageable.class)))
                 .thenReturn(List.of(lint));
 
-        var response = service.list(WORKSPACE_ID, USER_ID, "lint", null, null, 20);
+        var response = service.list(WORKSPACE_ID, USER_ID, List.of("lint"), null, null, 20);
 
         assertThat(response.logs()).singleElement().satisfies(item -> {
             assertThat(item.operationType()).isEqualTo("lint");
@@ -351,9 +352,9 @@ class OperationQueryServiceTest {
         OperationLog second = OperationLog.completed(
                 "op_aaa", WORKSPACE_ID, USER_ID, OperationType.ingest, null, "B", 1, sameInstant);
         // size+1건을 돌려주면 서비스가 다음 페이지가 있다고 판단한다.
-        when(operationLogRepository.findPage(eq(WORKSPACE_ID), eq(null), eq(null),
+        when(operationLogRepository.findPage(eq(WORKSPACE_ID), anyCollection(), anyCollection(),
                 any(Instant.class), anyString(),
-                eq(OperationStatus.succeeded), eq(OperationType.document_edit), anyCollection(),
+                eq(OperationStatus.succeeded), eq(OperationType.document_edit),
                 any(Pageable.class)))
                 .thenReturn(List.of(first, second));
 
@@ -365,10 +366,10 @@ class OperationQueryServiceTest {
     @Test
     void list_splitsCursorIntoInstantAndOperationId() {
         doNothing().when(workspaceAccessGuard).requireMember(WORKSPACE_ID, USER_ID);
-        when(operationLogRepository.findPage(eq(WORKSPACE_ID), eq(null), eq(null),
+        when(operationLogRepository.findPage(eq(WORKSPACE_ID), anyCollection(), anyCollection(),
                 eq(Instant.parse("2026-08-20T05:33:40.036572Z")), eq("op__hIetMtPO1nVEXY3cBvAdw"),
                 eq(OperationStatus.succeeded), eq(OperationType.document_edit),
-                anyCollection(), any(Pageable.class)))
+                any(Pageable.class)))
                 .thenReturn(List.of());
 
         var response = service.list(WORKSPACE_ID, USER_ID, null, null,
@@ -392,10 +393,48 @@ class OperationQueryServiceTest {
                 .when(workspaceAccessGuard).requireMember(WORKSPACE_ID, USER_ID);
 
         assertThatThrownBy(() -> service.list(
-                WORKSPACE_ID, USER_ID, "lint", null, null, 20))
+                WORKSPACE_ID, USER_ID, List.of("lint"), null, null, 20))
                 .isInstanceOf(WorkspaceNotFoundException.class);
 
         verify(operationLogRepository, never()).findPage(
-                any(), any(), any(), any(), any(), any(), any(), any(), any());
+                any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void list_passesEveryRequestedTypeAndStatusToOneQuery() {
+        doNothing().when(workspaceAccessGuard).requireMember(WORKSPACE_ID, USER_ID);
+        when(operationLogRepository.findPage(any(), anyCollection(), anyCollection(), any(), any(),
+                any(), any(), any())).thenReturn(List.of());
+
+        service.list(WORKSPACE_ID, USER_ID, List.of("lint", "restore"),
+                List.of("processing", " applying", ""), null, 20);
+
+        verify(operationLogRepository).findPage(eq(WORKSPACE_ID),
+                eq(Set.of(OperationType.lint, OperationType.restore)),
+                eq(Set.of(OperationStatus.processing, OperationStatus.applying)),
+                any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void list_withoutFiltersQueriesEveryTypeAndHidesInProgressAndFailedStatuses() {
+        doNothing().when(workspaceAccessGuard).requireMember(WORKSPACE_ID, USER_ID);
+        when(operationLogRepository.findPage(any(), anyCollection(), anyCollection(), any(), any(),
+                any(), any(), any())).thenReturn(List.of());
+
+        service.list(WORKSPACE_ID, USER_ID, null, List.of(), null, 20);
+
+        verify(operationLogRepository).findPage(eq(WORKSPACE_ID),
+                eq(Set.of(OperationType.values())),
+                eq(Set.of(OperationStatus.succeeded, OperationStatus.partially_succeeded)),
+                any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void list_rejectsUnknownStatusAmongMany() {
+        doNothing().when(workspaceAccessGuard).requireMember(WORKSPACE_ID, USER_ID);
+
+        assertThatThrownBy(() -> service.list(
+                WORKSPACE_ID, USER_ID, null, List.of("processing", "nope"), null, 20))
+                .hasMessageContaining("알 수 없는 상태입니다: nope");
     }
 }

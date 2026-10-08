@@ -535,20 +535,24 @@ paths:
         schema:
           type: string
           default: ws_9d47a0e9a6324341b47562553b75f92a
-      - description: 작업 유형
-        example: ingest
+      - description: 작업 유형. 쉼표 구분 또는 파라미터 반복으로 여러 값을 받는다
+        example: "lint,restore"
         in: query
         name: type
         required: false
         schema:
-          type: string
-      - description: 상태
-        example: succeeded
+          type: array
+          items:
+            type: string
+      - description: 상태. 쉼표 구분 또는 파라미터 반복으로 여러 값을 받는다
+        example: "processing,applying"
         in: query
         name: status
         required: false
         schema:
-          type: string
+          type: array
+          items:
+            type: string
       - description: 이전 응답의 next_cursor
         in: query
         name: cursor

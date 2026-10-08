@@ -62,7 +62,7 @@ class OperationQueryControllerTest {
     @Test
     @DisplayName("목록은 snake_case로 내려가고 커서를 그대로 전달한다")
     void listReturnsSnakeCaseAndPassesCursor() throws Exception {
-        when(queryService.list(eq(WORKSPACE_ID), eq(USER_ID), eq("ingest"), isNull(),
+        when(queryService.list(eq(WORKSPACE_ID), eq(USER_ID), eq(List.of("ingest")), isNull(),
                 eq("2026-08-01T00:00:00Z"), eq(50)))
                 .thenReturn(new OperationLogListResponse(List.of(
                         new OperationLogListResponse.Item(OPERATION_ID, "ingest", "succeeded",
@@ -85,7 +85,7 @@ class OperationQueryControllerTest {
     @Test
     @DisplayName("lint 목록은 문서 대상 없이 저장된 변경 개수를 반환한다")
     void listReturnsLintLog() throws Exception {
-        when(queryService.list(eq(WORKSPACE_ID), eq(USER_ID), eq("lint"), isNull(),
+        when(queryService.list(eq(WORKSPACE_ID), eq(USER_ID), eq(List.of("lint")), isNull(),
                 isNull(), eq(20)))
                 .thenReturn(new OperationLogListResponse(List.of(
                         new OperationLogListResponse.Item(OPERATION_ID, "lint", "succeeded",
@@ -113,6 +113,21 @@ class OperationQueryControllerTest {
                 .andExpect(jsonPath("$.next_cursor").doesNotExist());
 
         verify(queryService).list(WORKSPACE_ID, USER_ID, null, null, null, null);
+    }
+
+    @Test
+    @DisplayName("상태는 쉼표 구분과 파라미터 반복 모두 여러 값으로 받는다")
+    void listAcceptsMultipleStatuses() throws Exception {
+        when(queryService.list(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new OperationLogListResponse(List.of(), null));
+
+        mockMvc.perform(get(BASE).header("Authorization", bearer())
+                        .param("type", "lint,restore")
+                        .param("status", "processing", "applying"))
+                .andExpect(status().isOk());
+
+        verify(queryService).list(WORKSPACE_ID, USER_ID, List.of("lint", "restore"),
+                List.of("processing", "applying"), null, null);
     }
 
     @Test
