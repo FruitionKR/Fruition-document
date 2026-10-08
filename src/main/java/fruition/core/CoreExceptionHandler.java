@@ -26,6 +26,7 @@ import fruition.core.document.exception.DocumentVersionConflictException;
 import fruition.core.document.exception.DocumentWriteForbiddenException;
 import fruition.core.document.exception.DuplicateDocumentException;
 import fruition.core.document.exception.InvalidDocumentConvertRequestException;
+import fruition.core.document.exception.InvalidDocumentOriginException;
 import fruition.core.document.exception.InvalidDocumentFilenameException;
 import fruition.core.document.exception.InvalidDocumentVersionException;
 import fruition.core.document.exception.InvalidMarkdownContentException;
@@ -295,6 +296,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body(ErrorResponse.of("INVALID_DOCUMENT_CONVERT_REQUEST", e.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidDocumentOriginException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidDocumentOrigin(InvalidDocumentOriginException e) {
+        logHandled(e, HttpStatus.BAD_REQUEST, "INVALID_DOCUMENT_ORIGIN");
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(ErrorResponse.of("INVALID_DOCUMENT_ORIGIN", e.getMessage()));
     }
 
     @ExceptionHandler(InvalidMarkdownContentException.class)

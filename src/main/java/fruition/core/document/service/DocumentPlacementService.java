@@ -49,7 +49,9 @@ public class DocumentPlacementService {
                 userId, scope, idempotencyKey, hash, DocumentPositionResponse.class, 200,
                 response -> documentId, () -> {
                     verifyMembership(workspaceId, userId);
+                    // 스킬 참고 문서는 트리에 없으므로 옮길 대상도 아니다.
                     documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                            .filter(document -> !document.isSkillReference())
                             .orElseThrow(() -> new HierarchyItemNotFoundException("문서를 찾을 수 없습니다."));
                     if (targetFolderId != null && folderRepository
                             .findActiveForUpdate(targetFolderId, workspaceId).isEmpty()) {

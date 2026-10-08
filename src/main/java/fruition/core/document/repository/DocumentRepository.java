@@ -71,15 +71,17 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
 
     List<Document> findAllByStatusAndPipelineRunIdIsNotNull(DocumentStatus status);
 
-    /** 호환 문서 목록: 채팅 편입 문서를 포함한 활성 문서를 공용 순서로 조회한다. */
+    /** 호환 문서 목록: 채팅 편입 문서를 포함한 활성 문서를 공용 순서로 조회한다. 스킬 참고 문서는 뺀다. */
     @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
             + "AND d.deletedAt IS NULL "
+            + "AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
             + "ORDER BY d.sortOrder ASC, d.id ASC")
     List<Document> findVisibleByWorkspaceId(@Param("workspaceId") String workspaceId);
 
     /** 파일명 검색은 본문을 조회하지 않는다. */
     @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
             + "AND d.deletedAt IS NULL "
+            + "AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
             + "AND (LOWER(d.displayName) LIKE LOWER(CONCAT('%', :query, '%')) "
             + "OR LOWER(d.filename) LIKE LOWER(CONCAT('%', :query, '%'))) "
             + "ORDER BY d.sortOrder ASC, d.id ASC")
@@ -87,6 +89,18 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             @Param("workspaceId") String workspaceId,
             @Param("query") String query
     );
+
+    /** 스킬 피커용 참고 문서 목록. 최근 업로드가 앞에 온다. */
+    @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
+            + "AND d.deletedAt IS NULL AND d.origin = 'skill_reference' "
+            + "ORDER BY d.uploadedAt DESC, d.id DESC")
+    List<Document> findSkillReferences(@Param("workspaceId") String workspaceId);
+
+    /** 스킬 참고 문서끼리의 이름 공간. 정규화는 uq_documents_skill_reference_name 인덱스와 같다. */
+    @Query(value = "SELECT normalize(lower(normalize(btrim(filename), NFC)), NFC) FROM documents "
+            + "WHERE workspace_id = :workspaceId AND origin = 'skill_reference' AND deleted_at IS NULL",
+            nativeQuery = true)
+    List<String> findActiveSkillReferenceNames(@Param("workspaceId") String workspaceId);
 
     Optional<Document> findByIdAndWorkspaceIdAndDeletedAtIsNull(String id, String workspaceId);
 
@@ -148,6 +162,7 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
     @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
             + "AND ((:folderId IS NULL AND d.folderId IS NULL) OR d.folderId = :folderId) "
             + "AND d.deletedAt IS NULL "
+            + "AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
             + "ORDER BY d.sortOrder ASC, d.id ASC")
     List<Document> findChildDocuments(
             @Param("workspaceId") String workspaceId,
@@ -177,6 +192,7 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
     boolean existsByWorkspaceIdAndFolderIdAndDeletedAtIsNull(String workspaceId, java.util.UUID folderId);
 
     @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId AND d.deletedAt IS NULL "
+            + "AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
             + "AND (LOWER(d.displayName) LIKE :pattern OR d.normalizedFilename LIKE :pattern) "
             + "ORDER BY d.displayName ASC, d.id ASC")
     List<Document> searchByName(

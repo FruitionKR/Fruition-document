@@ -6,6 +6,8 @@
 
 폴더 관리와 문서 트리 탐색 API다.
 
+스킬 참고 문서(`origin=skill_reference`)는 문서 트리·폴더 하위 목록·이름 검색에 나오지 않고 이 이름 공간도 쓰지 않는다. 자세한 규칙은 [Document Management](documents/management.md)를 본다.
+
 - API 수: 10
 
 ## API 목차
