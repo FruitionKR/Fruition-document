@@ -42,6 +42,7 @@ import org.springframework.mock.web.MockMultipartFile;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -80,7 +81,7 @@ class DocumentControllerTest {
                 "duplicate", new java.sql.SQLException("duplicate", "23505"), "uq_document_tree_active_name");
         RuntimeException failure = new org.springframework.dao.DataIntegrityViolationException("write failed", violation);
         if (wrapped) failure = new fruition.core.document.exception.DocumentUploadException("upload failed", failure);
-        when(documentService.upload(eq(WORKSPACE_ID), eq(USER_ID), any(), any(), any())).thenThrow(failure);
+        when(documentService.upload(eq(WORKSPACE_ID), eq(USER_ID), any(), any(), any(), any())).thenThrow(failure);
 
         mockMvc.perform(multipart("/api/workspaces/" + WORKSPACE_ID + "/documents")
                         .file(new MockMultipartFile("file", "보고서.md", "text/markdown", "본문".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
@@ -179,7 +180,7 @@ class DocumentControllerTest {
 
     @Test
     void list_withQuery_passesFilenameSearchQuery() throws Exception {
-        when(documentService.findAll(WORKSPACE_ID, USER_ID, "보고서"))
+        when(documentService.findAll(WORKSPACE_ID, USER_ID, "보고서", null))
                 .thenReturn(new fruition.core.document.dto.DocumentListResponse(List.of()));
 
         mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/documents")
@@ -188,7 +189,7 @@ class DocumentControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.documents").isArray());
 
-        verify(documentService).findAll(WORKSPACE_ID, USER_ID, "보고서");
+        verify(documentService).findAll(WORKSPACE_ID, USER_ID, "보고서", null);
     }
 
     @Test
@@ -223,6 +224,35 @@ class DocumentControllerTest {
 
         verify(documentService).createMarkdown(
                 eq(WORKSPACE_ID), eq(USER_ID), eq("create-key"), any(MarkdownDocumentCreateRequest.class));
+    }
+
+    @Test
+    void skillReference_passesOriginFromBodyAndQuery() throws Exception {
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/documents/markdown")
+                        .header("Authorization", bearerToken())
+                        .header("Idempotency-Key", "ref-key")
+                        .contentType("application/json")
+                        .content("""
+                                {"display_name":"양식","markdown":"# 양식","origin":"skill_reference"}
+                                """))
+                .andExpect(status().isCreated());
+        verify(documentService).createMarkdown(eq(WORKSPACE_ID), eq(USER_ID), eq("ref-key"),
+                eq(new MarkdownDocumentCreateRequest("양식", "# 양식", null, "skill_reference")));
+
+        when(documentService.findAll(WORKSPACE_ID, USER_ID, null, "skill_reference"))
+                .thenReturn(new fruition.core.document.dto.DocumentListResponse(List.of()));
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/documents")
+                        .queryParam("origin", "skill_reference")
+                        .header("Authorization", bearerToken()))
+                .andExpect(status().isOk());
+
+        when(documentService.findAll(WORKSPACE_ID, USER_ID, null, "upload"))
+                .thenThrow(new fruition.core.document.exception.InvalidDocumentOriginException("허용하지 않는 origin"));
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/documents")
+                        .queryParam("origin", "upload")
+                        .header("Authorization", bearerToken()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_DOCUMENT_ORIGIN"));
     }
 
     @Test
@@ -263,7 +293,7 @@ class DocumentControllerTest {
         DocumentUploadResponse response = new DocumentUploadResponse(
                 "doc_uploaded", "노트.md", "text/markdown", 0, DocumentStatus.completed,
                 null, Instant.now(), true, 1, DocumentRole.EDITABLE, null);
-        when(documentService.upload(eq(WORKSPACE_ID), eq(USER_ID), eq("up-key"), eq(folderId), any()))
+        when(documentService.upload(eq(WORKSPACE_ID), eq(USER_ID), eq("up-key"), eq(folderId), any(), isNull()))
                 .thenReturn(response);
 
         mockMvc.perform(multipart("/api/workspaces/" + WORKSPACE_ID + "/documents")
@@ -274,7 +304,7 @@ class DocumentControllerTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value("doc_uploaded"));
 
-        verify(documentService).upload(eq(WORKSPACE_ID), eq(USER_ID), eq("up-key"), eq(folderId), any());
+        verify(documentService).upload(eq(WORKSPACE_ID), eq(USER_ID), eq("up-key"), eq(folderId), any(), isNull());
     }
 
     @Test
@@ -282,7 +312,7 @@ class DocumentControllerTest {
         MockMultipartFile file = new MockMultipartFile(
                 "file", "노트.md", "text/markdown",
                 "# 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        when(documentService.upload(eq(WORKSPACE_ID), eq(USER_ID), eq("same-key"), eq(null), any()))
+        when(documentService.upload(eq(WORKSPACE_ID), eq(USER_ID), eq("same-key"), eq(null), any(), isNull()))
                 .thenThrow(new IdempotencyInProgressException("같은 요청이 처리 중입니다."));
 
         mockMvc.perform(multipart("/api/workspaces/" + WORKSPACE_ID + "/documents")
@@ -298,7 +328,7 @@ class DocumentControllerTest {
         MockMultipartFile file = new MockMultipartFile(
                 "file", "노트.md", "text/markdown",
                 "# 본문".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        when(documentService.upload(eq(WORKSPACE_ID), eq(USER_ID), eq("same-key"), eq(null), any()))
+        when(documentService.upload(eq(WORKSPACE_ID), eq(USER_ID), eq("same-key"), eq(null), any(), isNull()))
                 .thenThrow(new IdempotencyConflictException("다른 요청입니다."));
 
         mockMvc.perform(multipart("/api/workspaces/" + WORKSPACE_ID + "/documents")

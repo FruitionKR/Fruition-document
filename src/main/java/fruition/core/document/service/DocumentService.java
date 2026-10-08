@@ -15,6 +15,7 @@ import fruition.shared.idempotency.IdempotencyService;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.DocumentOriginalNotFoundException;
 import fruition.core.document.exception.DocumentUploadException;
+import fruition.core.document.exception.InvalidDocumentOriginException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentVersionConflictException;
 import fruition.core.document.exception.DocumentWriteForbiddenException;
@@ -215,7 +216,21 @@ public class DocumentService {
             UUID folderId,
             MultipartFile file
     ) {
+        return upload(workspaceId, userId, idempotencyKey, folderId, file, null);
+    }
+
+    @Transactional
+    public DocumentUploadResponse upload(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            UUID folderId,
+            MultipartFile file,
+            String origin
+    ) {
         verifyWorkspaceOwnership(workspaceId, userId);
+        boolean skillReference = isSkillReferenceOrigin(origin);
+        requireNoFolderForSkillReference(skillReference, folderId);
         verifyFolder(workspaceId, folderId);
         validateIdempotencyKey(idempotencyKey);
         String objectPath = null;
@@ -227,6 +242,9 @@ public class DocumentService {
             filename = filename.trim().replaceFirst("(?i)\\.txt$", ".md");
             String mimeType = resolveMimeType(filename);
             boolean markdownUpload = MARKDOWN_MIME_TYPE.equals(mimeType);
+            if (skillReference && !markdownUpload) {
+                throw new UnsupportedDocumentFileException("스킬 참고 문서는 Markdown 또는 txt 파일만 업로드할 수 있습니다.");
+            }
             if (!markdownUpload && !(file instanceof StoredOriginal)) {
                 requirePdfSignature(file);
             }
@@ -235,8 +253,10 @@ public class DocumentService {
             String contentHash = markdownUpload ? markdownContent.contentHash()
                     : file instanceof StoredOriginal stored ? stored.storageFingerprint() : uploadedFileHash(file);
             String endpointScope = uploadEndpointScope(workspaceId);
-            String requestHash = requestHash(
-                    filename.trim(), mimeType, contentHash, String.valueOf(folderId));
+            // 일반 업로드의 해시는 그대로 두어 배포 전후 같은 키 재요청이 충돌하지 않게 한다.
+            String requestHash = skillReference
+                    ? requestHash(filename.trim(), mimeType, contentHash, String.valueOf(folderId), origin)
+                    : requestHash(filename.trim(), mimeType, contentHash, String.valueOf(folderId));
 
             Optional<DocumentUploadResponse> replay = replayIdempotentRequest(
                     userId, endpointScope, idempotencyKey, requestHash);
@@ -245,9 +265,12 @@ public class DocumentService {
             }
 
             // 같은 폴더에 같은 이름이 있으면 거절하지 않고 "이름 (2).pdf"처럼 번호를 붙인다.
-            // 동시에 같은 이름을 고르는 경합은 DB 고유 제약이 막는다.
+            // 스킬 참고 문서는 참고 문서끼리만 비교한다. 동시에 같은 이름을 고르는 경합은 DB 고유 제약이 막는다.
+            List<String> existingNames = skillReference
+                    ? documentRepository.findActiveSkillReferenceNames(workspaceId)
+                    : documentRepository.findActiveSiblingNames(workspaceId, folderId);
             String storedFilename = DocumentEditingRules.uniqueUploadFilename(filename,
-                    new java.util.HashSet<>(documentRepository.findActiveSiblingNames(workspaceId, folderId))).filename();
+                    new java.util.HashSet<>(existingNames)).filename();
 
             log.info("[문서 업로드 요청] workspaceId={} userId={} filename={} contentType={} size={}",
                     workspaceId, userId, file.getOriginalFilename(), file.getContentType(), file.getSize());
@@ -281,7 +304,8 @@ public class DocumentService {
                     mimeType,
                     file.getSize(),
                     objectPath,
-                    contentHash
+                    contentHash,
+                    skillReference ? Document.SKILL_REFERENCE_ORIGIN : "upload"
             );
             document.place(folderId, placementSortOrder(workspaceId, folderId, document.getDocumentRole()));
             document.updateStatus(DocumentStatus.uploaded, null, null, null);
@@ -298,6 +322,7 @@ public class DocumentService {
 
             return response;
         } catch (InvalidDocumentFilenameException
+                 | InvalidDocumentOriginException
                  | InvalidIdempotencyKeyException
                  | IdempotencyConflictException
                  | IdempotencyInProgressException
@@ -325,15 +350,19 @@ public class DocumentService {
         if (request == null) {
             throw new InvalidMarkdownContentException("Markdown 생성 요청은 필수입니다.");
         }
+        boolean skillReference = isSkillReferenceOrigin(request.origin());
+        requireNoFolderForSkillReference(skillReference, request.folderId());
         verifyFolder(workspaceId, request.folderId());
 
         DocumentEditingRules.Filename filename =
                 DocumentEditingRules.rename(request.displayName(), "document.md");
         DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(request.markdown());
         String endpointScope = markdownEndpointScope(workspaceId);
-        String requestHash = requestHash(
-                filename.filename(), "text/markdown", content.contentHash(),
-                String.valueOf(request.folderId()));
+        String requestHash = skillReference
+                ? requestHash(filename.filename(), "text/markdown", content.contentHash(),
+                        String.valueOf(request.folderId()), request.origin())
+                : requestHash(filename.filename(), "text/markdown", content.contentHash(),
+                        String.valueOf(request.folderId()));
 
         Optional<DocumentUploadResponse> replay =
                 replayIdempotentRequest(userId, endpointScope, idempotencyKey, requestHash);
@@ -342,7 +371,8 @@ public class DocumentService {
         }
 
         DocumentUploadResponse response =
-                createMarkdownDocument(workspaceId, userId, filename.filename(), content, "direct", request.folderId());
+                createMarkdownDocument(workspaceId, userId, filename.filename(), content,
+                        skillReference ? Document.SKILL_REFERENCE_ORIGIN : "direct", request.folderId());
         saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
         return response;
     }
@@ -433,6 +463,24 @@ public class DocumentService {
             );
         } catch (Exception e) {
             log.warn("초기 노트 저장 실패로 건너뜁니다. workspaceId={}", workspaceId, e);
+        }
+    }
+
+    /** 사용자가 지정할 수 있는 origin은 스킬 참고 문서뿐이다. 생략하면 일반 문서다. */
+    private static boolean isSkillReferenceOrigin(String origin) {
+        if (origin == null) {
+            return false;
+        }
+        if (!Document.SKILL_REFERENCE_ORIGIN.equals(origin)) {
+            throw new InvalidDocumentOriginException("origin은 skill_reference만 지정할 수 있습니다.");
+        }
+        return true;
+    }
+
+    /** 스킬 참고 문서는 문서 트리 밖에 있으므로 폴더에 둘 수 없다. */
+    private static void requireNoFolderForSkillReference(boolean skillReference, UUID folderId) {
+        if (skillReference && folderId != null) {
+            throw new InvalidDocumentOriginException("스킬 참고 문서는 폴더를 지정할 수 없습니다.");
         }
     }
 
@@ -1326,9 +1374,16 @@ public class DocumentService {
     }
 
     public DocumentListResponse findAll(String workspaceId, String userId, String query) {
+        return findAll(workspaceId, userId, query, null);
+    }
+
+    /** origin=skill_reference면 스킬 참고 문서만 최근 업로드 순으로 돌려준다. 이때 query는 쓰지 않는다. */
+    public DocumentListResponse findAll(String workspaceId, String userId, String query, String origin) {
         verifyWorkspaceOwnership(workspaceId, userId);
 
-        List<Document> documents = query == null || query.isBlank()
+        List<Document> documents = isSkillReferenceOrigin(origin)
+                ? documentRepository.findSkillReferences(workspaceId)
+                : query == null || query.isBlank()
                 ? documentRepository.findVisibleByWorkspaceId(workspaceId)
                 : documentRepository.searchVisibleByWorkspaceId(workspaceId, query.trim());
 
@@ -1860,6 +1915,9 @@ public class DocumentService {
                 .filter(value -> value.getDeletedAt() == null)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
         verifyDocumentOwner(document, userId);
+        if (document.isSkillReference()) {
+            throw new InvalidMarkdownContentException("스킬 참고 문서는 위키에 편입할 수 없습니다.");
+        }
         if ("chat_export".equals(document.getOrigin())) {
             if (document.getStatus() == DocumentStatus.processing) {
                 throw new DocumentAlreadyProcessingException("이미 처리 중인 문서입니다.");

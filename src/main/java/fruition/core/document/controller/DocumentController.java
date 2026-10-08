@@ -110,14 +110,17 @@ public class DocumentController {
             @Parameter(description = "요청 멱등 키", required = true)
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestParam(value = "folder_id", required = false) java.util.UUID folderId,
-            @RequestParam(value = "file", required = false) MultipartFile file) {
+            @RequestParam(value = "file", required = false) MultipartFile file,
+            @Parameter(description = "skill_reference면 스킬 참고 문서로 올린다. Markdown·txt만 받으며 folder_id와 함께 쓸 수 없다. 그 밖의 값은 400이다.")
+            @RequestParam(value = "origin", required = false) String origin) {
         if (file == null || file.isEmpty()) {
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)
                     .body(ErrorResponse.of("INVALID_REQUEST", "파일이 없거나 비어 있습니다."));
         }
 
-        DocumentUploadResponse response = documentService.upload(workspaceId, userId, idempotencyKey, folderId, file);
+        DocumentUploadResponse response =
+                documentService.upload(workspaceId, userId, idempotencyKey, folderId, file, origin);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -148,10 +151,12 @@ public class DocumentController {
                 .body(documentService.createMarkdown(workspaceId, userId, idempotencyKey, request));
     }
 
-    @Operation(summary = "문서 목록 조회", description = "활성 문서의 호환용 평면 목록을 반환하며 파일명 검색을 지원합니다.")
+    @Operation(summary = "문서 목록 조회", description = "활성 문서의 호환용 평면 목록을 반환하며 파일명 검색을 지원합니다. 스킬 참고 문서는 빠지고, origin=skill_reference로 따로 조회합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "목록 조회 성공",
             content = @Content(schema = @Schema(implementation = DocumentListResponse.class))),
+        @ApiResponse(responseCode = "400", description = "허용하지 않는 origin",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "500", description = "서버 내부 오류",
@@ -161,8 +166,10 @@ public class DocumentController {
     public ResponseEntity<DocumentListResponse> list(
             @PathVariable("workspace_id") String workspaceId,
             @AuthenticationPrincipal String userId,
-            @RequestParam(value = "query", required = false) String query) {
-        return ResponseEntity.ok(documentService.findAll(workspaceId, userId, query));
+            @RequestParam(value = "query", required = false) String query,
+            @Parameter(description = "skill_reference면 스킬 참고 문서만 최근 업로드 순으로 반환합니다. 이때 query는 무시합니다.")
+            @RequestParam(value = "origin", required = false) String origin) {
+        return ResponseEntity.ok(documentService.findAll(workspaceId, userId, query, origin));
     }
 
     @Operation(summary = "문서 상세 조회", description = "특정 문서의 상세 정보를 반환합니다. 연결된 Wiki 페이지 목록이 포함됩니다.")
