@@ -2,6 +2,8 @@
 
 활성 파일·폴더의 이름은 같은 부모 폴더 안에서 고유해야 한다(최상위는 워크스페이스 루트). 문서 종류가 달라도, 파일과 폴더 사이에서도 같은 이름을 사용할 수 없다. 앞뒤 공백·대소문자·한글 조합 방식만 다른 이름도 중복이다. 생성·이름 변경·이동·복구 시 충돌하면 `409 DUPLICATE_NAME`을 반환한다. 파일 업로드(직접 업로드 포함)는 거절하지 않고, 이름이 겹칠 때만 확장자 앞에 `(2)`부터 빈 번호를 붙인다(`보고서.pdf` → `보고서 (2).pdf`). 실제 저장된 이름은 응답 `filename`으로 확인한다. `보고서.pdf`와 `보고서.md`는 별개 이름이다. 휴지통 문서는 이름을 점유하지 않는다. 복제·채팅 내보내기의 자동 이름도 같은 폴더에서 빈 이름을 골라 번호를 붙인다. 동시 요청이 같은 이름을 선택하면 DB 제약으로 하나를 거절한다.
 
+스킬 참고 문서(`origin=skill_reference`)는 이 이름 공간 밖에 있다. 참고 문서끼리만 워크스페이스 단위로 이름을 비교하며, 업로드는 같은 방식으로 번호를 붙이고 생성·이름 변경·복구 충돌은 `409 DUPLICATE_NAME`이다. 참고 문서는 Markdown만 받고 폴더에 둘 수 없다. 문서 트리·폴더 하위 목록·이름 검색·기본 목록·위키 편입에서 빠지고, `GET /documents?origin=skill_reference`로만 조회한다. 이동(`position`)은 `404`, 편입(`ingest`)은 `400`으로 거절한다. 상세 조회·본문 편집·이름 변경·삭제·복구는 일반 문서와 같고, 휴지통도 같이 쓴다. 스킬 author 요청의 `reference_document_ids`에는 일반 문서와 참고 문서를 모두 넣을 수 있다.
+
 [서비스 문서](../../README.md) / [document-svc](../README.md) / [Documents](README.md)
 
 문서 목록·생성·업로드·조회와 기본 관리 API다.
@@ -33,10 +35,10 @@
 | 항목 | 내용 |
 |---|---|
 | 목적 | 활성 문서의 호환용 평면 목록을 반환하며 파일명 검색을 지원합니다. |
-| 입력 | **Path** — `workspace_id`: `string`<br>**Query** — `query`(선택): `string` |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Query** — `query`(선택): `string`, `origin`(선택): `skill_reference` |
 | 출력 | `200` 목록 조회 성공 — `DocumentListResponse` |
-| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>필터링: `query`<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`500` 서버 내부 오류 — `ErrorResponse` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>필터링: `query`, `origin`<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
+| 주요 오류 | `400` 허용하지 않는 origin — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`500` 서버 내부 오류 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -54,6 +56,8 @@
 
 처리가 시작된 문서는 `processing_started_at`을 반환한다. 프론트는 이 서버 시각을 기준으로 Ingest 경과 시간을 표시한다.
 
+스킬 참고 문서는 기본 목록과 `query` 검색에서 빠진다. `origin=skill_reference`를 주면 스킬 참고 문서만 최근 업로드 순으로 반환하고 `query`는 무시한다. 그 밖의 `origin` 값은 `400 INVALID_DOCUMENT_ORIGIN`이다.
+
 #### 3. Auth 필요 여부
 
 - 필요
@@ -65,6 +69,7 @@
 |---|---|---|---|---|
 | path | `workspace_id` | `string` | 예 | - |
 | query | `query` | `string` | 아니요 | - |
+| query | `origin` | `string` | 아니요 | `skill_reference`만 허용. 스킬 참고 문서만 최근 업로드 순으로 반환 |
 
 - Body: 없음
 
@@ -97,6 +102,7 @@
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
+| `400` | 허용하지 않는 origin | `ErrorResponse` (`INVALID_DOCUMENT_ORIGIN`) |
 | `404` | 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `500` | 서버 내부 오류 | `ErrorResponse` |
 
@@ -112,7 +118,7 @@
 #### 7. Pagination / filtering
 
 - 페이지네이션: 지원하지 않음
-- 필터링: `query`
+- 필터링: `query`, `origin`
 
 #### 8. 권한 규칙
 
@@ -164,10 +170,10 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | 항목 | 내용 |
 |---|---|
 | 목적 | PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. |
-| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Query** — `folder_id`(선택): `string`<br>**Body** — `file` |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Query** — `folder_id`(선택): `string`, `origin`(선택): `skill_reference`<br>**Body** — `file` |
 | 출력 | `201` 업로드 성공 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 파일 없음 또는 잘못된 요청 — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse`<br>`415` 지원하지 않는 확장자 또는 올바르지 않은 PDF 내용 — `ErrorResponse`<br>`500` 서버 내부 오류 — `ErrorResponse` |
+| 주요 오류 | `400` 파일 없음, 허용하지 않는 origin, 참고 문서에 폴더 지정 등 잘못된 요청 — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse`<br>`415` 지원하지 않는 확장자, 올바르지 않은 PDF 내용, 스킬 참고 문서로 올린 PDF — `ErrorResponse`<br>`500` 서버 내부 오류 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -195,6 +201,7 @@ PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이
 | path | `workspace_id` | `string` | 예 | - |
 | header | `Idempotency-Key` | `string` | 예 | 요청 멱등 키 |
 | query | `folder_id` | `string` | 아니요 | - |
+| query | `origin` | `string` | 아니요 | `skill_reference`면 스킬 참고 문서로 올린다. Markdown·txt만 받고 `folder_id`와 함께 쓸 수 없다. 그 밖의 값은 `400 INVALID_DOCUMENT_ORIGIN` |
 
 - Content-Type: `multipart/form-data`
 
@@ -228,10 +235,10 @@ PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
-| `400` | 파일 없음 또는 잘못된 요청 | `ErrorResponse` |
+| `400` | 파일 없음 또는 잘못된 요청. 허용하지 않는 origin, 참고 문서에 `folder_id` 지정은 `INVALID_DOCUMENT_ORIGIN` | `ErrorResponse` |
 | `404` | 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 | `ErrorResponse` |
-| `415` | 지원하지 않는 확장자 또는 올바르지 않은 PDF 내용 | `ErrorResponse` (`UNSUPPORTED_FILE_TYPE`) |
+| `415` | 지원하지 않는 확장자, 올바르지 않은 PDF 내용, 스킬 참고 문서로 올린 PDF | `ErrorResponse` (`UNSUPPORTED_FILE_TYPE`) |
 | `500` | 서버 내부 오류 | `ErrorResponse` |
 
 ```json
@@ -252,7 +259,7 @@ PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이
 #### 7. Pagination / filtering
 
 - 페이지네이션: 지원하지 않음
-- 필터링: 지원하지 않음 (요청 옵션: `folder_id`)
+- 필터링: 지원하지 않음 (요청 옵션: `folder_id`, `origin`)
 
 #### 8. 권한 규칙
 
@@ -779,7 +786,7 @@ HTTP/1.1 204 No Content
 | 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `MarkdownDocumentCreateRequest` |
 | 출력 | `201` 생성 성공 또는 멱등 재요청 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 본문 또는 Idempotency-Key — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse`<br>`413` Markdown 5MB 초과 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 본문, Idempotency-Key 또는 origin — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 또는 같은 이름 — `ErrorResponse`<br>`413` Markdown 5MB 초과 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -794,6 +801,8 @@ HTTP/1.1 204 No Content
 #### 2. 목적
 
 표시 이름과 전체 Markdown 본문으로 즉시 편집 가능한 문서를 생성합니다.
+
+`origin: "skill_reference"`를 주면 스킬 참고 문서로 만든다. `folder_id`와 함께 쓸 수 없고, 그 밖의 `origin` 값은 `400 INVALID_DOCUMENT_ORIGIN`이다. 이름은 참고 문서끼리만 비교한다.
 
 #### 3. Auth 필요 여부
 
@@ -841,9 +850,9 @@ HTTP/1.1 204 No Content
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
-| `400` | 잘못된 본문 또는 Idempotency-Key | `ErrorResponse` |
+| `400` | 잘못된 본문 또는 Idempotency-Key. 허용하지 않는 origin, 참고 문서에 `folder_id` 지정은 `INVALID_DOCUMENT_ORIGIN` | `ErrorResponse` |
 | `404` | 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `409` | Idempotency-Key 충돌 | `ErrorResponse` |
+| `409` | Idempotency-Key 충돌 또는 같은 이름(`DUPLICATE_NAME`) | `ErrorResponse` |
 | `413` | Markdown 5MB 초과 | `ErrorResponse` |
 
 ```json

@@ -1132,7 +1132,7 @@ Markdown 문서를 Wiki 파이프라인에 넣습니다. 일반 문서는 최신
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
-| `400` | 편집 가능한 Markdown 문서가 아님 | `ErrorResponse` |
+| `400` | 편집 가능한 Markdown 문서가 아니거나 스킬 참고 문서임 | `ErrorResponse` |
 | `403` | 문서 소유자가 아님 | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 이미 처리 중인 문서 | `ErrorResponse` |
