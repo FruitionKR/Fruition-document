@@ -107,9 +107,8 @@ public interface OperationLogRepository extends JpaRepository<OperationLog, Stri
      * {@code successOnlyType}은 결과가 나기 전에 감사 행을 먼저 커밋하는 유형이라, 끝난 성공만
      * 남긴다. 이 둘은 명시 조회에서도 걷어낸다.
      *
-     * <p>{@code hiddenDefaultStatuses}(진행 중·반영 실패)는 {@code status}를 생략했을 때만
-     * 걷어낸다. 명시 조회는 그대로 통과시킨다. {@code status=processing}은 활성 작업 탐지에,
-     * {@code status=failed}·{@code status=conflict}는 실패 알림 감지에 쓴다.
+     * <p>{@code types}·{@code statuses}는 비우지 않는다. 필터를 생략한 조회는 서비스가 전체 값
+     * (상태는 기본으로 감추는 상태를 뺀 값)으로 채워 넘긴다.
      *
      * <p>{@code createdAt}만으로는 같은 시각에 만들어진 작업이 {@code <} 비교에서 통째로
      * 빠진다. {@code (createdAt, operationId)} 복합 커서로 동시각 작업까지 결정적으로 가른다.
@@ -121,9 +120,8 @@ public interface OperationLogRepository extends JpaRepository<OperationLog, Stri
     @Query("""
             SELECT l FROM OperationLog l
             WHERE l.workspaceId = :workspaceId
-              AND (:type IS NULL OR l.operationType = :type)
-              AND (:status IS NULL OR l.status = :status)
-              AND (:status IS NOT NULL OR l.status NOT IN :hiddenDefaultStatuses)
+              AND l.operationType IN :types
+              AND l.status IN :statuses
               AND (l.status <> :successStatus OR l.changedResourceCount > 0)
               AND (l.operationType <> :successOnlyType OR l.status = :successStatus)
               AND (l.createdAt < :cursor
@@ -132,13 +130,12 @@ public interface OperationLogRepository extends JpaRepository<OperationLog, Stri
             """)
     List<OperationLog> findPage(
             @Param("workspaceId") String workspaceId,
-            @Param("type") OperationType type,
-            @Param("status") OperationStatus status,
+            @Param("types") Collection<OperationType> types,
+            @Param("statuses") Collection<OperationStatus> statuses,
             @Param("cursor") Instant cursor,
             @Param("cursorOperationId") String cursorOperationId,
             @Param("successStatus") OperationStatus successStatus,
             @Param("successOnlyType") OperationType successOnlyType,
-            @Param("hiddenDefaultStatuses") Collection<OperationStatus> hiddenDefaultStatuses,
             Pageable pageable
     );
 

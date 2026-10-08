@@ -396,7 +396,7 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
 | 항목 | 내용 |
 |---|---|
 | 목적 | 최신순으로 반환합니다. 일반 목록에서는 진행 중 상태를 제외하고, `status=processing` 명시 조회는 활성 작업 탐지에 사용합니다. 로그 테이블만 읽으며 diff를 계산하지 않습니다. |
-| 입력 | **Path** — `workspace_id`: `string`<br>**Query** — `type`(선택): `string`, `status`(선택): `string`, `cursor`(선택): `string`, `size`(선택): `integer` |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Query** — `type`(선택): `string[]`, `status`(선택): `string[]`, `cursor`(선택): `string`, `size`(선택): `integer` |
 | 출력 | `200` 조회 성공 — `OperationLogListResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>페이지네이션: `cursor`, `size`<br>필터링: `type`, `status`, `cursor`, `size`<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
 | 주요 오류 | `404` 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
@@ -413,7 +413,7 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
 
 #### 2. 목적
 
-최신순으로 반환합니다. 바꾼 것이 없는 성공 작업은 제외하고, 문서 편집은 실제 변경에 성공한 작업만 포함합니다. 이 둘은 명시 조회에서도 제외합니다. `status`를 생략한 일반 로그 목록은 `processing`·`applying`·`notify_pending`·`rebuilding`과 `failed`·`conflict` 작업을 제외합니다. 되돌릴 대상이 없어 사용자가 목록에서 할 수 있는 일이 없기 때문이며, 감사 기록은 상세 조회로 그대로 열립니다. `status`를 명시하면 그대로 조회됩니다. `status=processing`은 활성 Ingest·Lint 탐지에, `status=failed`·`status=conflict`는 실패 알림 감지에 사용합니다. 필터는 페이지네이션 전에 DB query에서 적용하고, 로그 테이블만 읽으며 diff를 계산하지 않습니다.
+최신순으로 반환합니다. 바꾼 것이 없는 성공 작업은 제외하고, 문서 편집은 실제 변경에 성공한 작업만 포함합니다. 이 둘은 명시 조회에서도 제외합니다. `status`를 생략한 일반 로그 목록은 `processing`·`applying`·`notify_pending`·`rebuilding`과 `failed`·`conflict` 작업을 제외합니다. 되돌릴 대상이 없어 사용자가 목록에서 할 수 있는 일이 없기 때문이며, 감사 기록은 상세 조회로 그대로 열립니다. `status`를 명시하면 그대로 조회됩니다. `status=processing`은 활성 Ingest·Lint 탐지에, `status=failed`·`status=conflict`는 실패 알림 감지에 사용합니다. `type`과 `status`는 여러 값을 받으며(`?status=processing,applying` 또는 `?status=processing&status=applying`), 값 중 하나라도 맞으면 포함합니다. 진행 중인 여러 상태를 한 번의 요청으로 확인할 수 있습니다. 필터는 페이지네이션 전에 DB query에서 적용하고, 로그 테이블만 읽으며 diff를 계산하지 않습니다.
 
 `target_display_name`은 작업 시작 시점 snapshot이다. Ingest 로그 제목과 원본 문서 표시는 현재 문서 이름을 다시 조회하지 않고 이 값을 사용한다.
 
@@ -427,8 +427,8 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | `workspace_id` | `string` | 예 | - |
-| query | `type` | `string` | 아니요 | 작업 유형 |
-| query | `status` | `string` | 아니요 | 상태 |
+| query | `type` | `string[]` | 아니요 | 작업 유형. 쉼표 구분 또는 파라미터 반복으로 여러 값을 받는다 |
+| query | `status` | `string[]` | 아니요 | 상태. 쉼표 구분 또는 파라미터 반복으로 여러 값을 받는다 |
 | query | `cursor` | `string` | 아니요 | 이전 응답의 next_cursor |
 | query | `size` | `integer` | 아니요 | 페이지 크기. 기본 20, 최대 100 |
 

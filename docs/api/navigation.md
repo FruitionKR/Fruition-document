@@ -796,9 +796,9 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | 모든 폴더를 펼친 상태의 활성 폴더·문서 계층을 한 번에 반환합니다. |
-| 입력 | **Path** — `workspace_id`: `string` |
-| 출력 | `200` 전체 트리 조회 성공 — `DocumentTreeResponse` |
+| 목적 | 모든 폴더를 펼친 상태의 활성 폴더·문서 계층을 한 번에 반환합니다. 응답의 ETag를 `If-None-Match`로 보내면, 바뀐 것이 없을 때 트리를 조립하지 않고 본문 없이 304를 반환합니다. |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `If-None-Match`(선택): 이전 응답의 `ETag` |
+| 출력 | `200` 전체 트리 조회 성공 — `DocumentTreeResponse`, `ETag` 헤더<br>`304` 바뀐 것이 없음 — 본문 없음 |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
 | 주요 오류 | `404` 활성 워크스페이스 또는 멤버십을 찾을 수 없음 — `ErrorResponse` |
 
@@ -824,6 +824,11 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
 문서가 사람에게 보이는 제목은 `document.display_name`에 있다.
 
 폴더 항목에는 `document` 키가 없다.
+
+**변경 감지(ETag/304)**: 응답에는 `ETag` 헤더가 붙는다. 폴링은 이 값을 `If-None-Match`로 보내고, 304를 받으면 갖고 있던 트리를 그대로 쓴다.
+서버는 트리에 실리는 문서·폴더 행과 편집 상태의 지문을 먼저 계산해 비교한다. 같으면 트리를 조립하지 않는다.
+처리 중 문서가 멈춤(`stalled`)으로 바뀌는 것처럼 시간이 지나 달라지는 값도 지문에 들어간다.
+지문은 트리를 조립하기 전에 계산하므로, 그 사이에 변경이 생기면 다음 요청에서 다시 200을 받는다.
 
 #### 3. Auth 필요 여부
 

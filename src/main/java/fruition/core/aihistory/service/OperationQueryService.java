@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -50,9 +51,12 @@ public class OperationQueryService {
      * {@code status=failed}·{@code status=conflict}는 실패 알림 감지에 쓴다.
      */
     private static final Set<OperationStatus> HIDDEN_BY_DEFAULT_STATUSES =
-            Set.of(OperationStatus.processing, OperationStatus.applying,
+            EnumSet.of(OperationStatus.processing, OperationStatus.applying,
                     OperationStatus.notify_pending, OperationStatus.rebuilding,
                     OperationStatus.failed, OperationStatus.conflict);
+
+    private static final Set<OperationStatus> DEFAULT_STATUSES =
+            EnumSet.complementOf(EnumSet.copyOf(HIDDEN_BY_DEFAULT_STATUSES));
 
     private final OperationLogRepository operationLogRepository;
     private final OperationChangeRepository operationChangeRepository;
@@ -77,14 +81,15 @@ public class OperationQueryService {
 
     @Transactional(readOnly = true)
     public OperationLogListResponse list(String workspaceId, String userId,
-                                         String type, String status, String cursor, Integer size) {
+                                         List<String> types, List<String> statuses,
+                                         String cursor, Integer size) {
         verifyMember(workspaceId, userId);
 
         int limit = normalizeSize(size);
         Cursor parsed = parseCursor(cursor);
         List<OperationLog> found = operationLogRepository.findPage(
-                workspaceId, parseType(type), parseStatus(status), parsed.createdAt(), parsed.operationId(),
-                OperationStatus.succeeded, OperationType.document_edit, HIDDEN_BY_DEFAULT_STATUSES,
+                workspaceId, parseTypes(types), parseStatuses(statuses), parsed.createdAt(), parsed.operationId(),
+                OperationStatus.succeeded, OperationType.document_edit,
                 PageRequest.of(0, limit + 1));
 
         // 한 건 더 읽어 다음 페이지가 있는지 본다.
@@ -139,26 +144,35 @@ public class OperationQueryService {
         return Math.min(size, MAX_SIZE);
     }
 
-    private OperationType parseType(String type) {
-        if (type == null || type.isBlank()) {
-            return null;
+    /** 생략하면 모든 유형이다. */
+    private Set<OperationType> parseTypes(List<String> types) {
+        Set<OperationType> parsed = EnumSet.noneOf(OperationType.class);
+        for (String type : nonBlank(types)) {
+            try {
+                parsed.add(OperationType.valueOf(type));
+            } catch (IllegalArgumentException e) {
+                throw new InvalidRestoreRequestException("알 수 없는 작업 유형입니다: " + type);
+            }
         }
-        try {
-            return OperationType.valueOf(type);
-        } catch (IllegalArgumentException e) {
-            throw new InvalidRestoreRequestException("알 수 없는 작업 유형입니다: " + type);
-        }
+        return parsed.isEmpty() ? EnumSet.allOf(OperationType.class) : parsed;
     }
 
-    private OperationStatus parseStatus(String status) {
-        if (status == null || status.isBlank()) {
-            return null;
+    /** 생략하면 {@link #HIDDEN_BY_DEFAULT_STATUSES}를 뺀 상태다. */
+    private Set<OperationStatus> parseStatuses(List<String> statuses) {
+        Set<OperationStatus> parsed = EnumSet.noneOf(OperationStatus.class);
+        for (String status : nonBlank(statuses)) {
+            try {
+                parsed.add(OperationStatus.valueOf(status));
+            } catch (IllegalArgumentException e) {
+                throw new InvalidRestoreRequestException("알 수 없는 상태입니다: " + status);
+            }
         }
-        try {
-            return OperationStatus.valueOf(status);
-        } catch (IllegalArgumentException e) {
-            throw new InvalidRestoreRequestException("알 수 없는 상태입니다: " + status);
-        }
+        return parsed.isEmpty() ? DEFAULT_STATUSES : parsed;
+    }
+
+    private static List<String> nonBlank(List<String> values) {
+        return values == null ? List.of()
+                : values.stream().map(String::trim).filter(value -> !value.isEmpty()).toList();
     }
 
     /** 마지막으로 받은 항목을 가리키는 복합 커서. 같은 시각의 작업도 이 두 키로 갈린다. */

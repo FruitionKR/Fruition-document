@@ -78,6 +78,41 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             + "ORDER BY d.sortOrder ASC, d.id ASC")
     List<Document> findVisibleByWorkspaceId(@Param("workspaceId") String workspaceId);
 
+    /**
+     * 문서 트리 응답이 바뀌었는지 가리는 지문. 트리를 조립하지 않고 304를 판단할 때 쓴다.
+     *
+     * <p>트리에 실리는 문서·폴더 행의 {@code xmin}을 모은다. 행이 갱신되면 {@code xmin}이 바뀌므로
+     * 엔티티·벌크 갱신·네이티브 SQL 어느 경로로 바뀌어도 지문이 달라진다. 시각 비교와 달리 늦게
+     * 커밋된 갱신도 놓치지 않는다. 편집 상태는 행이 있는지만 편집 가능 여부에 쓰이므로 ID만 넣는다.
+     *
+     * <p>{@code stalled}는 DB 변경 없이 시간이 지나 바뀌므로 {@code stalledBefore}로 따로 넣는다.
+     * 조건은 {@link fruition.core.document.service.DocumentItemAssembler}의 판정과 같아야 한다.
+     */
+    @Query(value = """
+            SELECT md5(
+                coalesce((SELECT string_agg(d.id || ':' || d.xmin::text
+                                     || CASE WHEN d.status NOT IN ('completed', 'failed')
+                                                  AND d.pipeline_run_id IS NOT NULL
+                                                  AND d.processing_updated_at < :stalledBefore
+                                             THEN ':stalled' ELSE '' END,
+                                     ',' ORDER BY d.id)
+                          FROM documents d
+                          WHERE d.workspace_id = :workspaceId
+                            AND d.deleted_at IS NULL
+                            AND (d.origin IS NULL OR d.origin <> 'skill_reference')), '')
+                || '|' || coalesce((SELECT string_agg(f.id::text || ':' || f.xmin::text, ',' ORDER BY f.id)
+                                    FROM folders f
+                                    WHERE f.workspace_id = :workspaceId
+                                      AND f.deleted_at IS NULL), '')
+                || '|' || coalesce((SELECT string_agg(e.document_id, ',' ORDER BY e.document_id)
+                                    FROM document_edit_states e
+                                    JOIN documents d ON d.id = e.document_id
+                                    WHERE d.workspace_id = :workspaceId
+                                      AND d.deleted_at IS NULL), ''))
+            """, nativeQuery = true)
+    String findTreeFingerprint(@Param("workspaceId") String workspaceId,
+                               @Param("stalledBefore") Instant stalledBefore);
+
     /** 파일명 검색은 본문을 조회하지 않는다. */
     @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
             + "AND d.deletedAt IS NULL "

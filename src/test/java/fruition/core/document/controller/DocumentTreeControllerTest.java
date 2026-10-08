@@ -22,8 +22,13 @@ import java.util.List;
 
 import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.not;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -80,6 +85,37 @@ class DocumentTreeControllerTest {
                 null, "run_1", DocumentProcessingState.completed, null,
                 "pages", "page", "메모", "md", DocumentRole.EDITABLE, true, 3L, null,
                 Instant.parse("2026-08-17T00:02:00Z"), true, null);
+    }
+
+    @Test
+    void tree_returns304WithoutBuildingTreeWhenVersionIsUnchanged() throws Exception {
+        when(folderService.treeVersion(WORKSPACE_ID, USER_ID)).thenReturn("v1");
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/document-tree")
+                        .header("Authorization", bearer())
+                        .header("If-None-Match", "\"v1\""))
+                .andExpect(status().isNotModified())
+                .andExpect(header().string("ETag", "\"v1\""))
+                .andExpect(content().string(""));
+
+        verify(folderService, never()).tree(any(), any());
+    }
+
+    @Test
+    void tree_returnsBodyWithNewEtagWhenVersionChanged() throws Exception {
+        when(folderService.treeVersion(WORKSPACE_ID, USER_ID)).thenReturn("v2");
+        when(folderService.tree(WORKSPACE_ID, USER_ID)).thenReturn(new DocumentTreeResponse(List.of()));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/document-tree")
+                        .header("Authorization", bearer())
+                        .header("If-None-Match", "\"v1\""))
+                .andExpect(status().isOk())
+                .andExpect(header().string("ETag", "\"v2\""))
+                .andExpect(jsonPath("$.items").isEmpty());
+    }
+
+    private String bearer() {
+        return "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com");
     }
 
     @Test
