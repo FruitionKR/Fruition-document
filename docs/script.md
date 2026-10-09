@@ -42,4 +42,4 @@ API 계약을 의도적으로 바꾸면 `./gradlew test -DupdateOpenApiSnapshot=
 
 선불 크레딧(#79)은 `BILLING_ENFORCE`(기본 false)가 true일 때만 잔액 부족 요청을 402로 거절한다. false면 예약·정산만 기록한다. kind별 예상 상한은 `BILLING_ESTIMATE_<KIND>`(milli-KRW), 기본 `BILLING_DEFAULT_ESTIMATE_KRW_MILLI`. 수동 지급·조정은 `scripts/sql/credit-grant-adjust.sql`, 잔액 점검은 `scripts/sql/credit-balance-check.sql`.
 
-PG 결제 충전·환불(#80)은 PG를 정하기 전까지 `BILLING_PAYMENTS_ENABLED=false`(기본)로 둔다. 켤 때 `PG_CONFIRM_ENDPOINT`·`PG_CANCEL_ENDPOINT`·`PG_SECRET_KEY`·`PG_WEBHOOK_SECRET`을 주입하고 PG 관리 화면에 webhook 주소 `/internal/payments/webhook`을 등록한다. 상품표는 `app.billing.product.<code>.amount-krw`·`.credit-krw-milli`다(ADR-0026).
+PG 결제 충전·환불(#80)은 PG를 정하기 전까지 `BILLING_PAYMENTS_ENABLED=false`(기본)로 둔다. 켤 때 `PG_CONFIRM_ENDPOINT`·`PG_PAYMENT_ENDPOINT`·`PG_CANCEL_ENDPOINT`·`PG_SECRET_KEY`·`PG_WEBHOOK_SECRET`을 주입하고 PG 관리 화면에 webhook 주소 `/internal/payments/webhook`을 등록한다. 상품표는 `app.billing.product.<code>.amount-krw`·`.credit-krw-milli`다(ADR-0026).

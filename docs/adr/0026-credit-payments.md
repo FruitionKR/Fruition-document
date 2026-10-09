@@ -25,13 +25,13 @@
 
 1. **주문**: `POST /api/users/me/credit-orders`(`product_code`). 금액(원)과 지급 크레딧(milli-KRW)은 서버 설정 상품표(`app.billing.product.<code>.*`)로만 정한다. 결제창에는 `order_id`·`amount_krw`를 넘긴다.
 2. **승인**: 결제창 성공 후 브라우저가 `payment_key`·`amount`를 `POST .../{order_id}/confirm`으로 보낸다. 금액이 주문과 다르면 PG를 부르지 않는다. 서버가 PG 승인 API를 부르고 응답의 주문 ID·금액·상태(`DONE`)를 다시 대조한 뒤 주문을 `paid`로 바꾸고 같은 트랜잭션에서 `purchase`를 쓴다. 상태 조건부 갱신(`created`/`failed` → `paid`)과 원장 키(`purchase:{order_id}`)로 재시도·동시 요청에도 한 번만 지급한다.
-3. **webhook**: `POST /internal/payments/webhook`. 본문 HMAC-SHA256(설정 비밀키) 서명을 `X-Payment-Signature`로 검증하고, `eventId`(없으면 본문 SHA-256)를 `payment_events`에 넣어 한 번만 처리한다. 승인 응답을 받지 못한 결제(브라우저 이탈·서버 timeout)를 `DONE` 알림으로 복구한다. 원문은 저장하지 않고 해시만 남긴다.
-4. **환불**: `POST .../{order_id}/refund`. 주문의 남은 크레딧과 가용 잔액(잔액 − 예약) 중 작은 값만 환불하고 금액은 그 비율(원 단위 내림)이다. 주문·계정 행을 잠근 채 PG 취소(부분 취소, `Idempotency-Key`)를 부르고, 성공하면 `refund`(−)를 쓴다.
+3. **webhook**: `POST /internal/payments/webhook`. 본문 HMAC-SHA256(설정 비밀키) 서명을 `X-Payment-Signature`로 검증하고, `eventId`(없으면 본문 SHA-256)를 `payment_events`에 넣어 한 번만 처리한다. 승인 응답을 받지 못한 결제(브라우저 이탈·서버 timeout)를 `DONE` 알림으로 복구한다. `CANCELED`·`PARTIAL_CANCELED` 알림(PG 관리자 콘솔 취소 등)은 PG 결제 조회 결과로 주문에 기록하지 않은 취소만큼 크레딧을 회수한다. 원문은 저장하지 않고 해시만 남긴다. 승인을 다시 확인할 때 PG가 이미 처리한 결제라고 거절하면 결제 조회로 대조해 지급한다.
+4. **환불**: `POST .../{order_id}/refund`. 주문의 남은 크레딧과 가용 잔액(잔액 − 예약) 중 작은 값만 환불하고 금액은 그 비율(원 단위 내림)이다. 주문·계정 행을 잠근 채 PG 결제를 조회해 주문에 기록하지 않은 취소가 있으면 회수만 하고, 없으면 PG 취소(부분 취소, `Idempotency-Key`)를 부른 뒤 성공하면 `refund`(−)를 쓴다.
 5. `app.billing.payments-enabled`(기본 false)가 false면 주문·승인·환불·webhook이 모두 404다.
 
 ### 3. PG 연동은 클래스 하나로 둔다
 
-`PaymentGatewayClient` 하나에 승인·취소만 둔다. 엔드포인트·비밀키는 설정값이다. PG가 하나로 정해질 때까지 인터페이스를 만들지 않는다. 요청·응답은 토스페이먼츠 결제 승인(`POST /v1/payments/confirm`, Basic 인증 `secretKey:`)·취소(`POST /v1/payments/{paymentKey}/cancel`) 형식을 기준으로 했고, **PG 선정 후 이 클래스와 webhook 서명 방식을 그 PG에 맞춘다.**
+`PaymentGatewayClient` 하나에 승인·조회·취소만 둔다. 엔드포인트·비밀키는 설정값이다. PG가 하나로 정해질 때까지 인터페이스를 만들지 않는다. 요청·응답은 토스페이먼츠 결제 승인(`POST /v1/payments/confirm`, Basic 인증 `secretKey:`)·조회(`GET /v1/payments/{paymentKey}`)·취소(`POST /v1/payments/{paymentKey}/cancel`) 형식을 기준으로 했고, **PG 선정 후 이 클래스와 webhook 서명 방식을 그 PG에 맞춘다.**
 
 ## PG 후보 비교 (결정 필요)
 
@@ -58,6 +58,6 @@
 ## 알려진 한계
 
 - 환불은 PG 취소 동안 주문·계정 행을 잠근다. 그동안 같은 사용자의 AI 예약이 기다린다. 환불이 잦아지면 "환불 대기"로 크레딧을 먼저 회수하고 PG 결과로 확정·복원하는 두 단계로 바꾼다.
-- PG 취소는 성공했는데 커밋이 실패하면 돈은 환불되고 크레딧은 남는다. 같은 `Idempotency-Key`로 다시 환불하면 PG는 한 번만 취소하고 크레딧이 회수된다. PG 정산 내역과 원장 대사로 확인한다.
+- PG 취소는 성공했는데 커밋이 실패하거나 응답을 잃으면 돈은 환불되고 크레딧은 남는다. 다시 환불을 요청하면 PG 조회로 그 취소를 찾아 새로 취소하지 않고 회수만 한다. 사용자가 다시 요청하지 않으면 PG 취소 webhook이 같은 방식으로 회수한다. 부분 취소 회수 크레딧은 금액 비율 내림이라 처음 계산한 환불 크레딧보다 1 milli-KRW 단위로 적을 수 있다.
 - PG가 `DONE`을 다른 금액으로 답하면 지급하지 않고 오류 로그만 남긴다(결제 취소는 운영자가 한다).
 - 충전 화면(frontend)과 PG 정산 내역 대사는 범위 밖이다.

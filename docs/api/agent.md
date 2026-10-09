@@ -1222,9 +1222,9 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 | Method + Path | 동작 |
 |---|---|
 | `POST /api/users/me/credit-orders` (`{"product_code"}`) | 주문 생성. 금액·크레딧은 서버 상품표(`app.billing.product.<code>.amount-krw`·`.credit-krw-milli`)로 정한다. 없는 상품 400. |
-| `POST /api/users/me/credit-orders/{order_id}/confirm` (`{"payment_key", "amount"}`) | 서버가 PG 승인 API를 부르고 주문·금액·상태를 대조한 뒤 `purchase`를 지급한다. 이미 지급한 주문은 PG를 다시 부르지 않고 그대로 돌려준다. 금액 불일치 400(PG 미호출), PG 거절 400(주문 `failed`), PG 응답 없음·불일치 502. |
-| `POST /api/users/me/credit-orders/{order_id}/refund` | 주문의 남은 크레딧과 가용 잔액 중 작은 값만 환불한다. 금액은 그 비율(원 단위 내림)이며 PG 취소 성공 후 `refund`(−)를 쓴다. 상태는 `refunded` 또는 `partially_refunded`. 환불할 것이 없으면 409(PG 미호출), PG 거절 409, 응답 없음 502. |
-| `POST /internal/payments/webhook` | 헤더 `X-Payment-Signature` = 본문 HMAC-SHA256 hex(`app.billing.pg.webhook-secret`). 틀리면 401. `eventId`(없으면 본문 SHA-256)로 한 번만 처리하고, `data.status = DONE`이면 승인 응답을 받지 못한 주문을 지급한다. |
+| `POST /api/users/me/credit-orders/{order_id}/confirm` (`{"payment_key", "amount"}`) | 서버가 PG 승인 API를 부르고 주문·금액·상태를 대조한 뒤 `purchase`를 지급한다. 이미 지급한 주문은 PG를 다시 부르지 않고 그대로 돌려준다. 앞선 승인 응답을 받지 못해 PG가 이미 처리한 결제라고 거절하면(`ALREADY_PROCESSED_PAYMENT`) PG 결제 조회로 주문·금액·상태를 대조해 지급한다. 금액 불일치 400(PG 미호출), PG 거절 400(주문 `failed`), PG 응답 없음·불일치 502. |
+| `POST /api/users/me/credit-orders/{order_id}/refund` | 주문의 남은 크레딧과 가용 잔액 중 작은 값만 환불한다. 금액은 그 비율(원 단위 내림)이며 PG 취소 성공 후 `refund`(−)를 쓴다. 취소 전에 PG 결제를 조회해, 주문에 기록하지 않은 취소(취소 뒤 회수 전 실패·응답 유실)가 있으면 새로 취소하지 않고 그 금액만큼 회수만 한다. 상태는 `refunded` 또는 `partially_refunded`. 환불할 것이 없으면 409(PG 미호출), PG 거절 409, 응답 없음 502. |
+| `POST /internal/payments/webhook` | 헤더 `X-Payment-Signature` = 본문 HMAC-SHA256 hex(`app.billing.pg.webhook-secret`). 틀리면 401. `eventId`(없으면 본문 SHA-256)로 한 번만 처리하고, `data.status = DONE`이면 승인 응답을 받지 못한 주문을 지급한다. `CANCELED`·`PARTIAL_CANCELED`(관리자 콘솔 취소 등)면 PG 결제를 조회해 주문에 기록하지 않은 취소 금액만큼 주문 환불 누적과 `refund`(−)를 기록한다(전액 취소면 남은 크레딧 전부, 부분 취소면 금액 비율). 조회가 실패하면 처리 기록도 롤백돼 PG 재전송 때 다시 처리한다. |
 
 ```json
 {"order_id": "order_3f2c...", "product_code": "CREDIT_10000", "amount_krw": 10000, "credit_krw_milli": 10000000,
@@ -1233,5 +1233,6 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 ```
 
 - 한 번만 지급: 주문 상태 조건부 갱신(`created`/`failed` → `paid`)과 원장 키 `purchase:{order_id}`를 같은 트랜잭션에서 쓴다. 승인 재시도·webhook 중복·둘의 경합에도 지급은 한 번이다.
-- PG 연동은 `PaymentGatewayClient` 하나(승인·취소)다. 요청은 토스페이먼츠 형식 기준이며 PG 선정 후 맞춘다. 설정: `app.billing.pg.confirm-endpoint`, `app.billing.pg.cancel-endpoint`(`{paymentKey}` 치환), `app.billing.pg.secret-key`(Basic 인증), `app.billing.pg.webhook-secret`.
+- 환불 회수는 PG 결제의 취소 누적(`totalAmount − balanceAmount`)과 주문의 `refunded_krw` 차이만 반영하고, 원장 키 `refund:{order_id}:{그때까지 환불 크레딧}`이 같아 재시도·webhook 중복에도 한 번만 회수한다. 가용 잔액보다 많이 회수하면 잔액이 음수가 될 수 있다.
+- PG 연동은 `PaymentGatewayClient` 하나(승인·조회·취소)다. 요청은 토스페이먼츠 형식 기준이며 PG 선정 후 맞춘다. 설정: `app.billing.pg.confirm-endpoint`, `app.billing.pg.payment-endpoint`·`app.billing.pg.cancel-endpoint`(`{paymentKey}` 치환), `app.billing.pg.secret-key`(Basic 인증), `app.billing.pg.webhook-secret`.
 - 진입점: `src/main/java/fruition/core/billing/CreditOrderController.java`, `src/main/java/fruition/core/billing/CreditOrderService.java`

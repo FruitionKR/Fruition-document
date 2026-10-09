@@ -35,9 +35,12 @@ import java.util.UUID;
  * <ul>
  *   <li>주문: 금액과 지급 크레딧은 서버 상품표({@code app.billing.product.<code>.*})로만 정한다.</li>
  *   <li>승인: 브라우저가 보낸 금액이 주문과 다르면 PG를 부르지 않는다. PG 승인 응답의 주문·금액·상태를 다시 확인한 뒤
- *       주문을 {@code paid}로 바꾸고 같은 트랜잭션에서 크레딧을 지급한다. 조건부 갱신과 원장 키로 한 번만 지급한다.</li>
- *   <li>webhook: HMAC 서명을 검증하고 event_id로 한 번만 처리한다. 승인 응답을 받지 못한 결제를 복구한다.</li>
- *   <li>환불: 주문에서 아직 쓰지 않은 크레딧(가용 잔액 한도)만 환불한다. PG 취소가 성공한 뒤 크레딧을 회수한다.</li>
+ *       주문을 {@code paid}로 바꾸고 같은 트랜잭션에서 크레딧을 지급한다. 조건부 갱신과 원장 키로 한 번만 지급한다.
+ *       앞선 승인이 성공했는데 응답을 받지 못해 PG가 이미 처리했다고 거절하면 PG 결제 조회로 다시 확인한다.</li>
+ *   <li>webhook: HMAC 서명을 검증하고 event_id로 한 번만 처리한다. 승인 응답을 받지 못한 결제를 복구하고,
+ *       PG 쪽에서 일어난 취소(관리자 콘솔 등)는 PG 결제 조회 결과대로 크레딧을 회수한다.</li>
+ *   <li>환불: 주문에서 아직 쓰지 않은 크레딧(가용 잔액 한도)만 환불한다. PG 취소가 성공한 뒤 크레딧을 회수한다.
+ *       PG에 이 주문에 기록하지 않은 취소가 있으면(취소 뒤 회수 전 실패·응답 유실) 새로 취소하지 않고 회수만 한다.</li>
  * </ul>
  */
 @Service
@@ -45,6 +48,9 @@ public class CreditOrderService {
 
     private static final Logger log = LoggerFactory.getLogger(CreditOrderService.class);
     private static final Set<String> PAID = Set.of("paid", "partially_refunded", "refunded");
+    private static final Set<String> REFUNDABLE = Set.of("paid", "partially_refunded");
+    /** 토스페이먼츠가 이미 승인한 결제를 다시 승인하려 할 때 주는 오류 코드. */
+    private static final String ALREADY_PROCESSED = "ALREADY_PROCESSED_PAYMENT";
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
@@ -103,7 +109,7 @@ public class CreditOrderService {
         }
         PaymentGatewayClient.Payment payment;
         try {
-            payment = gateway.confirm(paymentKey, orderId, order.amountKrw());
+            payment = confirmOrFind(paymentKey, orderId, order.amountKrw());
         } catch (PaymentGatewayClient.PaymentRejectedException e) {
             jdbc.update("UPDATE credit_orders SET status = 'failed', failure_code = ? WHERE order_id = ? AND status = 'created'",
                     e.getCode(), orderId);
@@ -116,6 +122,17 @@ public class CreditOrderService {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "결제 승인 결과가 주문과 다릅니다. 고객센터로 문의해 주세요.");
         }
         return find(orderId, userId);
+    }
+
+    /** 앞선 승인 응답을 받지 못해 PG가 이미 처리했다고 하면 PG에 남은 결제를 조회해 돌려준다. 지급 여부는 markPaid가 대조한다. */
+    private PaymentGatewayClient.Payment confirmOrFind(String paymentKey, String orderId, long amount) {
+        try {
+            return gateway.confirm(paymentKey, orderId, amount);
+        } catch (PaymentGatewayClient.PaymentRejectedException e) {
+            if (!ALREADY_PROCESSED.equals(e.getCode())) throw e;
+            log.info("[결제 승인 재확인] orderId={} PG가 이미 처리한 결제를 조회한다.", orderId);
+            return gateway.find(paymentKey);
+        }
     }
 
     /**
@@ -143,14 +160,19 @@ public class CreditOrderService {
                     + "ON CONFLICT (event_id) DO NOTHING", eventId, hash, event.path("eventType").asText(null), orderId) == 0) {
                 return;
             }
-            if (orderId == null || !"DONE".equals(data.path("status").asText())) return;
-            var orders = jdbc.query("SELECT * FROM credit_orders WHERE order_id = ?", (rs, i) -> order(rs), orderId);
+            String status = data.path("status").asText();
+            if (orderId == null || !Set.of("DONE", "CANCELED", "PARTIAL_CANCELED").contains(status)) return;
+            var orders = jdbc.query("SELECT * FROM credit_orders WHERE order_id = ? FOR UPDATE", (rs, i) -> order(rs), orderId);
             if (orders.isEmpty()) {
                 log.warn("[결제 webhook 주문 없음] eventId={} orderId={}", eventId, orderId);
                 return;
             }
-            if (!PAID.contains(orders.getFirst().status())) {
-                markPaid(orders.getFirst(), PaymentGatewayClient.Payment.from(data));
+            Order order = orders.getFirst();
+            if ("DONE".equals(status)) {
+                if (!PAID.contains(order.status())) markPaid(order, PaymentGatewayClient.Payment.from(data));
+            } else if (REFUNDABLE.contains(order.status())) {
+                // 알림 순서가 뒤바뀌어도 되도록 본문 대신 PG의 현재 결제로 대조한다. 조회가 실패하면 롤백돼 PG가 다시 보낸다.
+                recordPgCancels(order, gateway.find(order.paymentKey()));
             }
         });
     }
@@ -166,33 +188,69 @@ public class CreditOrderService {
                     (rs, i) -> order(rs), orderId, userId);
             if (orders.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "주문을 찾을 수 없습니다.");
             Order order = orders.getFirst();
-            if (!Set.of("paid", "partially_refunded").contains(order.status())) {
+            if (!REFUNDABLE.contains(order.status())) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "환불할 수 있는 주문이 아닙니다.");
             }
             // ponytail: PG 취소 동안 주문·계정 행을 잠가 그사이 크레딧이 쓰이지 않게 한다. 이 사용자의 AI 예약은 그동안 기다린다.
             // 환불이 잦아지면 환불 대기 상태로 먼저 회수하고 PG 결과로 확정·복원하는 두 단계로 나눈다.
             long remaining = order.creditKrwMilli() - order.refundedCreditKrwMilli();
-            long refundCredit = Math.min(remaining, credits.lockAvailable(userId));
-            long refundKrw = refundCredit == remaining ? order.amountKrw() - order.refundedKrw()
-                    : refundCredit * order.amountKrw() / order.creditKrwMilli();
-            if (refundCredit <= 0 || refundKrw <= 0) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "환불할 수 있는 미사용 크레딧이 없습니다.");
-            }
-            String key = "refund:" + orderId + ":" + order.refundedCreditKrwMilli();
+            long refundCredit;
+            long refundKrw;
             try {
-                gateway.cancel(order.paymentKey(), refundKrw, "크레딧 미사용분 환불", key);
+                // 앞선 취소가 PG에서 성공했는데 회수 전에 실패했거나 응답을 받지 못했으면 다시 취소하지 않고 회수만 한다.
+                if (recordPgCancels(order, gateway.find(order.paymentKey()))) return;
+                refundCredit = Math.min(remaining, credits.lockAvailable(userId));
+                refundKrw = refundCredit == remaining ? order.amountKrw() - order.refundedKrw()
+                        : refundCredit * order.amountKrw() / order.creditKrwMilli();
+                if (refundCredit <= 0 || refundKrw <= 0) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "환불할 수 있는 미사용 크레딧이 없습니다.");
+                }
+                gateway.cancel(order.paymentKey(), refundKrw, "크레딧 미사용분 환불", refundKey(order));
             } catch (PaymentGatewayClient.PaymentRejectedException e) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "결제사가 환불을 거절했습니다.");
             } catch (RestClientException | IllegalStateException e) {
                 log.warn("[결제 취소 결과 미확인] orderId={} error={}", orderId, e.toString());
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "환불 결과를 확인하지 못했습니다. 잠시 뒤 다시 시도해 주세요.");
             }
-            credits.post(userId, "refund", -refundCredit, key, "결제 환불 " + orderId);
-            jdbc.update("UPDATE credit_orders SET refunded_krw = refunded_krw + ?, refunded_credit_milli = refunded_credit_milli + ?, "
-                    + "status = CASE WHEN refunded_credit_milli + ? = credit_milli THEN 'refunded' ELSE 'partially_refunded' END, "
-                    + "refunded_at = now() WHERE order_id = ?", refundKrw, refundCredit, refundCredit, orderId);
+            applyRefund(order, refundKrw, refundCredit);
         });
         return find(orderId, userId);
+    }
+
+    /**
+     * PG에서 취소된 금액 중 주문에 아직 기록하지 않은 만큼을 기록하고 크레딧을 회수한다. 전액 취소면 남은 주문 크레딧 전부,
+     * 부분 취소면 금액 비율만큼 회수한다. 가용 잔액이 모자라도 회수해 잔액이 음수가 될 수 있다. 호출자가 주문 행을 잠근다.
+     *
+     * @return 이번에 기록했으면 true
+     */
+    private boolean recordPgCancels(Order order, PaymentGatewayClient.Payment payment) {
+        if (!order.orderId().equals(payment.orderId()) || payment.totalAmount() != order.amountKrw()
+                || payment.balanceAmount() < 0) {
+            log.error("[결제 취소 대조 불가] orderId={} pgOrderId={} amount={} balance={}", order.orderId(),
+                    payment.orderId(), payment.totalAmount(), payment.balanceAmount());
+            return false;
+        }
+        long cancelled = order.amountKrw() - payment.balanceAmount();
+        long refundKrw = cancelled - order.refundedKrw();
+        if (refundKrw <= 0) return false;
+        long remaining = order.creditKrwMilli() - order.refundedCreditKrwMilli();
+        long refundCredit = cancelled == order.amountKrw() ? remaining
+                : Math.min(remaining, refundKrw * order.creditKrwMilli() / order.amountKrw());
+        log.warn("[결제 취소 회수] orderId={} 주문에 기록하지 않은 PG 취소 {}원을 회수한다.", order.orderId(), refundKrw);
+        applyRefund(order, refundKrw, refundCredit);
+        return true;
+    }
+
+    /** 취소 멱등 키. 같은 주문의 같은 환불 단계를 다시 시도하면 같은 키라 PG도 원장도 한 번만 반영한다. */
+    private static String refundKey(Order order) {
+        return "refund:" + order.orderId() + ":" + order.refundedCreditKrwMilli();
+    }
+
+    private void applyRefund(Order order, long refundKrw, long refundCredit) {
+        credits.post(order.userId(), "refund", -refundCredit, refundKey(order), "결제 환불 " + order.orderId());
+        jdbc.update("UPDATE credit_orders SET refunded_krw = refunded_krw + ?, refunded_credit_milli = refunded_credit_milli + ?, "
+                + "status = CASE WHEN refunded_credit_milli + ? = credit_milli THEN 'refunded' ELSE 'partially_refunded' END, "
+                + "refunded_at = now() WHERE order_id = ?", refundKrw, refundCredit, refundCredit, order.orderId());
     }
 
     /** PG 결과를 주문과 대조해 지급한다. 조건부 갱신이라 동시에 들어온 승인·webhook 중 하나만 지급한다. */
