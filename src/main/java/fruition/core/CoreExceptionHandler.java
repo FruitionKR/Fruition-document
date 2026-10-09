@@ -183,6 +183,15 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
     }
 
 
+    @ExceptionHandler(fruition.core.usage.service.CreditService.InsufficientCreditException.class)
+    public ResponseEntity<ErrorResponse> handleInsufficientCredit(
+            fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+        logHandled(e, HttpStatus.PAYMENT_REQUIRED, "INSUFFICIENT_CREDIT");
+        return ResponseEntity
+                .status(HttpStatus.PAYMENT_REQUIRED)
+                .body(ErrorResponse.of("INSUFFICIENT_CREDIT", e.getMessage()));
+    }
+
     @ExceptionHandler(MeetingException.class)
     public ResponseEntity<ErrorResponse> handleMeeting(MeetingException e) {
         logHandled(e, e.getStatus(), e.getCode());

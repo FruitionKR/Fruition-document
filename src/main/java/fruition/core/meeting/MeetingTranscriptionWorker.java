@@ -1,6 +1,7 @@
 package fruition.core.meeting;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.usage.service.UsageChargeService;
 import fruition.shared.http.PipelineClientFactory;
 import fruition.shared.util.StorageProperties;
 import io.minio.GetObjectArgs;
@@ -41,11 +42,14 @@ public class MeetingTranscriptionWorker {
     private final StorageProperties storage;
     private final RestClient restClient;
     private final String endpoint;
+    private final UsageChargeService usageCharges;
 
     public MeetingTranscriptionWorker(MeetingRepository repository, MinioClient minio, StorageProperties storage,
                                       PipelineClientFactory clientFactory,
                                       @Value("${app.speech.transcription-endpoint}") String endpoint,
-                                      @Value("${app.speech.transcription-timeout-seconds:150}") int timeoutSeconds) {
+                                      @Value("${app.speech.transcription-timeout-seconds:150}") int timeoutSeconds,
+                                      UsageChargeService usageCharges) {
+        this.usageCharges = usageCharges;
         this.repository = repository;
         this.minio = minio;
         this.storage = storage;
@@ -66,11 +70,14 @@ public class MeetingTranscriptionWorker {
                     .bucket(storage.getBucket()).object(meeting.recordingKey()).build())) {
                 audio = input.readAllBytes();
             }
-            var uri = UriComponentsBuilder.fromUriString(endpoint)
-                    .queryParam("workspace_id", "{workspaceId}").queryParam("user_id", "{userId}")
-                    .encode().buildAndExpand(meeting.workspaceId(), meeting.createdBy()).toUri();
-            JsonNode body = restClient.post().uri(uri).contentType(MediaType.parseMediaType(meeting.recordingContentType()))
-                    .body(audio).retrieve().body(JsonNode.class);
+            JsonNode body = usageCharges.track("meeting_transcription", meeting.workspaceId(), meeting.createdBy(), runId -> {
+                var uri = UriComponentsBuilder.fromUriString(endpoint)
+                        .queryParam("workspace_id", "{workspaceId}").queryParam("user_id", "{userId}")
+                        .queryParam("run_id", "{runId}")
+                        .encode().buildAndExpand(meeting.workspaceId(), meeting.createdBy(), runId).toUri();
+                return restClient.post().uri(uri).contentType(MediaType.parseMediaType(meeting.recordingContentType()))
+                        .body(audio).retrieve().body(JsonNode.class);
+            });
             String text = body == null ? "" : body.path("text").asText("").strip();
             if (text.isEmpty()) {
                 repository.failTranscription(meeting.id(), meeting.recordingKey(), "인식된 음성이 없습니다.");
@@ -88,6 +95,8 @@ public class MeetingTranscriptionWorker {
                 case 413, 415, 422 -> "지원하지 않거나 인식할 수 없는 녹음 파일입니다.";
                 default -> "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.";
             });
+        } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+            repository.failTranscription(meeting.id(), meeting.recordingKey(), e.getMessage());
         } catch (Exception e) {
             log.warn("[회의 파일 전사 실패] meetingId={}", meeting.id(), e);
             repository.failTranscription(meeting.id(), meeting.recordingKey(), "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.");

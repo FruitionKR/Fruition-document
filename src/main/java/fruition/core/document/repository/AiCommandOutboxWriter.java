@@ -3,6 +3,7 @@ package fruition.core.document.repository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.document.domain.AiCommandOutbox;
+import fruition.core.usage.service.CreditService;
 import org.springframework.stereotype.Component;
 import org.springframework.jdbc.core.JdbcTemplate;
 import jakarta.persistence.EntityManager;
@@ -17,13 +18,15 @@ public class AiCommandOutboxWriter {
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbcTemplate;
     private final EntityManager entityManager;
+    private final CreditService credits;
 
     public AiCommandOutboxWriter(AiCommandOutboxRepository repository, ObjectMapper objectMapper,
-                                JdbcTemplate jdbcTemplate, EntityManager entityManager) {
+                                JdbcTemplate jdbcTemplate, EntityManager entityManager, CreditService credits) {
         this.repository = repository;
         this.objectMapper = objectMapper;
         this.jdbcTemplate = jdbcTemplate;
         this.entityManager = entityManager;
+        this.credits = credits;
     }
 
     public void begin(String runId, String workspaceId, String userId, String kind) {
@@ -31,6 +34,8 @@ public class AiCommandOutboxWriter {
         entityManager.flush();
         jdbcTemplate.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind) VALUES (?, ?, ?, ?) "
                 + "ON CONFLICT(id) DO NOTHING", runId, workspaceId, userId, kind);
+        // outbox 발행 전에 같은 트랜잭션에서 크레딧을 예약한다. 잔액이 모자라면 작업 등록과 함께 롤백된다(#79).
+        credits.reserve(runId, userId, kind);
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
     }
 
@@ -42,12 +47,25 @@ public class AiCommandOutboxWriter {
                 + "ON CONFLICT(id) DO NOTHING", runId, workspaceId, userId, kind);
         if (inserted != 1) throw new org.springframework.web.server.ResponseStatusException(
                 org.springframework.http.HttpStatus.CONFLICT, "이미 사용한 작업 ID입니다.");
+        credits.reserve(runId, userId, kind);
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
     }
 
+    /** 실행을 끝내고 같은 트랜잭션에서 사용 금액 수집·크레딧 정산 대기열에 넣는다(#78·#79). */
     public void complete(String runId) {
-        jdbcTemplate.update("UPDATE ai_task_runs SET status = 'completed', updated_at = now() "
-                + "WHERE id = ? AND status = 'running'", runId);
+        close(runId, "completed");
+    }
+
+    /** 다시 시도하지 않을 실패로 실행을 닫는다. 실패 전까지의 공급사 호출도 수집·정산한다. */
+    public void fail(String runId) {
+        close(runId, "failed");
+    }
+
+    private void close(String runId, String status) {
+        if (jdbcTemplate.update("UPDATE ai_task_runs SET status = ?, updated_at = now() WHERE id = ? AND status = 'running'",
+                status, runId) == 1) {
+            jdbcTemplate.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", runId);
+        }
     }
 
     public boolean active(String runId) {

@@ -27,10 +27,13 @@ public class AiTaskCancellationService {
     private final fruition.core.query.service.QueryEventBroker events;
     private final io.minio.MinioClient storage;
     private final fruition.shared.util.StorageProperties storageProperties;
+    private final fruition.core.usage.service.CreditService credits;
 
     public AiTaskCancellationService(JdbcTemplate jdbc, PlatformTransactionManager manager,
             PipelineTaskCancellationClient pipeline, WorkspaceAccessGuard access, ObjectMapper mapper,
-            QueryRunStore queryRuns, fruition.core.query.service.QueryEventBroker events, io.minio.MinioClient storage, fruition.shared.util.StorageProperties storageProperties) {
+            QueryRunStore queryRuns, fruition.core.query.service.QueryEventBroker events, io.minio.MinioClient storage, fruition.shared.util.StorageProperties storageProperties,
+            fruition.core.usage.service.CreditService credits) {
+        this.credits = credits;
         this.jdbc = jdbc;
         this.transaction = new TransactionTemplate(manager);
         this.pipeline = pipeline;
@@ -52,6 +55,8 @@ public class AiTaskCancellationService {
             var matching = jdbc.queryForList("SELECT id FROM ai_task_runs WHERE id = ? AND command = CAST(? AS jsonb)",
                     String.class, id, command.toString());
             if (matching.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "작업 ID의 요청 내용이 다릅니다.");
+            // AI 호출 전에 크레딧을 예약한다. 잔액이 모자라면 실행 등록과 함께 롤백된다(#79).
+            credits.reserve(id, command.path("user_id").asText(), command.path("kind").asText());
         });
     }
 
@@ -167,6 +172,8 @@ public class AiTaskCancellationService {
                 queryRuns.markCancelled(id);
                 events.cancel(id);
                 jdbc.update("UPDATE ai_task_runs SET status = 'cancelled', error_code = NULL, updated_at = now() WHERE id = ?", id);
+                // 취소 전까지 일어난 호출을 수집해 정산하고 남은 예약을 푼다(#78·#79).
+                jdbc.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", id);
             });
         } catch (org.springframework.web.client.HttpClientErrorException.Conflict e) {
             fail(id, "rollback_conflict");

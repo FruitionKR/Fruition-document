@@ -37,3 +37,9 @@ API 계약을 의도적으로 바꾸면 `./gradlew test -DupdateOpenApiSnapshot=
 ## 모델 사용량 API 연결
 
 `MODEL_USAGE_ENDPOINT`에 AI `/usage/models`의 내부 주소를 설정한다(기본 `http://localhost:8000/usage/models`). `INTERNAL_CALLBACK_TOKEN`을 AI와 동일하게 주입한다. AI 원장 migration과 새 AI API 배포 후 document 서비스를 새 코드로 적용한다. 금액 환산이나 사용량 UI는 포함하지 않는다.
+
+호출 단위 청구(#78)는 `MODEL_USAGE_CALLS_ENDPOINT`에 AI `/internal/model-usage/calls`의 내부 주소를 설정한다(기본 `http://localhost:8000/internal/model-usage/calls`). 수집 주기 `USAGE_CHARGE_COLLECT_INTERVAL_MS`(기본 5초), 대사 주기 `USAGE_CHARGE_RECONCILE_INTERVAL_MS`(기본 하루). 단가·환율·정책은 운영 SQL로 새 행을 넣는다(`scripts/sql/insert-usage-price-versions.sql`). AI API가 배포되기 전에는 수집이 실패 로그만 남기고 재시도한다.
+
+선불 크레딧(#79)은 `BILLING_ENFORCE`(기본 false)가 true일 때만 잔액 부족 요청을 402로 거절한다. false면 예약·정산만 기록한다. kind별 예상 상한은 `BILLING_ESTIMATE_<KIND>`(milli-KRW), 기본 `BILLING_DEFAULT_ESTIMATE_KRW_MILLI`. 수동 지급·조정은 `scripts/sql/credit-grant-adjust.sql`, 잔액 점검은 `scripts/sql/credit-balance-check.sql`.
+
+PG 결제 충전·환불(#80)은 PG를 정하기 전까지 `BILLING_PAYMENTS_ENABLED=false`(기본)로 둔다. 켤 때 `PG_CONFIRM_ENDPOINT`·`PG_PAYMENT_ENDPOINT`·`PG_CANCEL_ENDPOINT`·`PG_SECRET_KEY`·`PG_WEBHOOK_SECRET`을 주입하고 PG 관리 화면에 webhook 주소 `/internal/payments/webhook`을 등록한다. 상품표는 `app.billing.product.<code>.amount-krw`·`.credit-krw-milli`다(ADR-0026).

@@ -121,6 +121,113 @@ paths:
       summary: 질의 진행 이벤트 구독
       tags:
       - Query Runs
+  /api/users/me/credit-orders:
+    post:
+      description: "상품 코드의 금액·크레딧은 서버 상품표로 정합니다. 결제창에 order_id와 amount_krw를 넘깁니다. 결제 기능이 꺼져 있으면 404, 없는 상품이면 400입니다."
+      operationId: create_2
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Order"
+          description: OK
+      summary: 크레딧 충전 주문 생성
+      tags:
+      - credit-order-controller
+  /api/users/me/credit-orders/{order_id}/confirm:
+    post:
+      description: "결제창이 돌려준 payment_key와 금액으로 서버가 PG 승인 API를 호출하고, 주문·금액이 맞으면 크레딧을 지급합니다. 같은 주문을 다시 확인해도 한 번만 지급합니다. 앞선 승인 응답을 받지 못해 PG가 이미 처리한 결제라고 하면 PG 결제 조회로 대조해 지급합니다. 금액이 주문과 다르면 PG를 부르지 않고 400, PG 거절 400, PG 응답을 받지 못하면 502(webhook이 복구)입니다."
+      operationId: confirm
+      parameters:
+      - in: path
+        name: order_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Order"
+          description: OK
+      summary: 크레딧 충전 결제 승인
+      tags:
+      - credit-order-controller
+  /api/users/me/credit-orders/{order_id}/refund:
+    post:
+      description: 주문에서 쓰지 않은 크레딧(가용 잔액 한도)만 환불합니다. 금액은 환불 크레딧 비율이며 PG 취소가 성공해야 크레딧을 회수합니다. PG에 이 주문에 기록하지 않은 취소가 있으면(앞선 환불 응답 유실 등) 새로 취소하지 않고 회수만 합니다. 환불할 것이 없거나 환불할 수 없는 주문이면 409입니다.
+      operationId: refund
+      parameters:
+      - in: path
+        name: order_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Order"
+          description: OK
+      summary: 크레딧 충전 환불
+      tags:
+      - credit-order-controller
+  /api/users/me/credits:
+    get:
+      description: 잔액·실행 중 예약액·가용액(잔액 − 예약)과 최근 원장 50건을 반환합니다. 금액은 milli-KRW 정수이며 실제 사용이 예약보다 크면 잔액이 음수일 수 있습니다.
+      operationId: credits
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Credits"
+          description: OK
+      summary: 본인의 크레딧 잔액 조회
+      tags:
+      - usage-charge-controller
+  /api/users/me/usage/charges:
+    get:
+      description: "호출 시작 시각이 [from_at, to_at)인 본인 호출의 금액을 워크스페이스를 가로질러 합쳐 모델별로 반환합니다. 금액은 부가세 포함 milli-KRW 정수입니다. 단가가 없는 호출(unpriced_calls)은 합계에 들어가지 않고, 토큰을 모르는 호출(needs_review_calls)은 0원입니다. 기간은 366일 이하입니다."
+      operationId: read_3
+      parameters:
+      - in: query
+        name: from_at
+        required: true
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: to_at
+        required: true
+        schema:
+          type: string
+          format: date-time
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ChargeSummary"
+          description: OK
+      summary: 본인의 AI 사용 금액 조회
+      tags:
+      - usage-charge-controller
   /api/workspaces/{workspaceId}/ai/tasks/{id}:
     get:
       operationId: status_1
@@ -5113,6 +5220,28 @@ paths:
           description: OK
       tags:
       - internal-document-controller
+  /internal/payments/webhook:
+    post:
+      description: "X-Payment-Signature(본문 HMAC-SHA256 hex)를 검증하고 eventId(없으면 본문 해시)로 한 번만 처리합니다. 승인 응답을 받지 못한 결제를 지급하고, PG 쪽 취소(CANCELED·PARTIAL_CANCELED)는 PG 결제 조회 결과대로 크레딧을 회수합니다. 서명이 틀리면 401입니다."
+      operationId: webhook
+      parameters:
+      - in: header
+        name: X-Payment-Signature
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: string
+        required: true
+      responses:
+        "200":
+          description: OK
+      summary: PG 결제 webhook
+      tags:
+      - credit-order-controller
   /internal/wiki/contributions:
     post:
       operationId: find
@@ -5502,6 +5631,32 @@ components:
           type: string
           description: 바뀐 리소스 종류
           example: wiki_page
+    ChargeSummary:
+      type: object
+      properties:
+        charge_krw_milli:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        from_at:
+          type: string
+          format: date-time
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelCharge"
+        needs_review_calls:
+          type: integer
+          format: int64
+        to_at:
+          type: string
+          format: date-time
+        unpriced_calls:
+          type: integer
+          format: int64
+        user_id:
+          type: string
     ChatMessageReference:
       type: object
       description: 답변의 근거가 된 원문 참조. 값이 없는 필드는 키 자체가 빠진다.
@@ -5751,6 +5906,18 @@ components:
       properties:
         ticket:
           type: string
+    ConfirmRequest:
+      type: object
+      properties:
+        amount:
+          type: integer
+          format: int64
+        payment_key:
+          type: string
+          minLength: 1
+      required:
+      - amount
+      - payment_key
     ContributionRequest:
       type: object
       properties:
@@ -5778,6 +5945,34 @@ components:
             type: string
           maxItems: 20
           minItems: 0
+    CreateRequest:
+      type: object
+      properties:
+        product_code:
+          type: string
+          minLength: 1
+      required:
+      - product_code
+    Credits:
+      type: object
+      properties:
+        available_krw_milli:
+          type: integer
+          format: int64
+        balance_krw_milli:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entry"
+        reserved_krw_milli:
+          type: integer
+          format: int64
+        user_id:
+          type: string
     DocumentAttachmentSaveResponse:
       type: object
       description: 본문 저장과 함께 등록된 이미지 asset
@@ -6831,6 +7026,21 @@ components:
           description: 편집 대상 범위. 생략하면 문서 전체가 대상이다.
       required:
       - markdown
+    Entry:
+      type: object
+      properties:
+        amount_krw_milli:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        run_id:
+          type: string
+        type:
+          type: string
     ErrorDetail:
       type: object
       properties:
@@ -7466,6 +7676,45 @@ components:
           type: string
           description: 처리 상태
           example: completed
+    ModelCharge:
+      type: object
+      properties:
+        audio_seconds:
+          type: number
+        cache_creation_tokens:
+          type: integer
+          format: int64
+        cached_input_tokens:
+          type: integer
+          format: int64
+        calls:
+          type: integer
+          format: int64
+        charge_krw_milli:
+          type: integer
+          format: int64
+        input_tokens:
+          type: integer
+          format: int64
+        model:
+          type: string
+        needs_review_calls:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        provider:
+          type: string
+        reasoning_tokens:
+          type: integer
+          format: int64
+        tts_characters:
+          type: integer
+          format: int64
+        unpriced_calls:
+          type: integer
+          format: int64
     ModelLine:
       type: object
       properties:
@@ -7665,6 +7914,33 @@ components:
         next_cursor:
           type: string
           description: 다음 페이지를 받을 커서. null이면 마지막 페이지다.
+    Order:
+      type: object
+      properties:
+        amount_krw:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        credit_krw_milli:
+          type: integer
+          format: int64
+        order_id:
+          type: string
+        paid_at:
+          type: string
+          format: date-time
+        product_code:
+          type: string
+        refunded_credit_krw_milli:
+          type: integer
+          format: int64
+        refunded_krw:
+          type: integer
+          format: int64
+        status:
+          type: string
     OriginalReadUrl:
       type: object
       properties:
