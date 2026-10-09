@@ -1,5 +1,5 @@
 -- 사용자 선불 크레딧(#79). 금액은 milli-KRW 정수다.
--- credit_entries는 추가만 한다. 부호 규칙: purchase·grant·refund는 +, charge는 −, adjust는 ±(잔액에 반영),
+-- credit_entries는 추가만 한다. 부호 규칙: purchase·grant는 +, charge·refund(결제 환불로 회수)는 −, adjust는 ±(잔액에 반영),
 -- reserve는 +, release는 −(예약에 반영). 그래서 항상
 --   credit_accounts.balance  = SUM(amount) WHERE type NOT IN ('reserve', 'release')
 --   credit_accounts.reserved = SUM(amount) WHERE type IN ('reserve', 'release')
@@ -21,8 +21,9 @@ CREATE TABLE credit_entries (
     reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (type <> 'adjust' OR nullif(btrim(reason), '') IS NOT NULL),
-    CHECK (CASE type WHEN 'charge' THEN amount <= 0 WHEN 'release' THEN amount <= 0
-                     WHEN 'adjust' THEN true ELSE amount >= 0 END)
+    CONSTRAINT credit_entries_amount_sign
+        CHECK (CASE type WHEN 'charge' THEN amount <= 0 WHEN 'release' THEN amount <= 0 WHEN 'refund' THEN amount <= 0
+                         WHEN 'adjust' THEN true ELSE amount >= 0 END)
 );
 CREATE INDEX idx_credit_entries_user ON credit_entries (user_id, id DESC);
 CREATE INDEX idx_credit_entries_run ON credit_entries (run_id) WHERE run_id IS NOT NULL;

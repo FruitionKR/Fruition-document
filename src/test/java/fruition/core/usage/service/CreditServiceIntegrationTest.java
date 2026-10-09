@@ -174,6 +174,21 @@ class CreditServiceIntegrationTest {
         return new SpeechTranscriptionClient(new PipelineClientFactory("internal-test"), endpoint, 5, charges);
     }
 
+    @Test
+    void ledgerRejectsWrongSignByNamedConstraint() {
+        grant(1_000);
+        for (String type : List.of("charge", "release", "refund")) {
+            assertThatThrownBy(() -> jdbc.update("INSERT INTO credit_entries (user_id, type, amount, idempotency_key) "
+                    + "VALUES (?, ?, 1, ?)", user, type, type + ":" + UUID.randomUUID()))
+                    .hasMessageContaining("credit_entries_amount_sign");
+        }
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO credit_entries (user_id, type, amount, idempotency_key) "
+                + "VALUES (?, 'purchase', -1, ?)", user, "purchase:" + UUID.randomUUID()))
+                .hasMessageContaining("credit_entries_amount_sign");
+        jdbc.update("INSERT INTO credit_entries (user_id, type, amount, idempotency_key) VALUES (?, 'refund', -1, ?)",
+                user, "refund:" + UUID.randomUUID());
+    }
+
     /** 운영 지급 SQL과 같은 방식으로 원장과 계정을 함께 쓴다. */
     private void grant(long amount) {
         jdbc.update("INSERT INTO credit_accounts (user_id) VALUES (?) ON CONFLICT DO NOTHING", user);

@@ -29,9 +29,3 @@ CREATE TABLE payment_events (
     order_id TEXT,
     received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
--- 결제 환불(refund)은 지급한 크레딧을 회수하므로 음수다. V66에서 +로 두었던 부호를 바로잡는다.
-ALTER TABLE credit_entries DROP CONSTRAINT credit_entries_check1;
-ALTER TABLE credit_entries ADD CONSTRAINT credit_entries_amount_sign
-    CHECK (CASE type WHEN 'charge' THEN amount <= 0 WHEN 'release' THEN amount <= 0 WHEN 'refund' THEN amount <= 0
-                     WHEN 'adjust' THEN true ELSE amount >= 0 END);
