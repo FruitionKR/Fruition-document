@@ -309,6 +309,10 @@ public class DocumentService {
             );
             document.place(folderId, placementSortOrder(workspaceId, folderId, document.getDocumentRole()));
             document.updateStatus(DocumentStatus.uploaded, null, null, null);
+            if (!markdownUpload && !(file instanceof StoredOriginal)) {
+                // 서버를 거친 PDF는 위에서 파일 전체 해시를 이미 계산했다. 직접 업로드는 worker가 나중에 채운다.
+                document.recordOriginalSha256(contentHash);
+            }
             documentRepository.save(document);
             if (markdownUpload) {
                 editStateRepository.save(new DocumentEditState(

@@ -70,7 +70,17 @@ public class DocumentItemAssembler {
                 doc.getSourceDocumentId(),
                 doc.getUpdatedAt(),
                 needsReingest(doc),
-                doc.getFolderId());
+                doc.getFolderId(),
+                fileSha256Of(doc));
+    }
+
+    /** 편집 문서는 현재 본문 해시, 원본은 파일 전체 해시. 원본 해시가 계산 전이거나 계산할 수 없으면 null이다. */
+    static String fileSha256Of(Document doc) {
+        if (doc.getDocumentRole() == DocumentRole.EDITABLE) {
+            return doc.getCurrentContentHash();
+        }
+        String sha256 = doc.getOriginalSha256();
+        return sha256 == null || sha256.isEmpty() ? null : sha256;
     }
 
     static DocumentProcessingState resolveProcessingState(Document doc) {

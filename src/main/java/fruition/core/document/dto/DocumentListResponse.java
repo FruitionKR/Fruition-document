@@ -114,6 +114,13 @@ public record DocumentListResponse(
             @JsonProperty("folder_id")
             @JsonInclude(JsonInclude.Include.ALWAYS)
             @Schema(description = "부모 폴더 ID. 루트면 null이다.", nullable = true)
-            UUID folderId
+            UUID folderId,
+
+            @JsonProperty("file_sha256")
+            @JsonInclude(JsonInclude.Include.ALWAYS)
+            @Schema(description = "같은 파일이 이미 있는지 업로드 전에 판별하는 SHA-256(hex). 원본(PDF)은 올린 파일 전체의 해시,"
+                    + " 편집 문서는 현재 본문(UTF-8)의 해시다. 대용량 직접 업로드 직후처럼 아직 계산 전이면 null이다.",
+                    nullable = true)
+            String fileSha256
     ) {}
 }

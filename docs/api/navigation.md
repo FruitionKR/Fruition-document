@@ -884,6 +884,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
 - `document`는 `DocumentItem` 전체를 담는다. 위 예시는 지면상 일부만 보였다. 전체 필드는
   `GET /api/workspaces/{workspace_id}/documents` 항목과 같다.
 
+- 문서 항목은 `GET .../documents` 목록과 같은 `DocumentItem`이다. `file_sha256`으로 데스크톱 앱이 로컬 파일과 서버 문서를 짝짓는다.
+
 #### 6. Error response
 
 | HTTP 상태 | 설명 | 응답 스키마 |

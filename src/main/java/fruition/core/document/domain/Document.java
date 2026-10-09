@@ -50,6 +50,10 @@ public class Document {
     private String sourceUri;
 
     /** 파이프라인이 추출한 텍스트의 위치. 파이프라인이 콜백으로 채우며 `s3://<bucket>/<key>` 형식이다. */
+    /** 원본 파일 전체의 SHA-256. 원본(PDF) 문서만 쓰고, 계산 전이면 null, 원본이 없어 계산할 수 없으면 빈 문자열이다. */
+    @Column(name = "original_sha256", length = 64)
+    private String originalSha256;
+
     @Column(name = "extracted_text_uri")
     private String extractedTextUri;
 
@@ -299,6 +303,11 @@ public class Document {
     public DocumentStatus getStatus() { return status; }
     public String getSourceUri() { return sourceUri; }
     public String getExtractedTextUri() { return extractedTextUri; }
+    public String getOriginalSha256() { return originalSha256; }
+
+    public void recordOriginalSha256(String sha256) {
+        this.originalSha256 = sha256;
+    }
     public String getContentHash() { return contentHash; }
     public String getSourceDocumentId() { return sourceDocumentId; }
     public String getCurrentContentHash() { return currentContentHash; }
