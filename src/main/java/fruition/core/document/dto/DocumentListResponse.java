@@ -114,6 +114,33 @@ public record DocumentListResponse(
             @JsonProperty("folder_id")
             @JsonInclude(JsonInclude.Include.ALWAYS)
             @Schema(description = "부모 폴더 ID. 루트면 null이다.", nullable = true)
-            UUID folderId
+            UUID folderId,
+
+            @JsonProperty("file_sha256")
+            @JsonInclude(JsonInclude.Include.ALWAYS)
+            @Schema(description = "같은 파일이 이미 있는지 업로드 전에 판별하는 SHA-256(hex). 원본(PDF)은 올린 파일 전체의 해시,"
+                    + " 편집 문서는 현재 본문(UTF-8)의 해시다. 대용량 직접 업로드 직후처럼 아직 계산 전이면 null이다.",
+                    nullable = true)
+            String fileSha256,
+
+            @JsonProperty("can_edit")
+            @Schema(description = "현재 사용자가 본문 저장·이름 변경·이동을 할 수 있는지. 문서 소유자와 OWNER는 항상 true다.",
+                    example = "true")
+            boolean canEdit,
+
+            @JsonProperty("can_delete")
+            @Schema(description = "현재 사용자가 삭제·휴지통 복구를 할 수 있는지. 문서 소유자와 OWNER만 true다.", example = "false")
+            boolean canDelete,
+
+            @JsonProperty("permission")
+            @JsonInclude(JsonInclude.Include.ALWAYS)
+            @Schema(description = "이 문서에 직접 건 권한 설정(edit | view). null이면 상위 폴더 설정 또는 기본값(edit)을 따른다.",
+                    nullable = true, allowableValues = {"edit", "view"})
+            String permission,
+
+            @JsonProperty("updated_by")
+            @JsonInclude(JsonInclude.Include.ALWAYS)
+            @Schema(description = "마지막으로 본문을 저장한 사용자 ID. 업로드 뒤 저장한 적이 없으면 null이다.", nullable = true)
+            String updatedBy
     ) {}
 }

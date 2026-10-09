@@ -23,6 +23,7 @@ import fruition.core.aihistory.service.RestoreExecuteService;
 import fruition.core.aihistory.service.RestoreOperationLifecycle;
 import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.core.document.service.DocumentService;
+import fruition.core.usage.service.UsageChargeService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,6 +57,7 @@ public class AiTaskResultApplier {
     private final RestoreApplier restoreApplier;
     private final RestoreOperationLifecycle restoreLifecycle;
     private final DocumentService documentService;
+    private final UsageChargeService usageCharges;
 
     public AiTaskResultApplier(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
                                QueryService queryService,
@@ -67,7 +69,8 @@ public class AiTaskResultApplier {
                                RestoreOperationLifecycle restoreLifecycle,
                                DocumentService documentService,
                                ChatTurnRecorder chatTurnRecorder,
-                               ChatEvidenceRecorder chatEvidenceRecorder) {
+                               ChatEvidenceRecorder chatEvidenceRecorder,
+                               UsageChargeService usageCharges) {
         this.chatTurnRecorder = chatTurnRecorder;
         this.chatEvidenceRecorder = chatEvidenceRecorder;
         this.jdbcTemplate = jdbcTemplate;
@@ -80,6 +83,7 @@ public class AiTaskResultApplier {
         this.restoreApplier = restoreApplier;
         this.restoreLifecycle = restoreLifecycle;
         this.documentService = documentService;
+        this.usageCharges = usageCharges;
     }
 
     @Transactional
@@ -533,6 +537,8 @@ public class AiTaskResultApplier {
         if (!Set.of("running", "completed").contains(states.getFirst())) return false;
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
         jdbcTemplate.update("UPDATE ai_task_runs SET status = 'completed', updated_at = now() WHERE id = ?", runId);
+        // 결과 반영과 같은 트랜잭션에 넣어 커밋된 뒤에 사용 금액을 수집한다(#78).
+        usageCharges.enqueue(runId);
         return true;
     }
 

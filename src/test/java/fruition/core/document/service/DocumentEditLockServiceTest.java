@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -42,11 +43,12 @@ class DocumentEditLockServiceTest {
     @Mock DocumentEditLockRepository lockRepository;
     @Mock DocumentRepository documentRepository;
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
+    @Mock JdbcTemplate jdbcTemplate;
     @Mock AccessUserClient accessUserClient;
 
     private DocumentEditLockService service() {
         return new DocumentEditLockService(lockRepository, documentRepository,
-                workspaceAccessGuard, accessUserClient, 45, Clock.fixed(NOW, ZoneOffset.UTC));
+                workspaceAccessGuard, accessUserClient, new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate), 45, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     private void stubOwnedEditable() {

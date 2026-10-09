@@ -1162,3 +1162,78 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 ```
 
 - 진입점: `src/main/java/fruition/core/usage/controller/ModelUsageController.java`, `src/main/java/fruition/core/usage/service/UsageSettlementService.java`
+
+## 본인 AI 사용 금액 (호출 단위 청구)
+
+`GET /api/users/me/usage/charges?from_at=...&to_at=...`
+
+로그인 사용자 본인의 호출 단위 청구(`usage_charges`)를 워크스페이스를 가로질러 합쳐 모델별로 돌려준다. 청구 단위는 실행을 시작한 사용자다. 기간은 호출 시작 시각 기준 `[from_at, to_at)`, 둘 다 필수이며 366일 이하다. 금액은 부가세 포함 milli-KRW 정수(`charge_krw_milli`, 1000 = 1원)다. 시작 ≥ 종료·366일 초과 400.
+
+```json
+{
+  "user_id": "user_1", "from_at": "2026-09-01T00:00:00Z", "to_at": "2026-10-01T00:00:00Z",
+  "currency": "KRW", "charge_krw_milli": 3334, "unpriced_calls": 0, "needs_review_calls": 1,
+  "models": [{"provider": "openai", "model": "gpt-5-nano", "calls": 2, "input_tokens": 1000,
+    "cached_input_tokens": 400, "cache_creation_tokens": 100, "output_tokens": 500, "reasoning_tokens": 300,
+    "audio_seconds": 0, "tts_characters": 0, "charge_krw_milli": 3334, "unpriced_calls": 0, "needs_review_calls": 1}]
+}
+```
+
+- 단가: `ai_model_prices`(실제 응답 모델별 토큰 USD / 1M, 오디오 USD / 분, TTS USD / 1M 글자), 환율 `fx_rates`(USD→KRW 고정), 정책 `pricing_policies`(마진·부가세 basis point). 모두 수정하지 않고 `effective_from`이 다른 새 행을 넣으며, 호출 `started_at`에 적용 중인 행을 고른다. 이슈 #78의 단위별 단가 행 대신 정산(#59)이 쓰는 `ai_model_prices`에 오디오·TTS 열을 더해 두 계산이 같은 단가표를 쓴다.
+- 원가: (입력 − 캐시 읽기 − 캐시 생성) × 입력 단가 + 캐시 읽기 × 캐시 읽기 단가 + 캐시 생성 × 캐시 생성 단가 + 출력 × 출력 단가 + 오디오·TTS. 입력은 캐시를 포함한 합계이고 reasoning은 출력에 포함돼 따로 과금하지 않는다(`UsagePricing`, 정산과 같은 식). `cost_usd_micro`는 micro-USD로 올림한다.
+- 사용자 금액: 원가 × 환율 × (1 + 마진) × (1 + 부가세)를 milli-KRW로 올림한다. 올림 전 원가로 한 번에 계산한다.
+- 상태: `charged` 금액 확정. `unpriced` 단가·환율·정책이 없어 금액을 비워 두고 합계에서 뺀다(0원으로 넘기지 않음, 경고 로그). `needs_review` 토큰을 모르는 호출(`unknown`·`failed`·`abandoned`)로 0원이며 경고 로그를 남긴다. AI에서 아직 `started`인 호출은 청구 행을 만들지 않는다.
+- 같은 호출(AI 원장 `id` = `call_id` UNIQUE)은 여러 번 수집해도 한 행이다. `charged` 행은 다시 계산하지 않아 단가가 바뀌어도 이전 청구가 변하지 않는다. `unpriced`·`needs_review` 행은 다시 수집하면 그때 단가로 갱신된다.
+- 수집: 비동기 실행은 결과 반영(`beginResult`)과 같은 트랜잭션에, PDF 변환은 완료(`AiCommandOutboxWriter.complete`)나 재시도 소진 실패와 같은 트랜잭션에, 동기 호출은 호출이 끝난 뒤(실패 포함) run_id를 `usage_collect_queue`에 넣는다. 실패한 동기 호출과 재시도를 다 쓴 변환은 `ai_task_runs.status`를 `failed`로 닫는다. worker가 `FOR UPDATE SKIP LOCKED`로 하나씩 선점해 AI `GET ${MODEL_USAGE_CALLS_ENDPOINT}?run_id=`(`X-Internal-Token`)로 가져온다. 실패하면 시도 횟수의 제곱(분)만큼 늦춰 최대 10번 재시도한다. 대사 작업이 하루 주기로 커서(`usage_reconcile_cursor`)부터 1시간 전까지를 하루치씩 `?finished_from=&finished_to=`로 다시 조회해 빠진 호출(늦게 커밋됨·취소된 실행·수집 포기)을 채운다. 대사 트랜잭션에는 청구 행 기록과 커서 갱신만 두고, 크레딧 정산은 커밋한 뒤 실행별로 한다. 값을 해석할 수 없는 호출 1건(시각 형식 오류 등)은 오류 로그를 남기고 건너뛴다.
+- 청구 사용자: 실행을 예약한 사용자(`ai_task_runs.user_id`)다. 실행 행이 없을 때만 AI 원장의 `user_id`를 쓰므로, AI가 사용자를 몰라 `unattributed`로 남긴 호출도 실행자에게 청구된다.
+- 동기 AI 호출의 run_id: 실행 ID가 없는 회의록 초안·녹음 파일 전사·음성 전사·Wiki 스키마 미리보기·초안은 호출마다 `ai_task_runs`에 실행(`kind:uuid`)을 등록하고 `run_id`·`user_id`를 추가 필드로 보낸다(본문 JSON 또는 query). Skill은 기존 run_id를 쓴다.
+- AI 응답 계약(FruitionKR/Fruition-ai#60): `{"calls": [{"id", "run_id", "workspace_id", "user_id", "kind", "provider", "requested_model", "model", "status", "input_tokens", "cached_input_tokens", "cache_creation_tokens", "output_tokens", "reasoning_tokens", "audio_seconds", "tts_characters", "started_at", "finished_at"}]}`. 응답 모델이 없으면 `requested_model`을 남긴다.
+- 대사: `scripts/sql/usage-cost-monthly.sql`로 월별 공급사·모델 원가 합계를 공급사 청구서와 비교한다.
+- 진입점: `src/main/java/fruition/core/usage/controller/UsageChargeController.java`, `src/main/java/fruition/core/usage/service/UsageChargeService.java`
+
+## 본인 크레딧 잔액 (선불)
+
+`GET /api/users/me/credits`
+
+로그인 사용자 본인의 선불 크레딧 잔액·예약액·가용액(잔액 − 예약)과 최근 원장 50건을 돌려준다. 금액은 milli-KRW 정수다. 실제 사용이 예약보다 크면 그대로 차감해 잔액이 음수일 수 있다.
+
+```json
+{
+  "user_id": "user_1", "currency": "KRW",
+  "balance_krw_milli": 600000, "reserved_krw_milli": 300000, "available_krw_milli": 300000,
+  "entries": [{"type": "release", "amount_krw_milli": -300000, "run_id": "query-1", "reason": null,
+    "created_at": "2026-10-09T03:00:00Z"}]
+}
+```
+
+- 원장 `credit_entries`는 추가만 한다. 부호: `purchase`·`grant` +, `charge`·`refund`(결제 환불로 회수) −, `adjust` ±(잔액), `reserve` +, `release` −(예약). 계정 잔액 = 예약을 뺀 원장 합계, 예약 = `reserve`·`release` 합계이며 `scripts/sql/credit-balance-check.sql`로 점검한다.
+- 사전 승인: AI 요청 전에 계정 행을 `FOR UPDATE`로 잠그고 kind별 예상 상한(`app.billing.estimate.<kind>`, 없으면 `app.billing.default-estimate-krw-milli`)을 `reserve`로 기록한다. 비동기 작업은 `AiCommandOutboxWriter.begin`·`reserve`(outbox 저장과 같은 트랜잭션), 동기 호출(Skill·회의록 초안·녹음 파일 전사·음성 전사·Wiki 스키마)은 `AiTaskCancellationService.register`, 실시간 전사는 연결 시작에서 예약한다. 같은 실행은 한 번만 예약하고, 사용자가 없는 시스템 작업은 예약하지 않는다.
+- `app.billing.enforce`(기본 false): true면 가용 잔액이 상한보다 작거나 잔액이 음수일 때 AI 요청 전에 `402 INSUFFICIENT_CREDIT`("크레딧 잔액이 부족합니다. 크레딧을 충전한 뒤 다시 시도해 주세요.")로 거절하고 작업 등록도 롤백한다. 비동기 회의록 초안은 `failed`/`INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유, 실시간 전사는 `insufficient_credit` 오류 후 close `1008`로 알린다. false면 거절하지 않고 예약·정산만 기록한다(무료 크레딧 정책 전 배포용).
+- 정산: 사용 금액 수집(위 절)이 실행의 호출을 가져오면 그 실행의 청구 합계를 `charge`로 차감하고 남은 예약을 `release`한다. 실행이 아직 진행 중(`running`·`cancel_requested`·`rolling_back`)이면 차감만 하고 예약은 둔다. 차감 키는 `charge:{run_id}:{user_id}:{누적 청구액}`, 해제 키는 `release:{run_id}`라 같은 실행을 여러 번 정산해도 같은 금액은 한 번만 반영되고, 대사가 늦게 채운 호출은 늘어난 만큼만 더 차감한다. 취소된 실행도 취소 확정 시 수집 대기열에 넣어 정산한다. 토큰을 모르는 호출(`needs_review`)은 현재 0원이다.
+- 종료 신호가 없는 실행의 예약은 `app.billing.stale-reservation-hours`(기본 48시간)가 지나면 정리 작업이 그때까지의 청구로 정산하고 푼다. 진행 중인 실행은 건너뛰되, `ai_task_runs.updated_at`이 그 시간보다 오래된 실행(프로세스 종료로 남은 `running` 등)은 끝난 것으로 본다.
+- 실시간 전사는 연결 시작 시 `meeting_live` 상한을 예약하고, `app.billing.live-renew-seconds`(기본 60초)마다 그때까지의 호출을 수집해 차감한 뒤 남은 예약을 풀고 다음 구간 상한을 다시 예약한다(키 `release:{run_id}:{구간}`·`reserve:{run_id}:{구간}`). enforce에서 차감 뒤 가용 잔액이 상한보다 작으면 아무것도 반영하지 않고 `insufficient_credit` 오류 후 close `1008`로 연결을 닫으며, 연결 종료 정산이 사용량을 차감하고 예약을 푼다. 확정 구간은 남아 충전 뒤 새 ticket으로 이어서 녹음한다.
+- 수동 지급·조정은 `scripts/sql/credit-grant-adjust.sql`(`grant` 또는 `adjust`, `adjust`는 사유 필수)로 한다.
+- 보관: 탈퇴·워크스페이스 삭제 파기 대상에서 `credit_accounts`·`credit_entries`·`usage_charges`·`credit_orders`·`payment_events`는 제외한다(전자상거래법상 대금 결제 기록 5년 보관).
+- 진입점: `src/main/java/fruition/core/usage/controller/UsageChargeController.java`, `src/main/java/fruition/core/usage/service/CreditService.java`
+
+## 크레딧 충전·환불 (PG 결제)
+
+결정과 PG·법률 검토 항목은 [ADR-0026](../adr/0026-credit-payments.md)에 있다. `app.billing.payments-enabled`(기본 false)가 false면 아래 API는 모두 404다.
+
+| Method + Path | 동작 |
+|---|---|
+| `POST /api/users/me/credit-orders` (`{"product_code"}`) | 주문 생성. 금액·크레딧은 서버 상품표(`app.billing.product.<code>.amount-krw`·`.credit-krw-milli`)로 정한다. 없는 상품 400. |
+| `POST /api/users/me/credit-orders/{order_id}/confirm` (`{"payment_key", "amount"}`) | 서버가 PG 승인 API를 부르고 주문·금액·상태를 대조한 뒤 `purchase`를 지급한다. 이미 지급한 주문은 PG를 다시 부르지 않고 그대로 돌려준다. 앞선 승인 응답을 받지 못해 PG가 이미 처리한 결제라고 거절하면(`ALREADY_PROCESSED_PAYMENT`) PG 결제 조회로 주문·금액·상태를 대조해 지급한다. 금액 불일치 400(PG 미호출), PG 거절 400(주문 `failed`), PG 응답 없음·불일치 502. |
+| `POST /api/users/me/credit-orders/{order_id}/refund` | 주문의 남은 크레딧과 가용 잔액 중 작은 값만 환불한다. 금액은 그 비율(원 단위 내림)이며 PG 취소 성공 후 `refund`(−)를 쓴다. 취소 전에 PG 결제를 조회해, 주문에 기록하지 않은 취소(취소 뒤 회수 전 실패·응답 유실)가 있으면 새로 취소하지 않고 그 금액만큼 회수만 한다. 상태는 `refunded` 또는 `partially_refunded`. 환불할 것이 없으면 409(PG 미호출), PG 거절 409, 응답 없음 502. |
+| `POST /internal/payments/webhook` | 헤더 `X-Payment-Signature` = 본문 HMAC-SHA256 hex(`app.billing.pg.webhook-secret`). 틀리면 401. `eventId`(없으면 본문 SHA-256)로 한 번만 처리하고, `data.status = DONE`이면 승인 응답을 받지 못한 주문을 지급한다. `CANCELED`·`PARTIAL_CANCELED`(관리자 콘솔 취소 등)면 PG 결제를 조회해 주문에 기록하지 않은 취소 금액만큼 주문 환불 누적과 `refund`(−)를 기록한다(전액 취소면 남은 크레딧 전부, 부분 취소면 금액 비율). 조회가 실패하면 처리 기록도 롤백돼 PG 재전송 때 다시 처리한다. |
+
+```json
+{"order_id": "order_3f2c...", "product_code": "CREDIT_10000", "amount_krw": 10000, "credit_krw_milli": 10000000,
+ "status": "paid", "refunded_krw": 0, "refunded_credit_krw_milli": 0,
+ "created_at": "2026-10-09T03:00:00Z", "paid_at": "2026-10-09T03:01:00Z"}
+```
+
+- 한 번만 지급: 주문 상태 조건부 갱신(`created`/`failed` → `paid`)과 원장 키 `purchase:{order_id}`를 같은 트랜잭션에서 쓴다. 승인 재시도·webhook 중복·둘의 경합에도 지급은 한 번이다.
+- 환불 회수는 PG 결제의 취소 누적(`totalAmount − balanceAmount`)과 주문의 `refunded_krw` 차이만 반영하고, 원장 키 `refund:{order_id}:{그때까지 환불 크레딧}`이 같아 재시도·webhook 중복에도 한 번만 회수한다. 가용 잔액보다 많이 회수하면 잔액이 음수가 될 수 있다.
+- PG 연동은 `PaymentGatewayClient` 하나(승인·조회·취소)다. 요청은 토스페이먼츠 형식 기준이며 PG 선정 후 맞춘다. 설정: `app.billing.pg.confirm-endpoint`, `app.billing.pg.payment-endpoint`·`app.billing.pg.cancel-endpoint`(`{paymentKey}` 치환), `app.billing.pg.secret-key`(Basic 인증), `app.billing.pg.webhook-secret`.
+- 진입점: `src/main/java/fruition/core/billing/CreditOrderController.java`, `src/main/java/fruition/core/billing/CreditOrderService.java`

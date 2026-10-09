@@ -828,6 +828,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
 **변경 감지(ETag/304)**: 응답에는 `ETag` 헤더가 붙는다. 폴링은 이 값을 `If-None-Match`로 보내고, 304를 받으면 갖고 있던 트리를 그대로 쓴다.
 서버는 트리에 실리는 문서·폴더 행과 편집 상태의 지문을 먼저 계산해 비교한다. 같으면 트리를 조립하지 않는다.
 처리 중 문서가 멈춤(`stalled`)으로 바뀌는 것처럼 시간이 지나 달라지는 값도 지문에 들어간다.
+`can_edit`·`can_delete`가 사용자마다 다르므로 ETag도 사용자마다 다르다.
 지문은 트리를 조립하기 전에 계산하므로, 그 사이에 변경이 생기면 다음 요청에서 다시 200을 받는다.
 
 #### 3. Auth 필요 여부
@@ -883,6 +884,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
 
 - `document`는 `DocumentItem` 전체를 담는다. 위 예시는 지면상 일부만 보였다. 전체 필드는
   `GET /api/workspaces/{workspace_id}/documents` 항목과 같다.
+
+- 문서 항목은 `GET .../documents` 목록과 같은 `DocumentItem`이다. `file_sha256`으로 데스크톱 앱이 로컬 파일과 서버 문서를 짝짓는다.
 
 #### 6. Error response
 

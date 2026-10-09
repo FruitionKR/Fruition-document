@@ -18,8 +18,12 @@ tags:
   name: Chat Sessions
 - description: Markdown 문서 이미지 asset 조회 API
   name: Document Assets
+- description: 같은 revision에서 갈라진 편집을 OWNER가 골라 해결
+  name: Document Edit Conflicts
 - description: 문서 편집 잠금(활성 편집 추적) API
   name: Document Edit Lock
+- description: 문서·폴더 공동 편집 권한 설정
+  name: Document Permissions
 - description: Markdown 편집 문서와 업로드 원본 관리 API
   name: Documents
 - description: 문서 위치와 폴더 배치 관리 API
@@ -32,6 +36,8 @@ tags:
   name: Navigation
 - description: 워크스페이스 문서와 폴더 계층 탐색 API
   name: Navigation
+- description: 앱 안 알림 목록과 읽음 처리
+  name: Notifications
 - description: Wiki 기반 자연어 질의 API
   name: Query
 - description: 비동기 질의 실행 상태와 실시간 진행 이벤트 API
@@ -115,6 +121,113 @@ paths:
       summary: 질의 진행 이벤트 구독
       tags:
       - Query Runs
+  /api/users/me/credit-orders:
+    post:
+      description: "상품 코드의 금액·크레딧은 서버 상품표로 정합니다. 결제창에 order_id와 amount_krw를 넘깁니다. 결제 기능이 꺼져 있으면 404, 없는 상품이면 400입니다."
+      operationId: create_2
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Order"
+          description: OK
+      summary: 크레딧 충전 주문 생성
+      tags:
+      - credit-order-controller
+  /api/users/me/credit-orders/{order_id}/confirm:
+    post:
+      description: "결제창이 돌려준 payment_key와 금액으로 서버가 PG 승인 API를 호출하고, 주문·금액이 맞으면 크레딧을 지급합니다. 같은 주문을 다시 확인해도 한 번만 지급합니다. 앞선 승인 응답을 받지 못해 PG가 이미 처리한 결제라고 하면 PG 결제 조회로 대조해 지급합니다. 금액이 주문과 다르면 PG를 부르지 않고 400, PG 거절 400, PG 응답을 받지 못하면 502(webhook이 복구)입니다."
+      operationId: confirm
+      parameters:
+      - in: path
+        name: order_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Order"
+          description: OK
+      summary: 크레딧 충전 결제 승인
+      tags:
+      - credit-order-controller
+  /api/users/me/credit-orders/{order_id}/refund:
+    post:
+      description: 주문에서 쓰지 않은 크레딧(가용 잔액 한도)만 환불합니다. 금액은 환불 크레딧 비율이며 PG 취소가 성공해야 크레딧을 회수합니다. PG에 이 주문에 기록하지 않은 취소가 있으면(앞선 환불 응답 유실 등) 새로 취소하지 않고 회수만 합니다. 환불할 것이 없거나 환불할 수 없는 주문이면 409입니다.
+      operationId: refund
+      parameters:
+      - in: path
+        name: order_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Order"
+          description: OK
+      summary: 크레딧 충전 환불
+      tags:
+      - credit-order-controller
+  /api/users/me/credits:
+    get:
+      description: 잔액·실행 중 예약액·가용액(잔액 − 예약)과 최근 원장 50건을 반환합니다. 금액은 milli-KRW 정수이며 실제 사용이 예약보다 크면 잔액이 음수일 수 있습니다.
+      operationId: credits
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Credits"
+          description: OK
+      summary: 본인의 크레딧 잔액 조회
+      tags:
+      - usage-charge-controller
+  /api/users/me/usage/charges:
+    get:
+      description: "호출 시작 시각이 [from_at, to_at)인 본인 호출의 금액을 워크스페이스를 가로질러 합쳐 모델별로 반환합니다. 금액은 부가세 포함 milli-KRW 정수입니다. 단가가 없는 호출(unpriced_calls)은 합계에 들어가지 않고, 토큰을 모르는 호출(needs_review_calls)은 0원입니다. 기간은 366일 이하입니다."
+      operationId: read_3
+      parameters:
+      - in: query
+        name: from_at
+        required: true
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: to_at
+        required: true
+        schema:
+          type: string
+          format: date-time
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ChargeSummary"
+          description: OK
+      summary: 본인의 AI 사용 금액 조회
+      tags:
+      - usage-charge-controller
   /api/workspaces/{workspaceId}/ai/tasks/{id}:
     get:
       operationId: status_1
@@ -1109,6 +1222,104 @@ paths:
       summary: "[임시] 채팅 Wiki page화 Markdown 미리보기"
       tags:
       - Chat Sessions
+  /api/workspaces/{workspace_id}/conflicts:
+    get:
+      description: 충돌 본과 서버 현재 본문·revision·마지막 수정자를 함께 반환합니다. OWNER만 호출할 수 있습니다.
+      operationId: listConflicts
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentEditConflictListResponse"
+          description: 조회 성공
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: OWNER가 아님
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+      summary: 미해결 편집 충돌 목록
+      tags:
+      - Document Edit Conflicts
+  /api/workspaces/{workspace_id}/conflicts/{conflict_id}/resolve:
+    post:
+      description: "server는 본문을 그대로 두고, conflict·merged는 그 본문으로 새 revision을 저장합니다. 고르지 않은 본문은 버전 이력과 충돌 기록에 남습니다. OWNER만 호출할 수 있고, 먼저 해결한 요청만 반영됩니다."
+      operationId: resolveConflict
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: conflict_id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentEditConflictResolveRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentEditConflictResponse"
+          description: 해결 완료
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: choice가 올바르지 않거나 필요한 markdown·base_revision이 없음
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: OWNER가 아님
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 충돌·문서 또는 워크스페이스를 찾을 수 없음
+        "409":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 이미 해결됨(CONFLICT_ALREADY_RESOLVED) 또는 서버 revision이 바뀜(DOCUMENT_VERSION_CONFLICT)
+        "423":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 다른 사용자가 편집 잠금을 보유 중
+      summary: 편집 충돌 해결
+      tags:
+      - Document Edit Conflicts
   /api/workspaces/{workspace_id}/document-tree:
     get:
       description: "모든 폴더를 펼친 상태의 활성 폴더·문서 계층을 한 번에 반환합니다. 응답의 ETag를 If-None-Match로 보내면, 바뀐 것이 없을 때 트리를 조립하지 않고 본문 없이 304를 반환합니다."
@@ -1603,6 +1814,63 @@ paths:
       summary: 원본 문서 block 목록 조회
       tags:
       - Documents
+  /api/workspaces/{workspace_id}/documents/{document_id}/conflicts:
+    post:
+      description: 본문 저장이 409 DOCUMENT_VERSION_CONFLICT로 막혔을 때 내 본문을 충돌로 올려 보존합니다. 그 문서를 편집할 수 있어야 합니다. 같은 client_conflict_id로 다시 보내면 기존 충돌을 돌려줍니다.
+      operationId: registerConflict
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: document_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentEditConflictRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentEditConflictResponse"
+          description: 등록 또는 멱등 재요청
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: markdown·base_revision·client_conflict_id가 올바르지 않거나 편집 가능한 Markdown 문서가 아님
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님)
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 문서 또는 워크스페이스를 찾을 수 없음
+        "413":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Markdown 5MB 초과
+      summary: 편집 충돌 등록
+      tags:
+      - Document Edit Conflicts
   /api/workspaces/{workspace_id}/documents/{document_id}/content:
     put:
       description: 전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision과 일치할 때만 반영하며 revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다.
@@ -1674,7 +1942,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 편집 revision 또는 revision_write_id 충돌
+          description: 편집 revision 또는 revision_write_id 충돌. revision 충돌(DOCUMENT_VERSION_CONFLICT)은 error.current_revision에 서버 현재 revision을 담는다
         "413":
           content:
             '*/*':
@@ -2103,6 +2371,57 @@ paths:
           description: OK
       tags:
       - Documents
+  /api/workspaces/{workspace_id}/documents/{document_id}/permission:
+    put:
+      description: 멤버는 기본으로 모든 문서를 편집할 수 있습니다. view로 바꾸면 소유자와 OWNER 외에는 보기만 합니다. null이면 설정을 지워 상위 폴더 설정이나 기본값을 따릅니다. 문서 소유자나 OWNER만 바꿀 수 있습니다.
+      operationId: setDocument
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: document_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentPermissionRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentPermissionResponse"
+          description: 설정 완료
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "access가 edit, view, null이 아님"
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 문서 소유자나 OWNER가 아님
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 문서 또는 워크스페이스를 찾을 수 없음
+      summary: 문서 권한 설정
+      tags:
+      - Document Permissions
   /api/workspaces/{workspace_id}/documents/{document_id}/position:
     patch:
       description: 문서를 대상 폴더와 정렬 위치로 이동합니다. base version과 Idempotency-Key로 동시 변경을 검증합니다.
@@ -2634,6 +2953,58 @@ paths:
       summary: 폴더 하위 항목 조회
       tags:
       - Folders
+  /api/workspaces/{workspace_id}/folders/{folder_id}/permission:
+    put:
+      description: 폴더 안의 문서와 하위 폴더가 따르는 권한입니다. 문서·하위 폴더에 직접 건 설정이 우선합니다. view 폴더는 OWNER 외에 이름 변경·이동할 수 없습니다. OWNER만 바꿀 수 있습니다.
+      operationId: setFolder
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: folder_id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentPermissionRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentPermissionResponse"
+          description: 설정 완료
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "access가 edit, view, null이 아님"
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: OWNER가 아님
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 폴더 또는 워크스페이스를 찾을 수 없음
+      summary: 폴더 권한 설정
+      tags:
+      - Document Permissions
   /api/workspaces/{workspace_id}/folders/{folder_id}/position:
     patch:
       description: 폴더를 대상 상위 폴더와 정렬 위치로 이동합니다. 자기 자신이나 하위 폴더로는 이동할 수 없습니다.
@@ -3370,6 +3741,118 @@ paths:
       summary: 폴더·문서 검색
       tags:
       - Navigation
+  /api/workspaces/{workspace_id}/notifications:
+    get:
+      description: "나에게 온 알림과, OWNER면 OWNER 대상 알림을 최신순으로 반환합니다. 다음 페이지는 마지막 항목의 created_at과 id를 before와 before_id로 보냅니다."
+      operationId: listNotifications
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: query
+        name: unread_only
+        required: false
+        schema:
+          type: boolean
+          default: false
+      - description: "기본 50, 최대 100"
+        in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          format: int32
+          description: "기본 50, 최대 100"
+      - description: "이 시각보다 먼저 만든 알림만. before_id와 함께 보내면 (created_at, id)가 그보다 앞선 알림만"
+        in: query
+        name: before
+        required: false
+        schema:
+          type: string
+          format: date-time
+          description: "이 시각보다 먼저 만든 알림만. before_id와 함께 보내면 (created_at, id)가 그보다 앞선 알림만"
+      - description: 이전 페이지 마지막 항목의 id. before와 함께 보내야 쓰인다
+        in: query
+        name: before_id
+        required: false
+        schema:
+          type: string
+          format: uuid
+          description: 이전 페이지 마지막 항목의 id. before와 함께 보내야 쓰인다
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/NotificationListResponse"
+          description: 조회 성공
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+      summary: 내 알림 목록
+      tags:
+      - Notifications
+  /api/workspaces/{workspace_id}/notifications/read-all:
+    post:
+      description: 지금 나에게 보이는 알림을 모두 읽음으로 표시합니다.
+      operationId: readAllNotifications
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      responses:
+        "204":
+          description: 읽음 처리됨
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+      summary: 알림 전부 읽음 처리
+      tags:
+      - Notifications
+  /api/workspaces/{workspace_id}/notifications/{notification_id}/read:
+    post:
+      description: 이미 읽은 알림이어도 204입니다.
+      operationId: readNotification
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: notification_id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "204":
+          description: 읽음 처리됨
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 내가 볼 수 없는 알림(NOTIFICATION_NOT_FOUND) 또는 워크스페이스 없음
+      summary: 알림 읽음 처리
+      tags:
+      - Notifications
   /api/workspaces/{workspace_id}/skills:
     get:
       description: 현재 사용자가 사용할 수 있는 워크스페이스 Skill 목록을 반환합니다.
@@ -4737,6 +5220,28 @@ paths:
           description: OK
       tags:
       - internal-document-controller
+  /internal/payments/webhook:
+    post:
+      description: "X-Payment-Signature(본문 HMAC-SHA256 hex)를 검증하고 eventId(없으면 본문 해시)로 한 번만 처리합니다. 승인 응답을 받지 못한 결제를 지급하고, PG 쪽 취소(CANCELED·PARTIAL_CANCELED)는 PG 결제 조회 결과대로 크레딧을 회수합니다. 서명이 틀리면 401입니다."
+      operationId: webhook
+      parameters:
+      - in: header
+        name: X-Payment-Signature
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: string
+        required: true
+      responses:
+        "200":
+          description: OK
+      summary: PG 결제 webhook
+      tags:
+      - credit-order-controller
   /internal/purge/users:
     post:
       operationId: purgeUser
@@ -5174,6 +5679,32 @@ components:
           type: string
           description: 바뀐 리소스 종류
           example: wiki_page
+    ChargeSummary:
+      type: object
+      properties:
+        charge_krw_milli:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        from_at:
+          type: string
+          format: date-time
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelCharge"
+        needs_review_calls:
+          type: integer
+          format: int64
+        to_at:
+          type: string
+          format: date-time
+        unpriced_calls:
+          type: integer
+          format: int64
+        user_id:
+          type: string
     ChatMessageReference:
       type: object
       description: 답변의 근거가 된 원문 참조. 값이 없는 필드는 키 자체가 빠진다.
@@ -5423,6 +5954,18 @@ components:
       properties:
         ticket:
           type: string
+    ConfirmRequest:
+      type: object
+      properties:
+        amount:
+          type: integer
+          format: int64
+        payment_key:
+          type: string
+          minLength: 1
+      required:
+      - amount
+      - payment_key
     ContributionRequest:
       type: object
       properties:
@@ -5450,6 +5993,34 @@ components:
             type: string
           maxItems: 20
           minItems: 0
+    CreateRequest:
+      type: object
+      properties:
+        product_code:
+          type: string
+          minLength: 1
+      required:
+      - product_code
+    Credits:
+      type: object
+      properties:
+        available_krw_milli:
+          type: integer
+          format: int64
+        balance_krw_milli:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entry"
+        reserved_krw_milli:
+          type: integer
+          format: int64
+        user_id:
+          type: string
     DocumentAttachmentSaveResponse:
       type: object
       description: 본문 저장과 함께 등록된 이미지 asset
@@ -5672,6 +6243,14 @@ components:
           format: int64
           description: 파일 크기(바이트)
           example: 482913
+        can_delete:
+          type: boolean
+          description: 현재 사용자가 삭제·휴지통 복구를 할 수 있는지. 문서 소유자와 OWNER만 true다.
+          example: false
+        can_edit:
+          type: boolean
+          description: 현재 사용자가 본문 저장·이름 변경·이동을 할 수 있는지. false면 읽기 전용으로 연다.
+          example: true
         current_version:
           type: integer
           format: int64
@@ -5728,6 +6307,12 @@ components:
           type: string
           description: 파일 MIME 타입
           example: application/pdf
+        permission:
+          type: string
+          description: 이 문서에 직접 건 권한 설정(edit | view). null이면 상위 폴더 설정 또는 기본값(edit)을 따른다.
+          enum:
+          - edit
+          - view
         pipeline_run_id:
           type: string
           description: 이 문서를 처리한 pipeline run ID
@@ -5767,6 +6352,9 @@ components:
           format: date-time
           description: 마지막 변경 시각(ISO-8601 UTC)
           example: 2026-08-13T04:25:24.371948Z
+        updated_by:
+          type: string
+          description: 마지막으로 본문을 저장한 사용자 ID. 업로드 뒤 저장한 적이 없으면 null이다.
         uploaded_at:
           type: string
           format: date-time
@@ -5820,6 +6408,139 @@ components:
           type: string
           description: 복제 원본 문서 ID
           example: doc_8d4f1e6c3b0a97d25e4f831b9f4c7e2a
+    DocumentEditConflictItem:
+      type: object
+      properties:
+        conflict:
+          $ref: "#/components/schemas/DocumentEditConflictResponse"
+          description: 충돌 본
+        document_name:
+          type: string
+          description: 문서 이름
+        server:
+          $ref: "#/components/schemas/DocumentEditConflictServer"
+          description: 지금 서버에 있는 본문
+    DocumentEditConflictListResponse:
+      type: object
+      properties:
+        conflicts:
+          type: array
+          description: 미해결 충돌. 오래된 순
+          items:
+            $ref: "#/components/schemas/DocumentEditConflictItem"
+    DocumentEditConflictRequest:
+      type: object
+      description: 본문 저장이 409 DOCUMENT_VERSION_CONFLICT로 막혔을 때 내 본문을 충돌로 올려 보존하는 요청
+      properties:
+        base_revision:
+          type: integer
+          format: int64
+          description: 편집을 시작한 revision(저장 요청에 보냈던 base_revision)
+          example: 4
+          minimum: 1
+        client_conflict_id:
+          type: string
+          description: 클라이언트가 만든 충돌 ID. 같은 값으로 다시 보내면 기존 충돌을 돌려준다.
+          example: c7a1e0d2-5b9f-4c3e-8a6d-1f2e3d4c5b6a
+          maxLength: 255
+          minLength: 0
+        markdown:
+          type: string
+          description: 저장하려던 전체 Markdown 본문
+      required:
+      - base_revision
+      - client_conflict_id
+      - markdown
+    DocumentEditConflictResolveRequest:
+      type: object
+      description: OWNER가 충돌을 해결하는 요청
+      properties:
+        base_revision:
+          type: integer
+          format: int64
+          description: "목록에서 본 서버 현재 revision. conflict·merged일 때 필수이고, 서버 값과 다르면 409 DOCUMENT_VERSION_CONFLICT다."
+          example: 5
+          minimum: 1
+        choice:
+          type: string
+          description: server(서버 본 유지) | conflict(충돌 본 채택) | merged(직접 합친 본문)
+          enum:
+          - server
+          - conflict
+          - merged
+          pattern: server|conflict|merged
+        markdown:
+          type: string
+          description: 합친 본문. choice가 merged일 때만 필수다.
+      required:
+      - choice
+    DocumentEditConflictResponse:
+      type: object
+      properties:
+        author_user_id:
+          type: string
+          description: 충돌을 등록한 사용자
+        base_revision:
+          type: integer
+          format: int64
+          description: 충돌 본이 편집을 시작한 revision
+          example: 4
+        created_at:
+          type: string
+          format: date-time
+          description: 등록 시각
+        document_id:
+          type: string
+          description: 문서 ID
+        id:
+          type: string
+          format: uuid
+          description: 충돌 ID
+        markdown:
+          type: string
+          description: 충돌 본 Markdown
+        resolution:
+          type: string
+          description: 고른 본문. 미해결이면 null
+          enum:
+          - server
+          - conflict
+          - merged
+        resolved_at:
+          type: string
+          format: date-time
+          description: 해결 시각. 미해결이면 null
+        resolved_by:
+          type: string
+          description: 해결한 OWNER. 미해결이면 null
+        resolved_revision:
+          type: integer
+          format: int64
+          description: 해결 후 문서 revision. server면 그 시점 서버 revision이다. 미해결이면 null
+        status:
+          type: string
+          description: open(미해결) | resolved(해결됨)
+          enum:
+          - open
+          - resolved
+    DocumentEditConflictServer:
+      type: object
+      properties:
+        markdown:
+          type: string
+          description: 서버 현재 Markdown 본문
+        revision:
+          type: integer
+          format: int64
+          description: 서버 현재 revision. 해결 요청의 base_revision으로 쓴다.
+          example: 5
+        updated_at:
+          type: string
+          format: date-time
+          description: 서버 본문 마지막 저장 시각
+        updated_by:
+          type: string
+          description: 마지막으로 본문을 저장한 사용자
     DocumentIngestResponse:
       type: object
       description: ingest 요청 접수 결과. 실제 처리는 비동기로 진행되며 run_id로 상태를 추적한다.
@@ -5851,6 +6572,14 @@ components:
           format: int64
           description: 파일 크기(바이트)
           example: 482913
+        can_delete:
+          type: boolean
+          description: 현재 사용자가 삭제·휴지통 복구를 할 수 있는지. 문서 소유자와 OWNER만 true다.
+          example: false
+        can_edit:
+          type: boolean
+          description: 현재 사용자가 본문 저장·이름 변경·이동을 할 수 있는지. 문서 소유자와 OWNER는 항상 true다.
+          example: true
         current_version:
           type: integer
           format: int64
@@ -5876,6 +6605,9 @@ components:
         extracted_text_uri:
           type: string
           description: 추출된 본문 텍스트가 저장된 경로. 처리 전이면 없다.
+        file_sha256:
+          type: string
+          description: "같은 파일이 이미 있는지 업로드 전에 판별하는 SHA-256(hex). 원본(PDF)은 올린 파일 전체의 해시, 편집 문서는 현재 본문(UTF-8)의 해시다. 대용량 직접 업로드 직후처럼 아직 계산 전이면 null이다."
         file_type:
           type: string
           description: 확장자 기준 파일 종류
@@ -5904,6 +6636,12 @@ components:
           type: boolean
           description: 마지막 ingest 이후 편집본이 바뀌어 재분석이 필요한지 여부. 편집 가능 문서만 true가 될 수 있다.
           example: false
+        permission:
+          type: string
+          description: 이 문서에 직접 건 권한 설정(edit | view). null이면 상위 폴더 설정 또는 기본값(edit)을 따른다.
+          enum:
+          - edit
+          - view
         pipeline_run_id:
           type: string
           description: 이 문서를 처리한 pipeline run ID
@@ -5947,6 +6685,9 @@ components:
           format: date-time
           description: 마지막 변경 시각(ISO-8601 UTC)
           example: 2026-08-13T04:25:24.371948Z
+        updated_by:
+          type: string
+          description: 마지막으로 본문을 저장한 사용자 ID. 업로드 뒤 저장한 적이 없으면 null이다.
         uploaded_at:
           type: string
           format: date-time
@@ -5997,6 +6738,25 @@ components:
           description: 활성 문서 목록. 휴지통 문서는 포함되지 않는다.
           items:
             $ref: "#/components/schemas/DocumentItem"
+    DocumentPermissionRequest:
+      type: object
+      properties:
+        access:
+          type: string
+          description: edit(편집 가능) | view(보기만) | null(설정을 지워 상위 폴더 또는 기본값을 따름)
+          enum:
+          - edit
+          - view
+          pattern: edit|view
+    DocumentPermissionResponse:
+      type: object
+      properties:
+        access:
+          type: string
+          description: 저장된 설정. null이면 직접 건 설정이 없다.
+          enum:
+          - edit
+          - view
     DocumentPositionRequest:
       type: object
       description: 문서 이동·순서 변경 요청
@@ -6319,6 +7079,21 @@ components:
           description: 편집 대상 범위. 생략하면 문서 전체가 대상이다.
       required:
       - markdown
+    Entry:
+      type: object
+      properties:
+        amount_krw_milli:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        run_id:
+          type: string
+        type:
+          type: string
     ErrorDetail:
       type: object
       properties:
@@ -6326,6 +7101,11 @@ components:
           type: string
           description: 분기 기준으로 쓰는 값. message가 아니라 이 값으로 분기한다.
           example: INVALID_REQUEST
+        current_revision:
+          type: integer
+          format: int64
+          description: "본문 저장 충돌(409 DOCUMENT_VERSION_CONFLICT)일 때만 존재한다. 서버의 현재 편집 revision으로, 충돌 등록에 쓴다."
+          example: 5
         details:
           type: array
           description: 검증 실패(400 INVALID_REQUEST)일 때만 존재한다. 값이 없으면 키 자체가 빠지므로 null 체크가 아니라 존재 여부로 확인한다.
@@ -6949,6 +7729,45 @@ components:
           type: string
           description: 처리 상태
           example: completed
+    ModelCharge:
+      type: object
+      properties:
+        audio_seconds:
+          type: number
+        cache_creation_tokens:
+          type: integer
+          format: int64
+        cached_input_tokens:
+          type: integer
+          format: int64
+        calls:
+          type: integer
+          format: int64
+        charge_krw_milli:
+          type: integer
+          format: int64
+        input_tokens:
+          type: integer
+          format: int64
+        model:
+          type: string
+        needs_review_calls:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        provider:
+          type: string
+        reasoning_tokens:
+          type: integer
+          format: int64
+        tts_characters:
+          type: integer
+          format: int64
+        unpriced_calls:
+          type: integer
+          format: int64
     ModelLine:
       type: object
       properties:
@@ -7013,6 +7832,35 @@ components:
           description: 활성화된 provider/model 조합 목록
           items:
             $ref: "#/components/schemas/ModelResponse"
+    Notification:
+      type: object
+      properties:
+        created_at:
+          type: string
+          format: date-time
+          description: 알림 생성 시각. 다음 페이지 요청의 before로 쓴다.
+        id:
+          type: string
+          format: uuid
+          description: 알림 ID. 다음 페이지 요청의 before_id로 쓴다.
+        payload:
+          $ref: "#/components/schemas/JsonNode"
+          description: "type별 내용. edit_conflict_registered: conflict_id, document_id, document_name, author_user_id. edit_conflict_resolved: conflict_id, document_id, choice, resolved_by"
+        read:
+          type: boolean
+          description: 내가 읽었는지
+        type:
+          type: string
+          description: edit_conflict_registered(OWNER 대상) | edit_conflict_resolved(충돌 작성자 대상)
+          example: edit_conflict_registered
+    NotificationListResponse:
+      type: object
+      properties:
+        notifications:
+          type: array
+          description: 나에게 온 알림. 최신순
+          items:
+            $ref: "#/components/schemas/Notification"
     OperationLogDetailResponse:
       type: object
       description: AI 작업 상세. 그 작업이 바꾼 리소스를 함께 반환한다. ingest·lint는 생성·삭제된 Wiki 제목과 유형만 전달하고 그 외 작업은 변경분을 포함한다.
@@ -7119,6 +7967,33 @@ components:
         next_cursor:
           type: string
           description: 다음 페이지를 받을 커서. null이면 마지막 페이지다.
+    Order:
+      type: object
+      properties:
+        amount_krw:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        credit_krw_milli:
+          type: integer
+          format: int64
+        order_id:
+          type: string
+        paid_at:
+          type: string
+          format: date-time
+        product_code:
+          type: string
+        refunded_credit_krw_milli:
+          type: integer
+          format: int64
+        refunded_krw:
+          type: integer
+          format: int64
+        status:
+          type: string
     OriginalReadUrl:
       type: object
       properties:
@@ -8144,6 +9019,11 @@ components:
           description: 그래프에서 이어진 관련 페이지 목록
           items:
             $ref: "#/components/schemas/WikiRelatedPage"
+        revision:
+          type: integer
+          format: int64
+          description: 현재 본문 revision. 버전 이력이 아직 없으면 키가 빠진다.
+          example: 3
         slug:
           type: string
           description: URL에 쓰는 식별자

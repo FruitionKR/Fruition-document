@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -47,6 +48,7 @@ class FolderServiceTest {
     private static final String USER_ID = "user_1";
 
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
+    @Mock JdbcTemplate jdbcTemplate;
     @Mock FolderRepository folderRepository;
     @Mock DocumentRepository documentRepository;
     @Mock IdempotencyService idempotencyService;
@@ -61,7 +63,7 @@ class FolderServiceTest {
         service = new FolderService(workspaceAccessGuard,
                 folderRepository, documentRepository,
                 idempotencyService, siblingReorderer, documentItemAssembler, documentWikiRetirement,
-                Duration.ofDays(30));
+                new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate), Duration.ofDays(30));
         lenient().when(idempotencyService.execute(
                 any(), any(), any(), any(), any(), anyInt(), any(), any()))
                 .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(7).get());

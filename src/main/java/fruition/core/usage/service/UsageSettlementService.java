@@ -33,8 +33,7 @@ import java.util.UUID;
  *   <li>대상: 기간 중 멤버였던 사용자 전원(탈퇴·제거 포함, access 멤버십 이력).</li>
  *   <li>단가: 실제 응답 모델({@code model}) 기준. 기간 중 단가가 바뀌면 그 시점으로 기간을 나눠
  *       구간마다 AI 사용량을 조회하고 그때 단가를 곱한다.</li>
- *   <li>입력 토큰은 캐시 읽기·생성분을 포함한 합계라(LangChain usage_metadata) 일반 입력은 그 둘을 뺀다.
- *       reasoning 토큰은 출력에 포함돼 따로 과금하지 않는다.</li>
+ *   <li>금액 식은 {@link UsagePricing}을 쓴다. 캐시 토큰은 각자 단가로, reasoning 토큰은 출력에 포함돼 따로 과금하지 않는다.</li>
  *   <li>단가가 없는 모델은 0원으로 두지 않고 {@code price_missing}으로 표시하고 합계에서 뺀다.
  *       사용량 미확인·미완료 호출은 건수로만 표시한다.</li>
  *   <li>마감하면 계산 결과를 저장한다. 이후 단가표가 바뀌어도 저장된 금액은 바뀌지 않는다.</li>
@@ -43,7 +42,6 @@ import java.util.UUID;
 @Service
 public class UsageSettlementService {
 
-    private static final BigDecimal TOKENS_PER_PRICE_UNIT = BigDecimal.valueOf(1_000_000);
     // 사용자 수 × 단가 구간 수만큼 AI를 호출한다. 기간을 1년으로 제한해 호출 수를 묶는다.
     private static final Duration MAX_PERIOD = Duration.ofDays(366);
 
@@ -123,9 +121,7 @@ public class UsageSettlementService {
     private Settlement compute(String workspaceId, Instant from, Instant to, Instant closedAt, String closedBy) {
         List<Price> prices = jdbc.query("SELECT * FROM ai_model_prices WHERE effective_from < ? ORDER BY effective_from",
                 (rs, i) -> new Price(rs.getString("provider"), rs.getString("model"),
-                        rs.getTimestamp("effective_from").toInstant(), rs.getBigDecimal("input_usd_per_mtok"),
-                        rs.getBigDecimal("output_usd_per_mtok"), rs.getBigDecimal("cache_read_usd_per_mtok"),
-                        rs.getBigDecimal("cache_write_usd_per_mtok")),
+                        rs.getTimestamp("effective_from").toInstant(), UsagePricing.Price.from(rs)),
                 Timestamp.from(to));
         TreeSet<Instant> cuts = new TreeSet<>(List.of(from, to));
         prices.stream().map(Price::effectiveFrom).filter(at -> at.isAfter(from)).forEach(cuts::add);
@@ -198,8 +194,7 @@ public class UsageSettlementService {
         }
     }
 
-    private record Price(String provider, String model, Instant effectiveFrom, BigDecimal input, BigDecimal output,
-                         BigDecimal cacheRead, BigDecimal cacheWrite) {
+    private record Price(String provider, String model, Instant effectiveFrom, UsagePricing.Price rates) {
     }
 
     /** 모델 하나의 구간별 사용량을 합친다. 한 구간이라도 단가가 없으면 금액을 내지 않는다. */
@@ -236,12 +231,8 @@ public class UsageSettlementService {
                 priceMissing = true;
                 return;
             }
-            long plainInput = Math.max(0, input - cached - creation);
-            amount = amount.add(BigDecimal.valueOf(plainInput).multiply(price.input())
-                    .add(BigDecimal.valueOf(cached).multiply(price.cacheRead()))
-                    .add(BigDecimal.valueOf(creation).multiply(price.cacheWrite()))
-                    .add(BigDecimal.valueOf(output).multiply(price.output()))
-                    .divide(TOKENS_PER_PRICE_UNIT, 6, RoundingMode.HALF_UP));
+            amount = amount.add(UsagePricing.tokenCostUsd(price.rates(), input, cached, creation, output)
+                    .setScale(6, RoundingMode.HALF_UP));
         }
 
         ModelLine toLine() {

@@ -22,7 +22,7 @@
 | [`POST /api/workspaces/{workspace_id}/documents/uploads/abort`](#summary-post-api-workspaces-workspace-id-documents-uploads-abort) | 진행 중인 조각 업로드를 중단하고 임시 객체를 정리합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/markdown`](#summary-post-api-workspaces-workspace-id-documents-markdown) | 표시 이름과 전체 Markdown 본문으로 즉시 편집 가능한 문서를 생성합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}`](#summary-get-api-workspaces-workspace-id-documents-document-id) | 특정 문서의 상세 정보를 반환합니다. 연결된 Wiki 페이지 목록이 포함됩니다. |
-| [`POST /api/workspaces/{workspace_id}/documents/{document_id}/duplicate`](#summary-post-api-workspaces-workspace-id-documents-document-id-duplicate) | 문서 소유자가 최신 Markdown 편집본을 같은 부모의 마지막 위치에 새 문서로 복제합니다. |
+| [`POST /api/workspaces/{workspace_id}/documents/{document_id}/duplicate`](#summary-post-api-workspaces-workspace-id-documents-document-id-duplicate) | 워크스페이스 멤버가 최신 Markdown 편집본을 같은 부모의 마지막 위치에 새 문서로 복제합니다. |
 | [`PATCH /api/workspaces/{workspace_id}/documents/{document_id}/position`](#summary-patch-api-workspaces-workspace-id-documents-document-id-position) | 문서를 대상 폴더와 정렬 위치로 이동합니다. base version과 Idempotency-Key로 동시 변경을 검증합니다. |
 | [`PATCH /api/workspaces/{workspace_id}/documents/{document_id}/rename`](#summary-patch-api-workspaces-workspace-id-documents-document-id-rename) | Notion의 page title처럼 표시 이름만 변경하며 본문과 Wiki 제목은 유지합니다. |
 | [`POST /internal/workspaces/{workspace_id}/initial-note`](#summary-post-internal-workspaces-workspace-id-initial-note) | 새 워크스페이스에 기본 Markdown 문서를 생성합니다. |
@@ -99,6 +99,11 @@
   ]
 }
 ```
+
+- `file_sha256`: 같은 파일이 이미 있는지 업로드 전에 판별하는 SHA-256(hex). 원본(PDF)은 올린 파일 전체의 해시,
+  편집 문서는 현재 본문(UTF-8)의 해시다. 대용량 직접 업로드 직후나 이 필드 도입 전에 올린 원본은 백그라운드 작업이
+  저장소 객체를 읽어 채우므로 그 전까지 `null`이다. 원본 객체가 없어 계산할 수 없는 문서도 `null`이다.
+  (`content_hash`는 직접 업로드에서 저장소 ETag 기반 값이라 로컬 파일 해시와 비교할 수 없다.)
 
 #### 6. Error response
 
@@ -1053,11 +1058,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | 문서 소유자가 최신 Markdown 편집본을 같은 부모의 마지막 위치에 새 문서로 복제합니다. |
+| 목적 | 워크스페이스 멤버가 최신 Markdown 편집본을 같은 부모의 마지막 위치에 새 문서로 복제합니다. |
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string` |
 | 출력 | `201` 복제 성공 또는 멱등 재요청 — `DocumentDuplicateResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 문서 소유자가 아니거나 편집 문서가 아님 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 편집 문서가 아님 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1071,7 +1076,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 #### 2. 목적
 
-문서 소유자가 최신 Markdown 편집본을 같은 부모의 마지막 위치에 새 문서로 복제합니다.
+워크스페이스 멤버가 최신 Markdown 편집본을 같은 부모의 마지막 위치에 새 문서로 복제합니다.
 
 #### 3. Auth 필요 여부
 
@@ -1112,7 +1117,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 Idempotency-Key | `ErrorResponse` |
-| `403` | 문서 소유자가 아니거나 편집 문서가 아님 | `ErrorResponse` |
+| `403` | 편집 문서가 아님 | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 | `ErrorResponse` |
 
@@ -1310,7 +1315,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docu
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Body** — `DocumentRenameRequest` |
 | 출력 | `200` 이름 변경 성공 — `DocumentRenameResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 유효하지 않은 파일명 — `ErrorResponse`<br>`403` 문서 소유자가 아님 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 충돌 — `ErrorResponse` |
+| 주요 오류 | `400` 유효하지 않은 파일명 — `ErrorResponse`<br>`403` 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 충돌 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1368,7 +1373,7 @@ Notion의 page title처럼 표시 이름만 변경하며 본문과 Wiki 제목�
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 유효하지 않은 파일명 | `ErrorResponse` |
-| `403` | 문서 소유자가 아님 | `ErrorResponse` |
+| `403` | 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 문서 version 충돌 | `ErrorResponse` |
 

@@ -159,7 +159,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `DocumentLifecycleRequest` |
 | 출력 | `200` 삭제 성공 — `DocumentLifecycleResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 base_version 또는 Idempotency-Key — `ErrorResponse`<br>`403` 문서 소유자가 아님 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 또는 멱등 키 충돌 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 base_version 또는 Idempotency-Key — `ErrorResponse`<br>`403` 문서 소유자나 워크스페이스 OWNER가 아님 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 또는 멱등 키 충돌 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -216,7 +216,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 base_version 또는 Idempotency-Key | `ErrorResponse` |
-| `403` | 문서 소유자가 아님 | `ErrorResponse` |
+| `403` | 문서 소유자나 워크스페이스 OWNER가 아님 | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 문서 version 또는 멱등 키 충돌 | `ErrorResponse` |
 
@@ -436,7 +436,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `DocumentLifecycleRequest` |
 | 출력 | `200` 복구 성공 — `DocumentLifecycleResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 base_version 또는 Idempotency-Key — `ErrorResponse`<br>`403` 문서 소유자가 아님 — `ErrorResponse`<br>`404` 삭제 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 또는 멱등 키 충돌, `TRASH_RETENTION_EXPIRED` 휴지통 보관 기간 경과 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 base_version 또는 Idempotency-Key — `ErrorResponse`<br>`403` 문서 소유자나 워크스페이스 OWNER가 아님 — `ErrorResponse`<br>`404` 삭제 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 또는 멱등 키 충돌, `TRASH_RETENTION_EXPIRED` 휴지통 보관 기간 경과 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -493,7 +493,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 base_version 또는 Idempotency-Key | `ErrorResponse` |
-| `403` | 문서 소유자가 아님 | `ErrorResponse` |
+| `403` | 문서 소유자나 워크스페이스 OWNER가 아님 | `ErrorResponse` |
 | `404` | 삭제 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 문서 version 또는 멱등 키 충돌, `TRASH_RETENTION_EXPIRED` 휴지통 보관 기간 경과 | `ErrorResponse` |
 
@@ -803,7 +803,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`, `version`: `integer`<br>**Body** — `DocumentContentRestoreRequest` |
 | 출력 | `200` 복원 성공 또는 동일 본문 no-op — `DocumentContentSaveResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 편집 가능한 Markdown 문서가 아니거나 base_version 오류 — `ErrorResponse`<br>`403` 문서 소유자가 아님 — `ErrorResponse`<br>`404` 문서 또는 해당 버전을 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 충돌 — `ErrorResponse` |
+| 주요 오류 | `400` 편집 가능한 Markdown 문서가 아니거나 base_version 오류 — `ErrorResponse`<br>`403` 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 해당 버전을 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 충돌 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -868,7 +868,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 편집 가능한 Markdown 문서가 아니거나 base_version 오류 | `ErrorResponse` |
-| `403` | 문서 소유자가 아님 | `ErrorResponse` |
+| `403` | 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
 | `404` | 문서 또는 해당 버전을 찾을 수 없음 | `ErrorResponse` |
 | `409` | 문서 version 충돌 | `ErrorResponse` |
 

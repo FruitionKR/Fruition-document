@@ -116,7 +116,7 @@ public class PostgresDocumentEditStore {
         String baseMarkdown = (String) state.get("markdown");
         String baseContentHash = (String) state.get("contentHash");
         if (currentRevision != baseRevision) {
-            throw new DocumentVersionConflictException("문서 편집 버전이 일치하지 않습니다.");
+            throw new DocumentVersionConflictException("문서 편집 버전이 일치하지 않습니다.", currentRevision);
         }
 
         Instant writeAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
@@ -150,7 +150,8 @@ public class PostgresDocumentEditStore {
             if (existing != null) {
                 return replayOrConflict(existing, requestHash, baseRevision);
             }
-            throw new DocumentVersionConflictException("문서 편집 버전이 일치하지 않습니다.");
+            throw new DocumentVersionConflictException("문서 편집 버전이 일치하지 않습니다.", jdbcTemplate.queryForObject(
+                    "SELECT revision FROM document_edit_states WHERE document_id = ?", Long.class, documentId));
         }
 
         jdbcTemplate.update("""

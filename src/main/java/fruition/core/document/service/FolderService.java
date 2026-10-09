@@ -50,6 +50,7 @@ public class FolderService {
     private final SiblingReorderer siblingReorderer;
     private final DocumentItemAssembler documentItemAssembler;
     private final DocumentWikiRetirement documentWikiRetirement;
+    private final DocumentAccessPolicy documentAccessPolicy;
     private final Duration trashRetention;
 
     public FolderService(WorkspaceAccessGuard workspaceAccessGuard,
@@ -59,6 +60,7 @@ public class FolderService {
                          SiblingReorderer siblingReorderer,
                          DocumentItemAssembler documentItemAssembler,
                          DocumentWikiRetirement documentWikiRetirement,
+                         DocumentAccessPolicy documentAccessPolicy,
                          @Value("${app.document-trash.retention:30d}") Duration trashRetention) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.folderRepository = folderRepository;
@@ -67,6 +69,7 @@ public class FolderService {
         this.siblingReorderer = siblingReorderer;
         this.documentItemAssembler = documentItemAssembler;
         this.documentWikiRetirement = documentWikiRetirement;
+        this.documentAccessPolicy = documentAccessPolicy;
         this.trashRetention = trashRetention;
     }
 
@@ -101,6 +104,7 @@ public class FolderService {
                 response -> folderId.toString(), () -> {
                     verifyMembership(workspaceId, userId);
                     requireFolder(workspaceId, folderId);
+                    documentAccessPolicy.requireFolderEdit(workspaceId, folderId, userId);
                     int updated = folderRepository.renameIfVersionMatches(
                             folderId, workspaceId, request.baseVersion(), name, Instant.now());
                     if (updated == 0) {
@@ -123,6 +127,7 @@ public class FolderService {
                 response -> folderId.toString(), () -> {
                     verifyMembership(workspaceId, userId);
                     requireFolder(workspaceId, folderId);
+                    documentAccessPolicy.requireFolderEdit(workspaceId, folderId, userId);
                     if (targetParentId != null) {
                         verifyParentFolder(workspaceId, targetParentId);
                         if (folderRepository.countAncestorMatches(targetParentId, folderId) > 0) {
@@ -253,7 +258,9 @@ public class FolderService {
     @Transactional(readOnly = true)
     public String treeVersion(String workspaceId, String userId) {
         verifyMembership(workspaceId, userId);
-        return documentRepository.findTreeFingerprint(workspaceId, DocumentItemAssembler.stalledBefore());
+        // can_edit·can_delete가 역할과 문서 소유 여부에 따라 달라지므로 사용자·역할이 다르면 다른 버전이 되게 한다.
+        return documentRepository.findTreeFingerprint(workspaceId, DocumentItemAssembler.stalledBefore())
+                + "-" + (workspaceAccessGuard.isOwner(workspaceId, userId) ? "o" : "m") + "-" + userId;
     }
 
     @Transactional(readOnly = true)
@@ -273,7 +280,7 @@ public class FolderService {
                     .add(document);
         }
         // 화면이 계층과 문서 상태를 함께 쓰므로 목록 조회와 같은 항목을 실어 보낸다.
-        Map<String, DocumentListResponse.DocumentItem> itemsById = documentItemAssembler.assemble(documents)
+        Map<String, DocumentListResponse.DocumentItem> itemsById = documentItemAssembler.assemble(workspaceId, userId, documents)
                 .stream()
                 .collect(Collectors.toMap(DocumentListResponse.DocumentItem::id, item -> item));
 

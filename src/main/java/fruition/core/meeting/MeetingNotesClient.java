@@ -1,6 +1,7 @@
 package fruition.core.meeting;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.usage.service.UsageChargeService;
 import fruition.shared.http.PipelineClientFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -18,19 +19,28 @@ import java.util.Map;
 public class MeetingNotesClient {
     private final RestClient restClient;
     private final String endpoint;
+    private final UsageChargeService usageCharges;
 
     public MeetingNotesClient(PipelineClientFactory clientFactory,
                               @Value("${app.speech.meeting-notes-endpoint}") String endpoint,
-                              @Value("${app.speech.meeting-notes-timeout-seconds:270}") int timeoutSeconds) {
+                              @Value("${app.speech.meeting-notes-timeout-seconds:270}") int timeoutSeconds,
+                              UsageChargeService usageCharges) {
         this.restClient = clientFactory.restClient(timeoutSeconds);
         this.endpoint = endpoint;
+        this.usageCharges = usageCharges;
     }
 
-    /** 실패는 사용자용 오류 코드로 바꾼다. 제공자 원문은 노출하지 않는다. */
+    /** 실패는 사용자용 오류 코드로 바꾼다. 제공자 원문은 노출하지 않는다. AI가 사용량을 남기도록 run_id를 함께 보낸다. */
     public JsonNode preview(String workspaceId, String userId, String displayName, List<Map<String, String>> segments) {
+        return usageCharges.track("meeting_notes", workspaceId, userId,
+                runId -> preview(runId, workspaceId, userId, displayName, segments));
+    }
+
+    private JsonNode preview(String runId, String workspaceId, String userId, String displayName,
+                             List<Map<String, String>> segments) {
         try {
             JsonNode body = restClient.post().uri(endpoint).contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of("workspace_id", workspaceId, "user_id", userId,
+                    .body(Map.of("run_id", runId, "workspace_id", workspaceId, "user_id", userId,
                             "display_name", displayName, "segments", segments))
                     .retrieve().body(JsonNode.class);
             if (body == null || !body.path("summary").isArray()) {

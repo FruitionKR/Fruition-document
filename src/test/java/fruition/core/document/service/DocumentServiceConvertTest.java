@@ -35,6 +35,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.mockito.Mockito;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
@@ -76,6 +77,7 @@ class DocumentServiceConvertTest {
     @Mock DocumentRepository documentRepository;
     @Mock FolderRepository folderRepository;
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
+    @Mock JdbcTemplate jdbcTemplate;
     @Mock MinioClient minioClient;
     @Mock StorageProperties storageProps;
     @Mock IngestCommandOutbox ingestCommandOutbox;
@@ -106,6 +108,7 @@ class DocumentServiceConvertTest {
 
     @BeforeEach
     void setUp() {
+        DocumentAccessPolicy accessPolicy = new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate);
         org.mockito.Mockito.lenient().when(applyOperationStore.authorizeSave(anyString(), anyString(), anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.active(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.join(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
@@ -113,7 +116,7 @@ class DocumentServiceConvertTest {
                 workspaceAccessGuard, minioClient, storageProps,
                 ingestCommandOutbox, pipelineWikiStateRequester,
                 convertQueueRepository, converterClient, transactionTemplate,
-                editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository),
+                editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository, accessPolicy),
                 postgresDocumentEditStore,
                 contentVersionRepository, markdownDiffService,
                 editLockService, idempotencyService,
@@ -123,7 +126,8 @@ class DocumentServiceConvertTest {
                 applyOperationStore,
                 operationRecorder,
                 ingestOperationStarter,
-                workspaceAiModelClient, taskWriter, documentWikiRetirement, java.time.Duration.ofDays(30));
+                workspaceAiModelClient, taskWriter, documentWikiRetirement, accessPolicy,
+                java.time.Duration.ofDays(30));
         // 변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.
         lenient().when(storageProps.getBucket()).thenReturn("fruition-storage");
         // 단위 테스트에서는 transactionTemplate이 콜백을 그대로 실행하게 한다.
