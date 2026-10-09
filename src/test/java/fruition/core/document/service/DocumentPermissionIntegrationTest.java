@@ -64,6 +64,13 @@ class DocumentPermissionIntegrationTest {
     }
 
     @Test
+    void treeVersionDiffersPerUserBecauseCanDeleteDoes() {
+        // 같은 클라이언트에서 계정을 바꿔도 앞 사용자의 can_delete를 304로 받지 않는다.
+        assertThat(folderService.treeVersion(workspace, member))
+                .isNotEqualTo(folderService.treeVersion(workspace, author));
+    }
+
+    @Test
     void viewDocumentAllowsOnlyAuthorAndWorkspaceOwner() {
         assertThatThrownBy(() -> permissionService.setDocument(workspace, member, documentId, "view"))
                 .isInstanceOf(DocumentWriteForbiddenException.class);

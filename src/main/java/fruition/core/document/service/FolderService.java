@@ -248,9 +248,9 @@ public class FolderService {
     @Transactional(readOnly = true)
     public String treeVersion(String workspaceId, String userId) {
         verifyMembership(workspaceId, userId);
-        // can_edit·can_delete가 역할에 따라 달라지므로 역할이 바뀌면 다른 버전이 되게 한다.
+        // can_edit·can_delete가 역할과 문서 소유 여부에 따라 달라지므로 사용자·역할이 다르면 다른 버전이 되게 한다.
         return documentRepository.findTreeFingerprint(workspaceId, DocumentItemAssembler.stalledBefore())
-                + "-" + (workspaceAccessGuard.isOwner(workspaceId, userId) ? "o" : "m");
+                + "-" + (workspaceAccessGuard.isOwner(workspaceId, userId) ? "o" : "m") + "-" + userId;
     }
 
     @Transactional(readOnly = true)
