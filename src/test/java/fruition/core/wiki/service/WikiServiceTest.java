@@ -1,5 +1,6 @@
 package fruition.core.wiki.service;
 
+import fruition.core.aihistory.exception.WikiObjectReadException;
 import fruition.core.aihistory.service.WikiObjectReader;
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.document.repository.DocumentRepository;
@@ -99,6 +100,27 @@ class WikiServiceTest {
 
         assertThat(detail.markdown()).isNull();
         assertThat(detail.revision()).isNull();
+    }
+
+    @Test
+    void blankMarkdownIsDroppedWhenNothingFillsIt() {
+        when(stateRequester.page("ws_1", "wp_1")).thenReturn(Optional.of(page("", null)));
+        when(versionRepository.findTopByIdPageIdOrderByIdRevisionDesc("wp_1")).thenReturn(Optional.empty());
+
+        assertThat(service.findById("ws_1", "user_1", "wp_1").markdown()).isNull();
+    }
+
+    @Test
+    void detailSucceedsWithoutMarkdownWhenObjectReadFails() {
+        when(stateRequester.page("ws_1", "wp_1")).thenReturn(Optional.of(page("", "wiki/ws_1/pages/wp_1/ops/op_0.md")));
+        when(versionRepository.findTopByIdPageIdOrderByIdRevisionDesc("wp_1")).thenReturn(Optional.empty());
+        when(wikiObjectReader.readPageObject("wiki/ws_1/pages/wp_1/ops/op_0.md", "ws_1", "wp_1"))
+                .thenThrow(new WikiObjectReadException("본문 객체를 읽지 못했습니다: pageId=wp_1", null));
+
+        WikiPageDetailResponse detail = service.findById("ws_1", "user_1", "wp_1");
+
+        assertThat(detail.id()).isEqualTo("wp_1");
+        assertThat(detail.markdown()).isNull();
     }
 
     static WikiPageDetailResponse page(String markdown, String markdownUri) {

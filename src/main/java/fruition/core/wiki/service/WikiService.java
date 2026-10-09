@@ -1,5 +1,6 @@
 package fruition.core.wiki.service;
 
+import fruition.core.aihistory.exception.WikiObjectReadException;
 import fruition.core.aihistory.service.WikiObjectReader;
 import fruition.core.document.domain.Document;
 import fruition.core.document.repository.DocumentRepository;
@@ -116,7 +117,7 @@ public class WikiService {
      * <p>AI가 준 본문을 먼저 쓴다. 비어 있으면 최신 {@code wiki_page_versions.markdown}을 쓴다.
      * 버전 행은 applier가 객체 본문의 hash를 확인한 뒤 남긴 것이라 객체와 같은 내용이고 저장소 호출이 없다.
      * 버전도 없으면(이력 도입 전 페이지) 버전의 {@code markdown_key}나 AI의 {@code markdown_uri} 객체를 읽는다.
-     * 끝내 못 구하면 상세 조회 자체는 실패시키지 않고 빈 값으로 둔다.
+     * 끝내 못 구하면 상세 조회 자체는 실패시키지 않고 null로 둬 응답에서 키가 빠지게 한다.
      */
     private String markdownOf(String workspaceId, WikiPageDetailResponse page, WikiPageVersion latest) {
         if (page.markdown() != null && !page.markdown().isBlank()) {
@@ -128,13 +129,20 @@ public class WikiService {
         String key = latest != null ? latest.getMarkdownKey() : page.markdownUri();
         if (key != null && !key.isBlank()) {
             try {
-                return wikiObjectReader.readPageObject(key, workspaceId, page.id());
+                String markdown = wikiObjectReader.readPageObject(key, workspaceId, page.id());
+                if (!markdown.isBlank()) {
+                    return markdown;
+                }
+            } catch (WikiObjectReadException e) {
+                // 저장소 실패는 reader가 이미 남겼다.
+                return null;
             } catch (RuntimeException e) {
-                log.warn("[Wiki 본문 객체 읽기 실패] pageId={} key={}", page.id(), key, e);
+                log.warn("[Wiki 본문 객체 읽기 실패] pageId={} key={} reason={}", page.id(), key, e.getMessage());
+                return null;
             }
         }
         log.warn("[Wiki 본문 없음] pageId={}", page.id());
-        return page.markdown();
+        return null;
     }
 
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
