@@ -1740,7 +1740,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: markdown·base_revision·client_conflict_id가 올바르지 않음
+          description: markdown·base_revision·client_conflict_id가 올바르지 않거나 편집 가능한 Markdown 문서가 아님
         "403":
           content:
             '*/*':

@@ -44,7 +44,7 @@
 
 | API | 권한 | 동작 |
 |---|---|---|
-| `POST /api/workspaces/{workspace_id}/documents/{document_id}/conflicts` | 그 문서 편집 권한 | 본문 `{"markdown", "base_revision", "client_conflict_id"}`. `201`로 충돌(`id`, `document_id`, `base_revision`, `markdown`, `author_user_id`, `status`, `resolution`, `resolved_by`, `resolved_revision`, `created_at`, `resolved_at`)을 반환. 같은 `client_conflict_id` 재전송은 기존 충돌을 그대로 돌려준다 |
+| `POST /api/workspaces/{workspace_id}/documents/{document_id}/conflicts` | 그 문서 편집 권한 | 본문 `{"markdown", "base_revision", "client_conflict_id"}`. `201`로 충돌(`id`, `document_id`, `base_revision`, `markdown`, `author_user_id`, `status`, `resolution`, `resolved_by`, `resolved_revision`, `created_at`, `resolved_at`)을 반환. 같은 `client_conflict_id` 재전송은 기존 충돌을 그대로 돌려준다. 편집 가능한 Markdown 문서가 아니면 `400` |
 | `GET /api/workspaces/{workspace_id}/conflicts` | OWNER | 미해결 충돌을 오래된 순으로 `{"conflicts": [{"conflict": {...}, "document_name", "server": {"markdown", "revision", "updated_by", "updated_at"}}]}`. 휴지통 문서의 충돌은 뺀다 |
 | `POST /api/workspaces/{workspace_id}/conflicts/{conflict_id}/resolve` | OWNER | 본문 `{"choice": "server" \| "conflict" \| "merged", "markdown", "base_revision"}`. `server`는 본문을 그대로 두고, `conflict`는 충돌 본을, `merged`는 `markdown`을 새 revision으로 저장한다. `conflict`·`merged`는 `base_revision`(목록의 `server.revision`)이 필요하고 `merged`는 `markdown`도 필요하다. `200`으로 해결된 충돌을 반환 |
 

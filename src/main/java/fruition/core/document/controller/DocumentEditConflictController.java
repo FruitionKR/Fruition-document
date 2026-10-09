@@ -42,7 +42,7 @@ public class DocumentEditConflictController {
     @ApiResponses({
         @ApiResponse(responseCode = "201", description = "등록 또는 멱등 재요청",
             content = @Content(schema = @Schema(implementation = DocumentEditConflictResponse.class))),
-        @ApiResponse(responseCode = "400", description = "markdown·base_revision·client_conflict_id가 올바르지 않음",
+        @ApiResponse(responseCode = "400", description = "markdown·base_revision·client_conflict_id가 올바르지 않거나 편집 가능한 Markdown 문서가 아님",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

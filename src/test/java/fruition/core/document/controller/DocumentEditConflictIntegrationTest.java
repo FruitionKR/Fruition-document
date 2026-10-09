@@ -17,6 +17,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.mock.web.MockPart;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -165,6 +166,14 @@ class DocumentEditConflictIntegrationTest {
         permissionService.setDocument(workspace, author, documentId, "view");
 
         register(member, "# 멤버 본", "client-1").andExpect(status().isForbidden());
+    }
+
+    @Test
+    void originalDocumentCannotRegisterConflict() throws Exception {
+        documentId = documentService.upload(workspace, author, UUID.randomUUID().toString(), null,
+                new MockMultipartFile("file", "보고서.pdf", "application/pdf", "%PDF-1.4".getBytes(StandardCharsets.UTF_8))).id();
+
+        register(member, "# 멤버 본", "client-1").andExpect(status().isBadRequest());
     }
 
     private ResultActions register(String userId, String markdown, String clientConflictId) throws Exception {

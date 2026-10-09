@@ -2,6 +2,7 @@ package fruition.core.document.service;
 
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.document.domain.Document;
+import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.dto.DocumentEditConflictListResponse;
 import fruition.core.document.dto.DocumentEditConflictRequest;
 import fruition.core.document.dto.DocumentEditConflictResolveRequest;
@@ -67,6 +68,10 @@ public class DocumentEditConflictService {
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
         documentAccessPolicy.requireEdit(document, userId);
+        // 원본(PDF)은 본문 상태가 없어 목록에 안 보이고 server로 해결할 수도 없다.
+        if (document.getDocumentRole() != DocumentRole.EDITABLE) {
+            throw new InvalidMarkdownContentException("편집 가능한 Markdown 문서만 충돌을 등록할 수 있습니다.");
+        }
         DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(request.markdown());
 
         int inserted = jdbc.update("""
