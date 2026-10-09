@@ -127,6 +127,27 @@ public class CreditService {
         }
     }
 
+    /**
+     * 잔액에 반영되는 원장 행(purchase·refund 등)을 쓴다. 호출자 트랜잭션에서 계정 행을 잠그며 같은 키는 한 번만 반영한다.
+     *
+     * @return 이번에 반영했으면 true
+     */
+    public boolean post(String userId, String type, long amount, String key, String reason) {
+        return Boolean.TRUE.equals(transaction.execute(tx -> {
+            lock(userId);
+            if (!append(userId, type, amount, null, key, reason)) return false;
+            jdbc.update("UPDATE credit_accounts SET balance = balance + ?, updated_at = now() WHERE user_id = ?",
+                    amount, userId);
+            return true;
+        }));
+    }
+
+    /** 계정 행을 잠그고 가용 잔액(잔액 − 예약)을 돌려준다. 잠금은 호출자 트랜잭션이 끝날 때까지 유지된다. */
+    public long lockAvailable(String userId) {
+        Map<String, Object> account = lock(userId);
+        return ((Number) account.get("balance")).longValue() - ((Number) account.get("reserved")).longValue();
+    }
+
     /** 본인의 잔액·예약과 최근 원장 50건. */
     public Credits credits(String userId) {
         var accounts = jdbc.queryForList("SELECT balance, reserved FROM credit_accounts WHERE user_id = ?", userId);

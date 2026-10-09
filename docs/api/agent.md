@@ -1205,12 +1205,33 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 }
 ```
 
-- 원장 `credit_entries`는 추가만 한다. 부호: `purchase`·`grant`·`refund` +, `charge` −, `adjust` ±(잔액), `reserve` +, `release` −(예약). 계정 잔액 = 예약을 뺀 원장 합계, 예약 = `reserve`·`release` 합계이며 `scripts/sql/credit-balance-check.sql`로 점검한다.
+- 원장 `credit_entries`는 추가만 한다. 부호: `purchase`·`grant` +, `charge`·`refund`(결제 환불로 회수) −, `adjust` ±(잔액), `reserve` +, `release` −(예약). 계정 잔액 = 예약을 뺀 원장 합계, 예약 = `reserve`·`release` 합계이며 `scripts/sql/credit-balance-check.sql`로 점검한다.
 - 사전 승인: AI 요청 전에 계정 행을 `FOR UPDATE`로 잠그고 kind별 예상 상한(`app.billing.estimate.<kind>`, 없으면 `app.billing.default-estimate-krw-milli`)을 `reserve`로 기록한다. 비동기 작업은 `AiCommandOutboxWriter.begin`·`reserve`(outbox 저장과 같은 트랜잭션), 동기 호출(Skill·회의록 초안·녹음 파일 전사·음성 전사·Wiki 스키마)은 `AiTaskCancellationService.register`, 실시간 전사는 연결 시작에서 예약한다. 같은 실행은 한 번만 예약하고, 사용자가 없는 시스템 작업은 예약하지 않는다.
 - `app.billing.enforce`(기본 false): true면 가용 잔액이 상한보다 작거나 잔액이 음수일 때 AI 요청 전에 `402 INSUFFICIENT_CREDIT`("크레딧 잔액이 부족합니다. 크레딧을 충전한 뒤 다시 시도해 주세요.")로 거절하고 작업 등록도 롤백한다. 비동기 회의록 초안은 `failed`/`INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유, 실시간 전사는 `insufficient_credit` 오류 후 close `1008`로 알린다. false면 거절하지 않고 예약·정산만 기록한다(무료 크레딧 정책 전 배포용).
 - 정산: 사용 금액 수집(위 절)이 실행의 호출을 가져오면 그 실행의 청구 합계를 `charge`로 차감하고 남은 예약을 `release`한다. 차감 키는 `charge:{run_id}:{user_id}:{누적 청구액}`, 해제 키는 `release:{run_id}`라 같은 실행을 여러 번 정산해도 같은 금액은 한 번만 반영되고, 대사가 늦게 채운 호출은 늘어난 만큼만 더 차감한다. 취소된 실행도 취소 확정 시 수집 대기열에 넣어 정산한다. 토큰을 모르는 호출(`needs_review`)은 현재 0원이다.
 - 종료 신호가 없는 실행의 예약은 `app.billing.stale-reservation-hours`(기본 48시간)가 지나면 정리 작업이 그때까지의 청구로 정산하고 푼다.
 - 실시간 전사는 연결 시작 시 `meeting_live` 상한을 한 번 예약하고 연결이 끝나면 정산한다. 구간마다 정산·재예약해 회의 중 잔액 소진을 끊는 것은 아직 하지 않는다.
 - 수동 지급·조정은 `scripts/sql/credit-grant-adjust.sql`(`grant` 또는 `adjust`, `adjust`는 사유 필수)로 한다.
-- 보관: 탈퇴·워크스페이스 삭제 파기 대상에서 `credit_accounts`·`credit_entries`·`usage_charges`는 제외한다(전자상거래법상 대금 결제 기록 5년 보관).
+- 보관: 탈퇴·워크스페이스 삭제 파기 대상에서 `credit_accounts`·`credit_entries`·`usage_charges`·`credit_orders`·`payment_events`는 제외한다(전자상거래법상 대금 결제 기록 5년 보관).
 - 진입점: `src/main/java/fruition/core/usage/controller/UsageChargeController.java`, `src/main/java/fruition/core/usage/service/CreditService.java`
+
+## 크레딧 충전·환불 (PG 결제)
+
+결정과 PG·법률 검토 항목은 [ADR-0026](../adr/0026-credit-payments.md)에 있다. `app.billing.payments-enabled`(기본 false)가 false면 아래 API는 모두 404다.
+
+| Method + Path | 동작 |
+|---|---|
+| `POST /api/users/me/credit-orders` (`{"product_code"}`) | 주문 생성. 금액·크레딧은 서버 상품표(`app.billing.product.<code>.amount-krw`·`.credit-krw-milli`)로 정한다. 없는 상품 400. |
+| `POST /api/users/me/credit-orders/{order_id}/confirm` (`{"payment_key", "amount"}`) | 서버가 PG 승인 API를 부르고 주문·금액·상태를 대조한 뒤 `purchase`를 지급한다. 이미 지급한 주문은 PG를 다시 부르지 않고 그대로 돌려준다. 금액 불일치 400(PG 미호출), PG 거절 400(주문 `failed`), PG 응답 없음·불일치 502. |
+| `POST /api/users/me/credit-orders/{order_id}/refund` | 주문의 남은 크레딧과 가용 잔액 중 작은 값만 환불한다. 금액은 그 비율(원 단위 내림)이며 PG 취소 성공 후 `refund`(−)를 쓴다. 상태는 `refunded` 또는 `partially_refunded`. 환불할 것이 없으면 409(PG 미호출), PG 거절 409, 응답 없음 502. |
+| `POST /internal/payments/webhook` | 헤더 `X-Payment-Signature` = 본문 HMAC-SHA256 hex(`app.billing.pg.webhook-secret`). 틀리면 401. `eventId`(없으면 본문 SHA-256)로 한 번만 처리하고, `data.status = DONE`이면 승인 응답을 받지 못한 주문을 지급한다. |
+
+```json
+{"order_id": "order_3f2c...", "product_code": "CREDIT_10000", "amount_krw": 10000, "credit_krw_milli": 10000000,
+ "status": "paid", "refunded_krw": 0, "refunded_credit_krw_milli": 0,
+ "created_at": "2026-10-09T03:00:00Z", "paid_at": "2026-10-09T03:01:00Z"}
+```
+
+- 한 번만 지급: 주문 상태 조건부 갱신(`created`/`failed` → `paid`)과 원장 키 `purchase:{order_id}`를 같은 트랜잭션에서 쓴다. 승인 재시도·webhook 중복·둘의 경합에도 지급은 한 번이다.
+- PG 연동은 `PaymentGatewayClient` 하나(승인·취소)다. 요청은 토스페이먼츠 형식 기준이며 PG 선정 후 맞춘다. 설정: `app.billing.pg.confirm-endpoint`, `app.billing.pg.cancel-endpoint`(`{paymentKey}` 치환), `app.billing.pg.secret-key`(Basic 인증), `app.billing.pg.webhook-secret`.
+- 진입점: `src/main/java/fruition/core/billing/CreditOrderController.java`, `src/main/java/fruition/core/billing/CreditOrderService.java`
