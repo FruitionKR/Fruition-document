@@ -119,6 +119,28 @@ class NotificationIntegrationTest {
     }
 
     @Test
+    void pagingWithBeforeIdDoesNotSkipNotificationsCreatedAtSameTime() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            jdbc.update("""
+                    INSERT INTO notifications(id, workspace_id, recipient_user_id, audience, type, payload, created_at)
+                    VALUES (?, ?, ?, 'user', 'edit_conflict_resolved', '{}'::jsonb, '2026-01-01T00:00:00Z')
+                    """, UUID.randomUUID(), workspace, author);
+        }
+
+        JsonNode first = objectMapper.readTree(list(author, "?limit=2").andReturn().getResponse().getContentAsString())
+                .path("notifications");
+        JsonNode last = first.path(1);
+        JsonNode second = objectMapper.readTree(list(author, "?limit=2&before=" + last.path("created_at").asText()
+                        + "&before_id=" + last.path("id").asText()).andReturn().getResponse().getContentAsString())
+                .path("notifications");
+
+        assertThat(first.size()).isEqualTo(2);
+        assertThat(second.size()).isEqualTo(1);
+        assertThat(java.util.stream.Stream.of(first.path(0), first.path(1), second.path(0))
+                .map(node -> node.path("id").asText()).distinct().count()).isEqualTo(3);
+    }
+
+    @Test
     void cannotReadSomeoneElsesNotification() throws Exception {
         registerConflict("client-1");
         String ownerNotification = notificationId(owner, 0);

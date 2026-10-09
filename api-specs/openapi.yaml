@@ -3743,7 +3743,7 @@ paths:
       - Navigation
   /api/workspaces/{workspace_id}/notifications:
     get:
-      description: "나에게 온 알림과, OWNER면 OWNER 대상 알림을 최신순으로 반환합니다. 다음 페이지는 마지막 항목의 created_at을 before로 보냅니다."
+      description: "나에게 온 알림과, OWNER면 OWNER 대상 알림을 최신순으로 반환합니다. 다음 페이지는 마지막 항목의 created_at과 id를 before와 before_id로 보냅니다."
       operationId: listNotifications
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -3767,14 +3767,22 @@ paths:
           type: integer
           format: int32
           description: "기본 50, 최대 100"
-      - description: 이 시각보다 먼저 만든 알림만
+      - description: "이 시각보다 먼저 만든 알림만. before_id와 함께 보내면 (created_at, id)가 그보다 앞선 알림만"
         in: query
         name: before
         required: false
         schema:
           type: string
           format: date-time
-          description: 이 시각보다 먼저 만든 알림만
+          description: "이 시각보다 먼저 만든 알림만. before_id와 함께 보내면 (created_at, id)가 그보다 앞선 알림만"
+      - description: 이전 페이지 마지막 항목의 id. before와 함께 보내야 쓰인다
+        in: query
+        name: before_id
+        required: false
+        schema:
+          type: string
+          format: uuid
+          description: 이전 페이지 마지막 항목의 id. before와 함께 보내야 쓰인다
       responses:
         "200":
           content:
@@ -6352,6 +6360,18 @@ components:
           type: string
           description: 복제 원본 문서 ID
           example: doc_8d4f1e6c3b0a97d25e4f831b9f4c7e2a
+    DocumentEditConflictItem:
+      type: object
+      properties:
+        conflict:
+          $ref: "#/components/schemas/DocumentEditConflictResponse"
+          description: 충돌 본
+        document_name:
+          type: string
+          description: 문서 이름
+        server:
+          $ref: "#/components/schemas/DocumentEditConflictServer"
+          description: 지금 서버에 있는 본문
     DocumentEditConflictListResponse:
       type: object
       properties:
@@ -6359,7 +6379,7 @@ components:
           type: array
           description: 미해결 충돌. 오래된 순
           items:
-            $ref: "#/components/schemas/Item"
+            $ref: "#/components/schemas/DocumentEditConflictItem"
     DocumentEditConflictRequest:
       type: object
       description: 본문 저장이 409 DOCUMENT_VERSION_CONFLICT로 막혔을 때 내 본문을 충돌로 올려 보존하는 요청
@@ -6455,6 +6475,24 @@ components:
           enum:
           - open
           - resolved
+    DocumentEditConflictServer:
+      type: object
+      properties:
+        markdown:
+          type: string
+          description: 서버 현재 Markdown 본문
+        revision:
+          type: integer
+          format: int64
+          description: 서버 현재 revision. 해결 요청의 base_revision으로 쓴다.
+          example: 5
+        updated_at:
+          type: string
+          format: date-time
+          description: 서버 본문 마지막 저장 시각
+        updated_by:
+          type: string
+          description: 마지막으로 본문을 저장한 사용자
     DocumentIngestResponse:
       type: object
       description: ingest 요청 접수 결과. 실제 처리는 비동기로 진행되며 run_id로 상태를 추적한다.
@@ -7326,18 +7364,6 @@ components:
           minLength: 1
       required:
       - user_id
-    Item:
-      type: object
-      properties:
-        conflict:
-          $ref: "#/components/schemas/DocumentEditConflictResponse"
-          description: 충돌 본
-        document_name:
-          type: string
-          description: 문서 이름
-        server:
-          $ref: "#/components/schemas/Server"
-          description: 지금 서버에 있는 본문
     JsonNode: {}
     Line:
       type: object
@@ -7763,7 +7789,7 @@ components:
         id:
           type: string
           format: uuid
-          description: 알림 ID
+          description: 알림 ID. 다음 페이지 요청의 before_id로 쓴다.
         payload:
           $ref: "#/components/schemas/JsonNode"
           description: "type별 내용. edit_conflict_registered: conflict_id, document_id, document_name, author_user_id. edit_conflict_resolved: conflict_id, document_id, choice, resolved_by"
@@ -8339,24 +8365,6 @@ components:
         result:
           $ref: "#/components/schemas/RestoreResult"
           description: 실제로 일어난 결과
-    Server:
-      type: object
-      properties:
-        markdown:
-          type: string
-          description: 서버 현재 Markdown 본문
-        revision:
-          type: integer
-          format: int64
-          description: 서버 현재 revision. 해결 요청의 base_revision으로 쓴다.
-          example: 5
-        updated_at:
-          type: string
-          format: date-time
-          description: 서버 본문 마지막 저장 시각
-        updated_by:
-          type: string
-          description: 마지막으로 본문을 저장한 사용자
     SettingsRequest:
       type: object
       description: AI 모델 설정 변경 요청

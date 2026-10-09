@@ -59,14 +59,19 @@ class DocumentFileHashIntegrationTest {
     @Test
     void workerFillsDirectUploadHashAndMarksMissingOriginals() throws Exception {
         byte[] pdf = "%PDF-1.7 직접 업로드".getBytes(StandardCharsets.UTF_8);
-        String stored = insertOriginal("큰파일.pdf");
-        String missing = insertOriginal("없는파일.pdf");
+        // 실제 업로드처럼 객체를 먼저 올리고 행을 넣는다. 반대 순서면 그 사이에 다른 컨텍스트의 worker가
+        // 객체 없음으로 보고 빈 문자열을 기록해, 다시는 계산하지 않는다.
+        String stored = UUID.randomUUID().toString();
         minio.putObject(PutObjectArgs.builder().bucket(storage.getBucket()).object(sourceKey(stored))
                 .stream(new ByteArrayInputStream(pdf), pdf.length, -1).build());
+        insertOriginal(stored, "큰파일.pdf");
+        String missing = insertOriginal(UUID.randomUUID().toString(), "없는파일.pdf");
         // 계산 전 null은 확인하지 않는다. 같은 JVM에 캐시된 다른 테스트 컨텍스트의 worker(기본 30초)가 먼저 채울 수 있다.
 
-        while (worker.fillPending() > 0) {
-            // 다른 테스트가 남긴 계산 대기 문서도 함께 처리된다.
+        // 반환값(이번에 채운 수)으로 멈추면 안 된다. 다른 컨텍스트의 worker가 같은 문서를 먼저 채우면 0이 나와
+        // 업로드 시각이 늦은 이 테스트의 문서까지 가기 전에 끝난다. 이 테스트의 문서가 채워질 때까지 돌린다.
+        for (int attempt = 0; attempt < 100 && (pending(stored) || pending(missing)); attempt++) {
+            worker.fillPending();
         }
 
         assertThat(hashOf("큰파일.pdf")).isEqualTo(sha256(pdf));
@@ -75,8 +80,11 @@ class DocumentFileHashIntegrationTest {
                 .isEmpty();
     }
 
-    private String insertOriginal(String filename) {
-        String id = UUID.randomUUID().toString();
+    private boolean pending(String documentId) {
+        return jdbc.queryForObject("SELECT original_sha256 IS NULL FROM documents WHERE id = ?", Boolean.class, documentId);
+    }
+
+    private String insertOriginal(String id, String filename) {
         jdbc.update("""
                 INSERT INTO documents(
                     id, byte_size, content_hash, filename, display_name, normalized_filename,

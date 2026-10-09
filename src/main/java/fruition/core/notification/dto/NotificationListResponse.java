@@ -14,7 +14,7 @@ public record NotificationListResponse(
 ) {
 
     public record Notification(
-            @Schema(description = "알림 ID")
+            @Schema(description = "알림 ID. 다음 페이지 요청의 before_id로 쓴다.")
             UUID id,
 
             @Schema(description = "edit_conflict_registered(OWNER 대상) | edit_conflict_resolved(충돌 작성자 대상)",

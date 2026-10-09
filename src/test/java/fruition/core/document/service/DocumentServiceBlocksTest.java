@@ -50,6 +50,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -103,6 +104,7 @@ class DocumentServiceBlocksTest {
     @Mock DocumentRepository documentRepository;
     @Mock fruition.core.document.repository.FolderRepository folderRepository;
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
+    @Mock JdbcTemplate jdbcTemplate;
     @Mock MinioClient minioClient;
     @Mock StorageProperties storageProps;
     @Mock IngestCommandOutbox ingestCommandOutbox;
@@ -134,6 +136,7 @@ class DocumentServiceBlocksTest {
 
     @BeforeEach
     void setUp() {
+        DocumentAccessPolicy accessPolicy = new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate);
         org.mockito.Mockito.lenient().when(applyOperationStore.authorizeSave(anyString(), anyString(), anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.active(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.join(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
@@ -141,7 +144,7 @@ class DocumentServiceBlocksTest {
                 workspaceAccessGuard, minioClient, storageProps,
                 ingestCommandOutbox, pipelineWikiStateRequester,
                 convertQueueRepository, converterClient, transactionTemplate,
-                editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository, new fruition.core.document.service.DocumentAccessPolicy(workspaceAccessGuard, org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class))),
+                editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository, accessPolicy),
                 postgresDocumentEditStore,
                 contentVersionRepository, markdownDiffService,
                 editLockService, idempotencyService,
@@ -151,7 +154,7 @@ class DocumentServiceBlocksTest {
                 applyOperationStore,
                 operationRecorder,
                 ingestOperationStarter,
-                workspaceAiModelClient, taskWriter, documentWikiRetirement, new fruition.core.document.service.DocumentAccessPolicy(workspaceAccessGuard, org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class)));
+                workspaceAiModelClient, taskWriter, documentWikiRetirement, accessPolicy);
         lenient().when(pipelineWikiStateRequester.documentContext(anyString(), anyString()))
                 .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(), null));
         // 직접 생성·복제·변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.
@@ -1536,6 +1539,27 @@ class DocumentServiceBlocksTest {
 
         assertThatThrownBy(() -> documentService.ingest(WORKSPACE_ID, USER_ID, chatDoc.getId()))
                 .isInstanceOf(fruition.core.document.exception.DocumentAlreadyProcessingException.class);
+    }
+
+    @Test
+    @DisplayName("편집자가 ingest하면 작업과 command를 소유자가 아니라 요청한 편집자로 등록한다")
+    void ingest_byEditor_registersRequesterNotOwner() {
+        String editorId = "user_editor01";
+        Document chatDoc = new Document(
+                "chatdoc_editor", WORKSPACE_ID, USER_ID, "대화.md", "text/markdown", 4,
+                "sources/documents/chatdoc_editor/original", "chat-hash", "chat_export");
+        chatDoc.updateStatus(fruition.core.document.domain.DocumentStatus.completed, null, Instant.now(), null);
+        when(documentRepository.findByIdAndWorkspaceIdForUpdate(chatDoc.getId(), WORKSPACE_ID))
+                .thenReturn(Optional.of(chatDoc));
+
+        documentService.ingest(WORKSPACE_ID, editorId, chatDoc.getId());
+
+        verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(editorId));
+        verify(ingestOperationStarter).start(eq(WORKSPACE_ID), eq(editorId), eq(chatDoc.getId()),
+                anyString(), any(Instant.class));
+        verify(ingestCommandOutbox).enqueue(
+                anyString(), eq(chatDoc.getId()), eq(editorId), eq(WORKSPACE_ID), any(),
+                any(), any(), eq(false), any(), anyLong(), any());
     }
 
     @Test

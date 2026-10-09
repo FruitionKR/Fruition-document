@@ -1335,21 +1335,23 @@ public class DocumentService {
     }
 
     String enqueueIngest(Document document) {
-        return enqueueIngest(document, UUID.randomUUID().toString());
+        return enqueueIngest(document, document.getUserId());
     }
 
-    private String enqueueIngest(Document document, String runId) {
-        ingestCommandOutbox.begin(runId, document.getWorkspaceId(), document.getUserId());
+    /** requesterId는 ingest를 요청한 사용자다. 공동 편집에서는 소유자와 다를 수 있다. */
+    private String enqueueIngest(Document document, String requesterId) {
+        String runId = UUID.randomUUID().toString();
+        ingestCommandOutbox.begin(runId, document.getWorkspaceId(), requesterId);
         String documentId = document.getId();
         Instant startedAt = Instant.now();
         document.markPipelineStarted(runId, startedAt);
         String operationId = ingestOperationStarter.start(
-                document.getWorkspaceId(), document.getUserId(), documentId,
+                document.getWorkspaceId(), requesterId, documentId,
                 document.getDisplayName(), startedAt);
         ingestCommandOutbox.enqueue(
                 runId,
                 documentId,
-                document.getUserId(),
+                requesterId,
                 document.getWorkspaceId(),
                 document.getSelectionMode(),
                 document.getPipelineInputMarkdown(),
@@ -1680,9 +1682,8 @@ public class DocumentService {
     /**
      * PostgreSQL 편집 상태·write receipt·version/hash read model·감사·outbox와 같은 transaction에서 projection한다.
      * DB 단계가 실패하면 변경은 함께 rollback되고, object storage 정리는 호출자가 맡는다.
-     */
-    /**
-     * 저장 전 버전과 저장 결과를 버전 이력에 남긴다. 저장 전 버전은 대개 이전 저장 때 이미 들어가 있고, 없을 때만 넣는다.
+     *
+     * <p>저장 전 버전과 저장 결과를 버전 이력에 남긴다. 저장 전 버전은 대개 이전 저장 때 이미 들어가 있고, 없을 때만 넣는다.
      * 그 작성자는 이번에 저장한 사람이 아니라 직전 수정자(없으면 소유자)다. 공동 편집에서 둘이 다르다.
      */
     private void projectContentVersions(
@@ -1947,7 +1948,7 @@ public class DocumentService {
             // 저장한 문답과 provenance를 그대로 사용한다. 편집본 승격은 필요하지 않다.
             document.updateStatus(DocumentStatus.processing, document.getExtractedTextUri(), null, null);
             document.markReconciled(null);
-            String runId = enqueueIngest(document);
+            String runId = enqueueIngest(document, userId);
             return new DocumentIngestResponse(documentId, runId, document.getStatus());
         }
         if (document.getDocumentRole() != DocumentRole.EDITABLE) {
@@ -1984,7 +1985,7 @@ public class DocumentService {
         document.reopenForReingest(currentContentHash, bytes.length);
         log.info("[문서 재ingest DB 갱신 완료] documentId={} contentHashPrefix={} byteSize={}",
                 documentId, contentHashPrefix(currentContentHash), bytes.length);
-        String runId = enqueueIngest(document);
+        String runId = enqueueIngest(document, userId);
         return new DocumentIngestResponse(documentId, runId, document.getStatus());
     }
 

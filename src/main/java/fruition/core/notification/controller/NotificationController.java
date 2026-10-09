@@ -34,7 +34,7 @@ public class NotificationController {
 
     @Operation(summary = "내 알림 목록",
             description = "나에게 온 알림과, OWNER면 OWNER 대상 알림을 최신순으로 반환합니다."
-                    + " 다음 페이지는 마지막 항목의 created_at을 before로 보냅니다.")
+                    + " 다음 페이지는 마지막 항목의 created_at과 id를 before와 before_id로 보냅니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "조회 성공"),
         @ApiResponse(responseCode = "404", description = "워크스페이스를 찾을 수 없음",
@@ -46,8 +46,11 @@ public class NotificationController {
             @AuthenticationPrincipal String userId,
             @RequestParam(value = "unread_only", defaultValue = "false") boolean unreadOnly,
             @Schema(description = "기본 50, 최대 100") @RequestParam(value = "limit", required = false) Integer limit,
-            @Schema(description = "이 시각보다 먼저 만든 알림만") @RequestParam(value = "before", required = false) Instant before) {
-        return ResponseEntity.ok(notificationService.list(workspaceId, userId, unreadOnly, limit, before));
+            @Schema(description = "이 시각보다 먼저 만든 알림만. before_id와 함께 보내면 (created_at, id)가 그보다 앞선 알림만")
+            @RequestParam(value = "before", required = false) Instant before,
+            @Schema(description = "이전 페이지 마지막 항목의 id. before와 함께 보내야 쓰인다")
+            @RequestParam(value = "before_id", required = false) UUID beforeId) {
+        return ResponseEntity.ok(notificationService.list(workspaceId, userId, unreadOnly, limit, before, beforeId));
     }
 
     @Operation(summary = "알림 읽음 처리", description = "이미 읽은 알림이어도 204입니다.")

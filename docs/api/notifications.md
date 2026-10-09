@@ -19,7 +19,7 @@
 
 | API | 동작 |
 |---|---|
-| `GET /api/workspaces/{workspace_id}/notifications` | 나에게 보이는 알림을 최신순으로 `200 {"notifications": [{"id", "type", "payload", "read", "created_at"}]}`. query `unread_only`(기본 `false`), `limit`(기본 50, 1~100으로 맞춤), `before`(ISO-8601, 이 시각보다 먼저 만든 알림만). 다음 페이지는 마지막 항목의 `created_at`을 `before`로 보낸다 |
+| `GET /api/workspaces/{workspace_id}/notifications` | 나에게 보이는 알림을 최신순으로 `200 {"notifications": [{"id", "type", "payload", "read", "created_at"}]}`. query `unread_only`(기본 `false`), `limit`(기본 50, 1~100으로 맞춤), `before`(ISO-8601, 이 시각보다 먼저 만든 알림만), `before_id`(`before`와 함께 보내면 `(created_at, id)`가 그보다 앞선 알림만). 같은 시각에 만든 알림을 건너뛰지 않도록 다음 페이지는 마지막 항목의 `created_at`·`id`를 `before`·`before_id`로 보낸다 |
 | `POST /api/workspaces/{workspace_id}/notifications/{notification_id}/read` | 읽음 처리. 이미 읽었어도 `204`. 내가 볼 수 없는 알림이면 `404 NOTIFICATION_NOT_FOUND` |
 | `POST /api/workspaces/{workspace_id}/notifications/read-all` | 지금 나에게 보이는 알림을 모두 읽음 처리하고 `204` |
 
