@@ -1,5 +1,6 @@
 package fruition.core.usage.controller;
 
+import fruition.core.usage.service.CreditService;
 import fruition.core.usage.service.UsageChargeService;
 import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -12,9 +13,19 @@ import java.time.Instant;
 @RestController
 public class UsageChargeController {
     private final UsageChargeService charges;
+    private final CreditService credits;
 
-    public UsageChargeController(UsageChargeService charges) {
+    public UsageChargeController(UsageChargeService charges, CreditService credits) {
         this.charges = charges;
+        this.credits = credits;
+    }
+
+    @Operation(summary = "본인의 크레딧 잔액 조회",
+            description = "잔액·실행 중 예약액·가용액(잔액 − 예약)과 최근 원장 50건을 반환합니다. 금액은 milli-KRW 정수이며 "
+                    + "실제 사용이 예약보다 크면 잔액이 음수일 수 있습니다.")
+    @GetMapping("/api/users/me/credits")
+    public CreditService.Credits credits(@AuthenticationPrincipal String userId) {
+        return credits.credits(userId);
     }
 
     @Operation(summary = "본인의 AI 사용 금액 조회",

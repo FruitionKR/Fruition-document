@@ -95,6 +95,8 @@ public class MeetingTranscriptionWorker {
                 case 413, 415, 422 -> "지원하지 않거나 인식할 수 없는 녹음 파일입니다.";
                 default -> "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.";
             });
+        } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+            repository.failTranscription(meeting.id(), meeting.recordingKey(), e.getMessage());
         } catch (Exception e) {
             log.warn("[회의 파일 전사 실패] meetingId={}", meeting.id(), e);
             repository.failTranscription(meeting.id(), meeting.recordingKey(), "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.");

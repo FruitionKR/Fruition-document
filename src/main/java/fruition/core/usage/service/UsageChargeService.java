@@ -52,16 +52,19 @@ public class UsageChargeService {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final AiTaskCancellationService runs;
+    private final CreditService credits;
     private final ObjectMapper mapper;
     private final RestClient client;
     private final String endpoint;
 
     public UsageChargeService(JdbcTemplate jdbc, PlatformTransactionManager manager, AiTaskCancellationService runs,
+                              CreditService credits,
                               ObjectMapper mapper, PipelineClientFactory factory,
                               @Value("${app.usage-charge.calls-endpoint}") String endpoint) {
         this.jdbc = jdbc;
         this.transaction = new TransactionTemplate(manager);
         this.runs = runs;
+        this.credits = credits;
         this.mapper = mapper;
         this.client = factory.restClient(30);
         this.endpoint = endpoint;
@@ -77,9 +80,7 @@ public class UsageChargeService {
      * AI는 이 ID를 run_id로 원장에 남긴다. 호출이 실패해도 공급사 호출은 일어났을 수 있어 항상 수집 대기열에 넣는다.
      */
     public <T> T track(String kind, String workspaceId, String userId, Function<String, T> call) {
-        String runId = kind + ":" + UUID.randomUUID();
-        runs.register(mapper.createObjectNode().put("run_id", runId).put("kind", kind)
-                .put("workspace_id", workspaceId).put("user_id", userId));
+        String runId = startRun(kind, workspaceId, userId);
         try {
             T result = call.apply(runId);
             runs.finish(runId);
@@ -87,6 +88,24 @@ public class UsageChargeService {
         } finally {
             enqueue(runId);
         }
+    }
+
+    /**
+     * 실행 ID가 없는 AI 사용을 {@code ai_task_runs}에 등록하고 크레딧을 예약한다. 잔액이 모자라면(enforce)
+     * {@link CreditService.InsufficientCreditException}을 던지고 아무것도 등록하지 않는다.
+     */
+    public String startRun(String kind, String workspaceId, String userId) {
+        String runId = kind + ":" + UUID.randomUUID();
+        runs.register(mapper.createObjectNode().put("run_id", runId).put("kind", kind)
+                .put("workspace_id", workspaceId).put("user_id", userId));
+        return runId;
+    }
+
+    /** {@link #startRun}으로 시작한 실행을 끝내고 사용량 수집·정산을 대기열에 넣는다. */
+    public void endRun(String runId) {
+        jdbc.update("UPDATE ai_task_runs SET status = 'completed', updated_at = now() WHERE id = ? AND status = 'running'",
+                runId);
+        enqueue(runId);
     }
 
     /** 대기열의 run을 하나씩 선점해 수집한다. AI 장애면 시도 횟수만큼 늦춰 다시 시도하고, 끝내 실패하면 대사에 맡긴다. */
@@ -120,9 +139,10 @@ public class UsageChargeService {
         }
     }
 
-    /** 실행 하나의 호출을 가져와 청구 행을 만든다. */
+    /** 실행 하나의 호출을 가져와 청구 행을 만들고 크레딧을 정산한다. 호출이 없어도 예약은 푼다. */
     public void collectRun(String runId) {
         recordAll(fetch(Map.of("run_id", runId)));
+        credits.settle(runId);
     }
 
     /** 종료 시각이 [from, to)인 호출을 가져와 빠진 청구 행을 채운다. */
@@ -168,10 +188,14 @@ public class UsageChargeService {
         return body.path("calls");
     }
 
+    /** 청구 행을 만들고, 늦게 들어온 호출의 실행도 늘어난 만큼 정산한다. */
     private void recordAll(JsonNode calls) {
+        java.util.Set<String> runIds = new java.util.TreeSet<>();
         for (JsonNode call : calls) {
             record(call);
+            if (call.path("run_id").isTextual()) runIds.add(call.path("run_id").asText());
         }
+        runIds.forEach(credits::settle);
     }
 
     /** AI 원장 호출 1건을 청구 행으로 만든다. 아직 끝나지 않은 호출은 건너뛰고 종료 시각 대사가 가져온다. */

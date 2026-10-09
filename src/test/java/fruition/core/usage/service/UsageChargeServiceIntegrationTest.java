@@ -41,6 +41,7 @@ class UsageChargeServiceIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager manager;
     @Autowired AiTaskCancellationService runs;
+    @Autowired CreditService credits;
     @Autowired ObjectMapper mapper;
 
     private HttpServer server;
@@ -73,7 +74,7 @@ class UsageChargeServiceIntegrationTest {
         });
         server.start();
         base = "http://127.0.0.1:" + server.getAddress().getPort();
-        charges = new UsageChargeService(jdbc, manager, runs, mapper, new PipelineClientFactory("internal-test"),
+        charges = new UsageChargeService(jdbc, manager, runs, credits, mapper, new PipelineClientFactory("internal-test"),
                 base + "/internal/model-usage/calls");
         user = "user-" + UUID.randomUUID();
         model = "m-" + UUID.randomUUID();

@@ -154,6 +154,8 @@ public class MeetingNotesService {
             notes.markReady(meetingId, version, json(stored(draft, bundles)));
         } catch (MeetingException e) {
             notes.markFailed(meetingId, version, e.getCode());
+        } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+            notes.markFailed(meetingId, version, "INSUFFICIENT_CREDIT");
         } catch (RuntimeException e) {
             log.warn("[회의록 초안 생성 실패] meetingId={} version={}", meetingId, version, e);
             notes.markFailed(meetingId, version, "MEETING_NOTES_FAILED");

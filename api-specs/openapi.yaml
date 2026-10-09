@@ -121,6 +121,20 @@ paths:
       summary: 질의 진행 이벤트 구독
       tags:
       - Query Runs
+  /api/users/me/credits:
+    get:
+      description: 잔액·실행 중 예약액·가용액(잔액 − 예약)과 최근 원장 50건을 반환합니다. 금액은 milli-KRW 정수이며 실제 사용이 예약보다 크면 잔액이 음수일 수 있습니다.
+      operationId: credits
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Credits"
+          description: OK
+      summary: 본인의 크레딧 잔액 조회
+      tags:
+      - usage-charge-controller
   /api/users/me/usage/charges:
     get:
       description: "호출 시작 시각이 [from_at, to_at)인 본인 호출의 금액을 워크스페이스를 가로질러 합쳐 모델별로 반환합니다. 금액은 부가세 포함 milli-KRW 정수입니다. 단가가 없는 호출(unpriced_calls)은 합계에 들어가지 않고, 토큰을 모르는 호출(needs_review_calls)은 0원입니다. 기간은 366일 이하입니다."
@@ -5823,6 +5837,26 @@ components:
             type: string
           maxItems: 20
           minItems: 0
+    Credits:
+      type: object
+      properties:
+        available_krw_milli:
+          type: integer
+          format: int64
+        balance_krw_milli:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entry"
+        reserved_krw_milli:
+          type: integer
+          format: int64
+        user_id:
+          type: string
     DocumentAttachmentSaveResponse:
       type: object
       description: 본문 저장과 함께 등록된 이미지 asset
@@ -6846,6 +6880,21 @@ components:
           description: 편집 대상 범위. 생략하면 문서 전체가 대상이다.
       required:
       - markdown
+    Entry:
+      type: object
+      properties:
+        amount_krw_milli:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        run_id:
+          type: string
+        type:
+          type: string
     ErrorDetail:
       type: object
       properties:

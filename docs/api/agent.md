@@ -1189,3 +1189,28 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 - AI 응답 계약(FruitionKR/Fruition-ai#60): `{"calls": [{"id", "run_id", "workspace_id", "user_id", "kind", "provider", "requested_model", "model", "status", "input_tokens", "cached_input_tokens", "cache_creation_tokens", "output_tokens", "reasoning_tokens", "audio_seconds", "tts_characters", "started_at", "finished_at"}]}`. 응답 모델이 없으면 `requested_model`을 남긴다.
 - 대사: `scripts/sql/usage-cost-monthly.sql`로 월별 공급사·모델 원가 합계를 공급사 청구서와 비교한다.
 - 진입점: `src/main/java/fruition/core/usage/controller/UsageChargeController.java`, `src/main/java/fruition/core/usage/service/UsageChargeService.java`
+
+## 본인 크레딧 잔액 (선불)
+
+`GET /api/users/me/credits`
+
+로그인 사용자 본인의 선불 크레딧 잔액·예약액·가용액(잔액 − 예약)과 최근 원장 50건을 돌려준다. 금액은 milli-KRW 정수다. 실제 사용이 예약보다 크면 그대로 차감해 잔액이 음수일 수 있다.
+
+```json
+{
+  "user_id": "user_1", "currency": "KRW",
+  "balance_krw_milli": 600000, "reserved_krw_milli": 300000, "available_krw_milli": 300000,
+  "entries": [{"type": "release", "amount_krw_milli": -300000, "run_id": "query-1", "reason": null,
+    "created_at": "2026-10-09T03:00:00Z"}]
+}
+```
+
+- 원장 `credit_entries`는 추가만 한다. 부호: `purchase`·`grant`·`refund` +, `charge` −, `adjust` ±(잔액), `reserve` +, `release` −(예약). 계정 잔액 = 예약을 뺀 원장 합계, 예약 = `reserve`·`release` 합계이며 `scripts/sql/credit-balance-check.sql`로 점검한다.
+- 사전 승인: AI 요청 전에 계정 행을 `FOR UPDATE`로 잠그고 kind별 예상 상한(`app.billing.estimate.<kind>`, 없으면 `app.billing.default-estimate-krw-milli`)을 `reserve`로 기록한다. 비동기 작업은 `AiCommandOutboxWriter.begin`·`reserve`(outbox 저장과 같은 트랜잭션), 동기 호출(Skill·회의록 초안·녹음 파일 전사·음성 전사·Wiki 스키마)은 `AiTaskCancellationService.register`, 실시간 전사는 연결 시작에서 예약한다. 같은 실행은 한 번만 예약하고, 사용자가 없는 시스템 작업은 예약하지 않는다.
+- `app.billing.enforce`(기본 false): true면 가용 잔액이 상한보다 작거나 잔액이 음수일 때 AI 요청 전에 `402 INSUFFICIENT_CREDIT`("크레딧 잔액이 부족합니다. 크레딧을 충전한 뒤 다시 시도해 주세요.")로 거절하고 작업 등록도 롤백한다. 비동기 회의록 초안은 `failed`/`INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유, 실시간 전사는 `insufficient_credit` 오류 후 close `1008`로 알린다. false면 거절하지 않고 예약·정산만 기록한다(무료 크레딧 정책 전 배포용).
+- 정산: 사용 금액 수집(위 절)이 실행의 호출을 가져오면 그 실행의 청구 합계를 `charge`로 차감하고 남은 예약을 `release`한다. 차감 키는 `charge:{run_id}:{user_id}:{누적 청구액}`, 해제 키는 `release:{run_id}`라 같은 실행을 여러 번 정산해도 같은 금액은 한 번만 반영되고, 대사가 늦게 채운 호출은 늘어난 만큼만 더 차감한다. 취소된 실행도 취소 확정 시 수집 대기열에 넣어 정산한다. 토큰을 모르는 호출(`needs_review`)은 현재 0원이다.
+- 종료 신호가 없는 실행의 예약은 `app.billing.stale-reservation-hours`(기본 48시간)가 지나면 정리 작업이 그때까지의 청구로 정산하고 푼다.
+- 실시간 전사는 연결 시작 시 `meeting_live` 상한을 한 번 예약하고 연결이 끝나면 정산한다. 구간마다 정산·재예약해 회의 중 잔액 소진을 끊는 것은 아직 하지 않는다.
+- 수동 지급·조정은 `scripts/sql/credit-grant-adjust.sql`(`grant` 또는 `adjust`, `adjust`는 사유 필수)로 한다.
+- 보관: 탈퇴·워크스페이스 삭제 파기 대상에서 `credit_accounts`·`credit_entries`·`usage_charges`는 제외한다(전자상거래법상 대금 결제 기록 5년 보관).
+- 진입점: `src/main/java/fruition/core/usage/controller/UsageChargeController.java`, `src/main/java/fruition/core/usage/service/CreditService.java`

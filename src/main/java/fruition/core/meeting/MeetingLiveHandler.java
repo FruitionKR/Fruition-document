@@ -3,6 +3,8 @@ package fruition.core.meeting;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import fruition.core.usage.service.CreditService;
+import fruition.core.usage.service.UsageChargeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -61,6 +63,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
     private final ObjectMapper objectMapper;
     private final Environment environment;
     private final String internalToken;
+    private final UsageChargeService usageCharges;
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final ScheduledExecutorService lockRenewer = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "meeting-live-lock");
@@ -77,7 +80,9 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
 
     public MeetingLiveHandler(MeetingRepository repository, MeetingLiveLock liveLock, ObjectMapper objectMapper,
                               Environment environment,
-                              @Value("${app.internal.callback-token}") String internalToken) {
+                              @Value("${app.internal.callback-token}") String internalToken,
+                              UsageChargeService usageCharges) {
+        this.usageCharges = usageCharges;
         this.repository = repository;
         this.liveLock = liveLock;
         this.objectMapper = objectMapper;
@@ -92,6 +97,8 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         final WebSocketSession browser;
         volatile MeetingRepository.Stream stream;
         volatile WebSocket upstream;
+        /** 이 연결의 사용량 실행 ID. 시작 시 크레딧을 예약하고 연결이 끝나면 정산한다. */
+        volatile String runId;
         volatile boolean ready;
         /** 종료 처리는 한 번만 한다. 전송 시간 초과(Tomcat 스레드)와 ai-svc 오류(listener 스레드)가 겹칠 수 있다. */
         final AtomicBoolean closing = new AtomicBoolean();
@@ -142,9 +149,17 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
             fail(live, "transcript_limit", LIMIT_MESSAGE, CloseStatus.POLICY_VIOLATION);
             return;
         }
+        try {
+            // ponytail: 시작 시 한 번만 예약하고 끝날 때 정산한다. 구간마다 정산·재예약하면 긴 회의 중 잔액 소진을 끊을 수 있다.
+            live.runId = usageCharges.startRun("meeting_live", ticket.workspaceId(), ticket.userId());
+        } catch (CreditService.InsufficientCreditException e) {
+            fail(live, "insufficient_credit", e.getMessage(), CloseStatus.POLICY_VIOLATION);
+            return;
+        }
         live.stream = repository.openStream(ticket.meetingId());
         URI uri = URI.create(environment.getRequiredProperty("app.speech.live-endpoint")
-                + "?workspace_id=" + encode(ticket.workspaceId()) + "&user_id=" + encode(ticket.userId()));
+                + "?workspace_id=" + encode(ticket.workspaceId()) + "&user_id=" + encode(ticket.userId())
+                + "&run_id=" + encode(live.runId));
         // ai-svc 연결(실측 ready까지 약 3.5초)을 기다리며 요청 스레드를 잡지 않는다. 연결 객체는 onOpen에서 잡는다.
         httpClient.newWebSocketBuilder()
                 .header("X-Internal-Token", internalToken)
@@ -209,6 +224,9 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
             repository.endStream(live.stream.id(), "interrupted");
         }
         liveLock.release(live.ticket.meetingId(), live.lockToken);
+        if (live.runId != null) {
+            usageCharges.endRun(live.runId);
+        }
     }
 
     @Override
