@@ -1069,7 +1069,12 @@ public class DocumentService {
                 return null;
             });
             transactionTemplate.execute(status -> {
-                convertQueueRepository.findById(queueId).ifPresent(item -> { item.retry(); convertQueueRepository.save(item); });
+                convertQueueRepository.findById(queueId).ifPresent(item -> {
+                    item.retry();
+                    convertQueueRepository.save(item);
+                    // 더 시도하지 않으면 실행을 닫아 크레딧 예약을 푼다.
+                    if ("failed".equals(item.getStatus())) taskWriter.fail("convert:" + documentId);
+                });
                 return null;
             });
             log.warn("[문서 변환 실패 반영] documentId={} sourceDocumentId={} error={} cause={}",

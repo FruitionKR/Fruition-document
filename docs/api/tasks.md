@@ -35,6 +35,7 @@ Bearer access token. 해당 workspace 구성원이면서 작업을 시작한 사
 | 상태 | 의미 |
 |---|---|
 | `running`, `completed` | 정상 작업 기록 |
+| `failed` | 동기 AI 호출이 실패했거나 PDF 변환이 재시도를 다 쓰고 실패함 |
 | `cancel_requested` | 취소를 저장하고 실행 중인 작업이 멈추기를 기다림 |
 | `rolling_back` | AI DB·객체 저장소와 업무 DB를 복구 중 |
 | `cancelled` | 복구 확인 완료 |

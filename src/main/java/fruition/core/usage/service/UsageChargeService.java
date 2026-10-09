@@ -24,7 +24,10 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.time.format.DateTimeParseException;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -77,7 +80,8 @@ public class UsageChargeService {
 
     /**
      * 실행 ID가 없는 동기 AI 호출을 {@code ai_task_runs}에 실행으로 등록하고 그 ID로 호출한다.
-     * AI는 이 ID를 run_id로 원장에 남긴다. 호출이 실패해도 공급사 호출은 일어났을 수 있어 항상 수집 대기열에 넣는다.
+     * AI는 이 ID를 run_id로 원장에 남긴다. 호출이 실패하면 실행을 {@code failed}로 닫는다. 실패해도 공급사 호출은
+     * 일어났을 수 있어 항상 수집 대기열에 넣는다.
      */
     public <T> T track(String kind, String workspaceId, String userId, Function<String, T> call) {
         String runId = startRun(kind, workspaceId, userId);
@@ -85,9 +89,17 @@ public class UsageChargeService {
             T result = call.apply(runId);
             runs.finish(runId);
             return result;
+        } catch (RuntimeException e) {
+            failRun(runId);
+            throw e;
         } finally {
             enqueue(runId);
         }
+    }
+
+    /** 실패한 동기 실행을 닫는다. 취소 중이거나 이미 끝난 실행은 그대로 둔다. */
+    public void failRun(String runId) {
+        jdbc.update("UPDATE ai_task_runs SET status = 'failed', updated_at = now() WHERE id = ? AND status = 'running'", runId);
     }
 
     /**
@@ -139,43 +151,72 @@ public class UsageChargeService {
         }
     }
 
-    /** 실행 하나의 호출을 가져와 청구 행을 만들고 크레딧을 정산한다. 호출이 없어도 예약은 푼다. */
+    /** 실행 하나의 호출을 가져와 청구 행을 만들고 크레딧을 정산한다. 호출이 없어도 끝난 실행의 예약은 푼다. */
     public void collectRun(String runId) {
-        recordAll(fetch(Map.of("run_id", runId)));
+        Set<String> runIds = recordAll(fetch(Map.of("run_id", runId)));
+        runIds.remove(runId);
         credits.settle(runId);
+        settleQuietly(runIds);
     }
 
-    /** 종료 시각이 [from, to)인 호출을 가져와 빠진 청구 행을 채운다. */
-    public void collectFinished(Instant from, Instant to) {
-        recordAll(fetch(Map.of("finished_from", from.toString(), "finished_to", to.toString())));
+    /**
+     * 진행 중인 실행의 지금까지 호출을 청구 행으로 만들고 차감한 뒤 다음 구간을 다시 예약한다(실시간 전사).
+     * enforce에서 잔액이 모자라면 {@link CreditService.InsufficientCreditException}을 던진다.
+     */
+    public void renewRun(String runId, String userId, String kind, int seq) {
+        recordAll(fetch(Map.of("run_id", runId)));
+        credits.renew(runId, userId, kind, seq);
+    }
+
+    /** 종료 시각이 [from, to)인 호출을 가져와 빠진 청구 행을 채우고 정산할 run_id를 돌려준다. */
+    public Set<String> collectFinished(Instant from, Instant to) {
+        return recordAll(fetch(Map.of("finished_from", from.toString(), "finished_to", to.toString())));
     }
 
     /**
      * 하루 단위 대사. 커서부터 1시간 전까지를 하루치씩 조회한다. 커서 행 잠금으로 여러 Pod가 같은 구간을 동시에 돌지 않고,
-     * 조회가 실패하면 커서를 넘기지 않아 다음 주기에 같은 구간을 다시 본다.
+     * 조회가 실패하면 커서를 넘기지 않아 다음 주기에 같은 구간을 다시 본다. 청구 행 기록과 커서 갱신만 한 트랜잭션에
+     * 두고, 크레딧 정산은 커밋한 뒤 실행별로 한다. 정산 중 사용자 계정 행을 구간 내내 잠그지 않는다.
      */
     @Scheduled(initialDelay = 60_000, fixedDelayString = "${app.usage-charge.reconcile-interval-ms:86400000}")
     public void reconcile() {
         try {
-            while (Boolean.TRUE.equals(transaction.execute(tx -> reconcileNextChunk()))) {
-                // 밀린 구간을 모두 따라잡는다.
-            }
+            Chunk chunk;
+            do {
+                chunk = transaction.execute(tx -> reconcileNextChunk());
+                if (chunk == null) return;
+                settleQuietly(chunk.runIds());
+            } while (chunk.more());  // 밀린 구간을 모두 따라잡는다.
         } catch (RuntimeException e) {
             log.warn("[사용 금액 대사 실패] error={}", e.toString());
         }
     }
 
-    private boolean reconcileNextChunk() {
+    private record Chunk(Set<String> runIds, boolean more) {
+    }
+
+    private Chunk reconcileNextChunk() {
         var cursor = jdbc.queryForList("SELECT reconciled_to FROM usage_reconcile_cursor FOR UPDATE SKIP LOCKED",
                 Timestamp.class);
-        if (cursor.isEmpty()) return false;
+        if (cursor.isEmpty()) return null;
         Instant from = cursor.getFirst().toInstant();
         Instant limit = Instant.now().minus(RECONCILE_DELAY);
         Instant to = from.plus(RECONCILE_CHUNK).isBefore(limit) ? from.plus(RECONCILE_CHUNK) : limit;
-        if (!to.isAfter(from)) return false;
-        collectFinished(from, to);
+        if (!to.isAfter(from)) return null;
+        Set<String> runIds = collectFinished(from, to);
         jdbc.update("UPDATE usage_reconcile_cursor SET reconciled_to = ?", Timestamp.from(to));
-        return to.isBefore(limit);
+        return new Chunk(runIds, to.isBefore(limit));
+    }
+
+    /** 실행별로 정산한다. 한 실행이 실패해도 나머지는 정산하고, 실패한 실행은 다음 수집·정리 작업이 다시 정산한다. */
+    private void settleQuietly(Set<String> runIds) {
+        for (String runId : runIds) {
+            try {
+                credits.settle(runId);
+            } catch (RuntimeException e) {
+                log.warn("[크레딧 정산 실패] runId={} error={}", runId, e.toString());
+            }
+        }
     }
 
     private JsonNode fetch(Map<String, String> params) {
@@ -188,21 +229,36 @@ public class UsageChargeService {
         return body.path("calls");
     }
 
-    /** 청구 행을 만들고, 늦게 들어온 호출의 실행도 늘어난 만큼 정산한다. */
-    private void recordAll(JsonNode calls) {
-        java.util.Set<String> runIds = new java.util.TreeSet<>();
+    /**
+     * 청구 행을 만들고 정산할 run_id를 돌려준다. 형식이 잘못된 호출 1건은 로그를 남기고 건너뛰어 나머지 호출과 대사 커서가
+     * 멈추지 않게 한다.
+     */
+    private Set<String> recordAll(JsonNode calls) {
+        Set<String> runIds = new TreeSet<>();
         for (JsonNode call : calls) {
-            record(call);
+            try {
+                record(call);
+            } catch (DateTimeParseException | IllegalArgumentException e) {
+                // ponytail: 값 해석 오류만 건너뛴다. SQL 오류는 트랜잭션이 중단되므로 청크째 다시 시도한다.
+                log.error("[AI 사용량 호출 건너뜀] callId={} runId={} error={}", call.path("id").asText(),
+                        call.path("run_id").asText(), e.toString());
+                continue;
+            }
             if (call.path("run_id").isTextual()) runIds.add(call.path("run_id").asText());
         }
-        runIds.forEach(credits::settle);
+        return runIds;
     }
 
-    /** AI 원장 호출 1건을 청구 행으로 만든다. 아직 끝나지 않은 호출은 건너뛰고 종료 시각 대사가 가져온다. */
+    /**
+     * AI 원장 호출 1건을 청구 행으로 만든다. 아직 끝나지 않은 호출은 건너뛰고 종료 시각 대사가 가져온다.
+     * 청구 사용자는 실행을 예약한 사용자({@code ai_task_runs.user_id})다. 실행 행이 없을 때만 AI가 남긴 user_id를 쓴다
+     * (AI가 사용자를 몰라 {@code unattributed}로 남긴 호출도 실행자에게 청구된다).
+     */
     private void record(JsonNode call) {
         String callStatus = call.path("status").asText();
         if ("started".equals(callStatus)) return;
         String callId = call.path("id").asText();
+        if (callId.isBlank()) throw new IllegalArgumentException("호출 id가 없습니다.");
         Timestamp startedAt = Timestamp.from(Instant.parse(call.path("started_at").asText()));
         String provider = call.path("provider").asText(null);
         // 단가는 실제 응답 모델 기준이다. 실패해 응답 모델이 없으면 요청 모델을 남긴다.
@@ -255,7 +311,8 @@ public class UsageChargeService {
                     input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_tokens,
                     audio_seconds, tts_characters, price_effective_from, fx_effective_from, policy_effective_from,
                     cost_usd_micro, charge_krw_milli, status, started_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, coalesce((SELECT nullif(user_id, '') FROM ai_task_runs WHERE id = ?), ?),
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (call_id) DO UPDATE SET user_id = EXCLUDED.user_id, workspace_id = EXCLUDED.workspace_id,
                     run_id = EXCLUDED.run_id, kind = EXCLUDED.kind, provider = EXCLUDED.provider, model = EXCLUDED.model,
                     call_status = EXCLUDED.call_status, input_tokens = EXCLUDED.input_tokens,
@@ -266,7 +323,8 @@ public class UsageChargeService {
                     policy_effective_from = EXCLUDED.policy_effective_from, cost_usd_micro = EXCLUDED.cost_usd_micro,
                     charge_krw_milli = EXCLUDED.charge_krw_milli, status = EXCLUDED.status, started_at = EXCLUDED.started_at
                 WHERE usage_charges.status <> 'charged'
-                """, callId, call.path("user_id").asText("unattributed"), call.path("workspace_id").asText(null),
+                """, callId, call.path("run_id").asText(null), call.path("user_id").asText("unattributed"),
+                call.path("workspace_id").asText(null),
                 call.path("run_id").asText(null), call.path("kind").asText(null), provider, model, callStatus,
                 input, cached, creation, output, count(call, "reasoning_tokens"), audioSeconds, ttsCharacters,
                 priceFrom, fxFrom, policyFrom, cost, charge, status, startedAt);

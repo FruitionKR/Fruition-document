@@ -162,6 +162,82 @@ class CreditServiceIntegrationTest {
         }
     }
 
+    @Test
+    void runInProgressIsChargedButKeepsReservationUntilItEnds() {
+        CreditService credits = credits(true);
+        grant(1_000_000);
+        String runId = "run-" + UUID.randomUUID();
+        run(runId, "running");
+        credits.reserve(runId, user, "test_kind");
+        // 오래된 예약이어도 진행 중인 실행은 정리 작업이 풀지 않는다.
+        jdbc.update("UPDATE credit_entries SET created_at = now() - interval '49 hours' WHERE run_id = ?", runId);
+        charge(runId, 100_000);
+
+        credits.settle(runId);
+        credits.releaseStale();
+
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(900_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(ESTIMATE);
+
+        jdbc.update("UPDATE ai_task_runs SET status = 'completed' WHERE id = ?", runId);
+        credits.releaseStale();
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertLedgerMatchesAccount();
+    }
+
+    @Test
+    void runningRunWithoutSignalForTooLongIsTreatedAsEnded() {
+        CreditService credits = credits(true);
+        grant(1_000_000);
+        String runId = "run-" + UUID.randomUUID();
+        run(runId, "running");
+        credits.reserve(runId, user, "test_kind");
+        // 프로세스가 죽어 running으로 남은 실행은 기준 시간이 지나면 끝난 것으로 보고 푼다.
+        jdbc.update("UPDATE ai_task_runs SET updated_at = now() - interval '49 hours' WHERE id = ?", runId);
+
+        credits.settle(runId);
+
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertLedgerMatchesAccount();
+    }
+
+    @Test
+    void renewChargesUsageAndReservesNextIntervalOrRejectsWhenShort() {
+        CreditService credits = credits(true);
+        grant(1_000_000);
+        String runId = "run-" + UUID.randomUUID();
+        run(runId, "running");
+        credits.reserve(runId, user, "test_kind");
+        charge(runId, 300_000);
+
+        credits.renew(runId, user, "test_kind", 1);
+        credits.renew(runId, user, "test_kind", 1);
+
+        var result = credits.credits(user);
+        assertThat(result.balanceKrwMilli()).isEqualTo(700_000);
+        assertThat(result.reservedKrwMilli()).isEqualTo(ESTIMATE);
+
+        // 차감 뒤 가용 잔액이 다음 구간 상한보다 작으면 거절하고 아무것도 반영하지 않는다.
+        charge(runId, 500_000);
+        assertThatThrownBy(() -> credits.renew(runId, user, "test_kind", 2))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(700_000);
+
+        // 끝난 실행은 다시 예약하지 않고, 종료 정산이 남은 사용량을 차감하고 예약을 푼다.
+        jdbc.update("UPDATE ai_task_runs SET status = 'completed' WHERE id = ?", runId);
+        credits.renew(runId, user, "test_kind", 2);
+        credits.settle(runId);
+        result = credits.credits(user);
+        assertThat(result.balanceKrwMilli()).isEqualTo(200_000);
+        assertThat(result.reservedKrwMilli()).isZero();
+        assertLedgerMatchesAccount();
+    }
+
+    private void run(String runId, String status) {
+        jdbc.update("INSERT INTO ai_task_runs (id, workspace_id, user_id, kind, status) VALUES (?, 'ws-1', ?, 'test_kind', ?)",
+                runId, user, status);
+    }
+
     private CreditService credits(boolean enforce) {
         return new CreditService(jdbc, manager, environment, enforce, ESTIMATE, 48);
     }

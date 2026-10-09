@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import fruition.TestcontainersConfiguration;
 import fruition.core.aitask.service.AiTaskCancellationService;
+import fruition.core.document.repository.AiCommandOutboxWriter;
 import fruition.core.meeting.MeetingNotesClient;
 import fruition.core.speech.SpeechTranscriptionClient;
 import fruition.shared.http.PipelineClientFactory;
@@ -16,11 +17,15 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -28,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * AI 원장은 가짜 서버로 대신한다. 환율·정책 행은 테스트 사이에 공유되므로 테스트마다 다른 해를 쓰고,
@@ -43,6 +49,7 @@ class UsageChargeServiceIntegrationTest {
     @Autowired AiTaskCancellationService runs;
     @Autowired CreditService credits;
     @Autowired ObjectMapper mapper;
+    @Autowired AiCommandOutboxWriter outboxWriter;
 
     private HttpServer server;
     private UsageChargeService charges;
@@ -62,7 +69,7 @@ class UsageChargeServiceIntegrationTest {
                     + " token=" + exchange.getRequestHeaders().getFirst("X-Internal-Token"));
             String response = switch (exchange.getRequestURI().getPath()) {
                 case "/internal/model-usage/calls" -> "{\"calls\":[" + callsByQuery.getOrDefault(
-                        query.replaceAll("&finished_to=.*", ""), "") + "]}";
+                        query.replaceAll(".*(finished_from=[^&]*).*", "$1"), "") + "]}";
                 case "/speech/transcriptions" -> "{\"text\":\"안녕하세요\"}";
                 default -> "{\"summary\":[]}";
             };
@@ -193,6 +200,83 @@ class UsageChargeServiceIntegrationTest {
                 String.class, runIds.get(0), runIds.get(1))).isEmpty();
         assertThat(jdbc.queryForList("SELECT status FROM usage_charges WHERE run_id = ?", String.class, runIds.get(1)))
                 .containsExactly("unpriced");
+    }
+
+    @Test
+    void reconcileSkipsMalformedCallAndSettlesAfterCommit() {
+        versions("2045-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2045-01-01T00:00:00Z", "1");
+        String runId = "run-" + UUID.randomUUID();
+        credits.reserve(runId, user, "test_kind");
+        Instant from = Instant.now().minus(Duration.ofHours(3)).truncatedTo(ChronoUnit.SECONDS);
+        callsByQuery.put("finished_from=" + from, String.join(",",
+                call("c-" + UUID.randomUUID(), runId, "ws-1", model, "succeeded", "not-a-time", 1000, 0, 0, 0, 0),
+                call("c-" + UUID.randomUUID(), runId, "ws-1", model, "succeeded", "2045-02-01T00:00:00Z", 1000, 0, 0, 0, 0)));
+
+        jdbc.update("UPDATE usage_reconcile_cursor SET reconciled_to = ?", Timestamp.from(from));
+        // 앱의 대사 작업이 커서를 잠깐 잡을 수 있어 커서가 넘어갈 때까지 다시 부른다.
+        for (int i = 0; i < 10 && !jdbc.queryForObject("SELECT reconciled_to > ? FROM usage_reconcile_cursor",
+                Boolean.class, Timestamp.from(from)); i++) {
+            charges.reconcile();
+        }
+
+        // 잘못된 호출 1건은 건너뛰고 나머지는 기록하며 커서를 넘긴다.
+        assertThat(jdbc.queryForObject("SELECT reconciled_to > ? FROM usage_reconcile_cursor", Boolean.class,
+                Timestamp.from(from))).isTrue();
+        assertThat(jdbc.queryForList("SELECT charge_krw_milli FROM usage_charges WHERE run_id = ?", Long.class, runId))
+                .containsExactly(1000L);
+        // 커밋 뒤 정산이 차감하고, 실행 행이 없는 run은 끝난 것으로 보고 예약을 푼다.
+        var result = credits.credits(user);
+        assertThat(result.balanceKrwMilli()).isEqualTo(-1000);
+        assertThat(result.reservedKrwMilli()).isZero();
+    }
+
+    @Test
+    void callWithoutUserIsChargedToUserWhoReservedTheRun() {
+        versions("2046-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2046-01-01T00:00:00Z", "1");
+        String runId = charges.startRun("test_kind", "ws-1", user);
+        charges.endRun(runId);
+        callsByQuery.put("run_id=" + runId, call("c-" + UUID.randomUUID(), runId, "ws-1", model, "succeeded",
+                "2046-02-01T00:00:00Z", 1000, 0, 0, 0, 0).replace("\"user_id\":\"" + user + "\"", "\"user_id\":\"unattributed\""));
+
+        charges.collectRun(runId);
+
+        assertThat(jdbc.queryForObject("SELECT user_id FROM usage_charges WHERE run_id = ?", String.class, runId)).isEqualTo(user);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-1000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+    }
+
+    @Test
+    void failedSyncCallClosesRunAndQueuesCollection() {
+        assertThatThrownBy(() -> charges.track("test_kind", "ws-1", user, runId -> {
+            throw new IllegalStateException("AI 실패");
+        })).hasMessage("AI 실패");
+
+        String runId = jdbc.queryForObject("SELECT id FROM ai_task_runs WHERE user_id = ?", String.class, user);
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, runId)).isEqualTo("failed");
+        // 앱의 수집 worker가 이미 꺼냈을 수 있어 대기열 대신 예약이 풀렸는지까지 기다린다.
+        for (int i = 0; i < 10 && credits.credits(user).reservedKrwMilli() > 0; i++) {
+            jdbc.update("UPDATE usage_collect_queue SET available_at = now() - interval '1 day' WHERE run_id = ?", runId);
+            charges.collectPending();
+        }
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+    }
+
+    @Test
+    void completedConvertRunIsQueuedForCollection() {
+        String runId = "convert:" + UUID.randomUUID();
+        new TransactionTemplate(manager).executeWithoutResult(tx -> {
+            outboxWriter.begin(runId, "ws-1", user, "convert");
+            outboxWriter.complete(runId);
+        });
+
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, runId)).isEqualTo("completed");
+        for (int i = 0; i < 10 && credits.credits(user).reservedKrwMilli() > 0; i++) {
+            jdbc.update("UPDATE usage_collect_queue SET available_at = now() - interval '1 day' WHERE run_id = ?", runId);
+            charges.collectPending();
+        }
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
     }
 
     private void versions(String effectiveFrom, String krwPerUsd, int marginBp, int vatBp) {

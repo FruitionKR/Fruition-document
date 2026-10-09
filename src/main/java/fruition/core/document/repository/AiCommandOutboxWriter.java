@@ -51,9 +51,21 @@ public class AiCommandOutboxWriter {
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
     }
 
+    /** 실행을 끝내고 같은 트랜잭션에서 사용 금액 수집·크레딧 정산 대기열에 넣는다(#78·#79). */
     public void complete(String runId) {
-        jdbcTemplate.update("UPDATE ai_task_runs SET status = 'completed', updated_at = now() "
-                + "WHERE id = ? AND status = 'running'", runId);
+        close(runId, "completed");
+    }
+
+    /** 다시 시도하지 않을 실패로 실행을 닫는다. 실패 전까지의 공급사 호출도 수집·정산한다. */
+    public void fail(String runId) {
+        close(runId, "failed");
+    }
+
+    private void close(String runId, String status) {
+        if (jdbcTemplate.update("UPDATE ai_task_runs SET status = ?, updated_at = now() WHERE id = ? AND status = 'running'",
+                status, runId) == 1) {
+            jdbcTemplate.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", runId);
+        }
     }
 
     public boolean active(String runId) {

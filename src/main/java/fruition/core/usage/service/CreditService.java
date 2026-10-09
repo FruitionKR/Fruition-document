@@ -24,7 +24,9 @@ import java.util.TreeMap;
  *   <li>사전 승인: AI 요청 전에 계정 행을 잠그고 kind별 예상 상한을 예약한다. {@code app.billing.enforce}가 true일 때만
  *       가용 잔액(잔액 − 예약)이 상한보다 작거나 잔액이 음수면 402로 거절한다. false면 기록만 한다.</li>
  *   <li>정산: 실행의 청구 행({@code usage_charges}) 합계를 차감하고 남은 예약을 푼다. 실제 금액이 예약보다 크면
- *       그대로 차감해 잔액이 음수가 될 수 있다.</li>
+ *       그대로 차감해 잔액이 음수가 될 수 있다. 실행이 아직 진행 중이면 차감만 하고 예약은 두며, 종료 신호 없이
+ *       {@code app.billing.stale-reservation-hours}가 지난 실행은 끝난 것으로 본다.</li>
+ *   <li>재예약: 실시간 전사처럼 긴 실행은 구간마다 그때까지의 청구를 차감하고 예약을 다음 구간 상한으로 바꾼다.</li>
  *   <li>멱등: 원장 키가 run_id 기반이라 같은 실행을 여러 번 정산해도 같은 금액은 한 번만 차감한다.</li>
  * </ul>
  */
@@ -32,6 +34,9 @@ import java.util.TreeMap;
 public class CreditService {
 
     private static final Logger log = LoggerFactory.getLogger(CreditService.class);
+    /** {@code ai_task_runs} 행이 진행 중인 실행이라는 조건. 인자는 오래된 예약 기준 시간이다. */
+    private static final String IN_PROGRESS = "t.status IN ('running', 'cancel_requested', 'rolling_back') "
+            + "AND t.updated_at > now() - make_interval(hours => ?)";
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
@@ -87,19 +92,13 @@ public class CreditService {
                     .forEach(row -> totals.put((String) row.get("user_id"), ((Number) row.get("total")).longValue()));
             jdbc.queryForList("SELECT DISTINCT user_id FROM credit_entries WHERE run_id = ? AND type = 'reserve'",
                     String.class, runId).forEach(user -> totals.putIfAbsent(user, 0L));
+            boolean inProgress = inProgress(runId);
             // 잠금 순서를 user_id 순으로 고정해 정산끼리 교착하지 않는다.
             totals.forEach((userId, total) -> {
                 lock(userId);
-                Long charged = jdbc.queryForObject("SELECT -coalesce(sum(amount), 0) FROM credit_entries "
-                        + "WHERE run_id = ? AND user_id = ? AND type = 'charge'", Long.class, runId, userId);
-                long delta = total - charged;
-                if (delta > 0 && append(userId, "charge", -delta, runId, "charge:" + runId + ":" + userId + ":" + total, null)) {
-                    jdbc.update("UPDATE credit_accounts SET balance = balance - ?, updated_at = now() WHERE user_id = ?",
-                            delta, userId);
-                }
-                Long open = jdbc.queryForObject("SELECT coalesce(sum(amount), 0) FROM credit_entries "
-                        + "WHERE run_id = ? AND user_id = ? AND type IN ('reserve', 'release')", Long.class, runId, userId);
-                if (open > 0 && append(userId, "release", -open, runId, "release:" + runId, null)) {
+                charge(runId, userId, total);
+                long open = open(runId, userId);
+                if (!inProgress && open > 0 && append(userId, "release", -open, runId, "release:" + runId, null)) {
                     jdbc.update("UPDATE credit_accounts SET reserved = reserved - ?, updated_at = now() WHERE user_id = ?",
                             open, userId);
                 }
@@ -108,17 +107,71 @@ public class CreditService {
     }
 
     /**
+     * 진행 중인 실행의 청구를 차감하고, 남은 예약을 풀어 다음 구간 상한으로 다시 예약한다. enforce에서 차감 뒤 가용 잔액이
+     * 상한보다 작으면 {@link InsufficientCreditException}을 던지고 아무것도 반영하지 않는다(실행 종료 정산이 차감한다).
+     * seq는 구간 번호이며 같은 구간을 다시 불러도 한 번만 반영한다. 이미 끝난 실행은 차감만 한다.
+     */
+    public void renew(String runId, String userId, String kind, int seq) {
+        long estimate = environment.getProperty("app.billing.estimate." + kind, Long.class, defaultEstimate);
+        transaction.executeWithoutResult(tx -> {
+            lock(userId);
+            Long total = jdbc.queryForObject("SELECT coalesce(sum(charge_krw_milli), 0) FROM usage_charges "
+                    + "WHERE run_id = ? AND user_id = ?", Long.class, runId, userId);
+            charge(runId, userId, total);
+            // 계정 행을 잠근 뒤 확인한다. 그사이 끝난 실행을 다시 예약하면 종료 정산이 풀지 못한다.
+            if (!inProgress(runId)) return;
+            Map<String, Object> account = jdbc.queryForMap("SELECT balance, reserved FROM credit_accounts WHERE user_id = ?", userId);
+            long balance = ((Number) account.get("balance")).longValue();
+            long open = open(runId, userId);
+            long othersReserved = ((Number) account.get("reserved")).longValue() - open;
+            if (enforce && (balance < 0 || balance - othersReserved < estimate)) {
+                throw new InsufficientCreditException();
+            }
+            if (open > 0 && append(userId, "release", -open, runId, "release:" + runId + ":" + seq, null)) {
+                jdbc.update("UPDATE credit_accounts SET reserved = reserved - ?, updated_at = now() WHERE user_id = ?",
+                        open, userId);
+            }
+            if (append(userId, "reserve", estimate, runId, "reserve:" + runId + ":" + seq, kind)) {
+                jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
+                        estimate, userId);
+            }
+        });
+    }
+
+    /** 실행의 청구 합계 중 아직 차감하지 않은 만큼 차감한다. 키가 누적 청구액이라 같은 합계로는 한 번만 차감한다. */
+    private void charge(String runId, String userId, long total) {
+        Long charged = jdbc.queryForObject("SELECT -coalesce(sum(amount), 0) FROM credit_entries "
+                + "WHERE run_id = ? AND user_id = ? AND type = 'charge'", Long.class, runId, userId);
+        long delta = total - charged;
+        if (delta > 0 && append(userId, "charge", -delta, runId, "charge:" + runId + ":" + userId + ":" + total, null)) {
+            jdbc.update("UPDATE credit_accounts SET balance = balance - ?, updated_at = now() WHERE user_id = ?",
+                    delta, userId);
+        }
+    }
+
+    /** 실행에 아직 남은 예약. */
+    private long open(String runId, String userId) {
+        return jdbc.queryForObject("SELECT coalesce(sum(amount), 0) FROM credit_entries "
+                + "WHERE run_id = ? AND user_id = ? AND type IN ('reserve', 'release')", Long.class, runId, userId);
+    }
+
+    /** 실행이 아직 진행 중인지. 종료 신호 없이 오래된 실행(프로세스 종료 등)은 끝난 것으로 본다. */
+    private boolean inProgress(String runId) {
+        return !jdbc.queryForList("SELECT t.id FROM ai_task_runs t WHERE t.id = ? AND " + IN_PROGRESS, String.class,
+                runId, staleHours).isEmpty();
+    }
+
+    /**
      * 종료 신호 없이 남은 예약을 정리한다. 하루 단위 대사가 호출을 채울 시간을 둔 뒤 그때까지의 청구로 정산한다.
-     * 여러 Pod가 같은 실행을 골라도 원장 키가 같아 한 번만 반영된다.
+     * 아직 진행 중인 실행은 건너뛴다. 여러 Pod가 같은 실행을 골라도 원장 키가 같아 한 번만 반영된다.
      */
     @Scheduled(initialDelay = 120_000, fixedDelayString = "${app.billing.release-interval-ms:3600000}")
     public void releaseStale() {
-        for (String runId : jdbc.queryForList("""
-                SELECT r.run_id FROM credit_entries r
-                WHERE r.type = 'reserve' AND r.created_at < now() - make_interval(hours => ?)
-                  AND NOT EXISTS (SELECT 1 FROM credit_entries e WHERE e.idempotency_key = 'release:' || r.run_id)
-                ORDER BY r.created_at LIMIT 100
-                """, String.class, staleHours)) {
+        for (String runId : jdbc.queryForList("SELECT r.run_id FROM credit_entries r "
+                + "WHERE r.type = 'reserve' AND r.created_at < now() - make_interval(hours => ?) "
+                + "AND NOT EXISTS (SELECT 1 FROM credit_entries e WHERE e.idempotency_key = 'release:' || r.run_id) "
+                + "AND NOT EXISTS (SELECT 1 FROM ai_task_runs t WHERE t.id = r.run_id AND " + IN_PROGRESS + ") "
+                + "GROUP BY r.run_id ORDER BY min(r.created_at) LIMIT 100", String.class, staleHours, staleHours)) {
             try {
                 settle(runId);
             } catch (RuntimeException e) {

@@ -70,12 +70,22 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         thread.setDaemon(true);
         return thread;
     });
+    /**
+     * 구간 정산은 AI 호출을 기다리므로 잠금 갱신과 다른 스레드에서 한다.
+     * ponytail: 연결 전체가 스레드 하나를 나눠 쓴다. 동시 회의가 많아 구간 정산이 밀리면 가상 스레드로 나눈다.
+     */
+    private final ScheduledExecutorService billingRenewer = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "meeting-live-billing");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final Map<String, Live> sessions = new ConcurrentHashMap<>();
 
-    /** 종료 시 잠금 갱신을 멈춘다. 열린 연결은 TCP가 끊기고 Redis 잠금은 TTL(90초)로 풀린다. */
+    /** 종료 시 잠금 갱신·구간 정산을 멈춘다. 열린 연결은 TCP가 끊기고 Redis 잠금은 TTL(90초)로 풀린다. */
     @PreDestroy
     void shutdownLockRenewer() {
         lockRenewer.shutdownNow();
+        billingRenewer.shutdownNow();
     }
 
     public MeetingLiveHandler(MeetingRepository repository, MeetingLiveLock liveLock, ObjectMapper objectMapper,
@@ -97,8 +107,10 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         final WebSocketSession browser;
         volatile MeetingRepository.Stream stream;
         volatile WebSocket upstream;
-        /** 이 연결의 사용량 실행 ID. 시작 시 크레딧을 예약하고 연결이 끝나면 정산한다. */
+        /** 이 연결의 사용량 실행 ID. 시작 시 크레딧을 예약하고 구간마다 정산·재예약하며 연결이 끝나면 정산한다. */
         volatile String runId;
+        int billingSeq;
+        ScheduledFuture<?> billing;
         volatile boolean ready;
         /** 종료 처리는 한 번만 한다. 전송 시간 초과(Tomcat 스레드)와 ai-svc 오류(listener 스레드)가 겹칠 수 있다. */
         final AtomicBoolean closing = new AtomicBoolean();
@@ -150,12 +162,13 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
             return;
         }
         try {
-            // ponytail: 시작 시 한 번만 예약하고 끝날 때 정산한다. 구간마다 정산·재예약하면 긴 회의 중 잔액 소진을 끊을 수 있다.
             live.runId = usageCharges.startRun("meeting_live", ticket.workspaceId(), ticket.userId());
         } catch (CreditService.InsufficientCreditException e) {
             fail(live, "insufficient_credit", e.getMessage(), CloseStatus.POLICY_VIOLATION);
             return;
         }
+        long interval = environment.getProperty("app.billing.live-renew-seconds", Long.class, 60L);
+        live.billing = billingRenewer.scheduleWithFixedDelay(() -> renewCredit(live), interval, interval, TimeUnit.SECONDS);
         live.stream = repository.openStream(ticket.meetingId());
         URI uri = URI.create(environment.getRequiredProperty("app.speech.live-endpoint")
                 + "?workspace_id=" + encode(ticket.workspaceId()) + "&user_id=" + encode(ticket.userId())
@@ -217,6 +230,9 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         if (live.renewal != null) {
             live.renewal.cancel(false);
         }
+        if (live.billing != null) {
+            live.billing.cancel(false);
+        }
         if (live.upstream != null) {
             live.upstream.abort();
         }
@@ -226,6 +242,24 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         liveLock.release(live.ticket.meetingId(), live.lockToken);
         if (live.runId != null) {
             usageCharges.endRun(live.runId);
+        }
+    }
+
+    /**
+     * 그때까지의 전사 사용량을 차감하고 다음 구간을 다시 예약한다. enforce에서 잔액이 모자라면 이유를 알리고 연결을 닫는다.
+     * 확정 구간은 남아 있어 충전한 뒤 새 ticket으로 이어서 녹음한다. AI 조회가 실패하면 다음 구간에 다시 한다.
+     */
+    private void renewCredit(Live live) {
+        if (live.closing.get()) {
+            return;
+        }
+        try {
+            usageCharges.renewRun(live.runId, live.ticket.userId(), "meeting_live", ++live.billingSeq);
+        } catch (CreditService.InsufficientCreditException e) {
+            fail(live, "insufficient_credit", e.getMessage(), CloseStatus.POLICY_VIOLATION);
+        } catch (RuntimeException e) {
+            log.warn("[회의 실시간 전사 구간 정산 실패] meetingId={} runId={} error={}", live.ticket.meetingId(), live.runId,
+                    e.toString());
         }
     }
 

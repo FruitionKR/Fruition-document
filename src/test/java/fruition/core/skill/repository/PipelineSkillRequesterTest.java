@@ -163,6 +163,22 @@ class PipelineSkillRequesterTest {
         assertThat(exception.getHttpStatus()).isEqualTo(503);
     }
 
+    @Test
+    void failedTaskClosesRunAndStillQueuesUsageCollection() {
+        var usageCharges = org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class);
+        responseStatus = 500;
+        responseBody = "{}";
+
+        org.assertj.core.api.Assertions.catchThrowableOfType(fruition.core.skill.exception.PipelineSkillException.class,
+                () -> requester(usageCharges).author("ws_1", "user_1", new SkillAuthoringRequest(
+                        "personal", "meeting-notes", null, "회의록을 작성해줘", "enhance", List.of()),
+                        new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run-failed"));
+
+        var order = org.mockito.Mockito.inOrder(usageCharges);
+        order.verify(usageCharges).failRun("run-failed");
+        order.verify(usageCharges).enqueue("run-failed");
+    }
+
     private void author() {
         requester().author("ws_1", "user_1", new SkillAuthoringRequest(
                 "personal", "meeting-notes", null, "ㅁㄴㅇㅁㄴㅇㅁㄴ", "enhance", List.of()),
@@ -170,11 +186,14 @@ class PipelineSkillRequesterTest {
     }
 
     private PipelineSkillRequester requester() {
+        return requester(org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class));
+    }
+
+    private PipelineSkillRequester requester(fruition.core.usage.service.UsageChargeService usageCharges) {
         return new PipelineSkillRequester(
                 new PipelineClientFactory("unused-internal-token"),
                 "http://localhost:" + server.getAddress().getPort() + "/skills", "agent-token", 5,
                 org.mockito.Mockito.mock(fruition.core.aitask.service.AiTaskCancellationService.class),
-                new com.fasterxml.jackson.databind.ObjectMapper(),
-                org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class));
+                new com.fasterxml.jackson.databind.ObjectMapper(), usageCharges);
     }
 }
