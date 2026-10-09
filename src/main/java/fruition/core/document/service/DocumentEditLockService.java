@@ -32,6 +32,7 @@ public class DocumentEditLockService {
     private final DocumentRepository documentRepository;
     private final WorkspaceAccessGuard workspaceAccessGuard;
     private final AccessUserClient accessUserClient;
+    private final DocumentAccessPolicy documentAccessPolicy;
     private final long ttlSeconds;
     private final Clock clock;
 
@@ -39,12 +40,14 @@ public class DocumentEditLockService {
                                    DocumentRepository documentRepository,
                                    WorkspaceAccessGuard workspaceAccessGuard,
                                    AccessUserClient accessUserClient,
+                                   DocumentAccessPolicy documentAccessPolicy,
                                    @Value("${app.document.edit-lock.ttl-seconds:45}") long ttlSeconds,
                                    Clock clock) {
         this.lockRepository = lockRepository;
         this.documentRepository = documentRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.accessUserClient = accessUserClient;
+        this.documentAccessPolicy = documentAccessPolicy;
         this.ttlSeconds = ttlSeconds;
         this.clock = clock;
     }
@@ -52,7 +55,7 @@ public class DocumentEditLockService {
     /** 잠금 획득/갱신. 성립하면 본인 보유 잠금을, 다른 사용자가 보유 중이면 그 사용자 잠금을 그대로 반환한다. */
     @Transactional
     public EditLockResponse acquire(String workspaceId, String userId, String documentId) {
-        requireEditableOwned(workspaceId, userId, documentId);
+        requireEditable(workspaceId, userId, documentId);
         Instant now = Instant.now(clock);
         lockRepository.acquire(documentId, userId, now, now.plus(Duration.ofSeconds(ttlSeconds)));
         return toResponse(currentLock(documentId));
@@ -61,7 +64,7 @@ public class DocumentEditLockService {
     /** heartbeat 갱신. 보유자 본인의 유효한 잠금만 연장하며, 상실 시 409. */
     @Transactional
     public EditLockResponse heartbeat(String workspaceId, String userId, String documentId) {
-        requireEditableOwned(workspaceId, userId, documentId);
+        requireEditable(workspaceId, userId, documentId);
         Instant now = Instant.now(clock);
         int renewed = lockRepository.heartbeat(documentId, userId, now, now.plus(Duration.ofSeconds(ttlSeconds)));
         if (renewed == 0) {
@@ -73,7 +76,7 @@ public class DocumentEditLockService {
     /** 보유자 본인의 잠금 해제(멱등). */
     @Transactional
     public void release(String workspaceId, String userId, String documentId) {
-        requireEditableOwned(workspaceId, userId, documentId);
+        requireEditable(workspaceId, userId, documentId);
         lockRepository.release(documentId, userId);
     }
 
@@ -119,14 +122,12 @@ public class DocumentEditLockService {
         return accessUserClient.getDisplayName(userId);
     }
 
-    /** 사용자가 편집할 수 있는 자기 Markdown 문서인지 확인한다. 회의록 저장 대상 검증도 같은 규칙을 쓴다. */
-    public void requireEditableOwned(String workspaceId, String userId, String documentId) {
+    /** 사용자가 편집 권한을 가진 Markdown 문서인지 확인한다. 회의록 저장 대상 검증도 같은 규칙을 쓴다. */
+    public void requireEditable(String workspaceId, String userId, String documentId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        if (!document.getUserId().equals(userId)) {
-            throw new DocumentWriteForbiddenException("문서 소유자만 편집할 수 있습니다.");
-        }
+        documentAccessPolicy.requireEdit(document, userId);
         if (document.getDocumentRole() != DocumentRole.EDITABLE) {
             throw new InvalidMarkdownContentException("편집 가능한 Markdown 문서만 편집 잠금을 사용할 수 있습니다.");
         }

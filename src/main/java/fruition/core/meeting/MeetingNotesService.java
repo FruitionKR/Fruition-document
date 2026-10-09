@@ -172,7 +172,7 @@ public class MeetingNotesService {
         MeetingRepository.Meeting meeting = meetingService.requireOwned(workspaceId, userId, meetingId);
         MeetingNotesRepository.Note note = requireLatestReady(meetingId, version);
         String target = targetDocument(documentId, meeting);
-        documentEditRules.requireEditableOwned(workspaceId, userId, target);
+        documentEditRules.requireEditable(workspaceId, userId, target);
         DocumentEditState state = editState(target);
         return new AppendPreview(target, state.getRevision(),
                 merge(state.getMarkdown(), body(note, editedMarkdown)));
@@ -205,7 +205,7 @@ public class MeetingNotesService {
             if (request.baseRevision() == null) {
                 throw new MeetingException(HttpStatus.BAD_REQUEST, "INVALID_MEETING_NOTES_APPLY", "base_revision이 필요합니다.");
             }
-            documentEditRules.requireEditableOwned(workspaceId, userId, target);
+            documentEditRules.requireEditable(workspaceId, userId, target);
             DocumentEditState state = editState(target);
             if (state.getRevision() != request.baseRevision()) {
                 throw new MeetingException(HttpStatus.CONFLICT, "DOCUMENT_REVISION_CHANGED",

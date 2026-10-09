@@ -20,6 +20,8 @@ tags:
   name: Document Assets
 - description: 문서 편집 잠금(활성 편집 추적) API
   name: Document Edit Lock
+- description: 문서·폴더 공동 편집 권한 설정
+  name: Document Permissions
 - description: Markdown 편집 문서와 업로드 원본 관리 API
   name: Documents
 - description: 문서 위치와 폴더 배치 관리 API
@@ -2103,6 +2105,57 @@ paths:
           description: OK
       tags:
       - Documents
+  /api/workspaces/{workspace_id}/documents/{document_id}/permission:
+    put:
+      description: 멤버는 기본으로 모든 문서를 편집할 수 있습니다. view로 바꾸면 소유자와 OWNER 외에는 보기만 합니다. null이면 설정을 지워 상위 폴더 설정이나 기본값을 따릅니다. 문서 소유자나 OWNER만 바꿀 수 있습니다.
+      operationId: setDocument
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: document_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentPermissionRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentPermissionResponse"
+          description: 설정 완료
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "access가 edit, view, null이 아님"
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 문서 소유자나 OWNER가 아님
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 문서 또는 워크스페이스를 찾을 수 없음
+      summary: 문서 권한 설정
+      tags:
+      - Document Permissions
   /api/workspaces/{workspace_id}/documents/{document_id}/position:
     patch:
       description: 문서를 대상 폴더와 정렬 위치로 이동합니다. base version과 Idempotency-Key로 동시 변경을 검증합니다.
@@ -2634,6 +2687,58 @@ paths:
       summary: 폴더 하위 항목 조회
       tags:
       - Folders
+  /api/workspaces/{workspace_id}/folders/{folder_id}/permission:
+    put:
+      description: 폴더 안의 문서와 하위 폴더가 따르는 권한입니다. 문서·하위 폴더에 직접 건 설정이 우선합니다. view 폴더는 OWNER 외에 이름 변경·이동할 수 없습니다. OWNER만 바꿀 수 있습니다.
+      operationId: setFolder
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: folder_id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentPermissionRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentPermissionResponse"
+          description: 설정 완료
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "access가 edit, view, null이 아님"
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: OWNER가 아님
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 폴더 또는 워크스페이스를 찾을 수 없음
+      summary: 폴더 권한 설정
+      tags:
+      - Document Permissions
   /api/workspaces/{workspace_id}/folders/{folder_id}/position:
     patch:
       description: 폴더를 대상 상위 폴더와 정렬 위치로 이동합니다. 자기 자신이나 하위 폴더로는 이동할 수 없습니다.
@@ -5624,6 +5729,14 @@ components:
           format: int64
           description: 파일 크기(바이트)
           example: 482913
+        can_delete:
+          type: boolean
+          description: 현재 사용자가 삭제·휴지통 복구를 할 수 있는지. 문서 소유자와 OWNER만 true다.
+          example: false
+        can_edit:
+          type: boolean
+          description: 현재 사용자가 본문 저장·이름 변경·이동을 할 수 있는지. false면 읽기 전용으로 연다.
+          example: true
         current_version:
           type: integer
           format: int64
@@ -5680,6 +5793,12 @@ components:
           type: string
           description: 파일 MIME 타입
           example: application/pdf
+        permission:
+          type: string
+          description: 이 문서에 직접 건 권한 설정(edit | view). null이면 상위 폴더 설정 또는 기본값(edit)을 따른다.
+          enum:
+          - edit
+          - view
         pipeline_run_id:
           type: string
           description: 이 문서를 처리한 pipeline run ID
@@ -5719,6 +5838,9 @@ components:
           format: date-time
           description: 마지막 변경 시각(ISO-8601 UTC)
           example: 2026-08-13T04:25:24.371948Z
+        updated_by:
+          type: string
+          description: 마지막으로 본문을 저장한 사용자 ID. 업로드 뒤 저장한 적이 없으면 null이다.
         uploaded_at:
           type: string
           format: date-time
@@ -5803,6 +5925,14 @@ components:
           format: int64
           description: 파일 크기(바이트)
           example: 482913
+        can_delete:
+          type: boolean
+          description: 현재 사용자가 삭제·휴지통 복구를 할 수 있는지. 문서 소유자와 OWNER만 true다.
+          example: false
+        can_edit:
+          type: boolean
+          description: 현재 사용자가 본문 저장·이름 변경·이동을 할 수 있는지. 문서 소유자와 OWNER는 항상 true다.
+          example: true
         current_version:
           type: integer
           format: int64
@@ -5859,6 +5989,12 @@ components:
           type: boolean
           description: 마지막 ingest 이후 편집본이 바뀌어 재분석이 필요한지 여부. 편집 가능 문서만 true가 될 수 있다.
           example: false
+        permission:
+          type: string
+          description: 이 문서에 직접 건 권한 설정(edit | view). null이면 상위 폴더 설정 또는 기본값(edit)을 따른다.
+          enum:
+          - edit
+          - view
         pipeline_run_id:
           type: string
           description: 이 문서를 처리한 pipeline run ID
@@ -5902,6 +6038,9 @@ components:
           format: date-time
           description: 마지막 변경 시각(ISO-8601 UTC)
           example: 2026-08-13T04:25:24.371948Z
+        updated_by:
+          type: string
+          description: 마지막으로 본문을 저장한 사용자 ID. 업로드 뒤 저장한 적이 없으면 null이다.
         uploaded_at:
           type: string
           format: date-time
@@ -5952,6 +6091,25 @@ components:
           description: 활성 문서 목록. 휴지통 문서는 포함되지 않는다.
           items:
             $ref: "#/components/schemas/DocumentItem"
+    DocumentPermissionRequest:
+      type: object
+      properties:
+        access:
+          type: string
+          description: edit(편집 가능) | view(보기만) | null(설정을 지워 상위 폴더 또는 기본값을 따름)
+          enum:
+          - edit
+          - view
+          pattern: edit|view
+    DocumentPermissionResponse:
+      type: object
+      properties:
+        access:
+          type: string
+          description: 저장된 설정. null이면 직접 건 설정이 없다.
+          enum:
+          - edit
+          - view
     DocumentPositionRequest:
       type: object
       description: 문서 이동·순서 변경 요청

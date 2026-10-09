@@ -94,7 +94,8 @@ class AgentToolServiceTest {
                 editStateRepository,
                 editStateInitializer,
                 idempotencyService,
-                transactionTemplate, taskCancellationClient);
+                transactionTemplate, taskCancellationClient,
+                new fruition.core.document.service.DocumentAccessPolicy(workspaceAccessGuard, org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class)));
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
         org.mockito.Mockito.lenient().when(transactionTemplate.getTransactionManager()).thenReturn(transactionManager);
         org.mockito.Mockito.lenient().doAnswer(invocation -> {

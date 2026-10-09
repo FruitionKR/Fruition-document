@@ -51,7 +51,7 @@ class DocumentPlacementServiceTest {
     void setUp() {
         service = new DocumentPlacementService(
                 workspaceAccessGuard,
-                documentRepository, folderRepository, idempotencyService, siblingReorderer);
+                documentRepository, folderRepository, idempotencyService, siblingReorderer, new fruition.core.document.service.DocumentAccessPolicy(workspaceAccessGuard, org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class)));
         lenient().when(idempotencyService.execute(
                 any(), any(), any(), any(), any(), anyInt(), any(), any()))
                 .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(7).get());

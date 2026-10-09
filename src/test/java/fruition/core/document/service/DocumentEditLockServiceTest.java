@@ -46,7 +46,7 @@ class DocumentEditLockServiceTest {
 
     private DocumentEditLockService service() {
         return new DocumentEditLockService(lockRepository, documentRepository,
-                workspaceAccessGuard, accessUserClient, 45, Clock.fixed(NOW, ZoneOffset.UTC));
+                workspaceAccessGuard, accessUserClient, new fruition.core.document.service.DocumentAccessPolicy(workspaceAccessGuard, org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class)), 45, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     private void stubOwnedEditable() {

@@ -1085,7 +1085,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string` |
 | 출력 | `202` 재처리 큐 등록됨 — `DocumentIngestResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 편집 가능한 Markdown 문서가 아님 — `ErrorResponse`<br>`403` 문서 소유자가 아님 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 이미 처리 중인 문서 — `ErrorResponse` |
+| 주요 오류 | `400` 편집 가능한 Markdown 문서가 아님 — `ErrorResponse`<br>`403` 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 이미 처리 중인 문서 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1133,7 +1133,7 @@ Markdown 문서를 Wiki 파이프라인에 넣습니다. 일반 문서는 최신
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 편집 가능한 Markdown 문서가 아니거나 스킬 참고 문서임 | `ErrorResponse` |
-| `403` | 문서 소유자가 아님 | `ErrorResponse` |
+| `403` | 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 이미 처리 중인 문서 | `ErrorResponse` |
 

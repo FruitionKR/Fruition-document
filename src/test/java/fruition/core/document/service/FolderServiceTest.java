@@ -55,7 +55,8 @@ class FolderServiceTest {
     void setUp() {
         service = new FolderService(workspaceAccessGuard,
                 folderRepository, documentRepository,
-                idempotencyService, siblingReorderer, documentItemAssembler, documentWikiRetirement);
+                idempotencyService, siblingReorderer, documentItemAssembler, documentWikiRetirement,
+                new fruition.core.document.service.DocumentAccessPolicy(workspaceAccessGuard, org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class)));
         lenient().when(idempotencyService.execute(
                 any(), any(), any(), any(), any(), anyInt(), any(), any()))
                 .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(7).get());

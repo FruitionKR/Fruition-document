@@ -84,6 +84,7 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
      * <p>트리에 실리는 문서·폴더 행의 {@code xmin}을 모은다. 행이 갱신되면 {@code xmin}이 바뀌므로
      * 엔티티·벌크 갱신·네이티브 SQL 어느 경로로 바뀌어도 지문이 달라진다. 시각 비교와 달리 늦게
      * 커밋된 갱신도 놓치지 않는다. 편집 상태는 행이 있는지만 편집 가능 여부에 쓰이므로 ID만 넣는다.
+     * 문서·폴더 권한 설정은 항목의 can_edit를 바꾸므로 함께 넣는다.
      *
      * <p>{@code stalled}는 DB 변경 없이 시간이 지나 바뀌므로 {@code stalledBefore}로 따로 넣는다.
      * 조건은 {@link fruition.core.document.service.DocumentItemAssembler}의 판정과 같아야 한다.
@@ -108,7 +109,10 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
                                     FROM document_edit_states e
                                     JOIN documents d ON d.id = e.document_id
                                     WHERE d.workspace_id = :workspaceId
-                                      AND d.deleted_at IS NULL), ''))
+                                      AND d.deleted_at IS NULL), '')
+                || '|' || coalesce((SELECT string_agg(p.id::text || ':' || p.xmin::text, ',' ORDER BY p.id)
+                                    FROM document_permissions p
+                                    WHERE p.workspace_id = :workspaceId), ''))
             """, nativeQuery = true)
     String findTreeFingerprint(@Param("workspaceId") String workspaceId,
                                @Param("stalledBefore") Instant stalledBefore);
@@ -145,12 +149,13 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
      */
     @Transactional
     @Modifying
-    @Query("UPDATE Document d SET d.currentContentHash = :contentHash, d.updatedAt = :updatedAt "
-            + "WHERE d.id = :documentId")
+    @Query("UPDATE Document d SET d.currentContentHash = :contentHash, d.updatedAt = :updatedAt, "
+            + "d.updatedBy = :updatedBy WHERE d.id = :documentId")
     int updateCurrentContentHash(
             @Param("documentId") String documentId,
             @Param("contentHash") String contentHash,
-            @Param("updatedAt") Instant updatedAt
+            @Param("updatedAt") Instant updatedAt,
+            @Param("updatedBy") String updatedBy
     );
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

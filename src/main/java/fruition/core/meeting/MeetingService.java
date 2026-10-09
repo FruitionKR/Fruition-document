@@ -62,7 +62,7 @@ public class MeetingService {
                 MeetingResponse::meetingId, () -> {
                     accessGuard.requireMember(workspaceId, userId);
                     if (documentId != null) {
-                        documentEditRules.requireEditableOwned(workspaceId, userId, documentId);
+                        documentEditRules.requireEditable(workspaceId, userId, documentId);
                     }
                     MeetingRepository.Meeting meeting = new MeetingRepository.Meeting(
                             "mtg_" + UUID.randomUUID().toString().replace("-", ""), workspaceId, userId, name,
