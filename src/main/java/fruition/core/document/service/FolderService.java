@@ -18,12 +18,15 @@ import fruition.core.document.exception.HierarchyItemNotFoundException;
 import fruition.core.document.exception.HierarchyVersionConflictException;
 import fruition.core.document.exception.HierarchyWriteForbiddenException;
 import fruition.core.document.exception.InvalidHierarchyRequestException;
+import fruition.core.document.exception.TrashRetentionExpiredException;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -48,6 +51,7 @@ public class FolderService {
     private final DocumentItemAssembler documentItemAssembler;
     private final DocumentWikiRetirement documentWikiRetirement;
     private final DocumentAccessPolicy documentAccessPolicy;
+    private final Duration trashRetention;
 
     public FolderService(WorkspaceAccessGuard workspaceAccessGuard,
                          FolderRepository folderRepository,
@@ -56,7 +60,8 @@ public class FolderService {
                          SiblingReorderer siblingReorderer,
                          DocumentItemAssembler documentItemAssembler,
                          DocumentWikiRetirement documentWikiRetirement,
-                         DocumentAccessPolicy documentAccessPolicy) {
+                         DocumentAccessPolicy documentAccessPolicy,
+                         @Value("${app.document-trash.retention:30d}") Duration trashRetention) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.folderRepository = folderRepository;
         this.documentRepository = documentRepository;
@@ -65,6 +70,7 @@ public class FolderService {
         this.documentItemAssembler = documentItemAssembler;
         this.documentWikiRetirement = documentWikiRetirement;
         this.documentAccessPolicy = documentAccessPolicy;
+        this.trashRetention = trashRetention;
     }
 
     @Transactional
@@ -198,6 +204,10 @@ public class FolderService {
                                     folderId, workspaceId)
                             .orElseThrow(() -> new HierarchyItemNotFoundException(
                                     "삭제된 폴더를 찾을 수 없습니다."));
+                    // 같은 작업으로 지운 하위 문서는 삭제 시각이 같아 함께 영구 삭제 대상이 된다.
+                    if (!deleted.getDeletedAt().plus(trashRetention).isAfter(Instant.now())) {
+                        throw new TrashRetentionExpiredException("휴지통 보관 기간이 지나 복구할 수 없습니다.");
+                    }
                     UUID operationId = deleted.getDeleteOperationId();
                     UUID originalParent = deleted.getParentFolderId();
                     boolean parentActive = originalParent == null

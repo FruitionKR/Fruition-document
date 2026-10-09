@@ -6,6 +6,7 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 
 - 활성 문서의 전체 파일명(확장자 포함)과 폴더명은 각각 워크스페이스 전체에서 고유하다. 폴더 위치가 달라도 중복을 허용하지 않는다. 앞뒤 공백 제거·Unicode NFC·소문자 변환 후 DB expression unique index로 비교한다(V48). 휴지통 항목은 이름을 점유하지 않으며, 복구 시 활성 이름과 충돌하면 전체 트랜잭션을 거절한다. 기존 중복은 적용 전에 별도로 검토해 정리해야 한다.
 - 문서를 휴지통으로 옮기면(문서·폴더 삭제) 같은 트랜잭션에서 `document_deleted` command를 `ai_command_outbox`에 넣어 AI가 해당 문서의 source 페이지를 위키에서 뺀다. 같은 트랜잭션에서 그 문서의 `wiki_page_contributions`를 `active = false`(`deactivated_by` 없음)로 꺼서, 로그 되돌리기가 삭제한 문서의 source 페이지나 개념 기여를 다시 살리지 않게 한다. 개념 페이지는 유지한다. 편집 문서는 `status = uploaded`로 되돌려 복구 후 다시 편입하게 한다. 이 규칙 이전에 휴지통에 들어간 문서는 V52가 한 번 정리 command를 발행하고 기여를 껐다.
+- 휴지통 문서·폴더는 `deleted_at`부터 보관 기간(`app.document-trash.retention`, 기본 30일)이 지나면 `DocumentTrashPurgeWorker`가 하루 1회 원본·추출본 객체를 먼저 지운 뒤 행을 지운다. 객체 삭제가 실패하면 트랜잭션을 되돌려 행을 남기고 다음 실행에서 다시 시도한다. 보관 기간이 지난 항목은 휴지통 목록에서 빠지고 복구를 `409 TRASH_RETENTION_EXPIRED`로 거절하므로, 객체만 지워진 문서가 되살아나지 않는다. 본문·버전·잠금·asset 참조는 CASCADE로 함께 지워지고, 다른 문서가 참조하지 않는 이미지 asset은 `unreferenced_since`를 채워 기존 이미지 정리 작업(7일 보존)에 넘긴다. 대상 행을 `FOR UPDATE SKIP LOCKED`로 잡은 채 객체와 행을 지워 여러 replica가 동시에 돌아도 한 번만 처리한다. 위키 정리는 휴지통으로 옮길 때 이미 끝났으므로 다시 보내지 않는다.
 
 - `chat_messages.web_search_enabled`: 질의 요청의 `allow_web_search` 실행 시점 snapshot
 

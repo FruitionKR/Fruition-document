@@ -36,6 +36,7 @@ import fruition.core.document.exception.MarkdownContentTooLargeException;
 import fruition.core.document.exception.MarkdownDiffTooLargeException;
 import fruition.core.document.exception.HierarchyItemNotFoundException;
 import fruition.core.document.exception.HierarchyVersionConflictException;
+import fruition.core.document.exception.TrashRetentionExpiredException;
 import fruition.core.document.exception.HierarchyCycleException;
 import fruition.core.document.exception.InvalidHierarchyRequestException;
 import fruition.core.document.exception.HierarchyWriteForbiddenException;
@@ -412,6 +413,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of("HIERARCHY_VERSION_CONFLICT", e.getMessage()));
+    }
+
+    @ExceptionHandler(TrashRetentionExpiredException.class)
+    public ResponseEntity<ErrorResponse> handleTrashRetentionExpired(TrashRetentionExpiredException e) {
+        logHandled(e, HttpStatus.CONFLICT, "TRASH_RETENTION_EXPIRED");
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("TRASH_RETENTION_EXPIRED", e.getMessage()));
     }
 
     @ExceptionHandler(HierarchyCycleException.class)

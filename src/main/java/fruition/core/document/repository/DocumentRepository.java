@@ -67,8 +67,6 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
     /** 완료 후처리(reconcile) 대상: 아직 후처리 안 된(reconciled_at IS NULL) origin·status 문서. */
     List<Document> findAllByOriginAndStatusAndReconciledAtIsNull(String origin, DocumentStatus status);
 
-    List<Document> findAllByWorkspaceId(String workspaceId);
-
     List<Document> findAllByStatusAndPipelineRunIdIsNotNull(DocumentStatus status);
 
     /** 호환 문서 목록: 채팅 편입 문서를 포함한 활성 문서를 공용 순서로 조회한다. 스킬 참고 문서는 뺀다. */

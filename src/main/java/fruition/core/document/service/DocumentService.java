@@ -18,6 +18,7 @@ import fruition.core.document.exception.DocumentUploadException;
 import fruition.core.document.exception.InvalidDocumentOriginException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentVersionConflictException;
+import fruition.core.document.exception.TrashRetentionExpiredException;
 import fruition.core.document.exception.DocumentWriteForbiddenException;
 import fruition.core.document.exception.InvalidDocumentFilenameException;
 import fruition.core.document.exception.InvalidDocumentVersionException;
@@ -93,6 +94,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays; import java.util.Comparator;
 import java.util.HexFormat;
@@ -146,6 +148,7 @@ public class DocumentService {
     private final IngestOperationStarter ingestOperationStarter;
     private final fruition.core.document.repository.AiCommandOutboxWriter taskWriter;
     private final DocumentAccessPolicy documentAccessPolicy;
+    private final Duration trashRetention;
 
     public DocumentService(DocumentRepository documentRepository,
                            FolderRepository folderRepository,
@@ -175,8 +178,10 @@ public class DocumentService {
                            WorkspaceAiModelClient workspaceAiModelClient,
                            fruition.core.document.repository.AiCommandOutboxWriter taskWriter,
                            DocumentWikiRetirement documentWikiRetirement,
-                           DocumentAccessPolicy documentAccessPolicy) {
+                           DocumentAccessPolicy documentAccessPolicy,
+                           @Value("${app.document-trash.retention:30d}") Duration trashRetention) {
         this.documentAccessPolicy = documentAccessPolicy;
+        this.trashRetention = trashRetention;
         this.taskWriter = taskWriter;
         this.documentWikiRetirement = documentWikiRetirement;
         this.documentRepository = documentRepository;
@@ -2116,10 +2121,12 @@ public class DocumentService {
 
     public DocumentTrashResponse trash(String workspaceId, String userId) {
         verifyWorkspaceOwnership(workspaceId, userId);
+        Instant now = Instant.now();
         return new DocumentTrashResponse(
                 documentRepository
                         .findAllByWorkspaceIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(workspaceId)
                         .stream()
+                        .filter(document -> !isTrashExpired(document.getDeletedAt(), now))
                         .map(document -> new DocumentTrashResponse.DocumentTrashItem(
                                 document.getId(),
                                 document.getFilename(),
@@ -2129,7 +2136,8 @@ public class DocumentService {
                                 document.getDeletedAt(),
                                 document.getDeletedBy(),
                                 document.getDeleteOperationId(),
-                                document.getSourceDocumentId()
+                                document.getSourceDocumentId(),
+                                document.getDeletedAt().plus(trashRetention)
                         ))
                         .toList()
         );
@@ -2161,6 +2169,10 @@ public class DocumentService {
         }
         if (document.getDeletedAt() == null) {
             throw new DocumentNotFoundException(documentId);
+        }
+        // 영구 삭제 작업이 원본 객체를 먼저 지우므로, 보관 기간이 지난 문서를 되살리면 원본 없는 문서가 된다.
+        if (isTrashExpired(document.getDeletedAt(), Instant.now())) {
+            throw new TrashRetentionExpiredException("휴지통 보관 기간이 지나 복구할 수 없습니다.");
         }
         List<Document> rootItems = documentRepository.findRootItemsForUpdate(
                 workspaceId, document.getDocumentRole());
@@ -2197,31 +2209,8 @@ public class DocumentService {
         return response;
     }
 
-    /** 워크스페이스 삭제 시 소속 문서를 함께 정리한다. DB에 workspace_id FK CASCADE가 없어 애플리케이션에서 직접 처리한다. */
-    @Transactional
-    public void deleteAllByWorkspaceId(String workspaceId) {
-        documentRepository.findAllByWorkspaceId(workspaceId).forEach(this::deleteInternal);
-    }
-
-    private void deleteInternal(Document document) {
-        String documentId = document.getId();
-        String sourceUri = document.getSourceUri();
-        String extractedTextUri = document.getExtractedTextUri();
-
-        // document 삭제
-        documentRepository.delete(document);
-        ingestCommandOutbox.enqueueDelete(documentId, document.getWorkspaceId());
-
-        // commit 이후 MinIO 오브젝트 삭제
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                deleteMinioObject(sourceUri);
-                if (extractedTextUri != null) {
-                    deleteMinioObject(extractedTextUri);
-                }
-            }
-        });
+    private boolean isTrashExpired(Instant deletedAt, Instant now) {
+        return !deletedAt.plus(trashRetention).isAfter(now);
     }
 
     private void validateLifecycleRequest(DocumentLifecycleRequest request) {

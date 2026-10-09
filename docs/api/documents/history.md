@@ -10,7 +10,7 @@
 
 | API | 목적 |
 |---|---|
-| [`GET /api/workspaces/{workspace_id}/documents/trash`](#summary-get-api-workspaces-workspace-id-documents-trash) | 워크스페이스에서 소프트 삭제된 문서를 삭제 시각 역순으로 반환합니다. |
+| [`GET /api/workspaces/{workspace_id}/documents/trash`](#summary-get-api-workspaces-workspace-id-documents-trash) | 워크스페이스에서 소프트 삭제된 문서 중 보관 기간이 지나지 않은 문서를 삭제 시각 역순으로 반환합니다. |
 | [`DELETE /api/workspaces/{workspace_id}/documents/{document_id}`](#summary-delete-api-workspaces-workspace-id-documents-document-id) | 원본과 편집 상태를 유지한 채 문서를 소프트 삭제하고 AI에 위키 정리를 요청합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/diff`](#summary-get-api-workspaces-workspace-id-documents-document-id-diff) | 두 Markdown 버전을 줄 단위로 비교해 GitHub 스타일 diff hunk를 반환합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/{document_id}/restore`](#summary-post-api-workspaces-workspace-id-documents-document-id-restore) | 삭제 문서를 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다. |
@@ -25,7 +25,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | 워크스페이스에서 소프트 삭제된 문서를 삭제 시각 역순으로 반환합니다. |
+| 목적 | 워크스페이스에서 소프트 삭제된 문서 중 보관 기간이 지나지 않은 문서를 삭제 시각 역순으로 반환합니다. |
 | 입력 | **Path** — `workspace_id`: `string` |
 | 출력 | `200` 휴지통 조회 성공 — `DocumentTrashResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
@@ -43,7 +43,7 @@
 
 #### 2. 목적
 
-워크스페이스에서 소프트 삭제된 문서를 삭제 시각 역순으로 반환합니다.
+워크스페이스에서 소프트 삭제된 문서 중 보관 기간이 지나지 않은 문서를 삭제 시각 역순으로 반환합니다.
 
 #### 3. Auth 필요 여부
 
@@ -75,11 +75,17 @@
       "document_role": "EDITABLE",
       "filename": "설계문서.pdf",
       "id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+      "purge_at": "2026-09-12T04:25:24.371948Z",
       "source_document_id": "string"
     }
   ]
 }
 ```
+
+- `purge_at`: 영구 삭제 예정 시각. `deleted_at`에 보관 기간(`app.document-trash.retention`, 기본 30일)을 더한 값이다.
+  이 시각이 지나면 휴지통 목록에서 빠지고 복구는 `409 TRASH_RETENTION_EXPIRED`로 거절한다. 하루 1회 도는 정리 작업이 원본·추출본 객체를 먼저 지운 뒤 DB 행을 지운다.
+  객체 삭제가 실패하면 행을 남겨 다음 실행에서 다시 시도한다.
+  보관 기간이 지난 폴더도 안에 남은 문서가 없으면 함께 지운다. 이미지는 다른 문서가 쓰지 않으면 7일 뒤 이미지 정리 작업이 지운다.
 
 #### 6. Error response
 
@@ -125,6 +131,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
       "document_role": "EDITABLE",
       "filename": "설계문서.pdf",
       "id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+      "purge_at": "2026-09-12T04:25:24.371948Z",
       "source_document_id": "string"
     }
   ]
@@ -429,7 +436,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `DocumentLifecycleRequest` |
 | 출력 | `200` 복구 성공 — `DocumentLifecycleResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 base_version 또는 Idempotency-Key — `ErrorResponse`<br>`403` 문서 소유자나 워크스페이스 OWNER가 아님 — `ErrorResponse`<br>`404` 삭제 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 또는 멱등 키 충돌 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 base_version 또는 Idempotency-Key — `ErrorResponse`<br>`403` 문서 소유자나 워크스페이스 OWNER가 아님 — `ErrorResponse`<br>`404` 삭제 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 또는 멱등 키 충돌, `TRASH_RETENTION_EXPIRED` 휴지통 보관 기간 경과 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -488,7 +495,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | `400` | 잘못된 base_version 또는 Idempotency-Key | `ErrorResponse` |
 | `403` | 문서 소유자나 워크스페이스 OWNER가 아님 | `ErrorResponse` |
 | `404` | 삭제 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `409` | 문서 version 또는 멱등 키 충돌 | `ErrorResponse` |
+| `409` | 문서 version 또는 멱등 키 충돌, `TRASH_RETENTION_EXPIRED` 휴지통 보관 기간 경과 | `ErrorResponse` |
 
 ```json
 {

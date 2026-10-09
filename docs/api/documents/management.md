@@ -26,6 +26,8 @@
 | [`PATCH /api/workspaces/{workspace_id}/documents/{document_id}/position`](#summary-patch-api-workspaces-workspace-id-documents-document-id-position) | 문서를 대상 폴더와 정렬 위치로 이동합니다. base version과 Idempotency-Key로 동시 변경을 검증합니다. |
 | [`PATCH /api/workspaces/{workspace_id}/documents/{document_id}/rename`](#summary-patch-api-workspaces-workspace-id-documents-document-id-rename) | Notion의 page title처럼 표시 이름만 변경하며 본문과 Wiki 제목은 유지합니다. |
 | [`POST /internal/workspaces/{workspace_id}/initial-note`](#summary-post-internal-workspaces-workspace-id-initial-note) | 새 워크스페이스에 기본 Markdown 문서를 생성합니다. |
+| [`POST /internal/purge/workspaces`](#summary-post-internal-purge-workspaces) | 워크스페이스의 문서·폴더·채팅·회의·AI 작업 기록과 저장소 객체를 모두 지웁니다. |
+| [`POST /internal/purge/users`](#summary-post-internal-purge-users) | 탈퇴 사용자의 채팅·회의·AI 실행 기록을 지우고 공유 문서는 남깁니다. |
 
 ## 한눈에 보기
 
@@ -1518,5 +1520,108 @@ curl -X POST "$DOCUMENT/internal/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-internal-workspaces-workspace-id-initial-note)
+
+</details>
+
+<a id="summary-post-internal-purge-workspaces"></a>
+### `POST /internal/purge/workspaces`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 영구 삭제하는 워크스페이스의 core_db 행과 저장소 객체를 모두 지웁니다. |
+| 입력 | **Header** — `X-Internal-Token`(필수): `string`<br>**Body** — `WorkspacePurgeRequest` |
+| 출력 | `200` 파기 완료 — 지운 행 수(`deleted_rows`)와 객체 수(`deleted_objects`) |
+| 조건 | 서비스 간 내부 인증 토큰을 검증한다. 같은 요청을 다시 보내도 결과가 같다. |
+| 주요 오류 | `400` `workspace_ids`가 비었거나 100개 초과<br>`401` 내부 인증 토큰 누락 또는 불일치<br>`503` `PURGE_STORAGE_FAILED` 저장소 객체 삭제 실패. 행은 그대로 남으므로 다시 호출한다 |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-internal-purge-workspaces"></a>
+### `POST /internal/purge/workspaces` 상세
+
+#### 1. 지우는 대상
+
+- 행: 문서(본문·버전·잠금·편집 기록·asset 참조), 이미지 asset, 폴더, 채팅 세션과 메시지, 회의(전사·회의록 초안 포함),
+  AI 작업 로그와 변경 내역, 위키 기여·버전 기록, AI 실행 기록, 문서 편집 outbox, Wiki lint 상태, 앱 안 알림(읽음 기록 포함).
+  문서·폴더 권한 설정과 편집 충돌은 문서·폴더 FK CASCADE로 함께 지워진다
+- 객체: 문서 원본·추출본, 회의 녹음 원본, `assets/{workspace_id}/` 아래 이미지 전부
+- 남기는 것: AI 사용 정산(`ai_usage_settlements`)과 단가표(`ai_model_prices`), 호출별 청구(`usage_charges`), 크레딧(`credit_accounts`·`credit_entries`), 결제(`credit_orders`·`payment_events`). 대금 결제 기록 보관 대상(5년)이다
+- AI pipeline이 가진 위키·스킬·에이전트 기록은 아직 지우지 않는다(AI 쪽 파기 API 필요)
+
+#### 2. 처리 순서
+
+워크스페이스마다 객체를 먼저 지우고 행을 한 트랜잭션에서 지운다. 객체 키는 행에서 읽으므로 객체 삭제가 실패하면 행을 남기고
+`503`을 돌려준다. 다시 호출하면 같은 키를 읽어 이어서 지운다. 여러 워크스페이스 중 일부만 끝난 뒤 실패해도 다시 호출하면 된다.
+
+#### 3. Request / Response
+
+```json
+{ "workspace_ids": ["ws_9d47a0e9a6324341b47562553b75f92a"] }
+```
+
+```json
+{
+  "deleted_rows": { "documents": 3, "folders": 1, "chat_sessions": 2, "meetings": 1, "...": 0 },
+  "deleted_objects": 5
+}
+```
+
+`deleted_rows`는 테이블별 직접 지운 행 수다. CASCADE로 함께 지워진 행(문서 버전, 채팅 메시지 등)은 세지 않는다.
+
+#### 4. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/purge/InternalPurgeController.java`
+- 처리: `src/main/java/fruition/core/purge/DataPurgeService.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: purgeWorkspaces`)
+- 호출자: 없음(access-svc 워크스페이스 영구 삭제·회원 탈퇴에서 붙일 예정)
+- 하위 호출: 객체 저장소(MinIO/S3) 목록 조회·삭제
+- 배선 상태: 호출자 없음
+
+[↑ 요약으로 돌아가기](#summary-post-internal-purge-workspaces)
+
+</details>
+
+<a id="summary-post-internal-purge-users"></a>
+### `POST /internal/purge/users`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 탈퇴 사용자가 공유 워크스페이스에 남긴 개인 데이터를 지웁니다. |
+| 입력 | **Header** — `X-Internal-Token`(필수): `string`<br>**Body** — `UserPurgeRequest` |
+| 출력 | `200` 파기 완료 — 지운 행 수(`deleted_rows`)와 객체 수(`deleted_objects`) |
+| 조건 | 서비스 간 내부 인증 토큰을 검증한다. 같은 요청을 다시 보내도 결과가 같다. |
+| 주요 오류 | `400` `user_id` 누락<br>`401` 내부 인증 토큰 누락 또는 불일치<br>`503` `PURGE_STORAGE_FAILED` 녹음 원본 삭제 실패. 다시 호출한다 |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-internal-purge-users"></a>
+### `POST /internal/purge/users` 상세
+
+#### 1. 지우는 대상
+
+- 지운다: 본인 채팅 세션과 메시지, 본인이 만든 회의와 녹음 원본, 본인 AI 실행 기록(질문 원문과 변경 전후 값을 담는다),
+  에이전트 적용 기록, 멱등 응답 기록, 본인에게 온 알림과 본인의 알림 읽음 기록
+- 남긴다: 멤버가 함께 보는 문서(회의록으로 저장한 문서 포함)와 AI 작업 로그. 이용약관 초안 제8조④에 따라 워크스페이스에 남고 OWNER가 관리한다
+- 혼자 쓰던 워크스페이스는 이 API가 아니라 `POST /internal/purge/workspaces`로 지운다
+
+#### 2. Request / Response
+
+```json
+{ "user_id": "user_3f2a" }
+```
+
+응답 형식은 `POST /internal/purge/workspaces`와 같다.
+
+#### 3. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/purge/InternalPurgeController.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: purgeUser`)
+- 호출자: 없음(access-svc 회원 탈퇴에서 붙일 예정)
+- 하위 호출: 객체 저장소(MinIO/S3) 삭제
+- 배선 상태: 호출자 없음
+
+[↑ 요약으로 돌아가기](#summary-post-internal-purge-users)
 
 </details>

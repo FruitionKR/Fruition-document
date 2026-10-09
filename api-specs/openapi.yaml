@@ -1543,7 +1543,7 @@ paths:
       - Documents
   /api/workspaces/{workspace_id}/documents/trash:
     get:
-      description: 워크스페이스에서 소프트 삭제된 문서를 삭제 시각 역순으로 반환합니다.
+      description: 워크스페이스에서 소프트 삭제된 문서 중 보관 기간이 지나지 않은 문서를 삭제 시각 역순으로 반환합니다.
       operationId: trash
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -2598,7 +2598,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 문서 version 또는 멱등 키 충돌
+          description: "문서 version 또는 멱등 키 충돌, TRASH_RETENTION_EXPIRED(휴지통 보관 기간 경과)"
       summary: 문서 복구
       tags:
       - Documents
@@ -3119,7 +3119,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: "version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용)"
+          description: "version 충돌, TRASH_RETENTION_EXPIRED(휴지통 보관 기간 경과), IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용)"
       summary: 폴더 복구
       tags:
       - Folders
@@ -5242,6 +5242,54 @@ paths:
       summary: PG 결제 webhook
       tags:
       - credit-order-controller
+  /internal/purge/users:
+    post:
+      operationId: purgeUser
+      parameters:
+      - in: header
+        name: X-Internal-Token
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPurgeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+          description: OK
+      tags:
+      - internal-purge-controller
+  /internal/purge/workspaces:
+    post:
+      operationId: purgeWorkspaces
+      parameters:
+      - in: header
+        name: X-Internal-Token
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspacePurgeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+          description: OK
+      tags:
+      - internal-purge-controller
   /internal/wiki/contributions:
     post:
       operationId: find
@@ -6851,6 +6899,11 @@ components:
           type: string
           description: 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        purge_at:
+          type: string
+          format: date-time
+          description: 영구 삭제 예정 시각(ISO-8601 UTC). 이 시각 뒤 하루 안에 지워지며 그 전까지 복구할 수 있다.
+          example: 2026-09-12T04:25:24.371948Z
         source_document_id:
           type: string
           description: 변환으로 만들어진 문서라면 원본 문서 ID
@@ -8818,6 +8871,14 @@ components:
           type: boolean
         user_id:
           type: string
+    UserPurgeRequest:
+      type: object
+      properties:
+        user_id:
+          type: string
+          minLength: 1
+      required:
+      - user_id
     WikiGraphEdge:
       type: object
       description: Wiki 페이지 사이의 방향 있는 관계
@@ -9321,6 +9382,18 @@ components:
       - status
       - user_id
       - workspace_id
+    WorkspacePurgeRequest:
+      type: object
+      properties:
+        workspace_ids:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          maxItems: 100
+          minItems: 1
+      required:
+      - workspace_ids
   securitySchemes:
     bearerAuth:
       bearerFormat: JWT
