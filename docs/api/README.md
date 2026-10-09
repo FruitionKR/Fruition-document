@@ -22,7 +22,7 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Wiki Schema](wiki-schema.md) | 5 | Wiki 스키마 초안·미리보기·활성화 |
 | [Usage](agent.md#본인-모델-사용량-조회) | 1 | 본인 모델별 토큰 사용량 조회 |
 
-기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 96개(`/api/**` 87 + `/internal/**` 9), operation 108개**다.
+기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 98개(`/api/**` 87 + `/internal/**` 11), operation 110개**다.
 위 표의 "API 수"는 각 도메인 문서가 다루는 API 수이고, 충돌할 경우 실행 코드와 생성된 OpenAPI를 우선한다.
 표의 HTTP 합계는 107이고 위의 operation 108개와 1 차이가 난다. 96개 path 전부가 문서에 있음은 확인했으므로
 누락된 API가 아니라 도메인별 집계 단위(같은 path의 여러 method를 1개로 세는지)가 섞인 결과다. 정확한 수는 OpenAPI를 본다.
@@ -35,14 +35,15 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | 구분 | path 수 | 호출자 확인 | 호출자 없음 |
 |---|---:|---:|---:|
 | `/api/**` (프론트엔드 전용 표면) | 87 | 59 | **28** |
-| `/internal/**` (서비스 간 표면) | 9 | 9 | 0 |
-| 합계 | 96 | 68 | **28** |
+| `/internal/**` (서비스 간 표면) | 11 | 9 | **2** |
+| 합계 | 98 | 68 | **30** |
 
 ### 호출 주체
 
 - `/api/**`는 프론트엔드만 호출한다. ai-svc·access-svc 어느 쪽도 이 서비스의 `/api/**`를 호출하지 않는다
   (ai-svc의 outbound 조립은 `/internal/**`과 access-svc `/internal/authz/**`뿐이고, access-svc의 outbound RestClient는 `DocumentInternalClient` 하나다).
-- `/internal/**` 9개 중 8개는 ai-svc가, 1개(`POST /internal/workspaces/{workspace_id}/initial-note`)는 access-svc가 호출한다.
+- `/internal/**` 11개 중 8개는 ai-svc가, 1개(`POST /internal/workspaces/{workspace_id}/initial-note`)는 access-svc가 호출한다.
+  데이터 파기 2개(`POST /internal/purge/workspaces`, `POST /internal/purge/users`)는 access-svc 회원 탈퇴·워크스페이스 영구 삭제가 붙기 전이라 호출자가 없다.
 - 주의: `/internal/agent/runs`와 `/internal/ai/tasks`는 이 서비스의 경로가 **아니다**. ai-svc가 노출하고 이 서비스가 호출하는 경로다
   (`pipeline/app/modules/agent_run/interfaces/http/routes.py:30`, `pipeline/app/modules/task_cancellation/interfaces/http/routes.py:10`).
 

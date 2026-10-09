@@ -4737,6 +4737,54 @@ paths:
           description: OK
       tags:
       - internal-document-controller
+  /internal/purge/users:
+    post:
+      operationId: purgeUser
+      parameters:
+      - in: header
+        name: X-Internal-Token
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPurgeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+          description: OK
+      tags:
+      - internal-purge-controller
+  /internal/purge/workspaces:
+    post:
+      operationId: purgeWorkspaces
+      parameters:
+      - in: header
+        name: X-Internal-Token
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspacePurgeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+          description: OK
+      tags:
+      - internal-purge-controller
   /internal/wiki/contributions:
     post:
       operationId: find
@@ -7943,6 +7991,14 @@ components:
           type: boolean
         user_id:
           type: string
+    UserPurgeRequest:
+      type: object
+      properties:
+        user_id:
+          type: string
+          minLength: 1
+      required:
+      - user_id
     WikiGraphEdge:
       type: object
       description: Wiki 페이지 사이의 방향 있는 관계
@@ -8441,6 +8497,18 @@ components:
       - status
       - user_id
       - workspace_id
+    WorkspacePurgeRequest:
+      type: object
+      properties:
+        workspace_ids:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          maxItems: 100
+          minItems: 0
+      required:
+      - workspace_ids
   securitySchemes:
     bearerAuth:
       bearerFormat: JWT
