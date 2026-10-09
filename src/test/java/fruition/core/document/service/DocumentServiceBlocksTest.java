@@ -151,7 +151,7 @@ class DocumentServiceBlocksTest {
                 applyOperationStore,
                 operationRecorder,
                 ingestOperationStarter,
-                workspaceAiModelClient, taskWriter, documentWikiRetirement);
+                workspaceAiModelClient, taskWriter, documentWikiRetirement, java.time.Duration.ofDays(30));
         lenient().when(pipelineWikiStateRequester.documentContext(anyString(), anyString()))
                 .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(), null));
         // 직접 생성·복제·변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.

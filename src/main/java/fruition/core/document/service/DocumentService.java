@@ -93,6 +93,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays; import java.util.Comparator;
 import java.util.HexFormat;
@@ -145,6 +146,7 @@ public class DocumentService {
     private final OperationRecorder operationRecorder;
     private final IngestOperationStarter ingestOperationStarter;
     private final fruition.core.document.repository.AiCommandOutboxWriter taskWriter;
+    private final Duration trashRetention;
 
     public DocumentService(DocumentRepository documentRepository,
                            FolderRepository folderRepository,
@@ -173,7 +175,9 @@ public class DocumentService {
                            IngestOperationStarter ingestOperationStarter,
                            WorkspaceAiModelClient workspaceAiModelClient,
                            fruition.core.document.repository.AiCommandOutboxWriter taskWriter,
-                           DocumentWikiRetirement documentWikiRetirement) {
+                           DocumentWikiRetirement documentWikiRetirement,
+                           @Value("${app.document-trash.retention:30d}") Duration trashRetention) {
+        this.trashRetention = trashRetention;
         this.taskWriter = taskWriter;
         this.documentWikiRetirement = documentWikiRetirement;
         this.documentRepository = documentRepository;
@@ -2108,7 +2112,8 @@ public class DocumentService {
                                 document.getDeletedAt(),
                                 document.getDeletedBy(),
                                 document.getDeleteOperationId(),
-                                document.getSourceDocumentId()
+                                document.getSourceDocumentId(),
+                                document.getDeletedAt().plus(trashRetention)
                         ))
                         .toList()
         );
@@ -2174,33 +2179,6 @@ public class DocumentService {
         saveIdempotencyRecord(
                 userId, endpointScope, idempotencyKey, requestHash, response);
         return response;
-    }
-
-    /** 워크스페이스 삭제 시 소속 문서를 함께 정리한다. DB에 workspace_id FK CASCADE가 없어 애플리케이션에서 직접 처리한다. */
-    @Transactional
-    public void deleteAllByWorkspaceId(String workspaceId) {
-        documentRepository.findAllByWorkspaceId(workspaceId).forEach(this::deleteInternal);
-    }
-
-    private void deleteInternal(Document document) {
-        String documentId = document.getId();
-        String sourceUri = document.getSourceUri();
-        String extractedTextUri = document.getExtractedTextUri();
-
-        // document 삭제
-        documentRepository.delete(document);
-        ingestCommandOutbox.enqueueDelete(documentId, document.getWorkspaceId());
-
-        // commit 이후 MinIO 오브젝트 삭제
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                deleteMinioObject(sourceUri);
-                if (extractedTextUri != null) {
-                    deleteMinioObject(extractedTextUri);
-                }
-            }
-        });
     }
 
     private void validateLifecycleRequest(DocumentLifecycleRequest request) {

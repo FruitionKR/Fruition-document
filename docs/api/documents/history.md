@@ -75,11 +75,16 @@
       "document_role": "EDITABLE",
       "filename": "설계문서.pdf",
       "id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+      "purge_at": "2026-09-12T04:25:24.371948Z",
       "source_document_id": "string"
     }
   ]
 }
 ```
+
+- `purge_at`: 영구 삭제 예정 시각. `deleted_at`에 보관 기간(`app.document-trash.retention`, 기본 30일)을 더한 값이다.
+  이 시각이 지나면 하루 1회 도는 정리 작업이 문서를 DB와 저장소에서 지우고, 그 뒤에는 복구할 수 없다.
+  보관 기간이 지난 폴더도 안에 남은 문서가 없으면 함께 지운다. 이미지는 다른 문서가 쓰지 않으면 7일 뒤 이미지 정리 작업이 지운다.
 
 #### 6. Error response
 
@@ -125,6 +130,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
       "document_role": "EDITABLE",
       "filename": "설계문서.pdf",
       "id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+      "purge_at": "2026-09-12T04:25:24.371948Z",
       "source_document_id": "string"
     }
   ]

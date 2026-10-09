@@ -45,7 +45,12 @@ public record DocumentTrashResponse(
 
             @JsonProperty("source_document_id")
             @Schema(description = "변환으로 만들어진 문서라면 원본 문서 ID")
-            String sourceDocumentId
+            String sourceDocumentId,
+
+            @JsonProperty("purge_at")
+            @Schema(description = "영구 삭제 예정 시각(ISO-8601 UTC). 이 시각 뒤 하루 안에 지워지며 그 전까지 복구할 수 있다.",
+                    example = "2026-09-12T04:25:24.371948Z")
+            Instant purgeAt
     ) {
     }
 }

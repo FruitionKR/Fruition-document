@@ -107,7 +107,7 @@ public class DataPurgeService {
     }
 
     private PurgeResult purge(String scope, String id, List<String> keys, List<Step> steps) {
-        removeObjects(keys.stream().map(DataPurgeService::objectKey).distinct().toList());
+        removeObjects(keys);
         Map<String, Integer> rows = transactionTemplate.execute(status -> {
             Map<String, Integer> deleted = new LinkedHashMap<>();
             for (Step step : steps) {
@@ -137,8 +137,12 @@ public class DataPurgeService {
         return keys;
     }
 
-    /** removeObjects는 결과를 끝까지 읽어야 요청이 나간다. 없는 키는 오류 없이 지나간다. */
-    private void removeObjects(List<String> keys) {
+    /**
+     * 객체를 한꺼번에 지운다. {@code s3://bucket/key} 형태의 위치도 받는다. 없는 키는 오류 없이 지나간다.
+     * removeObjects는 결과를 끝까지 읽어야 요청이 나간다.
+     */
+    public void removeObjects(List<String> uris) {
+        List<String> keys = uris.stream().map(DataPurgeService::objectKey).distinct().toList();
         if (keys.isEmpty()) return;
         try {
             for (Result<DeleteError> result : minio.removeObjects(RemoveObjectsArgs.builder().bucket(bucket)

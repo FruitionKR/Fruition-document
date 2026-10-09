@@ -6139,6 +6139,11 @@ components:
           type: string
           description: 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        purge_at:
+          type: string
+          format: date-time
+          description: 영구 삭제 예정 시각(ISO-8601 UTC). 이 시각 뒤 하루 안에 지워지며 그 전까지 복구할 수 있다.
+          example: 2026-09-12T04:25:24.371948Z
         source_document_id:
           type: string
           description: 변환으로 만들어진 문서라면 원본 문서 ID
