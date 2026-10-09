@@ -1,5 +1,6 @@
 package fruition.core.wiki.service;
 
+import fruition.core.aihistory.service.WikiObjectReader;
 import fruition.core.document.domain.Document;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.dto.MarkdownDiff;
@@ -14,6 +15,8 @@ import fruition.core.wiki.dto.*;
 import fruition.core.wiki.repository.PipelineWikiPageRequester;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.authz.WorkspaceAccessGuard;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,25 +29,30 @@ import java.util.stream.Collectors;
 @Transactional(readOnly = true)
 public class WikiService {
 
+    private static final Logger log = LoggerFactory.getLogger(WikiService.class);
+
     private final DocumentRepository documentRepository;
     private final WorkspaceAccessGuard workspaceAccessGuard;
     private final PipelineWikiPageRequester pipelineWikiPageRequester;
     private final PipelineWikiStateRequester pipelineWikiStateRequester;
     private final WikiPageVersionRepository versionRepository;
     private final MarkdownDiffService markdownDiffService;
+    private final WikiObjectReader wikiObjectReader;
 
     public WikiService(DocumentRepository documentRepository,
                        WorkspaceAccessGuard workspaceAccessGuard,
                        PipelineWikiPageRequester pipelineWikiPageRequester,
                        PipelineWikiStateRequester pipelineWikiStateRequester,
                        WikiPageVersionRepository versionRepository,
-                       MarkdownDiffService markdownDiffService) {
+                       MarkdownDiffService markdownDiffService,
+                       WikiObjectReader wikiObjectReader) {
         this.documentRepository = documentRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.pipelineWikiPageRequester = pipelineWikiPageRequester;
         this.pipelineWikiStateRequester = pipelineWikiStateRequester;
         this.versionRepository = versionRepository;
         this.markdownDiffService = markdownDiffService;
+        this.wikiObjectReader = wikiObjectReader;
     }
 
     private void verifyWorkspaceOwnership(String workspaceId, String userId) {
@@ -93,11 +101,40 @@ public class WikiService {
                 })
                 .toList();
 
+        WikiPageVersion latest = versionRepository.findTopByIdPageIdOrderByIdRevisionDesc(id).orElse(null);
         return new WikiPageDetailResponse(
                 page.id(), page.pageType(), page.title(), page.slug(), page.summary(),
-                page.markdownUri(), page.markdown(), page.status(), page.createdAt(), page.updatedAt(),
+                page.markdownUri(), markdownOf(workspaceId, page, latest), page.status(), page.createdAt(),
+                latest == null ? null : latest.getRevision(), page.updatedAt(),
                 sourceDocuments,
                 page.relatedPages());
+    }
+
+    /**
+     * 화면이 {@code markdown_uri}를 읽지 않으므로 본문은 여기서 채운다.
+     *
+     * <p>AI가 준 본문을 먼저 쓴다. 비어 있으면 최신 {@code wiki_page_versions.markdown}을 쓴다.
+     * 버전 행은 applier가 객체 본문의 hash를 확인한 뒤 남긴 것이라 객체와 같은 내용이고 저장소 호출이 없다.
+     * 버전도 없으면(이력 도입 전 페이지) 버전의 {@code markdown_key}나 AI의 {@code markdown_uri} 객체를 읽는다.
+     * 끝내 못 구하면 상세 조회 자체는 실패시키지 않고 빈 값으로 둔다.
+     */
+    private String markdownOf(String workspaceId, WikiPageDetailResponse page, WikiPageVersion latest) {
+        if (page.markdown() != null && !page.markdown().isBlank()) {
+            return page.markdown();
+        }
+        if (latest != null && !latest.getMarkdown().isBlank()) {
+            return latest.getMarkdown();
+        }
+        String key = latest != null ? latest.getMarkdownKey() : page.markdownUri();
+        if (key != null && !key.isBlank()) {
+            try {
+                return wikiObjectReader.readPageObject(key, workspaceId, page.id());
+            } catch (RuntimeException e) {
+                log.warn("[Wiki 본문 객체 읽기 실패] pageId={} key={}", page.id(), key, e);
+            }
+        }
+        log.warn("[Wiki 본문 없음] pageId={}", page.id());
+        return page.markdown();
     }
 
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
