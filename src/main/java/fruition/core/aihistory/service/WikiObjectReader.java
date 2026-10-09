@@ -50,11 +50,13 @@ public class WikiObjectReader {
     /**
      * 페이지 상세가 가리키는 본문을 읽는다. 작업 ID를 모르므로 그 워크스페이스·페이지 prefix까지만 대조한다.
      *
-     * @param markdownKey {@code wiki/{ws}/pages/{page}/} 아래의 object key 또는 {@code s3://} URI
+     * @param markdownKey {@code wiki/{ws}/pages/{page}/} 아래의 object key 또는 설정 bucket의 {@code s3://} URI
      */
     public String readPageObject(String markdownKey, String workspaceId, String pageId) {
         String actual = normalize(markdownKey);
-        if (!actual.startsWith("wiki/" + workspaceId + "/pages/" + pageId + "/") || actual.contains("..")) {
+        boolean foreignBucket = markdownKey != null && markdownKey.startsWith("s3://")
+                && !markdownKey.startsWith("s3://" + storageProperties.getBucket() + "/");
+        if (foreignBucket || !actual.startsWith("wiki/" + workspaceId + "/pages/" + pageId + "/") || actual.contains("..")) {
             throw new InvalidCallbackPayloadException(
                     "허용되지 않은 본문 경로입니다: pageId=" + pageId);
         }
