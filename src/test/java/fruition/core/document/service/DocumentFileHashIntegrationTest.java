@@ -65,14 +65,20 @@ class DocumentFileHashIntegrationTest {
                 .stream(new ByteArrayInputStream(pdf), pdf.length, -1).build());
         // 계산 전 null은 확인하지 않는다. 같은 JVM에 캐시된 다른 테스트 컨텍스트의 worker(기본 30초)가 먼저 채울 수 있다.
 
-        while (worker.fillPending() > 0) {
-            // 다른 테스트가 남긴 계산 대기 문서도 함께 처리된다.
+        // 반환값(이번에 채운 수)으로 멈추면 안 된다. 다른 컨텍스트의 worker가 같은 문서를 먼저 채우면 0이 나와
+        // 업로드 시각이 늦은 이 테스트의 문서까지 가기 전에 끝난다. 이 테스트의 문서가 채워질 때까지 돌린다.
+        for (int attempt = 0; attempt < 100 && (pending(stored) || pending(missing)); attempt++) {
+            worker.fillPending();
         }
 
         assertThat(hashOf("큰파일.pdf")).isEqualTo(sha256(pdf));
         assertThat(hashOf("없는파일.pdf")).isNull();
         assertThat(jdbc.queryForObject("SELECT original_sha256 FROM documents WHERE id = ?", String.class, missing))
                 .isEmpty();
+    }
+
+    private boolean pending(String documentId) {
+        return jdbc.queryForObject("SELECT original_sha256 IS NULL FROM documents WHERE id = ?", Boolean.class, documentId);
     }
 
     private String insertOriginal(String filename) {
