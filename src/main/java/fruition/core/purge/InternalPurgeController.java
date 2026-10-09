@@ -3,7 +3,7 @@ package fruition.core.purge;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import fruition.shared.util.ErrorResponse;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -84,7 +84,7 @@ public class InternalPurgeController {
     }
 
     record WorkspacePurgeRequest(
-            @NotEmpty @Size(max = 100) @JsonProperty("workspace_ids") List<@NotBlank String> workspaceIds) {}
+            @NotNull @Size(min = 1, max = 100) @JsonProperty("workspace_ids") List<@NotBlank String> workspaceIds) {}
 
     record UserPurgeRequest(@NotBlank @JsonProperty("user_id") String userId) {}
 
