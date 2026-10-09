@@ -1,6 +1,7 @@
 package fruition.core.document.service;
 
 import fruition.TestcontainersConfiguration;
+import fruition.core.purge.DataPurgeService;
 import fruition.shared.util.StorageProperties;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -11,6 +12,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.ByteArrayInputStream;
 import java.sql.Timestamp;
@@ -30,6 +33,8 @@ class DocumentTrashPurgeWorkerIntegrationTest {
     @Autowired DocumentTrashPurgeWorker worker;
     @Autowired DocumentService documentService;
     @Autowired JdbcTemplate jdbc;
+    @Autowired NamedParameterJdbcTemplate namedJdbc;
+    @Autowired TransactionTemplate transactionTemplate;
     @Autowired MinioClient minio;
     @Autowired StorageProperties storage;
     @Autowired StringRedisTemplate redis;
@@ -63,6 +68,23 @@ class DocumentTrashPurgeWorkerIntegrationTest {
         assertThat(unreferencedSince(shared)).isNull();
 
         assertThat(worker.purge(now)).isZero();
+    }
+
+    @Test
+    void failedObjectDeletionKeepsRowsForNextRun() throws Exception {
+        String expired = insertDocument(null, now.minus(Duration.ofDays(31)));
+        StorageProperties missingBucket = new StorageProperties();
+        missingBucket.setBucket("missing-" + UUID.randomUUID().toString().substring(0, 8));
+        DocumentTrashPurgeWorker failing = new DocumentTrashPurgeWorker(namedJdbc, transactionTemplate,
+                new DataPurgeService(jdbc, transactionTemplate, minio, missingBucket), Duration.ofDays(30));
+
+        failing.purge(now);
+        assertThat(exists("documents", expired)).isTrue();
+        stat(sourceKey(expired));
+
+        worker.purge(now);
+        assertThat(exists("documents", expired)).isFalse();
+        assertThatThrownBy(() -> stat(sourceKey(expired))).isNotNull();
     }
 
     @Test

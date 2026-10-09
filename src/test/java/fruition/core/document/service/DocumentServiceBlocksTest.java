@@ -24,6 +24,7 @@ import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.DocumentUploadException;
 import fruition.core.document.exception.DocumentVersionConflictException;
 import fruition.core.document.exception.DocumentWriteForbiddenException;
+import fruition.core.document.exception.TrashRetentionExpiredException;
 import fruition.core.document.exception.InvalidMarkdownContentException;
 import fruition.shared.idempotency.IdempotencyConflictException;
 import fruition.shared.idempotency.IdempotencyInProgressException;
@@ -1953,7 +1954,24 @@ class DocumentServiceBlocksTest {
     }
 
     @Test
-    @DisplayName("휴지통은 삭제 문서만 삭제 시각 역순으로 반환한다")
+    @DisplayName("휴지통 보관 기간이 지난 문서는 복구하지 않는다")
+    void restore_expiredTrashDocumentIsRejected() {
+        stubOwnedWorkspace();
+        Document deleted = mock(Document.class);
+        when(deleted.getUserId()).thenReturn(USER_ID);
+        when(deleted.getDeletedAt()).thenReturn(java.time.Instant.now().minus(java.time.Duration.ofDays(30)));
+        when(documentRepository.findByIdAndWorkspaceIdForUpdate("doc_expired", WORKSPACE_ID))
+                .thenReturn(Optional.of(deleted));
+
+        assertThatThrownBy(() -> documentService.restore(
+                WORKSPACE_ID, USER_ID, "doc_expired", "restore-key", new DocumentLifecycleRequest(2L)))
+                .isInstanceOf(TrashRetentionExpiredException.class);
+
+        verify(documentRepository, never()).restoreIfVersionMatches(any(), any(), anyLong(), anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("휴지통은 보관 기간 안의 삭제 문서만 삭제 시각 역순으로 반환한다")
     void trash_returnsDeletedDocuments() {
         stubOwnedWorkspace();
         Document deleted = mock(Document.class);
@@ -1964,8 +1982,10 @@ class DocumentServiceBlocksTest {
         when(deleted.getCurrentVersion()).thenReturn(2L);
         when(deleted.getDeletedAt()).thenReturn(java.time.Instant.now());
         when(deleted.getDeletedBy()).thenReturn(USER_ID);
+        Document expired = mock(Document.class);
+        when(expired.getDeletedAt()).thenReturn(java.time.Instant.now().minus(java.time.Duration.ofDays(31)));
         when(documentRepository.findAllByWorkspaceIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(
-                WORKSPACE_ID)).thenReturn(List.of(deleted));
+                WORKSPACE_ID)).thenReturn(List.of(deleted, expired));
 
         DocumentTrashResponse response = documentService.trash(WORKSPACE_ID, USER_ID);
 

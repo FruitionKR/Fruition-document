@@ -23,7 +23,9 @@ import java.util.List;
  * 문서에 딸린 본문·버전·잠금·asset 참조는 CASCADE로 함께 지워진다. 이미지 asset은 다른 문서가 참조하지 않으면
  * 미참조로 표시해 {@link DocumentAssetCleanupWorker}가 보존 기간 뒤 객체와 함께 지우게 한다.
  *
- * <p>대상 행을 {@code FOR UPDATE SKIP LOCKED}로 잡으므로 여러 replica가 동시에 돌아도 한 행은 한 번만 처리된다.
+ * <p>대상 행을 {@code FOR UPDATE SKIP LOCKED}로 잡은 채 원본 객체를 먼저 지우고 행을 지운다. 여러 replica가 동시에 돌아도
+ * 한 행은 한 번만 처리되고, 객체 삭제가 실패하면 트랜잭션을 되돌려 행을 남기므로 다음 실행에서 다시 시도한다.
+ * 보관 기간이 지난 항목은 복구를 거절하므로 객체를 지운 뒤 행이 되살아나는 일은 없다.
  */
 @Service
 public class DocumentTrashPurgeWorker {
@@ -57,15 +59,15 @@ public class DocumentTrashPurgeWorker {
         int documents = 0;
         int batch;
         do {
-            Batch result = transactionTemplate.execute(status -> purgeDocuments(cutoff, Timestamp.from(now)));
-            batch = result.count();
-            documents += batch;
             try {
-                purgeService.removeObjects(result.objectUris());
+                batch = transactionTemplate.execute(status -> purgeDocuments(cutoff, Timestamp.from(now)));
             } catch (DataPurgeService.PurgeStorageException e) {
-                // ponytail: 행이 이미 사라져 다시 찾을 수 없다. 남은 원본은 키를 로그로 남겨 수동 정리한다.
-                log.warn("[휴지통 원본 삭제 실패] uris={}", result.objectUris(), e);
+                // ponytail: 같은 배치를 이번 실행에서 다시 잡으면 같은 실패가 반복되므로 다음 실행으로 미룬다.
+                // 특정 객체만 계속 실패하면 그 뒤 배치도 밀리니, 그런 일이 생기면 실패한 문서만 건너뛰게 바꾼다.
+                log.warn("[휴지통 원본 삭제 실패] 다음 실행에서 다시 시도합니다.", e);
+                break;
             }
+            documents += batch;
         } while (batch == BATCH_SIZE);
 
         int folders = 0;
@@ -80,22 +82,25 @@ public class DocumentTrashPurgeWorker {
         return documents;
     }
 
-    private Batch purgeDocuments(Timestamp cutoff, Timestamp now) {
-        List<String> ids = jdbc.queryForList("""
-                SELECT id FROM documents WHERE deleted_at <= :cutoff
-                ORDER BY deleted_at LIMIT :limit FOR UPDATE SKIP LOCKED
-                """, new MapSqlParameterSource("cutoff", cutoff).addValue("limit", BATCH_SIZE), String.class);
-        if (ids.isEmpty()) {
-            return new Batch(0, List.of());
-        }
-        MapSqlParameterSource params = new MapSqlParameterSource("ids", ids).addValue("now", now);
-        List<Object> assetIds = jdbc.queryForList(
-                "SELECT DISTINCT asset_id FROM document_asset_references WHERE document_id IN (:ids)", params, Object.class);
+    private int purgeDocuments(Timestamp cutoff, Timestamp now) {
+        List<String> ids = new ArrayList<>();
         List<String> uris = new ArrayList<>();
-        jdbc.query("DELETE FROM documents WHERE id IN (:ids) RETURNING source_uri, extracted_text_uri", params, row -> {
+        jdbc.query("""
+                SELECT id, source_uri, extracted_text_uri FROM documents WHERE deleted_at <= :cutoff
+                ORDER BY deleted_at LIMIT :limit FOR UPDATE SKIP LOCKED
+                """, new MapSqlParameterSource("cutoff", cutoff).addValue("limit", BATCH_SIZE), row -> {
+            ids.add(row.getString("id"));
             addIfPresent(uris, row.getString("source_uri"));
             addIfPresent(uris, row.getString("extracted_text_uri"));
         });
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        purgeService.removeObjects(uris);
+        MapSqlParameterSource params = new MapSqlParameterSource("ids", ids).addValue("now", now);
+        List<Object> assetIds = jdbc.queryForList(
+                "SELECT DISTINCT asset_id FROM document_asset_references WHERE document_id IN (:ids)", params, Object.class);
+        jdbc.update("DELETE FROM documents WHERE id IN (:ids)", params);
         if (!assetIds.isEmpty()) {
             jdbc.update("""
                     UPDATE document_assets a SET unreferenced_since = :now
@@ -103,7 +108,7 @@ public class DocumentTrashPurgeWorker {
                       AND NOT EXISTS (SELECT 1 FROM document_asset_references r WHERE r.asset_id = a.id)
                     """, params.addValue("assets", assetIds));
         }
-        return new Batch(ids.size(), uris);
+        return ids.size();
     }
 
     /**
@@ -127,6 +132,4 @@ public class DocumentTrashPurgeWorker {
             uris.add(uri);
         }
     }
-
-    private record Batch(int count, List<String> objectUris) {}
 }

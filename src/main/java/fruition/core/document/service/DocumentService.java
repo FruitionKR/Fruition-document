@@ -18,6 +18,7 @@ import fruition.core.document.exception.DocumentUploadException;
 import fruition.core.document.exception.InvalidDocumentOriginException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentVersionConflictException;
+import fruition.core.document.exception.TrashRetentionExpiredException;
 import fruition.core.document.exception.DocumentWriteForbiddenException;
 import fruition.core.document.exception.InvalidDocumentFilenameException;
 import fruition.core.document.exception.InvalidDocumentVersionException;
@@ -2099,10 +2100,12 @@ public class DocumentService {
 
     public DocumentTrashResponse trash(String workspaceId, String userId) {
         verifyWorkspaceOwnership(workspaceId, userId);
+        Instant now = Instant.now();
         return new DocumentTrashResponse(
                 documentRepository
                         .findAllByWorkspaceIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(workspaceId)
                         .stream()
+                        .filter(document -> !isTrashExpired(document.getDeletedAt(), now))
                         .map(document -> new DocumentTrashResponse.DocumentTrashItem(
                                 document.getId(),
                                 document.getFilename(),
@@ -2146,6 +2149,10 @@ public class DocumentService {
         if (document.getDeletedAt() == null) {
             throw new DocumentNotFoundException(documentId);
         }
+        // 영구 삭제 작업이 원본 객체를 먼저 지우므로, 보관 기간이 지난 문서를 되살리면 원본 없는 문서가 된다.
+        if (isTrashExpired(document.getDeletedAt(), Instant.now())) {
+            throw new TrashRetentionExpiredException("휴지통 보관 기간이 지나 복구할 수 없습니다.");
+        }
         List<Document> rootItems = documentRepository.findRootItemsForUpdate(
                 workspaceId, document.getDocumentRole());
         long sortOrder = rootItems.stream()
@@ -2179,6 +2186,10 @@ public class DocumentService {
         saveIdempotencyRecord(
                 userId, endpointScope, idempotencyKey, requestHash, response);
         return response;
+    }
+
+    private boolean isTrashExpired(Instant deletedAt, Instant now) {
+        return !deletedAt.plus(trashRetention).isAfter(now);
     }
 
     private void validateLifecycleRequest(DocumentLifecycleRequest request) {

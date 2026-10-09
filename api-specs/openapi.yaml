@@ -1332,7 +1332,7 @@ paths:
       - Documents
   /api/workspaces/{workspace_id}/documents/trash:
     get:
-      description: 워크스페이스에서 소프트 삭제된 문서를 삭제 시각 역순으로 반환합니다.
+      description: 워크스페이스에서 소프트 삭제된 문서 중 보관 기간이 지나지 않은 문서를 삭제 시각 역순으로 반환합니다.
       operationId: trash
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -2279,7 +2279,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 문서 version 또는 멱등 키 충돌
+          description: "문서 version 또는 멱등 키 충돌, TRASH_RETENTION_EXPIRED(휴지통 보관 기간 경과)"
       summary: 문서 복구
       tags:
       - Documents
@@ -2748,7 +2748,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: "version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용)"
+          description: "version 충돌, TRASH_RETENTION_EXPIRED(휴지통 보관 기간 경과), IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용)"
       summary: 폴더 복구
       tags:
       - Folders
@@ -8511,7 +8511,7 @@ components:
             type: string
             minLength: 1
           maxItems: 100
-          minItems: 0
+          minItems: 1
       required:
       - workspace_ids
   securitySchemes:

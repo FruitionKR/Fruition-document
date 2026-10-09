@@ -287,7 +287,7 @@ public class DocumentController {
                 workspaceId, userId, documentId, idempotencyKey, request));
     }
 
-    @Operation(summary = "문서 휴지통", description = "워크스페이스에서 소프트 삭제된 문서를 삭제 시각 역순으로 반환합니다.")
+    @Operation(summary = "문서 휴지통", description = "워크스페이스에서 소프트 삭제된 문서 중 보관 기간이 지나지 않은 문서를 삭제 시각 역순으로 반환합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "휴지통 조회 성공",
             content = @Content(schema = @Schema(implementation = DocumentTrashResponse.class))),
@@ -311,7 +311,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "삭제 문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "문서 version 또는 멱등 키 충돌",
+        @ApiResponse(responseCode = "409", description = "문서 version 또는 멱등 키 충돌, TRASH_RETENTION_EXPIRED(휴지통 보관 기간 경과)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping("/{document_id}/restore")
