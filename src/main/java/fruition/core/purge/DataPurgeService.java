@@ -27,7 +27,8 @@ import java.util.Map;
  * 실패를 돌려준다. access가 다시 호출하면 같은 키를 다시 읽어 이어서 지운다. 반대 순서면 행이 사라진 뒤
  * 남은 객체를 찾을 방법이 없다. 모든 삭제가 조건부 DELETE라 같은 요청을 여러 번 보내도 결과가 같다.
  *
- * <p>AI 사용 정산(ai_usage_settlements, ai_model_prices)은 대금 결제 기록 보관 대상이라 지우지 않는다.
+ * <p>AI 사용 정산(ai_usage_settlements, ai_model_prices)과 호출별 청구·크레딧·결제 기록(usage_charges, credit_accounts,
+ * credit_entries, credit_orders, payment_events)은 대금 결제 기록 보관 대상(5년)이라 지우지 않는다.
  */
 @Service
 public class DataPurgeService {
@@ -63,7 +64,8 @@ public class DataPurgeService {
             new Step("documents", "DELETE FROM documents WHERE workspace_id = ?", 1),
             new Step("document_assets", "DELETE FROM document_assets WHERE workspace_id = ?", 1),
             new Step("folders", "DELETE FROM folders WHERE workspace_id = ?", 1),
-            new Step("wiki_lint_state", "DELETE FROM wiki_lint_state WHERE workspace_id = ?", 1));
+            new Step("wiki_lint_state", "DELETE FROM wiki_lint_state WHERE workspace_id = ?", 1),
+            new Step("notifications", "DELETE FROM notifications WHERE workspace_id = ?", 1));
 
     /**
      * 공유 워크스페이스에 남는 사용자 개인 데이터. 멤버가 함께 보는 문서와 AI 작업 로그는 OWNER가 관리하므로 남긴다.
@@ -76,7 +78,9 @@ public class DataPurgeService {
             new Step("agent_apply_projections", "DELETE FROM agent_apply_projections WHERE user_id = ?", 1),
             new Step("chat_sessions", "DELETE FROM chat_sessions WHERE user_id = ?", 1),
             new Step("meetings", "DELETE FROM meetings WHERE created_by = ?", 1),
-            new Step("idempotency_records", "DELETE FROM idempotency_records WHERE user_id = ?", 1));
+            new Step("idempotency_records", "DELETE FROM idempotency_records WHERE user_id = ?", 1),
+            new Step("notification_reads", "DELETE FROM notification_reads WHERE user_id = ?", 1),
+            new Step("notifications", "DELETE FROM notifications WHERE recipient_user_id = ?", 1));
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactionTemplate;

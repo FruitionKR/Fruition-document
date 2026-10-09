@@ -1543,9 +1543,10 @@ curl -X POST "$DOCUMENT/internal/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/
 #### 1. 지우는 대상
 
 - 행: 문서(본문·버전·잠금·편집 기록·asset 참조), 이미지 asset, 폴더, 채팅 세션과 메시지, 회의(전사·회의록 초안 포함),
-  AI 작업 로그와 변경 내역, 위키 기여·버전 기록, AI 실행 기록, 문서 편집 outbox, Wiki lint 상태
+  AI 작업 로그와 변경 내역, 위키 기여·버전 기록, AI 실행 기록, 문서 편집 outbox, Wiki lint 상태, 앱 안 알림(읽음 기록 포함).
+  문서·폴더 권한 설정과 편집 충돌은 문서·폴더 FK CASCADE로 함께 지워진다
 - 객체: 문서 원본·추출본, 회의 녹음 원본, `assets/{workspace_id}/` 아래 이미지 전부
-- 남기는 것: AI 사용 정산(`ai_usage_settlements`)과 단가표(`ai_model_prices`). 대금 결제 기록 보관 대상이다
+- 남기는 것: AI 사용 정산(`ai_usage_settlements`)과 단가표(`ai_model_prices`), 호출별 청구(`usage_charges`), 크레딧(`credit_accounts`·`credit_entries`), 결제(`credit_orders`·`payment_events`). 대금 결제 기록 보관 대상(5년)이다
 - AI pipeline이 가진 위키·스킬·에이전트 기록은 아직 지우지 않는다(AI 쪽 파기 API 필요)
 
 #### 2. 처리 순서
@@ -1601,7 +1602,7 @@ curl -X POST "$DOCUMENT/internal/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/
 #### 1. 지우는 대상
 
 - 지운다: 본인 채팅 세션과 메시지, 본인이 만든 회의와 녹음 원본, 본인 AI 실행 기록(질문 원문과 변경 전후 값을 담는다),
-  에이전트 적용 기록, 멱등 응답 기록
+  에이전트 적용 기록, 멱등 응답 기록, 본인에게 온 알림과 본인의 알림 읽음 기록
 - 남긴다: 멤버가 함께 보는 문서(회의록으로 저장한 문서 포함)와 AI 작업 로그. 이용약관 초안 제8조④에 따라 워크스페이스에 남고 OWNER가 관리한다
 - 혼자 쓰던 워크스페이스는 이 API가 아니라 `POST /internal/purge/workspaces`로 지운다
 

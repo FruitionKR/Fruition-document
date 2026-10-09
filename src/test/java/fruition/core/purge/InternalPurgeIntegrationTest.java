@@ -52,7 +52,7 @@ class InternalPurgeIntegrationTest {
                 .andExpect(jsonPath("$.deleted_objects").value(3));
 
         for (String table : new String[]{"documents", "folders", "document_assets", "ai_operation_logs",
-                "ai_task_runs", "chat_sessions", "meetings"}) {
+                "ai_task_runs", "chat_sessions", "meetings", "notifications"}) {
             assertThat(count(table, workspace)).as(table).isZero();
             assertThat(count(table, other)).as(table).isOne();
         }
@@ -93,6 +93,10 @@ class InternalPurgeIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_sessions WHERE user_id = ?", Integer.class, staying)).isOne();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE user_id = ?", Integer.class, leaving)).isZero();
         assertThat(count("meetings", workspace)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM notifications WHERE recipient_user_id = ?",
+                Integer.class, leaving)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM notification_reads WHERE user_id = ?",
+                Integer.class, leaving)).isZero();
         assertThat(count("documents", workspace)).isOne();
         assertThatThrownBy(() -> stat(leaver.recordingKey())).isNotNull();
         stat(leaver.sourceKey());
@@ -170,6 +174,12 @@ class InternalPurgeIntegrationTest {
                 runId, workspace, user);
         jdbc.update("INSERT INTO ai_task_changes(run_id, table_name, row_key) VALUES (?, 'documents', '{}'::jsonb)", runId);
         insertChatSession(workspace, user);
+        UUID notificationId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO notifications(id, workspace_id, recipient_user_id, audience, type, payload)
+                VALUES (?, ?, ?, 'user', 'edit_conflict_resolved', '{}'::jsonb)
+                """, notificationId, workspace, user);
+        jdbc.update("INSERT INTO notification_reads(notification_id, user_id) VALUES (?, ?)", notificationId, user);
         jdbc.update("""
                 INSERT INTO meetings(id, workspace_id, created_by, display_name, source, status, recording_key,
                     created_at, updated_at)
