@@ -13,6 +13,7 @@ import fruition.core.document.exception.DocumentWriteForbiddenException;
 import fruition.core.document.exception.EditConflictNotFoundException;
 import fruition.core.document.exception.InvalidMarkdownContentException;
 import fruition.core.document.repository.DocumentRepository;
+import fruition.core.notification.service.NotificationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -24,6 +25,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -31,7 +33,7 @@ import java.util.UUID;
  * 워크스페이스 OWNER가 서버 본·충돌 본·직접 합친 본 중 하나를 골라 해결한다.
  *
  * <p>해결해도 충돌 행은 지우지 않는다. 서버 본은 이미 버전 이력에 있고, 고르지 않은 충돌 본은 이 행에 남는다.
- * 충돌 알림은 아직 없어서 OWNER가 목록을 조회해 확인한다.
+ * 등록하면 OWNER에게, 해결하면 등록한 작성자에게 같은 트랜잭션에서 앱 안 알림을 남긴다.
  */
 @Service
 public class DocumentEditConflictService {
@@ -49,15 +51,17 @@ public class DocumentEditConflictService {
     private final DocumentAccessPolicy documentAccessPolicy;
     private final DocumentService documentService;
     private final JdbcTemplate jdbc;
+    private final NotificationService notificationService;
 
     public DocumentEditConflictService(WorkspaceAccessGuard workspaceAccessGuard, DocumentRepository documentRepository,
                                        DocumentAccessPolicy documentAccessPolicy, DocumentService documentService,
-                                       JdbcTemplate jdbc) {
+                                       JdbcTemplate jdbc, NotificationService notificationService) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.documentRepository = documentRepository;
         this.documentAccessPolicy = documentAccessPolicy;
         this.documentService = documentService;
         this.jdbc = jdbc;
+        this.notificationService = notificationService;
     }
 
     /** 그 문서를 편집할 수 있는 사람만 등록한다. 같은 client_conflict_id 재전송은 기존 충돌을 돌려준다. */
@@ -81,13 +85,18 @@ public class DocumentEditConflictService {
                 ON CONFLICT (document_id, client_conflict_id) DO NOTHING
                 """, UUID.randomUUID(), workspaceId, documentId, request.baseRevision(), content.markdown(),
                 content.contentHash(), userId, request.clientConflictId());
+        DocumentEditConflictResponse conflict = jdbc.queryForObject("SELECT " + CONFLICT_COLUMNS
+                        + " FROM document_edit_conflicts c WHERE c.document_id = ? AND c.client_conflict_id = ?",
+                CONFLICT_MAPPER, documentId, request.clientConflictId());
+        // 재전송으로 기존 충돌을 돌려줄 때는 알림을 다시 만들지 않는다.
         if (inserted == 1) {
             log.info("[편집 충돌 등록] workspaceId={} documentId={} userId={} baseRevision={}",
                     workspaceId, documentId, userId, request.baseRevision());
+            notificationService.notifyWorkspaceOwners(workspaceId, NotificationService.TYPE_EDIT_CONFLICT_REGISTERED,
+                    Map.of("conflict_id", conflict.id(), "document_id", documentId,
+                            "document_name", document.getDisplayName(), "author_user_id", userId));
         }
-        return jdbc.queryForObject("SELECT " + CONFLICT_COLUMNS
-                        + " FROM document_edit_conflicts c WHERE c.document_id = ? AND c.client_conflict_id = ?",
-                CONFLICT_MAPPER, documentId, request.clientConflictId());
+        return conflict;
     }
 
     /** OWNER에게 미해결 충돌과 서버 현재 본문을 함께 보여준다. 휴지통 문서의 충돌은 뺀다. */
@@ -155,6 +164,9 @@ public class DocumentEditConflictService {
                 """, request.choice(), userId, resolvedRevision, Timestamp.from(Instant.now()), conflictId);
         log.info("[편집 충돌 해결] workspaceId={} conflictId={} userId={} choice={} revision={}",
                 workspaceId, conflictId, userId, request.choice(), resolvedRevision);
+        notificationService.notifyUser(workspaceId, conflict.authorUserId(), NotificationService.TYPE_EDIT_CONFLICT_RESOLVED,
+                Map.of("conflict_id", conflictId, "document_id", conflict.documentId(),
+                        "choice", request.choice(), "resolved_by", userId));
         return jdbc.queryForObject("SELECT " + CONFLICT_COLUMNS + " FROM document_edit_conflicts c WHERE c.id = ?",
                 CONFLICT_MAPPER, conflictId);
     }

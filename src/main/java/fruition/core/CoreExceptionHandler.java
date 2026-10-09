@@ -49,6 +49,7 @@ import fruition.core.query.exception.QueryRunNotFoundException;
 import fruition.core.wiki.exception.InvalidWikiPageTitleException;
 import fruition.core.wiki.exception.PipelineWikiPageException;
 import fruition.core.authz.WorkspaceNotFoundException;
+import fruition.core.notification.exception.NotificationNotFoundException;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
 import fruition.core.wiki.exception.WikiPageSlugConflictException;
 import fruition.core.wiki.exception.WikiPageVersionNotFoundException;
@@ -233,6 +234,13 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         logHandled(e, HttpStatus.NOT_FOUND, "EDIT_CONFLICT_NOT_FOUND");
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("EDIT_CONFLICT_NOT_FOUND", e.getMessage()));
+    }
+
+    @ExceptionHandler(NotificationNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNotificationNotFound(NotificationNotFoundException e) {
+        logHandled(e, HttpStatus.NOT_FOUND, "NOTIFICATION_NOT_FOUND");
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of("NOTIFICATION_NOT_FOUND", e.getMessage()));
     }
 
     @ExceptionHandler(ConflictAlreadyResolvedException.class)

@@ -52,6 +52,6 @@
 - 고르지 않은 본문도 남는다. 서버 본은 버전 이력에, 충돌 본은 해결된 충돌 기록(`document_edit_conflicts`)에 있다.
 - OWNER는 문서 권한과 관계없이 저장할 수 있지만, 다른 사용자가 편집 잠금을 쥐고 있으면 `conflict`·`merged`는 423이고, 그사이 서버 revision이 바뀌었으면 409 `DOCUMENT_VERSION_CONFLICT`다.
 - 오류: `400` 요청 값이 잘못됨, `403` 편집 권한 없음·OWNER 아님(`DOCUMENT_WRITE_FORBIDDEN`), `404` 문서·충돌 없음(`EDIT_CONFLICT_NOT_FOUND`).
-- 충돌 생성·해결 알림은 아직 없다(이후 작업). 그때까지 OWNER는 목록 API로 확인한다.
+- 충돌을 새로 등록하면 OWNER에게 `edit_conflict_registered`, 해결하면 등록한 작성자에게 `edit_conflict_resolved` 앱 안 알림이 같은 트랜잭션에서 생긴다. 재전송으로 기존 충돌을 돌려줄 때는 알림을 다시 만들지 않는다. 알림 조회·읽음은 [Notifications](../notifications.md).
 
 진입점: `src/main/java/fruition/core/document/controller/DocumentEditConflictController.java`, 처리: `DocumentEditConflictService.java`.
