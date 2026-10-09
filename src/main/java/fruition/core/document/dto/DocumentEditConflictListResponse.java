@@ -11,6 +11,7 @@ public record DocumentEditConflictListResponse(
         List<Item> conflicts
 ) {
 
+    @Schema(name = "DocumentEditConflictItem")
     public record Item(
             @Schema(description = "충돌 본")
             DocumentEditConflictResponse conflict,
@@ -23,6 +24,7 @@ public record DocumentEditConflictListResponse(
             Server server
     ) {}
 
+    @Schema(name = "DocumentEditConflictServer")
     public record Server(
             @Schema(description = "서버 현재 Markdown 본문")
             String markdown,

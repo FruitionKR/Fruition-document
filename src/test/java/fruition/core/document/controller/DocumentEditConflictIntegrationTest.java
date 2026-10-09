@@ -17,14 +17,22 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.mock.web.MockPart;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -93,7 +101,7 @@ class DocumentEditConflictIntegrationTest {
     }
 
     @Test
-    void ownerListsAndPicksConflictVersionOnlyOnce() throws Exception {
+    void ownerListsAndConcurrentResolvesApplyOnlyOnce() throws Exception {
         String conflictId = conflictId(register(member, "# 멤버 본", "client-1"));
 
         mockMvc.perform(get("/api/workspaces/" + workspace + "/conflicts").header("Authorization", bearer(owner)))
@@ -106,20 +114,38 @@ class DocumentEditConflictIntegrationTest {
                 .andExpect(jsonPath("$.conflicts[0].server.revision").value(2))
                 .andExpect(jsonPath("$.conflicts[0].server.updated_by").value(author));
 
-        resolve(owner, conflictId, Map.of("choice", "conflict", "base_revision", 2))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("resolved"))
-                .andExpect(jsonPath("$.resolution").value("conflict"))
-                .andExpect(jsonPath("$.resolved_by").value(owner))
-                .andExpect(jsonPath("$.resolved_revision").value(3));
+        // 두 요청을 동시에 보내도 충돌 행 잠금으로 하나만 반영되고 나머지는 이미 해결됨 409다.
+        Map<String, Object> body = Map.of("choice", "conflict", "base_revision", 2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        List<Future<MockHttpServletResponse>> futures = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            futures.add(pool.submit(() -> {
+                start.await();
+                return resolve(owner, conflictId, body).andReturn().getResponse();
+            }));
+        }
+        start.countDown();
+        List<MockHttpServletResponse> responses = new ArrayList<>();
+        for (Future<MockHttpServletResponse> future : futures) responses.add(future.get(30, TimeUnit.SECONDS));
+        pool.shutdown();
+
+        assertThat(responses).extracting(MockHttpServletResponse::getStatus).containsExactlyInAnyOrder(200, 409);
+        JsonNode resolved = objectMapper.readTree(responses.stream().filter(r -> r.getStatus() == 200)
+                .findFirst().orElseThrow().getContentAsString());
+        assertThat(resolved.path("status").asText()).isEqualTo("resolved");
+        assertThat(resolved.path("resolution").asText()).isEqualTo("conflict");
+        assertThat(resolved.path("resolved_by").asText()).isEqualTo(owner);
+        assertThat(resolved.path("resolved_revision").asLong()).isEqualTo(3);
+        JsonNode rejected = objectMapper.readTree(responses.stream().filter(r -> r.getStatus() == 409)
+                .findFirst().orElseThrow().getContentAsString());
+        assertThat(rejected.path("error").path("code").asText()).isEqualTo("CONFLICT_ALREADY_RESOLVED");
+        assertThat(jdbc.queryForObject("SELECT revision FROM document_edit_states WHERE document_id = ?",
+                Long.class, documentId)).isEqualTo(3L);
         assertThat(markdown()).isEqualTo("# 멤버 본");
         // 고르지 않은 서버 본은 버전 이력에 남는다.
         assertThat(jdbc.queryForObject("SELECT markdown FROM document_content_versions WHERE document_id = ? AND version = 2",
                 String.class, documentId)).isEqualTo("# 작성자 본");
-
-        resolve(owner, conflictId, Map.of("choice", "server"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.code").value("CONFLICT_ALREADY_RESOLVED"));
         mockMvc.perform(get("/api/workspaces/" + workspace + "/conflicts").header("Authorization", bearer(owner)))
                 .andExpect(jsonPath("$.conflicts.length()").value(0));
     }

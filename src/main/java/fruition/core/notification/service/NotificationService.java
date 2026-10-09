@@ -61,7 +61,7 @@ public class NotificationService {
 
     @Transactional(readOnly = true)
     public NotificationListResponse list(String workspaceId, String userId, boolean unreadOnly, Integer limit,
-                                         Instant before) {
+                                         Instant before, UUID beforeId) {
         boolean owner = requireMember(workspaceId, userId);
         int size = limit == null ? DEFAULT_LIMIT : Math.clamp(limit, 1, MAX_LIMIT);
         List<Object> args = new ArrayList<>(List.of(userId, workspaceId, userId, owner));
@@ -73,7 +73,12 @@ public class NotificationService {
         if (unreadOnly) {
             sql.append(" AND r.user_id IS NULL");
         }
-        if (before != null) {
+        if (before != null && beforeId != null) {
+            // 같은 시각의 알림을 건너뛰지 않도록 정렬 순서와 같은 (created_at, id)로 자른다.
+            sql.append(" AND (n.created_at, n.id) < (?, ?)");
+            args.add(Timestamp.from(before));
+            args.add(beforeId);
+        } else if (before != null) {
             sql.append(" AND n.created_at < ?");
             args.add(Timestamp.from(before));
         }

@@ -20,6 +20,7 @@ import fruition.core.document.repository.DocumentEditStateRepository;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.document.service.DocumentPlacementService;
+import fruition.core.document.service.DocumentAccessPolicy;
 import fruition.core.document.service.DocumentEditStateInitializer;
 import fruition.core.document.service.DocumentService;
 import fruition.core.document.service.FolderService;
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
@@ -65,6 +67,7 @@ class AgentToolServiceTest {
     @Mock PipelineAgentArtifactClient artifactClient;
     @Mock AgentRunCommandRepository runCommandRepository;
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
+    @Mock JdbcTemplate jdbcTemplate;
     @Mock FolderService folderService;
     @Mock DocumentService documentService;
     @Mock DocumentPlacementService documentPlacementService;
@@ -95,7 +98,7 @@ class AgentToolServiceTest {
                 editStateInitializer,
                 idempotencyService,
                 transactionTemplate, taskCancellationClient,
-                new fruition.core.document.service.DocumentAccessPolicy(workspaceAccessGuard, org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class)));
+                new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate));
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
         org.mockito.Mockito.lenient().when(transactionTemplate.getTransactionManager()).thenReturn(transactionManager);
         org.mockito.Mockito.lenient().doAnswer(invocation -> {
