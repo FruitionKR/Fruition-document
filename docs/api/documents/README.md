@@ -32,3 +32,26 @@
 
 오류: `400` access 값이 잘못됨, `403` 바꿀 권한 없음(`DOCUMENT_WRITE_FORBIDDEN`), `404` 문서·폴더 없음.
 권한 설정이 바뀌면 문서 트리의 ETag도 바뀐다. 진입점: `src/main/java/fruition/core/document/controller/DocumentPermissionController.java`, 판정: `DocumentAccessPolicy.java`.
+
+## 편집 충돌
+
+공동 편집에서 두 사람이 같은 revision에서 고친 본문을 저장하면 나중 저장은 409 `DOCUMENT_VERSION_CONFLICT`를 받는다.
+충돌은 자동으로 합치지 않고, 클라이언트가 자기 본문을 충돌로 등록하면 워크스페이스 OWNER 중 한 명이 고른다.
+
+1. 본문 저장 409 응답의 `error.current_revision`에 서버 현재 revision이 온다([Content](content.md)의 `PUT .../content`).
+2. 클라이언트는 자기 본문을 `POST .../conflicts`로 올려 보존한다.
+3. OWNER는 `GET .../conflicts`에서 충돌 본과 서버 본을 비교하고 `POST .../conflicts/{conflict_id}/resolve`로 고른다.
+
+| API | 권한 | 동작 |
+|---|---|---|
+| `POST /api/workspaces/{workspace_id}/documents/{document_id}/conflicts` | 그 문서 편집 권한 | 본문 `{"markdown", "base_revision", "client_conflict_id"}`. `201`로 충돌(`id`, `document_id`, `base_revision`, `markdown`, `author_user_id`, `status`, `resolution`, `resolved_by`, `resolved_revision`, `created_at`, `resolved_at`)을 반환. 같은 `client_conflict_id` 재전송은 기존 충돌을 그대로 돌려준다 |
+| `GET /api/workspaces/{workspace_id}/conflicts` | OWNER | 미해결 충돌을 오래된 순으로 `{"conflicts": [{"conflict": {...}, "document_name", "server": {"markdown", "revision", "updated_by", "updated_at"}}]}`. 휴지통 문서의 충돌은 뺀다 |
+| `POST /api/workspaces/{workspace_id}/conflicts/{conflict_id}/resolve` | OWNER | 본문 `{"choice": "server" \| "conflict" \| "merged", "markdown", "base_revision"}`. `server`는 본문을 그대로 두고, `conflict`는 충돌 본을, `merged`는 `markdown`을 새 revision으로 저장한다. `conflict`·`merged`는 `base_revision`(목록의 `server.revision`)이 필요하고 `merged`는 `markdown`도 필요하다. `200`으로 해결된 충돌을 반환 |
+
+- 해결은 충돌 행을 잠그고 처리해서 OWNER 여럿이 동시에 해결해도 먼저 한 요청만 반영된다. 이미 해결된 충돌은 409 `CONFLICT_ALREADY_RESOLVED`.
+- 고르지 않은 본문도 남는다. 서버 본은 버전 이력에, 충돌 본은 해결된 충돌 기록(`document_edit_conflicts`)에 있다.
+- OWNER는 문서 권한과 관계없이 저장할 수 있지만, 다른 사용자가 편집 잠금을 쥐고 있으면 `conflict`·`merged`는 423이고, 그사이 서버 revision이 바뀌었으면 409 `DOCUMENT_VERSION_CONFLICT`다.
+- 오류: `400` 요청 값이 잘못됨, `403` 편집 권한 없음·OWNER 아님(`DOCUMENT_WRITE_FORBIDDEN`), `404` 문서·충돌 없음(`EDIT_CONFLICT_NOT_FOUND`).
+- 충돌 생성·해결 알림은 아직 없다(이후 작업). 그때까지 OWNER는 목록 API로 확인한다.
+
+진입점: `src/main/java/fruition/core/document/controller/DocumentEditConflictController.java`, 처리: `DocumentEditConflictService.java`.
