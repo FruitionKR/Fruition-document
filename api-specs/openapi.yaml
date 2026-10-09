@@ -8958,6 +8958,11 @@ components:
           description: 그래프에서 이어진 관련 페이지 목록
           items:
             $ref: "#/components/schemas/WikiRelatedPage"
+        revision:
+          type: integer
+          format: int64
+          description: 현재 본문 revision. 버전 이력이 아직 없으면 키가 빠진다.
+          example: 3
         slug:
           type: string
           description: URL에 쓰는 식별자
