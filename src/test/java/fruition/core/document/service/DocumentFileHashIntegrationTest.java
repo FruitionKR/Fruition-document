@@ -63,7 +63,7 @@ class DocumentFileHashIntegrationTest {
         String missing = insertOriginal("없는파일.pdf");
         minio.putObject(PutObjectArgs.builder().bucket(storage.getBucket()).object(sourceKey(stored))
                 .stream(new ByteArrayInputStream(pdf), pdf.length, -1).build());
-        assertThat(hashOf("큰파일.pdf")).isNull();
+        // 계산 전 null은 확인하지 않는다. 같은 JVM에 캐시된 다른 테스트 컨텍스트의 worker(기본 30초)가 먼저 채울 수 있다.
 
         while (worker.fillPending() > 0) {
             // 다른 테스트가 남긴 계산 대기 문서도 함께 처리된다.

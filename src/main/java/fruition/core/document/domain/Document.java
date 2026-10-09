@@ -49,7 +49,6 @@ public class Document {
     @Column(name = "source_uri")
     private String sourceUri;
 
-    /** 파이프라인이 추출한 텍스트의 위치. 파이프라인이 콜백으로 채우며 `s3://<bucket>/<key>` 형식이다. */
     /** 마지막으로 본문을 저장한 사용자. 공동 편집에서는 소유자(user_id)와 다를 수 있다. 저장 전이면 null이다. */
     @Column(name = "updated_by")
     private String updatedBy;
@@ -58,6 +57,7 @@ public class Document {
     @Column(name = "original_sha256", length = 64)
     private String originalSha256;
 
+    /** 파이프라인이 추출한 텍스트의 위치. 파이프라인이 콜백으로 채우며 `s3://<bucket>/<key>` 형식이다. */
     @Column(name = "extracted_text_uri")
     private String extractedTextUri;
 
