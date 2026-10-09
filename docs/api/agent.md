@@ -1162,3 +1162,30 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 ```
 
 - 진입점: `src/main/java/fruition/core/usage/controller/ModelUsageController.java`, `src/main/java/fruition/core/usage/service/UsageSettlementService.java`
+
+## 본인 AI 사용 금액 (호출 단위 청구)
+
+`GET /api/users/me/usage/charges?from_at=...&to_at=...`
+
+로그인 사용자 본인의 호출 단위 청구(`usage_charges`)를 워크스페이스를 가로질러 합쳐 모델별로 돌려준다. 청구 단위는 실행을 시작한 사용자다. 기간은 호출 시작 시각 기준 `[from_at, to_at)`, 둘 다 필수이며 366일 이하다. 금액은 부가세 포함 milli-KRW 정수(`charge_krw_milli`, 1000 = 1원)다. 시작 ≥ 종료·366일 초과 400.
+
+```json
+{
+  "user_id": "user_1", "from_at": "2026-09-01T00:00:00Z", "to_at": "2026-10-01T00:00:00Z",
+  "currency": "KRW", "charge_krw_milli": 3334, "unpriced_calls": 0, "needs_review_calls": 1,
+  "models": [{"provider": "openai", "model": "gpt-5-nano", "calls": 2, "input_tokens": 1000,
+    "cached_input_tokens": 400, "cache_creation_tokens": 100, "output_tokens": 500, "reasoning_tokens": 300,
+    "audio_seconds": 0, "tts_characters": 0, "charge_krw_milli": 3334, "unpriced_calls": 0, "needs_review_calls": 1}]
+}
+```
+
+- 단가: `ai_model_prices`(실제 응답 모델별 토큰 USD / 1M, 오디오 USD / 분, TTS USD / 1M 글자), 환율 `fx_rates`(USD→KRW 고정), 정책 `pricing_policies`(마진·부가세 basis point). 모두 수정하지 않고 `effective_from`이 다른 새 행을 넣으며, 호출 `started_at`에 적용 중인 행을 고른다. 이슈 #78의 단위별 단가 행 대신 정산(#59)이 쓰는 `ai_model_prices`에 오디오·TTS 열을 더해 두 계산이 같은 단가표를 쓴다.
+- 원가: (입력 − 캐시 읽기 − 캐시 생성) × 입력 단가 + 캐시 읽기 × 캐시 읽기 단가 + 캐시 생성 × 캐시 생성 단가 + 출력 × 출력 단가 + 오디오·TTS. 입력은 캐시를 포함한 합계이고 reasoning은 출력에 포함돼 따로 과금하지 않는다(`UsagePricing`, 정산과 같은 식). `cost_usd_micro`는 micro-USD로 올림한다.
+- 사용자 금액: 원가 × 환율 × (1 + 마진) × (1 + 부가세)를 milli-KRW로 올림한다. 올림 전 원가로 한 번에 계산한다.
+- 상태: `charged` 금액 확정. `unpriced` 단가·환율·정책이 없어 금액을 비워 두고 합계에서 뺀다(0원으로 넘기지 않음, 경고 로그). `needs_review` 토큰을 모르는 호출(`unknown`·`failed`·`abandoned`)로 0원이며 경고 로그를 남긴다. AI에서 아직 `started`인 호출은 청구 행을 만들지 않는다.
+- 같은 호출(AI 원장 `id` = `call_id` UNIQUE)은 여러 번 수집해도 한 행이다. `charged` 행은 다시 계산하지 않아 단가가 바뀌어도 이전 청구가 변하지 않는다. `unpriced`·`needs_review` 행은 다시 수집하면 그때 단가로 갱신된다.
+- 수집: 비동기 실행은 결과 반영(`beginResult`)과 같은 트랜잭션에, 동기 호출은 호출이 끝난 뒤(실패 포함) run_id를 `usage_collect_queue`에 넣는다. worker가 `FOR UPDATE SKIP LOCKED`로 하나씩 선점해 AI `GET ${MODEL_USAGE_CALLS_ENDPOINT}?run_id=`(`X-Internal-Token`)로 가져온다. 실패하면 시도 횟수의 제곱(분)만큼 늦춰 최대 10번 재시도한다. 대사 작업이 하루 주기로 커서(`usage_reconcile_cursor`)부터 1시간 전까지를 하루치씩 `?finished_from=&finished_to=`로 다시 조회해 빠진 호출(늦게 커밋됨·취소된 실행·수집 포기)을 채운다.
+- 동기 AI 호출의 run_id: 실행 ID가 없는 회의록 초안·녹음 파일 전사·음성 전사·Wiki 스키마 미리보기·초안은 호출마다 `ai_task_runs`에 실행(`kind:uuid`)을 등록하고 `run_id`·`user_id`를 추가 필드로 보낸다(본문 JSON 또는 query). Skill은 기존 run_id를 쓴다.
+- AI 응답 계약(FruitionKR/Fruition-ai#60): `{"calls": [{"id", "run_id", "workspace_id", "user_id", "kind", "provider", "requested_model", "model", "status", "input_tokens", "cached_input_tokens", "cache_creation_tokens", "output_tokens", "reasoning_tokens", "audio_seconds", "tts_characters", "started_at", "finished_at"}]}`. 응답 모델이 없으면 `requested_model`을 남긴다.
+- 대사: `scripts/sql/usage-cost-monthly.sql`로 월별 공급사·모델 원가 합계를 공급사 청구서와 비교한다.
+- 진입점: `src/main/java/fruition/core/usage/controller/UsageChargeController.java`, `src/main/java/fruition/core/usage/service/UsageChargeService.java`

@@ -21,7 +21,7 @@ public class WikiSchemaService {
 
     public JsonNode preview(String workspaceId, String userId, WikiSchemaPreviewRequest request) {
         verifyWorkspaceMembership(workspaceId, userId);
-        return requester.preview(request.rawMarkdown());
+        return requester.preview(request.rawMarkdown(), workspaceId, userId);
     }
 
     public JsonNode createDraft(String workspaceId, String userId, WikiSchemaDraftRequest request) {

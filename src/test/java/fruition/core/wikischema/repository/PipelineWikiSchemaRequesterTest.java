@@ -46,12 +46,16 @@ class PipelineWikiSchemaRequesterTest {
 
     @Test
     void preview_sendsRawMarkdownSnakeCase() {
-        JsonNode response = requester().preview("# 원문");
+        JsonNode response = requester().preview("# 원문", "ws_1", "user_1");
 
         assertThat(response.path("preview_markdown").asText()).isEqualTo("# 미리보기");
         assertThat(capturedUri.get()).isEqualTo("/wiki-schema/preview");
+        // AI가 사용량을 남기도록 실행 ID와 사용자를 보낸다(#78).
         assertThat(capturedBody.get())
                 .contains("\"raw_markdown\":\"# 원문\"")
+                .contains("\"workspace_id\":\"ws_1\"")
+                .contains("\"user_id\":\"user_1\"")
+                .contains("\"run_id\":\"run-1\"")
                 .doesNotContain("rawMarkdown");
     }
 
@@ -67,7 +71,8 @@ class PipelineWikiSchemaRequesterTest {
                 .contains("\"raw_markdown\":\"# 원문\"")
                 .contains("\"name\":\"기본\"")
                 .contains("\"workspace_id\":\"ws_1\"")
-                .contains("\"user_id\":\"user_1\"");
+                .contains("\"user_id\":\"user_1\"")
+                .contains("\"run_id\":\"run-1\"");
     }
 
     @Test
@@ -151,7 +156,7 @@ class PipelineWikiSchemaRequesterTest {
         responseStatus.set(422);
         responseBody.set("{\"detail\":[{\"loc\":[\"body\",\"raw_markdown\"],\"msg\":\"too short\"}]}");
 
-        assertThatThrownBy(() -> requester().preview("x"))
+        assertThatThrownBy(() -> requester().preview("x", "ws_1", "user_1"))
                 .isInstanceOfSatisfying(PipelineWikiSchemaException.class, error -> {
                     assertThat(error.getHttpStatus()).isEqualTo(422);
                     assertThat(error.getResponseBody()).contains("too short");
@@ -175,7 +180,7 @@ class PipelineWikiSchemaRequesterTest {
         responseStatus.set(500);
         responseBody.set("{\"detail\":\"boom\"}");
 
-        assertThatThrownBy(() -> requester().preview("x"))
+        assertThatThrownBy(() -> requester().preview("x", "ws_1", "user_1"))
                 .isInstanceOfSatisfying(PipelineWikiSchemaException.class, error -> {
                     assertThat(error.getHttpStatus()).isEqualTo(503);
                     assertThat(error.getResponseBody()).isNull();
@@ -184,7 +189,12 @@ class PipelineWikiSchemaRequesterTest {
 
     private PipelineWikiSchemaRequester requester() {
         String endpoint = "http://localhost:" + server.getAddress().getPort() + "/wiki-schema";
+        var usageCharges = org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class);
+        org.mockito.Mockito.when(usageCharges.track(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(invocation -> invocation.<java.util.function.Function<String, Object>>getArgument(3).apply("run-1"));
         return new PipelineWikiSchemaRequester(
-                new fruition.shared.http.PipelineClientFactory("test-internal-callback"), endpoint, 5);
+                new fruition.shared.http.PipelineClientFactory("test-internal-callback"), endpoint, 5, usageCharges);
     }
 }

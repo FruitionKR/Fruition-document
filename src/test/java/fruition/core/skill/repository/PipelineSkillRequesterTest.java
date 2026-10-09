@@ -174,6 +174,7 @@ class PipelineSkillRequesterTest {
                 new PipelineClientFactory("unused-internal-token"),
                 "http://localhost:" + server.getAddress().getPort() + "/skills", "agent-token", 5,
                 org.mockito.Mockito.mock(fruition.core.aitask.service.AiTaskCancellationService.class),
-                new com.fasterxml.jackson.databind.ObjectMapper());
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class));
     }
 }

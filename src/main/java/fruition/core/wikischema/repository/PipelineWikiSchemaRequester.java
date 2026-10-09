@@ -3,6 +3,7 @@ package fruition.core.wikischema.repository;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.usage.service.UsageChargeService;
 import fruition.core.wikischema.exception.PipelineWikiSchemaException;
 import fruition.shared.http.PipelineClientFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,21 +19,27 @@ public class PipelineWikiSchemaRequester {
 
     private final RestClient restClient;
     private final String endpoint;
+    private final UsageChargeService usageCharges;
 
     public PipelineWikiSchemaRequester(
             PipelineClientFactory clientFactory,
             @Value("${app.wiki-schema.endpoint}") String endpoint,
-            @Value("${app.wiki-schema.timeout-seconds:60}") int timeoutSeconds) {
+            @Value("${app.wiki-schema.timeout-seconds:60}") int timeoutSeconds,
+            UsageChargeService usageCharges) {
         this.endpoint = endpoint;
         this.restClient = clientFactory.restClient(timeoutSeconds);
+        this.usageCharges = usageCharges;
     }
 
-    public JsonNode preview(String rawMarkdown) {
-        return requireBody(post(endpoint + "/preview", new PreviewPayload(rawMarkdown)));
+    /** 미리보기·초안은 AI 모델을 부른다. AI가 사용량을 남기도록 run_id와 사용자를 함께 보낸다. */
+    public JsonNode preview(String rawMarkdown, String workspaceId, String userId) {
+        return usageCharges.track("wiki_schema_preview", workspaceId, userId, runId ->
+                requireBody(post(endpoint + "/preview", new PreviewPayload(rawMarkdown, workspaceId, userId, runId))));
     }
 
     public JsonNode createDraft(String rawMarkdown, String name, String workspaceId, String userId) {
-        return requireBody(post(endpoint + "/drafts", new DraftPayload(rawMarkdown, name, workspaceId, userId)));
+        return usageCharges.track("wiki_schema_draft", workspaceId, userId, runId ->
+                requireBody(post(endpoint + "/drafts", new DraftPayload(rawMarkdown, name, workspaceId, userId, runId))));
     }
 
     public JsonNode activate(String schemaId) {
@@ -107,13 +114,19 @@ public class PipelineWikiSchemaRequester {
         return new PipelineWikiSchemaException("Wiki 스키마 파이프라인을 사용할 수 없습니다.", 503, null);
     }
 
-    private record PreviewPayload(@JsonProperty("raw_markdown") String rawMarkdown) {}
+    private record PreviewPayload(
+            @JsonProperty("raw_markdown") String rawMarkdown,
+            @JsonProperty("workspace_id") String workspaceId,
+            @JsonProperty("user_id") String userId,
+            @JsonProperty("run_id") String runId
+    ) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private record DraftPayload(
             @JsonProperty("raw_markdown") String rawMarkdown,
             @JsonProperty("name") String name,
             @JsonProperty("workspace_id") String workspaceId,
-            @JsonProperty("user_id") String userId
+            @JsonProperty("user_id") String userId,
+            @JsonProperty("run_id") String runId
     ) {}
 }

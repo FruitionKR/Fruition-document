@@ -23,6 +23,7 @@ public class PipelineSkillRequester {
     private final String endpoint;
     private final fruition.core.aitask.service.AiTaskCancellationService cancellation;
     private final com.fasterxml.jackson.databind.ObjectMapper mapper;
+    private final fruition.core.usage.service.UsageChargeService usageCharges;
 
     private static final Rejection DEFAULT_REJECTION = new Rejection("SKILL_REQUEST_REJECTED", "Skill 요청이 거부되었습니다.");
 
@@ -47,9 +48,11 @@ public class PipelineSkillRequester {
             @Value("${app.skill.endpoint}") String endpoint,
             @Value("${app.skill.agent-token}") String agentToken,
             @Value("${app.skill.timeout-seconds:60}") int timeoutSeconds,
-            fruition.core.aitask.service.AiTaskCancellationService cancellation, com.fasterxml.jackson.databind.ObjectMapper mapper
+            fruition.core.aitask.service.AiTaskCancellationService cancellation, com.fasterxml.jackson.databind.ObjectMapper mapper,
+            fruition.core.usage.service.UsageChargeService usageCharges
     ) {
         this.endpoint = endpoint;
+        this.usageCharges = usageCharges;
         this.cancellation = cancellation;
         this.mapper = mapper;
         this.restClient = RestClient.builder()
@@ -122,9 +125,14 @@ public class PipelineSkillRequester {
         command.set("payload", mapper.valueToTree(payload));
         if (skillId != null) command.put("skill_id", skillId);
         cancellation.register(command);
-        JsonNode result = post("/tasks", command);
-        cancellation.finish(runId);
-        return result;
+        try {
+            JsonNode result = post("/tasks", command);
+            cancellation.finish(runId);
+            return result;
+        } finally {
+            // 실패해도 공급사 호출은 일어났을 수 있어 사용 금액을 수집한다(#78).
+            usageCharges.enqueue(runId);
+        }
     }
 
     private JsonNode get(String uri) {

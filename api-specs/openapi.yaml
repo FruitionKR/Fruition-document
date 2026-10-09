@@ -121,6 +121,33 @@ paths:
       summary: 질의 진행 이벤트 구독
       tags:
       - Query Runs
+  /api/users/me/usage/charges:
+    get:
+      description: "호출 시작 시각이 [from_at, to_at)인 본인 호출의 금액을 워크스페이스를 가로질러 합쳐 모델별로 반환합니다. 금액은 부가세 포함 milli-KRW 정수입니다. 단가가 없는 호출(unpriced_calls)은 합계에 들어가지 않고, 토큰을 모르는 호출(needs_review_calls)은 0원입니다. 기간은 366일 이하입니다."
+      operationId: read_3
+      parameters:
+      - in: query
+        name: from_at
+        required: true
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: to_at
+        required: true
+        schema:
+          type: string
+          format: date-time
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ChargeSummary"
+          description: OK
+      summary: 본인의 AI 사용 금액 조회
+      tags:
+      - usage-charge-controller
   /api/workspaces/{workspaceId}/ai/tasks/{id}:
     get:
       operationId: status_1
@@ -5494,6 +5521,32 @@ components:
           type: string
           description: 바뀐 리소스 종류
           example: wiki_page
+    ChargeSummary:
+      type: object
+      properties:
+        charge_krw_milli:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        from_at:
+          type: string
+          format: date-time
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelCharge"
+        needs_review_calls:
+          type: integer
+          format: int64
+        to_at:
+          type: string
+          format: date-time
+        unpriced_calls:
+          type: integer
+          format: int64
+        user_id:
+          type: string
     ChatMessageReference:
       type: object
       description: 답변의 근거가 된 원문 참조. 값이 없는 필드는 키 자체가 빠진다.
@@ -7440,6 +7493,45 @@ components:
           type: string
           description: 처리 상태
           example: completed
+    ModelCharge:
+      type: object
+      properties:
+        audio_seconds:
+          type: number
+        cache_creation_tokens:
+          type: integer
+          format: int64
+        cached_input_tokens:
+          type: integer
+          format: int64
+        calls:
+          type: integer
+          format: int64
+        charge_krw_milli:
+          type: integer
+          format: int64
+        input_tokens:
+          type: integer
+          format: int64
+        model:
+          type: string
+        needs_review_calls:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        provider:
+          type: string
+        reasoning_tokens:
+          type: integer
+          format: int64
+        tts_characters:
+          type: integer
+          format: int64
+        unpriced_calls:
+          type: integer
+          format: int64
     ModelLine:
       type: object
       properties:

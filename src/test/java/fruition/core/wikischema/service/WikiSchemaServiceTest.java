@@ -38,7 +38,7 @@ class WikiSchemaServiceTest {
     @Test
     void preview_delegatesToRequesterForMember() throws Exception {
         doNothing().when(workspaceAccessGuard).requireMember("ws_1", "user_1");
-        when(requester.preview("# 원문"))
+        when(requester.preview("# 원문", "ws_1", "user_1"))
                 .thenReturn(new ObjectMapper().readTree("{\"preview_markdown\":\"# 미리보기\"}"));
 
         var result = service.preview("ws_1", "user_1", new WikiSchemaPreviewRequest("# 원문"));

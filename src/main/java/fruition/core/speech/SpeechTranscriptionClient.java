@@ -1,6 +1,7 @@
 package fruition.core.speech;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.usage.service.UsageChargeService;
 import fruition.shared.http.PipelineClientFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -19,20 +20,30 @@ import java.net.URI;
 public class SpeechTranscriptionClient {
     private final RestClient restClient;
     private final String endpoint;
+    private final UsageChargeService usageCharges;
 
     public SpeechTranscriptionClient(PipelineClientFactory clientFactory,
                                      @Value("${app.speech.transcription-endpoint}") String endpoint,
-                                     @Value("${app.speech.transcription-timeout-seconds:150}") int timeoutSeconds) {
+                                     @Value("${app.speech.transcription-timeout-seconds:150}") int timeoutSeconds,
+                                     UsageChargeService usageCharges) {
         this.restClient = clientFactory.restClient(timeoutSeconds);
         this.endpoint = endpoint;
+        this.usageCharges = usageCharges;
     }
 
+    /** AI가 사용량을 남기도록 run_id를 함께 보낸다. */
     public String transcribe(String workspaceId, String userId, MediaType mediaType, byte[] audio) {
+        return usageCharges.track("speech_transcription", workspaceId, userId,
+                runId -> transcribe(runId, workspaceId, userId, mediaType, audio));
+    }
+
+    private String transcribe(String runId, String workspaceId, String userId, MediaType mediaType, byte[] audio) {
         URI uri = UriComponentsBuilder.fromUriString(endpoint)
                 .queryParam("workspace_id", "{workspaceId}")
                 .queryParam("user_id", "{userId}")
+                .queryParam("run_id", "{runId}")
                 .encode()
-                .buildAndExpand(workspaceId, userId)
+                .buildAndExpand(workspaceId, userId, runId)
                 .toUri();
         try {
             JsonNode body = restClient.post().uri(uri).contentType(mediaType).body(audio)

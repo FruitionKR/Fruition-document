@@ -25,8 +25,13 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | ai_task_runs·ai_task_changes | document-svc | 공개 AI 작업 상태·업무 행의 변경 전후 값·복구 완료 기록 | run ID와 actor, trigger로 같은 트랜잭션에 기록; V47. V58 `resume_claimed_by`·`resume_claimed_until`: 취소 진행을 한 Pod만 하도록 선점(3분 lease) |
 | ai_task_result_receipts | document-svc | `ai.task.event` 멱등 반영 영수증 | `event_id` PK, `run_id`, `task_kind` |
 | agent_apply_projections | document-svc | Markdown Agent 적용 예약·결과 projection | `run_id` PK, `apply_operation_id` UK, `base_version`, V33 `apply_revision_write_id`, V35 `ready_markdown`, queued→ready/failed→consumed. V36은 기존 ready를 backfill하고 복구 불가 건을 `failed`로 전환 |
-| ai_model_prices | document-svc | AI 모델 단가 이력(USD / 1M tokens) | PK `(provider, model, effective_from)`, 단가 변경은 새 행 추가; V59 |
+| ai_model_prices | document-svc | AI 모델 단가 이력(USD / 1M tokens) | PK `(provider, model, effective_from)`, 단가 변경은 새 행 추가; V59. V65 `audio_usd_per_minute`·`tts_usd_per_mchar`(NULL이면 그 사용량은 단가 없음) |
 | ai_usage_settlements | document-svc | 마감한 AI 사용량 정산 | `result` jsonb에 계산 결과 고정, `(workspace_id, from_at)` 인덱스; V59 |
+| fx_rates | document-svc | USD→KRW 고정 환율 이력 | PK `effective_from`, `krw_per_usd > 0`. 수정하지 않고 새 행 추가; V65 |
+| pricing_policies | document-svc | 마진·부가세율 이력 | PK `effective_from`, `margin_bp`·`vat_bp`(basis point, ≥ 0). 수정하지 않고 새 행 추가; V65 |
+| usage_charges | document-svc | AI 호출 단위 청구 | `call_id`(AI 원장 행 id) UNIQUE, `user_id`, `workspace_id`, `run_id`, `kind`, `provider`, `model`, `call_status`, 토큰 5종, `audio_seconds`, `tts_characters`, 적용 버전 `price_/fx_/policy_effective_from`, `cost_usd_micro`, `charge_krw_milli`, `status`(`charged`/`unpriced`/`needs_review`, `unpriced`면 `charge_krw_milli` NULL), `started_at`(버전 선택 기준). `charged` 행은 다시 계산하지 않는다. `(user_id, started_at)`·`(started_at)` 인덱스; V65 |
+| usage_collect_queue | document-svc | 호출 사용량 수집 대기열 | PK `run_id`, `attempts`, `available_at`. 실행 종료 시 넣고 worker가 SKIP LOCKED로 선점, 수집 후 삭제; V65 |
+| usage_reconcile_cursor | document-svc | 종료 시각 구간 대사 진행 위치 | 단일 행 `reconciled_to`. 1시간 넘게 지난 구간까지 하루치씩 진행; V65 |
 | wiki_page_versions | document-svc | Wiki 본문 revision 이력 | 복합 PK `(page_id, revision)`, 페이지 ID는 ai_db 논리 참조 |
 | wiki_page_contributions | document-svc | 복구용 ingest 기여 원장 | 복합 PK `(page_id, ingest_operation_id)`, 비활성화 이력 보존 |
 | chat_sessions | document-svc | 채팅 세션(workspace당 10개) | `context_summary` |
