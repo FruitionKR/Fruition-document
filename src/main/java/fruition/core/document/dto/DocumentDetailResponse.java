@@ -108,5 +108,24 @@ public record DocumentDetailResponse(
         @JsonProperty("folder_id")
         @JsonInclude(JsonInclude.Include.ALWAYS)
         @Schema(description = "부모 폴더 ID. 루트면 null이다.", nullable = true)
-        UUID folderId
+        UUID folderId,
+
+        @JsonProperty("can_edit")
+        @Schema(description = "현재 사용자가 본문 저장·이름 변경·이동을 할 수 있는지. false면 읽기 전용으로 연다.", example = "true")
+        boolean canEdit,
+
+        @JsonProperty("can_delete")
+        @Schema(description = "현재 사용자가 삭제·휴지통 복구를 할 수 있는지. 문서 소유자와 OWNER만 true다.", example = "false")
+        boolean canDelete,
+
+        @JsonProperty("permission")
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        @Schema(description = "이 문서에 직접 건 권한 설정(edit | view). null이면 상위 폴더 설정 또는 기본값(edit)을 따른다.",
+                nullable = true, allowableValues = {"edit", "view"})
+        String permission,
+
+        @JsonProperty("updated_by")
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        @Schema(description = "마지막으로 본문을 저장한 사용자 ID. 업로드 뒤 저장한 적이 없으면 null이다.", nullable = true)
+        String updatedBy
 ) {}

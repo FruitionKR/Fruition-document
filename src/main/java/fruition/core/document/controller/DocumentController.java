@@ -388,7 +388,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "편집 revision 또는 revision_write_id 충돌",
+        @ApiResponse(responseCode = "409", description = "편집 revision 또는 revision_write_id 충돌. revision 충돌(DOCUMENT_VERSION_CONFLICT)은 error.current_revision에 서버 현재 revision을 담는다",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "413", description = "Markdown 5MB 또는 이미지 제한 초과",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

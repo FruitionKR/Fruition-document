@@ -50,6 +50,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -103,6 +104,7 @@ class DocumentServiceBlocksTest {
     @Mock DocumentRepository documentRepository;
     @Mock fruition.core.document.repository.FolderRepository folderRepository;
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
+    @Mock JdbcTemplate jdbcTemplate;
     @Mock MinioClient minioClient;
     @Mock StorageProperties storageProps;
     @Mock IngestCommandOutbox ingestCommandOutbox;
@@ -134,6 +136,7 @@ class DocumentServiceBlocksTest {
 
     @BeforeEach
     void setUp() {
+        DocumentAccessPolicy accessPolicy = new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate);
         org.mockito.Mockito.lenient().when(applyOperationStore.authorizeSave(anyString(), anyString(), anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.active(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.join(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
@@ -141,7 +144,7 @@ class DocumentServiceBlocksTest {
                 workspaceAccessGuard, minioClient, storageProps,
                 ingestCommandOutbox, pipelineWikiStateRequester,
                 convertQueueRepository, converterClient, transactionTemplate,
-                editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository),
+                editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository, accessPolicy),
                 postgresDocumentEditStore,
                 contentVersionRepository, markdownDiffService,
                 editLockService, idempotencyService,
@@ -151,7 +154,7 @@ class DocumentServiceBlocksTest {
                 applyOperationStore,
                 operationRecorder,
                 ingestOperationStarter,
-                workspaceAiModelClient, taskWriter, documentWikiRetirement);
+                workspaceAiModelClient, taskWriter, documentWikiRetirement, accessPolicy);
         lenient().when(pipelineWikiStateRequester.documentContext(anyString(), anyString()))
                 .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(), null));
         // 직접 생성·복제·변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.
@@ -1319,7 +1322,7 @@ class DocumentServiceBlocksTest {
                 eq(1L), eq("write-retry-transient"), eq(USER_ID), isNull());
         verify(contentVersionRepository).insertIfAbsent(
                 document.getId(), 2L, "# 변경\n", resultHash, USER_ID, updatedAt);
-        verify(documentRepository).updateCurrentContentHash(document.getId(), resultHash, updatedAt);
+        verify(documentRepository).updateCurrentContentHash(document.getId(), resultHash, updatedAt, USER_ID);
     }
 
     @Test
@@ -1539,6 +1542,27 @@ class DocumentServiceBlocksTest {
     }
 
     @Test
+    @DisplayName("편집자가 ingest하면 작업과 command를 소유자가 아니라 요청한 편집자로 등록한다")
+    void ingest_byEditor_registersRequesterNotOwner() {
+        String editorId = "user_editor01";
+        Document chatDoc = new Document(
+                "chatdoc_editor", WORKSPACE_ID, USER_ID, "대화.md", "text/markdown", 4,
+                "sources/documents/chatdoc_editor/original", "chat-hash", "chat_export");
+        chatDoc.updateStatus(fruition.core.document.domain.DocumentStatus.completed, null, Instant.now(), null);
+        when(documentRepository.findByIdAndWorkspaceIdForUpdate(chatDoc.getId(), WORKSPACE_ID))
+                .thenReturn(Optional.of(chatDoc));
+
+        documentService.ingest(WORKSPACE_ID, editorId, chatDoc.getId());
+
+        verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(editorId));
+        verify(ingestOperationStarter).start(eq(WORKSPACE_ID), eq(editorId), eq(chatDoc.getId()),
+                anyString(), any(Instant.class));
+        verify(ingestCommandOutbox).enqueue(
+                anyString(), eq(chatDoc.getId()), eq(editorId), eq(WORKSPACE_ID), any(),
+                any(), any(), eq(false), any(), anyLong(), any());
+    }
+
+    @Test
     @DisplayName("채팅 편입은 원문과 출처 블록만 저장하고 ingest 작업을 만들지 않는다")
     void createChatExportDocument_savesWithoutIngest() throws Exception {
         when(documentRepository.findByWorkspaceIdAndOriginAndContentHashAndSelectionModeAndDeletedAtIsNull(
@@ -1636,8 +1660,8 @@ class DocumentServiceBlocksTest {
     }
 
     @Test
-    @DisplayName("오래된 본문 버전과 비소유자 저장은 거절한다")
-    void saveContent_rejectsStaleVersionAndNonOwner() {
+    @DisplayName("오래된 본문 버전 저장은 거절한다")
+    void saveContent_rejectsStaleVersion() {
         stubOwnedWorkspace();
         Document document = new Document(
                 "doc_edit", WORKSPACE_ID, USER_ID, "문서.md", "text/markdown", 4,
@@ -1653,15 +1677,11 @@ class DocumentServiceBlocksTest {
         assertThatThrownBy(() -> documentService.saveContent(
                 WORKSPACE_ID, USER_ID, document.getId(), "new", 2L, "write_1", null))
                 .isInstanceOf(DocumentVersionConflictException.class);
-        doNothing().when(workspaceAccessGuard).requireMember(WORKSPACE_ID, "member_2");
-        assertThatThrownBy(() -> documentService.saveContent(
-                WORKSPACE_ID, "member_2", document.getId(), "new", 1L, "write_2", null))
-                .isInstanceOf(DocumentWriteForbiddenException.class);
     }
 
     @Test
-    @DisplayName("워크스페이스 멤버는 다른 소유자의 문서를 읽지만 변경할 수 없다")
-    void workspaceMember_readsButCannotMutateOtherOwnersDocument() {
+    @DisplayName("워크스페이스 멤버는 다른 소유자의 문서를 읽고 편집하지만 삭제·복구할 수 없다")
+    void workspaceMember_editsButCannotDeleteOtherOwnersDocument() {
         String memberId = "member_2";
         doNothing().when(workspaceAccessGuard).requireMember(WORKSPACE_ID, memberId);
         Document document = new Document(
@@ -1679,10 +1699,13 @@ class DocumentServiceBlocksTest {
                 documentService.findById(WORKSPACE_ID, memberId, document.getId());
 
         assertThat(detail.markdown()).isEqualTo("# 공유 본문");
-        assertThatThrownBy(() -> documentService.rename(
-                WORKSPACE_ID, memberId, document.getId(),
-                new DocumentRenameRequest("변경 시도", 1L)))
-                .isInstanceOf(DocumentWriteForbiddenException.class);
+        assertThat(detail.canEdit()).isTrue();
+        assertThat(detail.canDelete()).isFalse();
+        when(documentRepository.renameIfVersionMatches(
+                eq(document.getId()), eq(WORKSPACE_ID), eq(1L), anyString(), anyString(), anyString(), any()))
+                .thenReturn(1);
+        assertThat(documentService.rename(WORKSPACE_ID, memberId, document.getId(),
+                new DocumentRenameRequest("공동 편집", 1L)).changed()).isTrue();
         assertThatThrownBy(() -> documentService.delete(
                 WORKSPACE_ID, memberId, document.getId(), "delete-key",
                 new DocumentLifecycleRequest(1L)))
@@ -1691,8 +1714,6 @@ class DocumentServiceBlocksTest {
                 WORKSPACE_ID, memberId, document.getId(), "restore-key",
                 new DocumentLifecycleRequest(1L)))
                 .isInstanceOf(DocumentWriteForbiddenException.class);
-        verify(documentRepository, never()).renameIfVersionMatches(
-                anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any());
         verify(documentRepository, never()).softDeleteIfVersionMatches(
                 anyString(), anyString(), anyLong(), anyString(), any(), any());
         verify(documentRepository, never()).restoreIfVersionMatches(
@@ -1864,8 +1885,8 @@ class DocumentServiceBlocksTest {
     }
 
     @Test
-    @DisplayName("원본 자료와 다른 소유자의 문서는 복제하지 않는다")
-    void duplicate_rejectsOriginalAndNonOwner() {
+    @DisplayName("원본 자료는 복제하지 않는다")
+    void duplicate_rejectsOriginal() {
         stubOwnedWorkspace();
         Document original = new Document(
                 "doc_pdf", WORKSPACE_ID, USER_ID, "자료.pdf", "application/pdf", 10,
@@ -1875,16 +1896,6 @@ class DocumentServiceBlocksTest {
 
         assertThatThrownBy(() -> documentService.duplicate(
                 WORKSPACE_ID, USER_ID, original.getId(), "duplicate-key"))
-                .isInstanceOf(DocumentWriteForbiddenException.class);
-
-        Document otherOwner = new Document(
-                "doc_other", WORKSPACE_ID, "user_other", "문서.md", "text/markdown", 10,
-                null, null, "direct");
-        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(otherOwner.getId(), WORKSPACE_ID))
-                .thenReturn(Optional.of(otherOwner));
-
-        assertThatThrownBy(() -> documentService.duplicate(
-                WORKSPACE_ID, USER_ID, otherOwner.getId(), "duplicate-key-2"))
                 .isInstanceOf(DocumentWriteForbiddenException.class);
         verify(documentRepository, never()).findSiblingPagesForUpdate(anyString(), any());
     }

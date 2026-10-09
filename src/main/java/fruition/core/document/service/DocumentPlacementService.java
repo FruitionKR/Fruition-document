@@ -24,17 +24,20 @@ public class DocumentPlacementService {
     private final FolderRepository folderRepository;
     private final IdempotencyService idempotencyService;
     private final SiblingReorderer siblingReorderer;
+    private final DocumentAccessPolicy documentAccessPolicy;
 
     public DocumentPlacementService(WorkspaceAccessGuard workspaceAccessGuard,
                                     DocumentRepository documentRepository,
                                     FolderRepository folderRepository,
                                     IdempotencyService idempotencyService,
-                                    SiblingReorderer siblingReorderer) {
+                                    SiblingReorderer siblingReorderer,
+                                    DocumentAccessPolicy documentAccessPolicy) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.documentRepository = documentRepository;
         this.folderRepository = folderRepository;
         this.idempotencyService = idempotencyService;
         this.siblingReorderer = siblingReorderer;
+        this.documentAccessPolicy = documentAccessPolicy;
     }
 
     @Transactional
@@ -50,9 +53,10 @@ public class DocumentPlacementService {
                 response -> documentId, () -> {
                     verifyMembership(workspaceId, userId);
                     // 스킬 참고 문서는 트리에 없으므로 옮길 대상도 아니다.
-                    documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                    Document target = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                             .filter(document -> !document.isSkillReference())
                             .orElseThrow(() -> new HierarchyItemNotFoundException("문서를 찾을 수 없습니다."));
+                    documentAccessPolicy.requireEdit(target, userId);
                     if (targetFolderId != null && folderRepository
                             .findActiveForUpdate(targetFolderId, workspaceId).isEmpty()) {
                         throw new HierarchyItemNotFoundException("대상 폴더를 찾을 수 없습니다.");
