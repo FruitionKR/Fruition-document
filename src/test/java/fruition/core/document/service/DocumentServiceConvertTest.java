@@ -309,7 +309,8 @@ class DocumentServiceConvertTest {
         var states = new java.util.HashMap<String, DocumentEditState>();
         states.put(parent.getId(), new DocumentEditState(parent.getId(), "<!-- page 10 -->\n\n# first pages\n", "hash", 2));
         var rows = stubBatchConvert(parent, source, queue, states);
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10),
+                eq(new ConverterClient.Attribution("convert:doc_placeholder", WORKSPACE_ID, USER_ID)), any()))
                 .thenReturn(new ConverterClient.Batch(11, 20, 20, "<!-- page 1 -->\n\n# next pages\n", false, true, null));
 
         documentService.doConvert(7L, parent.getId(), source.getId());
@@ -340,7 +341,7 @@ class DocumentServiceConvertTest {
         // 11쪽(약 3.5MiB) + 12쪽(약 2MiB): 함께는 상한을 넘어 두 조각이 된다.
         String batchMarkdown = "<!-- page 1 -->\n\n" + "나".repeat(mib * 7 / 6) + "\n\n<!-- page 2 -->\n\n" + "다".repeat(mib * 2 / 3) + "\n";
         var rows = stubBatchConvert(parent, source, queue, states);
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any(), any()))
                 .thenReturn(new ConverterClient.Batch(11, 20, 20, batchMarkdown, false, true, null));
 
         documentService.doConvert(7L, parent.getId(), source.getId());
@@ -383,7 +384,7 @@ class DocumentServiceConvertTest {
         String deletedPartId = "doc_" + java.util.UUID.nameUUIDFromBytes((parent.getId() + ":part:1")
                 .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
         when(documentRepository.existsById(anyString())).thenAnswer(inv -> deletedPartId.equals(inv.getArgument(0)));
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any(), any()))
                 .thenReturn(new ConverterClient.Batch(11, 20, 20, "<!-- page 1 -->\n\n" + "나".repeat(100) + "\n", false, true, null));
 
         documentService.doConvert(7L, parent.getId(), source.getId());
@@ -403,7 +404,7 @@ class DocumentServiceConvertTest {
         var states = new java.util.HashMap<String, DocumentEditState>();
         states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
         stubBatchConvert(parent, source, queue, states);
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any()))
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any(), any()))
                 .thenReturn(new ConverterClient.Batch(1, 3, 3, "<!-- page 1 -->\n\n# 본문\n", true, true, null));
 
         documentService.doConvert(7L, parent.getId(), source.getId());
@@ -421,7 +422,7 @@ class DocumentServiceConvertTest {
         var states = new java.util.HashMap<String, DocumentEditState>();
         states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
         stubBatchConvert(parent, source, queue, states);
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any()))
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any(), any()))
                 .thenReturn(new ConverterClient.Batch(1, 3, 3,
                         "<!-- page 1 -->\n\n<u>임시명세서</u> [보기](javascript:alert(1))\n", true, true, null));
 
@@ -440,7 +441,7 @@ class DocumentServiceConvertTest {
         states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
         stubBatchConvert(parent, source, queue, states);
         String png = java.util.Base64.getEncoder().encodeToString(pngHeader(20_000, 10));
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any()))
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any(), any()))
                 .thenReturn(new ConverterClient.Batch(1, 1, 1,
                         "앞\n\n![figure](data:image/png;base64," + png + ")\n\n뒤\n", true, true, null));
 
@@ -472,7 +473,7 @@ class DocumentServiceConvertTest {
         String nearlyFull = "<!-- page 10 -->\n\n" + "가".repeat((DocumentEditingRules.MAX_MARKDOWN_BYTES - 100) / 3);
         states.put(parent.getId(), new DocumentEditState(parent.getId(), nearlyFull, "hash", 2));
         var rows = stubBatchConvert(parent, source, queue, states);
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any(), any()))
                 .thenReturn(new ConverterClient.Batch(11, 20, 20, "<!-- page 1 -->\n\n" + "나".repeat(100) + "\n", false, true, null));
 
         documentService.doConvert(7L, parent.getId(), source.getId());
@@ -494,7 +495,7 @@ class DocumentServiceConvertTest {
         when(documentRepository.findByIdInActiveWorkspace(parent.getId())).thenReturn(Optional.of(parent));
         when(documentRepository.findById(SOURCE_DOCUMENT_ID)).thenReturn(Optional.of(sourcePdf()));
         when(minioClient.getPresignedObjectUrl(any())).thenReturn("https://storage.example.test/signed");
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any(), any()))
                 .thenThrow(new DocumentConvertException("temporary failure"));
         documentService.doConvert(7L, parent.getId(), SOURCE_DOCUMENT_ID);
         assertThat(queue.getCompletedPages()).isEqualTo(10);
@@ -517,7 +518,9 @@ class DocumentServiceConvertTest {
                 Headers.of(), "fruition-storage", "us-east-1",
                 source.getSourceUri(), new ByteArrayInputStream(pdfBytes)));
         when(converterClient.convertPdf(
-                eq("보고서.pdf"), eq(pdfBytes), eq("gemini"), eq("gemini-3.5-flash-lite"), any(java.util.function.BooleanSupplier.class)))
+                eq("보고서.pdf"), eq(pdfBytes), eq("gemini"), eq("gemini-3.5-flash-lite"),
+                eq(new ConverterClient.Attribution("convert:doc_placeholder", WORKSPACE_ID, USER_ID)),
+                any(java.util.function.BooleanSupplier.class)))
                 .thenReturn("# 변환된 <u>본문</u>\n");  // 저장 전에 원시 HTML을 걷어낸다
         when(postgresDocumentEditStore.save(
                 anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
@@ -569,7 +572,7 @@ class DocumentServiceConvertTest {
                 Headers.of(), "fruition-storage", "us-east-1",
                 source.getSourceUri(), new ByteArrayInputStream(pdfBytes)));
         String png = java.util.Base64.getEncoder().encodeToString(pngHeader(20_000, 10));
-        when(converterClient.convertPdf(anyString(), any(), anyString(), anyString(),
+        when(converterClient.convertPdf(anyString(), any(), anyString(), anyString(), any(),
                 any(java.util.function.BooleanSupplier.class)))
                 .thenReturn("앞\n\n![figure](data:image/png;base64," + png + ")\n\n뒤\n");
         when(postgresDocumentEditStore.save(
@@ -602,7 +605,7 @@ class DocumentServiceConvertTest {
                 Headers.of(), "fruition-storage", "us-east-1", source.getSourceUri(),
                 new ByteArrayInputStream(pdfBytes)));
         when(converterClient.convertPdf(
-                eq("보고서.pdf"), eq(pdfBytes), eq("gemini"), eq("gemini-3.5-flash-lite"), any(java.util.function.BooleanSupplier.class)))
+                eq("보고서.pdf"), eq(pdfBytes), eq("gemini"), eq("gemini-3.5-flash-lite"), any(), any(java.util.function.BooleanSupplier.class)))
                 .thenReturn(markdown);
         Instant updatedAt = Instant.parse("2026-08-14T00:00:00Z");
         PostgresDocumentEditSaveResult first = new PostgresDocumentEditSaveResult(
@@ -639,7 +642,7 @@ class DocumentServiceConvertTest {
         when(minioClient.getObject(any())).thenReturn(new GetObjectResponse(
                 Headers.of(), "fruition-storage", "us-east-1",
                 source.getSourceUri(), new ByteArrayInputStream(new byte[]{1})));
-        when(converterClient.convertPdf(anyString(), any(), anyString(), anyString(), any(java.util.function.BooleanSupplier.class)))
+        when(converterClient.convertPdf(anyString(), any(), anyString(), anyString(), any(), any(java.util.function.BooleanSupplier.class)))
                 .thenThrow(new DocumentConvertException("변환기 호출이 실패했습니다. status=422"));
 
         documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);

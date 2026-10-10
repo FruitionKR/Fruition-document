@@ -1070,6 +1070,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: convertMarkdown`)
 - 호출자: 프론트엔드 — `src/entities/document/api/document.ts:97`(`convertDocumentToMarkdown`)
 - 하위 호출: 동기 구간에서는 없음(`202` 반환). 커밋 후 비동기로 converter-svc `POST /convert`·`POST /convert-source-batch`(`ConverterClient`, `${CONVERTER_ENDPOINT}`, 인증 헤더 없음·NetworkPolicy 격리)와 access-svc `WorkspaceAiModelClient`를 호출한다
+- 사용량 귀속(#91): converter의 공급사 호출(selective repair)을 변환 요청 때 만든 실행 `convert:<placeholder 문서 ID>`에 귀속한다. run_id는 `X-Request-Id` 헤더로, `workspace_id`·`user_id`(placeholder 문서의 워크스페이스·요청자)는 `/convert` Form 필드와 `/convert-source-batch` JSON 본문 필드로 보낸다. 새 실행을 만들지 않으므로 크레딧 예약은 변환 요청 때 한 번이다. 헤더로 받는 converter 변경(FruitionKR/Fruition-ai)과 함께 배포한다.
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-convert-markdown)
