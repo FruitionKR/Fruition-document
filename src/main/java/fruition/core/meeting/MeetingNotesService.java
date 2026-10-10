@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.exception.DocumentLockedException;
@@ -16,16 +17,19 @@ import fruition.core.document.exception.InvalidDocumentFilenameException;
 import fruition.core.document.exception.InvalidMarkdownContentException;
 import fruition.core.document.exception.MarkdownContentTooLargeException;
 import fruition.core.document.dto.MarkdownDocumentCreateRequest;
+import fruition.core.document.repository.AiCommandOutboxWriter;
 import fruition.core.document.repository.PostgresDocumentEditStore;
 import fruition.core.document.service.DocumentEditLockService;
 import fruition.core.document.service.DocumentService;
 import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.shared.util.DuplicateResourceName;
-import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -37,21 +41,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.SynchronousQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 회의록 초안 생성·조회와 문서 저장.
  *
- * <p>AI 호출은 요청 스레드·트랜잭션 밖에서 하고 결과는 자기 버전 행에만 쓴다. 생성 요청은 {@code generating} 버전을
- * 만들고 바로 끝나며(202), 클라이언트는 조회로 결과를 기다린다. 저장은 기존 문서 생성·본문 저장 함수를 그대로 쓰며,
+ * <p>AI 작업은 outbox 명령(Kafka)으로 보내고 결과는 {@code ai.task.event}로 받아 자기 버전 행에만 쓴다. 생성 요청은
+ * {@code generating} 버전을 만들고 바로 끝나며(202), 클라이언트는 조회로 결과를 기다린다. 저장은 기존 문서 생성·본문 저장 함수를 그대로 쓰며,
  * 저장 전에 대상·본문을 기록해 같은 요청의 재시도가 같은 저장을 반복하게 한다(중복 생성·중복 추가 없음).
  */
 @Service
 public class MeetingNotesService {
-    static final Duration GENERATION_TIMEOUT = Duration.ofMinutes(5);
     /**
      * 확정 구간을 약 1,000자까지 묶어 보낸다. 실시간 받아쓰기는 발화 하나가 구간 하나라 긴 회의가 회의록 AI의
      * 1,000구간 한도를 넘기 때문이다. 저장·순서·화면 표시는 발화 단위를 그대로 쓴다(ADR-0023 결정 7).
@@ -63,42 +62,47 @@ public class MeetingNotesService {
 
     private final MeetingService meetingService;
     private final MeetingNotesRepository notes;
-    private final MeetingNotesClient client;
+    private final AiCommandOutboxWriter outboxWriter;
+    private final TransactionTemplate transaction;
+    private final String commandTopic;
+    private final Duration generationTimeout;
     private final WorkspaceAiModelClient workspaceAiModelClient;
     private final DocumentService documentService;
     private final DocumentEditLockService documentEditRules;
     private final PostgresDocumentEditStore editStore;
     private final ObjectMapper objectMapper;
-    /**
-     * 생성은 요청 스레드 밖에서 한다. 한 Pod에서 동시 4건까지만 만들고 큐를 두지 않아, 넘치면 기다리지 않고 바로
-     * 거절해 그 버전을 {@code failed}로 남긴다(generating으로 멈춰 있는 행을 만들지 않는다).
-     */
-    private final ThreadPoolExecutor generator = new ThreadPoolExecutor(0, 4, 60, TimeUnit.SECONDS,
-            new SynchronousQueue<>(), runnable -> {
-                Thread thread = new Thread(runnable, "meeting-notes-gen");
-                thread.setDaemon(true);
-                return thread;
-            });
-
-    /** 종료 시 진행 중 생성은 버린다. 남은 generating은 조회의 5분 정리가 failed로 바꾼다. */
-    @PreDestroy
-    void shutdownGenerator() {
-        generator.shutdownNow();
-    }
-
-    public MeetingNotesService(MeetingService meetingService, MeetingNotesRepository notes, MeetingNotesClient client,
+    public MeetingNotesService(MeetingService meetingService, MeetingNotesRepository notes,
                                DocumentService documentService, DocumentEditLockService documentEditRules,
                                PostgresDocumentEditStore editStore, ObjectMapper objectMapper,
-                               WorkspaceAiModelClient workspaceAiModelClient) {
+                               WorkspaceAiModelClient workspaceAiModelClient, AiCommandOutboxWriter outboxWriter,
+                               PlatformTransactionManager transactionManager,
+                               @Value("${app.maintenance.command-topic}") String commandTopic,
+                               @Value("${app.speech.meeting-notes-generation-timeout-minutes}") long generationTimeoutMinutes) {
         this.meetingService = meetingService;
         this.notes = notes;
-        this.client = client;
         this.documentService = documentService;
         this.documentEditRules = documentEditRules;
         this.editStore = editStore;
         this.objectMapper = objectMapper;
         this.workspaceAiModelClient = workspaceAiModelClient;
+        this.outboxWriter = outboxWriter;
+        this.transaction = new TransactionTemplate(transactionManager);
+        this.commandTopic = commandTopic;
+        this.generationTimeout = Duration.ofMinutes(generationTimeoutMinutes);
     }
+
+    /** ai-svc 회의록 명령. 구간은 {@code id}·{@code text}만 보낸다. */
+    record MeetingNotesCommand(
+            @JsonProperty("run_id") String runId,
+            String kind,
+            @JsonProperty("workspace_id") String workspaceId,
+            @JsonProperty("user_id") String userId,
+            String provider,
+            String model,
+            @JsonProperty("meeting_id") String meetingId,
+            @JsonProperty("display_name") String displayName,
+            List<Map<String, String>> segments
+    ) {}
 
     public record AppendPreview(String documentId, long baseRevision, String markdown) {}
 
@@ -128,48 +132,74 @@ public class MeetingNotesService {
                     "누락되었거나 정상 종료되지 않은 녹음이 있습니다. 일부 전사로 만들려면 allow_partial=true로 요청하세요.");
         }
         boolean partial = !meeting.transcriptComplete();
-        int version = notes.insertGenerating(meetingId, requestId, partial, json(segments))
-                .orElseGet(() -> notes.findByRequest(meetingId, requestId)
-                        .map(MeetingNotesRepository.Note::version)
-                        .orElseThrow(() -> new MeetingException(HttpStatus.CONFLICT, "MEETING_NOTES_BUSY",
-                                "다른 회의록 생성 요청과 겹쳤습니다. 다시 시도해 주세요.")));
-        var current = notes.find(meetingId, version).orElseThrow();
-        if (!"generating".equals(current.status())) {
-            return toResponse(current);  // 같은 요청 ID의 동시 재시도
+        // 결과 이벤트에서 근거 ID를 원래 구간으로 되돌릴 수 있도록 묶음의 구간 ID도 스냅샷에 남긴다.
+        List<Map<String, Object>> snapshot = bundles.stream()
+                .<Map<String, Object>>map(bundle -> Map.of("id", bundle.id(), "text", bundle.text(),
+                        "segment_ids", bundle.segmentIds()))
+                .toList();
+        String runId = UUID.randomUUID().toString();
+        var inserted = notes.insertGenerating(meetingId, requestId, partial, json(snapshot), runId);
+        if (inserted.isEmpty()) {
+            return toResponse(notes.findByRequest(meetingId, requestId).orElseThrow(() ->
+                    new MeetingException(HttpStatus.CONFLICT, "MEETING_NOTES_BUSY",
+                            "다른 회의록 생성 요청과 겹쳤습니다. 다시 시도해 주세요.")));  // 같은 요청 ID의 재시도·동시 재시도
         }
+        int version = inserted.get();
         try {
-            generator.execute(() -> generate(workspaceId, userId, meeting.displayName(), meetingId, version,
-                    segments, bundles));
-        } catch (RejectedExecutionException e) {
-            notes.markFailed(meetingId, version, "MEETING_NOTES_BUSY");
-            return toResponse(notes.find(meetingId, version).orElseThrow());
-        }
-        return toResponse(current);
-    }
-
-    /**
-     * 배경에서 초안을 만든다. {@code markReady}·{@code markFailed}는 {@code generating}인 자기 버전 행만 바꾸므로
-     * 늦게 끝난 이전 생성이 새 초안이나 정리된 행을 덮어쓰지 않는다. 실패는 그 버전의 {@code failed}로만 알린다.
-     */
-    private void generate(String workspaceId, String userId, String displayName, String meetingId, int version,
-                          List<Map<String, String>> segments, List<Bundle> bundles) {
-        try {
-            JsonNode draft = client.preview(workspaceId, userId, displayName, segments,
-                    workspaceAiModelClient.get(workspaceId));
-            notes.markReady(meetingId, version, json(stored(draft, bundles)));
-        } catch (MeetingException e) {
-            notes.markFailed(meetingId, version, e.getCode());
+            WorkspaceAiModelClient.AiModelSelection model = workspaceAiModelClient.get(workspaceId);
+            var command = new MeetingNotesCommand(runId, "meeting_notes", workspaceId, userId, model.provider(),
+                    model.model(), meetingId, meeting.displayName(), segments);
+            // 크레딧 예약·작업 등록·outbox 저장이 한 트랜잭션이다. 잔액이 모자라면 모두 롤백되고 이 버전만 failed로 남긴다.
+            transaction.executeWithoutResult(status -> outboxWriter.enqueue(runId, commandTopic, workspaceId, command));
         } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
             notes.markFailed(meetingId, version, "INSUFFICIENT_CREDIT");
         } catch (RuntimeException e) {
-            log.warn("[회의록 초안 생성 실패] meetingId={} version={}", meetingId, version, e);
+            log.warn("[회의록 초안 요청 실패] meetingId={} version={}", meetingId, version, e);
             notes.markFailed(meetingId, version, "MEETING_NOTES_FAILED");
         }
+        return toResponse(notes.find(meetingId, version).orElseThrow());
+    }
+
+    /**
+     * AI 결과 이벤트를 반영한다. {@code markReady}·{@code markFailed}는 {@code generating}인 자기 버전 행만 바꾸므로
+     * 재전달·늦게 온 이벤트가 새 초안이나 정리된 행을 덮어쓰지 않는다. 행이 없으면 무시한다.
+     */
+    public void applyResult(String runId, boolean succeeded, JsonNode draft, String error) {
+        var note = notes.findByRun(runId);
+        if (note.isEmpty()) {
+            log.warn("[회의록 결과 무시] runId={} reason=note_not_found", runId);
+            return;
+        }
+        String meetingId = note.get().meetingId();
+        int version = note.get().version();
+        if (!succeeded) {
+            boolean credit = error != null && error.toUpperCase(java.util.Locale.ROOT).contains("INSUFFICIENT_CREDIT");
+            notes.markFailed(meetingId, version, credit ? "INSUFFICIENT_CREDIT" : "MEETING_NOTES_FAILED");
+        } else if (draft == null || !draft.path("summary").isArray()) {
+            notes.markFailed(meetingId, version, "MEETING_NOTES_INVALID");
+        } else {
+            notes.markReady(meetingId, version, json(stored(draft, snapshotSources(note.get().segmentSnapshot()))));
+        }
+    }
+
+    /** 스냅샷의 묶음 ID → 묶인 원래 구간 ID들. */
+    private Map<String, List<String>> snapshotSources(String snapshot) {
+        Map<String, List<String>> sources = new LinkedHashMap<>();
+        try {
+            for (JsonNode bundle : objectMapper.readTree(snapshot)) {
+                List<String> ids = new ArrayList<>();
+                bundle.path("segment_ids").forEach(id -> ids.add(id.asText()));
+                sources.put(bundle.path("id").asText(), ids);
+            }
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+        return sources;
     }
 
     public MeetingNotesResponse latest(String workspaceId, String userId, String meetingId) {
         meetingService.requireOwned(workspaceId, userId, meetingId);
-        notes.expireGenerating(meetingId, Instant.now().minus(GENERATION_TIMEOUT));
+        notes.expireGenerating(meetingId, Instant.now().minus(generationTimeout));
         return toResponse(notes.latest(meetingId).orElseThrow(() ->
                 new MeetingException(HttpStatus.NOT_FOUND, "MEETING_NOTES_NOT_FOUND", "회의록 초안이 없습니다.")));
     }
@@ -394,9 +424,7 @@ public class MeetingNotesService {
      * 저장할 결과: 이름과 네 배열만 둔다(AI markdown은 버린다). 근거는 묶음 ID로 돌아오므로 묶인 원래 구간
      * ID들로 되돌려 저장한다. 모르는 ID는 그대로 둔다.
      */
-    private ObjectNode stored(JsonNode draft, List<Bundle> bundles) {
-        Map<String, List<String>> sources = new LinkedHashMap<>();
-        bundles.forEach(bundle -> sources.put(bundle.id(), bundle.segmentIds()));
+    private ObjectNode stored(JsonNode draft, Map<String, List<String>> sources) {
         ObjectNode result = objectMapper.createObjectNode();
         result.put("display_name", draft.path("display_name").asText("회의록"));
         for (String[] section : SECTIONS) {

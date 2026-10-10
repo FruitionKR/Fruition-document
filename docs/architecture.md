@@ -22,7 +22,7 @@ Document는 문서·폴더·채팅·Wiki 공개 API와 AI 요청 중계를 담�
 
 ## 회의록 초안과 저장
 
-회의가 끝나면 확정 전사를 AI 회의록 API에 보내 초안을 만들고 core_db에 버전별로 보관한다. AI 호출은 트랜잭션 밖에서 하며 결과는 자기 버전 행에만 쓴다. 문서 본문은 AI 응답의 markdown 대신 항목 배열로 다시 만들어 근거 ID를 넣지 않는다. 저장은 기존 Markdown 문서 생성·본문 저장 함수를 그대로 쓰며, 대상·본문을 먼저 기록해 같은 요청의 재시도가 같은 저장을 반복한다. 결정 근거: [ADR-0023](adr/0023-meeting-transcripts-and-recordings.md).
+회의가 끝나면 확정 전사를 outbox 명령(`ai.maintenance.command`, `kind=meeting_notes`)으로 AI에 보내 초안을 만들고 core_db에 버전별로 보관한다. 크레딧 예약·run 등록·명령 저장은 한 트랜잭션이고, 결과는 `ai.task.event`로 받아 `ai_run_id`로 찾은 자기 버전 행에만 쓴다. 30분 넘게 결과가 없는 `generating`은 조회 시 실패로 정리한다. 문서 본문은 AI 응답의 markdown 대신 항목 배열로 다시 만들어 근거 ID를 넣지 않는다. 저장은 기존 Markdown 문서 생성·본문 저장 함수를 그대로 쓰며, 대상·본문을 먼저 기록해 같은 요청의 재시도가 같은 저장을 반복한다. 결정 근거: [ADR-0023](adr/0023-meeting-transcripts-and-recordings.md).
 
 ## 채팅 음성 입력
 

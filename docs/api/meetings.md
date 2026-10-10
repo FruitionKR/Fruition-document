@@ -38,9 +38,9 @@
 | `DELETE .../meetings/{meeting_id}` | 없음 | 객체 저장소(MinIO/S3) 녹음 원본 삭제 | **미배선** |
 | `PUT .../meetings/{meeting_id}/recording` | 없음 | 객체 저장소 쓰기 → `MeetingTranscriptionWorker`가 비동기로 ai-svc `POST ${SPEECH_TRANSCRIPTION_ENDPOINT}` 호출 | **미배선** |
 | `GET .../meetings/{meeting_id}/recording-url` | 없음 | 객체 저장소 presign | **미배선** |
-| `POST .../meetings/{meeting_id}/notes` | 없음 | ai-svc `POST ${MEETING_NOTES_ENDPOINT}` (`MeetingNotesClient`) | **미배선** |
+| `POST .../meetings/{meeting_id}/notes` | 없음 | Kafka `ai.maintenance.command`(`kind=meeting_notes`)로 전달. 결과는 `ai.task.event`로 받는다 | **미배선** |
 | `GET .../meetings/{meeting_id}/notes` | 없음 | 권한 확인 외 없음(DB 조회로 보이나 서비스 계층을 한 줄씩 확인하지는 않았다) | **미배선** |
-| `POST .../meetings/{meeting_id}/notes/{version}/append-preview` | 없음 | ai-svc `POST ${MEETING_NOTES_ENDPOINT}` (`MeetingNotesClient`) | **미배선** |
+| `POST .../meetings/{meeting_id}/notes/{version}/append-preview` | 없음 | 문서 본문 읽기(DB). AI 호출 없음 | **미배선** |
 | `POST .../meetings/{meeting_id}/notes/{version}/apply` | 없음 | 문서 본문 쓰기(DB·객체 저장소). ai-svc 호출 여부는 미확인 | **미배선** |
 | `WS /api/meetings/{meeting_id}/live?ticket=` | 없음 | ai-svc WebSocket `${SPEECH_LIVE_ENDPOINT}` 1:1 중계(`MeetingLiveHandler`, `X-Internal-Token`) | **미배선** |
 
@@ -395,19 +395,31 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 
 ## 회의록 초안과 저장
 
-경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 네 API 모두 `Authorization: Bearer <access_token>`, workspace 멤버십, 회의를 만든 사람임을 검증한다(아니면 `404`). 초안은 AI 회의록 API(모델 고정)로 만들고 document가 버전별로 보관한다.
+경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 네 API 모두 `Authorization: Bearer <access_token>`, workspace 멤버십, 회의를 만든 사람임을 검증한다(아니면 `404`). 초안은 AI 비동기 작업(Kafka, 워크스페이스에서 고른 모델)으로 만들고 document가 버전별로 보관한다.
 
 <a id="notes-generate"></a>
 ### `POST .../meetings/{meeting_id}/notes` — 초안 생성
 
 | 항목 | 내용 |
 |---|---|
-| 입력 | **Header** — `Idempotency-Key`(필수). 네트워크 재시도는 같은 키(같은 버전 반환, AI 재호출 없음), 다시 만들기는 새 키<br>**Query** — `allow_partial`(기본 `false`) |
-| 처리 | `completed` 구간을 `position` 순으로 약 1,000자까지 묶어 AI에 보낸다(묶음 ID는 묶인 첫 구간 ID, 근거 ID는 원래 구간 ID들로 되돌려 저장). 새 버전 행을 `generating`으로 만든 뒤 **요청 스레드·트랜잭션 밖에서** AI를 호출하고, 결과는 그 버전 행에만 쓴다 |
+| 입력 | **Header** — `Idempotency-Key`(필수). 네트워크 재시도는 같은 키(같은 버전 반환, 명령 재발행 없음), 다시 만들기는 새 키<br>**Query** — `allow_partial`(기본 `false`) |
+| 처리 | `completed` 구간을 `position` 순으로 약 1,000자까지 묶어 AI에 보낸다(묶음 ID는 묶인 첫 구간 ID, 근거 ID는 원래 구간 ID들로 되돌려 저장). 새 버전 행을 `generating`으로 만들고(`ai_run_id` 기록) 크레딧 예약·`ai_task_runs` 등록·명령 outbox 저장을 한 트랜잭션으로 한 뒤 바로 끝난다. 결과는 `ai.task.event`(`kind=meeting_notes`)로 받아 `ai_run_id`로 찾은 그 버전 행에만 쓴다 |
 | 출력 | `202` — `MeetingNotesResponse`(`status=generating`). 같은 키 재시도로 이미 끝난 버전을 돌려줄 때만 `200` |
 | 오류 | `409` 받아쓰기 중(`MEETING_LIVE_IN_USE`), 누락·비정상 종료 전사를 `allow_partial` 없이 요청(`MEETING_TRANSCRIPT_INCOMPLETE`)<br>`422` 확정 전사 없음(`MEETING_TRANSCRIPT_EMPTY`) |
 
-생성은 비동기다. `202`를 받은 뒤 조회(`GET`)로 `status`가 `ready`나 `failed`가 될 때까지 기다린다. 생성 실패는 HTTP 오류가 아니라 그 버전의 `failed`와 `error_code`(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INVALID`, `MEETING_NOTES_INPUT_REJECTED`, `MEETING_NOTES_UNAVAILABLE`, 동시 생성 한도 초과는 `MEETING_NOTES_BUSY`, 크레딧 부족(`app.billing.enforce`)은 `INSUFFICIENT_CREDIT`)로 알리고, 이전 `ready` 초안은 그대로 쓸 수 있다.
+생성은 비동기다. `202`를 받은 뒤 조회(`GET`)로 `status`가 `ready`나 `failed`가 될 때까지 기다린다. 생성 실패는 HTTP 오류가 아니라 그 버전의 `failed`와 `error_code`(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INVALID`(성공 이벤트의 초안 형식 오류), `INSUFFICIENT_CREDIT`(`app.billing.enforce`에서 크레딧 부족, 명령을 발행하지 않는다))로 알리고, 이전 `ready` 초안은 그대로 쓸 수 있다.
+
+#### Kafka 계약 (`kind=meeting_notes`)
+
+명령(`ai.maintenance.command`, transactional outbox, 키 `workspace_id`):
+
+```json
+{"run_id": "<uuid>", "kind": "meeting_notes", "workspace_id": "ws_...", "user_id": "usr_...",
+ "provider": "gemini", "model": "gemini-3.5-flash-lite", "meeting_id": "mtg_...", "display_name": "출시 회의",
+ "segments": [{"id": "s1_a", "text": "..."}]}
+```
+
+결과(`ai.task.event`): `kind=meeting_notes`, `run_id`, `status`(`succeeded` | `failed`). 성공의 `payload`는 초안(`display_name`, `summary`, `decisions`, `action_items`, `open_questions`)이고, 실패의 `error`는 코드 문자열이다(`INSUFFICIENT_CREDIT`를 포함하면 `INSUFFICIENT_CREDIT`, 그 밖은 `MEETING_NOTES_FAILED`). `request`는 되돌려 보내지 않는다. 결과는 `generating`인 자기 버전 행만 바꾸므로 재전달·늦은 이벤트는 무시된다. 크레딧 예약과 사용량 정산은 다른 AI 작업과 같이 `run_id`로 한다.
 
 <a id="notes-latest"></a>
 ### `GET .../meetings/{meeting_id}/notes` — 최신 초안
@@ -432,7 +444,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 
 - `status`: `generating` · `ready` · `failed` · `applied`. `partial`은 `allow_partial`로 만든 초안이다.
 - `markdown`은 document가 네 배열로 다시 만든 본문이다(`# 이름` → `## 요약` · `## 결정 사항` · `## 할 일` · `## 미결 사항`, 빈 항목은 `- 확인된 내용 없음`). AI 응답의 `markdown`은 항목마다 근거 ID를 붙이므로 쓰지 않는다. 근거는 `source_segment_ids`로만 준다.
-- 최신 버전이 `failed`면 `last_ready_version`에 마지막 성공 버전을 준다. 5분 넘게 `generating`인 버전은 `failed`(`MEETING_NOTES_TIMEOUT`)로 바뀐다.
+- 최신 버전이 `failed`면 `last_ready_version`에 마지막 성공 버전을 준다. `app.speech.meeting-notes-generation-timeout-minutes`(기본 30분) 넘게 `generating`인 버전은 `failed`(`MEETING_NOTES_TIMEOUT`)로 바뀐다. 그 뒤 늦게 온 결과 이벤트는 반영하지 않는다.
 - 저장 후 `applied`: `{"mode":"append","document_id":"doc_...","applied_at":"..."}`.
 - 초안이 없으면 `404`(`MEETING_NOTES_NOT_FOUND`).
 

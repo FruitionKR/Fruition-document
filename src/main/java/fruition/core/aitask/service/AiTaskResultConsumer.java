@@ -64,6 +64,10 @@ public class AiTaskResultConsumer {
                 applier.applyLint(event);
                 return;
             }
+            if ("meeting_notes".equals(kind)) {
+                applier.applyMeetingNotes(event);
+                return;
+            }
             if (kind.startsWith("restore_")) {
                 applier.applyRestore(event);
                 return;

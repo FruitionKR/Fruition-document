@@ -2,11 +2,11 @@ package fruition.core.meeting;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sun.net.httpserver.HttpServer;
 import fruition.TestcontainersConfiguration;
+import fruition.core.aitask.service.AiTaskResultConsumer;
+import fruition.core.usage.service.CreditService;
 import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.shared.security.JwtTokenProvider;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,19 +17,11 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
@@ -38,19 +30,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** 회의록 초안 생성·버전·저장을 가짜 ai-svc 회의록 서버와 실제 문서 저장 경로로 확인한다. */
-@SpringBootTest
+/** 회의록 초안 생성(outbox 명령)·결과 이벤트 반영·버전·저장을 실제 문서 저장 경로로 확인한다. */
+@SpringBootTest(properties = "app.billing.enforce=true")
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
 class MeetingNotesIntegrationTest {
-
-    static final HttpServer FAKE_AI;
-    static final AtomicInteger calls = new AtomicInteger();
-    static final AtomicReference<String> lastRequest = new AtomicReference<>();
-    static final AtomicReference<String> lastRequestId = new AtomicReference<>();
-    static volatile int aiStatus = 200;
-    /** 생성이 끝나기 전에 응답하는지 보려고 가짜 AI를 잡아 둔다. null이면 바로 답한다. */
-    static volatile CountDownLatch gate;
 
     static final String DRAFT = """
             {"display_name":"출시 회의","markdown":"# 출시 회의\\n- 금요일 출시 (s1_a)",
@@ -60,57 +44,16 @@ class MeetingNotesIntegrationTest {
              "open_questions":[]}
             """;
 
-    static {
-        try {
-            FAKE_AI = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
-        }
-        FAKE_AI.createContext("/meeting-notes/preview", exchange -> {
-            calls.incrementAndGet();
-            CountDownLatch held = gate;
-            if (held != null) {
-                try {
-                    held.await(10, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            lastRequest.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-            lastRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
-            // 실제 ai-svc MeetingNotesRequest는 정의되지 않은 필드를 거부한다(extra="forbid"). 본문 run_id는 422다(#87).
-            // provider·model은 필수다(ai#68). 빠지면 422다.
-            String sent = lastRequest.get();
-            boolean contractOk = !sent.contains("\"run_id\"") && sent.contains("\"provider\":\"gemini\"")
-                    && sent.contains("\"model\":\"gemini-3.5-flash-lite\"");
-            int status = contractOk ? aiStatus : 422;
-            byte[] body = (status == 200 ? DRAFT : "{\"detail\":\"private-provider-detail\"}")
-                    .getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(status, body.length);
-            exchange.getResponseBody().write(body);
-            exchange.close();
-        });
-        FAKE_AI.start();
-    }
-
-    @DynamicPropertySource
-    static void aiEndpoint(DynamicPropertyRegistry registry) {
-        registry.add("app.speech.meeting-notes-endpoint",
-                () -> "http://127.0.0.1:" + FAKE_AI.getAddress().getPort() + "/meeting-notes/preview");
-    }
-
-    @AfterAll
-    static void stop() {
-        FAKE_AI.stop(0);
-    }
-
+    /** 명령이 Kafka로 나가 outbox에서 사라지지 않게 한다(다른 outbox 통합 테스트와 같다). */
+    @MockBean fruition.core.document.service.AiCommandOutboxPublisher outboxPublisher;
     @MockBean WorkspaceAiModelClient workspaceAiModelClient;
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired JdbcTemplate jdbc;
     @Autowired StringRedisTemplate redisTemplate;
     @Autowired JwtTokenProvider jwtTokenProvider;
+    @Autowired AiTaskResultConsumer consumer;
+    @Autowired CreditService credits;
 
     private String userId;
     private String workspaceId;
@@ -123,9 +66,6 @@ class MeetingNotesIntegrationTest {
         redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
         when(workspaceAiModelClient.get(workspaceId))
                 .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
-        aiStatus = 200;
-        gate = null;
-        calls.set(0);
     }
 
     @Test
@@ -152,28 +92,36 @@ class MeetingNotesIntegrationTest {
         // 짧은 발화는 한 묶음으로 보내고, AI가 돌려준 묶음 ID는 묶인 원래 구간 ID들로 되돌린다.
         assertThat(notes.path("action_items").get(0).path("source_segment_ids"))
                 .extracting(JsonNode::asText).containsExactly("s1_a", "s1_b");
-        JsonNode sent = objectMapper.readTree(lastRequest.get());
+        JsonNode sent = command(meetingId, 1);
+        assertThat(sent.path("kind").asText()).isEqualTo("meeting_notes");
+        assertThat(sent.path("run_id").asText()).isEqualTo(runId(meetingId, 1));
+        assertThat(sent.path("workspace_id").asText()).isEqualTo(workspaceId);
+        assertThat(sent.path("user_id").asText()).isEqualTo(userId);
+        assertThat(sent.path("meeting_id").asText()).isEqualTo(meetingId);
         assertThat(sent.path("display_name").asText()).isEqualTo("출시 회의");
-        // 사용량 귀속 run_id는 본문이 아니라 X-Request-Id 헤더로 보낸다(#87).
-        assertThat(sent.has("run_id")).isFalse();
-        assertThat(lastRequestId.get()).startsWith("meeting_notes:");
         assertThat(sent.path("provider").asText()).isEqualTo("gemini");
         assertThat(sent.path("model").asText()).isEqualTo("gemini-3.5-flash-lite");
         assertThat(sent.path("segments")).extracting(s -> s.path("id").asText()).containsExactly("s1_a");
         assertThat(sent.path("segments").get(0).path("text").asText())
                 .isEqualTo("출시는 금요일로 확정하겠습니다. 민수가 배포 점검을 맡겠습니다.");
+        assertThat(sent.path("segments").get(0).size()).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE id = ? AND kind = 'meeting_notes'",
+                Integer.class, runId(meetingId, 1))).isEqualTo(1);  // 취소·사용량 추적용 run 등록
 
         generate(meetingId, "k1", false).andExpect(status().isOk())
                 .andExpect(jsonPath("$.version").value(1)).andExpect(jsonPath("$.status").value("ready"));
-        assertThat(calls.get()).isEqualTo(1);  // 같은 키 재시도는 AI를 다시 부르지 않는다
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM meeting_notes WHERE meeting_id = ?", Integer.class,
+                meetingId)).isEqualTo(1);  // 같은 키 재시도는 새 작업을 만들지 않는다
     }
 
     @Test
     void incompleteTranscript_requiresAllowPartial() throws Exception {
         String meetingId = meetingWithTranscript(null, "interrupted");
+        grant();
         generate(meetingId, "k1", false).andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("MEETING_TRANSCRIPT_INCOMPLETE"));
         generate(meetingId, "k2", true).andExpect(status().isAccepted()).andExpect(jsonPath("$.partial").value(true));
+        succeed(meetingId, 1);
         assertThat(awaitStatus(meetingId, "ready").path("partial").asBoolean()).isTrue();
     }
 
@@ -181,11 +129,11 @@ class MeetingNotesIntegrationTest {
     void failedRegeneration_keepsLastReadyDraftUsable() throws Exception {
         String meetingId = meetingWithTranscript(null, "finished");
         generated(meetingId, "k1");
-        aiStatus = 502;
         generate(meetingId, "k2", false).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.status").value("generating"));
+        fail(meetingId, 2, "pipeline_error: private-provider-detail");
 
-        // 생성 실패는 HTTP 오류가 아니라 그 버전의 failed 상태로 알린다(제공자 원문은 노출하지 않는다).
+        // 생성 실패는 HTTP 오류가 아니라 그 버전의 failed 상태로 알린다(원문 오류는 노출하지 않는다).
         JsonNode failed = awaitStatus(meetingId, "failed");
         assertThat(failed.toString()).doesNotContain("private-provider-detail");
         assertThat(failed.path("version").asInt()).isEqualTo(2);
@@ -277,7 +225,7 @@ class MeetingNotesIntegrationTest {
         String meetingId = meetingWithManyUtterances(3_000);
         generated(meetingId, "k1");
 
-        JsonNode sent = objectMapper.readTree(lastRequest.get()).path("segments");
+        JsonNode sent = command(meetingId, 1).path("segments");
         assertThat(sent.size()).isLessThan(1_000);  // 발화 3,000개가 회의록 AI의 1,000구간 한도 안으로 묶인다
         int total = 0;
         for (JsonNode segment : sent) {
@@ -291,28 +239,102 @@ class MeetingNotesIntegrationTest {
     }
 
     @Test
-    void generate_returnsBeforeAiFinishesAndPollingSeesResult() throws Exception {
+    void generate_returnsBeforeResultAndPollingSeesResult() throws Exception {
         String meetingId = meetingWithTranscript(null, "finished");
-        gate = new CountDownLatch(1);
+        grant();
 
-        // AI가 아직 답하지 않았는데도 요청은 202로 끝난다.
+        // 결과 이벤트가 오기 전에도 요청은 202로 끝난다.
         generate(meetingId, "k1", false).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.version").value(1))
                 .andExpect(jsonPath("$.status").value("generating"));
         mockMvc.perform(get(notesUrl(meetingId)).header("Authorization", bearer()))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("generating"));
 
-        gate.countDown();
+        succeed(meetingId, 1);
         assertThat(awaitStatus(meetingId, "ready").path("display_name").asText()).isEqualTo("출시 회의");
+    }
+
+    @Test
+    void failedEvent_mapsInsufficientCreditAndOtherErrors() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        grant();
+        generate(meetingId, "k1", false).andExpect(status().isAccepted());
+        fail(meetingId, 1, "INSUFFICIENT_CREDIT");
+        assertThat(awaitStatus(meetingId, "failed").path("error_code").asText()).isEqualTo("INSUFFICIENT_CREDIT");
+
+        generate(meetingId, "k2", false).andExpect(status().isAccepted());
+        fail(meetingId, 2, "anything_else");
+        assertThat(awaitStatus(meetingId, "failed").path("error_code").asText()).isEqualTo("MEETING_NOTES_FAILED");
+    }
+
+    @Test
+    void duplicateAndLateEvents_areNoOps() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        JsonNode first = generated(meetingId, "k1");
+        succeed(meetingId, 1);  // 재전달
+        fail(meetingId, 1, "late_failure");  // 이미 끝난 run의 늦은 실패
+        assertThat(json(mockMvc.perform(get(notesUrl(meetingId)).header("Authorization", bearer()))))
+                .isEqualTo(first);
+
+        // 정리된(failed) 행에 늦게 온 성공 이벤트는 되살리지 않는다.
+        generate(meetingId, "k2", false).andExpect(status().isAccepted());
+        jdbc.update("UPDATE meeting_notes SET updated_at = now() - interval '31 minutes' "
+                + "WHERE meeting_id = ? AND version = 2", meetingId);
+        assertThat(awaitStatus(meetingId, "failed").path("error_code").asText()).isEqualTo("MEETING_NOTES_TIMEOUT");
+        succeed(meetingId, 2);
+        assertThat(awaitStatus(meetingId, "failed").path("version").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void insufficientCredit_failsVersionWithoutRegisteringRun() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+
+        generate(meetingId, "k1", false).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("failed"))
+                .andExpect(jsonPath("$.error_code").value("INSUFFICIENT_CREDIT"));
+
+        String runId = runId(meetingId, 1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE id = ?", Integer.class, runId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_command_outbox WHERE run_id = ?", Integer.class, runId))
+                .isZero();
     }
 
     // ---------- helpers
 
-    /** 생성은 비동기다. 202로 받은 뒤 조회로 끝날 때까지 기다린다. */
+    /** 생성은 비동기다. 202로 받은 뒤 성공 이벤트를 주입하고 조회로 반영을 확인한다. */
     private JsonNode generated(String meetingId, String key) throws Exception {
+        grant();
         generate(meetingId, key, false).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.status").value("generating"));
+        succeed(meetingId, jdbc.queryForObject("SELECT max(version) FROM meeting_notes WHERE meeting_id = ?",
+                Integer.class, meetingId));
         return awaitStatus(meetingId, "ready");
+    }
+
+    /** enforce에서 명령 예약이 통과하도록 잔액을 넣는다. */
+    private void grant() {
+        credits.post(userId, "grant", 10_000_000, "grant:" + UUID.randomUUID(), "테스트");
+    }
+
+    private String runId(String meetingId, int version) {
+        return jdbc.queryForObject("SELECT ai_run_id FROM meeting_notes WHERE meeting_id = ? AND version = ?",
+                String.class, meetingId, version);
+    }
+
+    /** enqueue가 ai_task_runs에 남긴 명령(outbox payload와 같다). */
+    private JsonNode command(String meetingId, int version) throws Exception {
+        return objectMapper.readTree(jdbc.queryForObject("SELECT command::text FROM ai_task_runs WHERE id = ?",
+                String.class, runId(meetingId, version)));
+    }
+
+    private void succeed(String meetingId, int version) throws Exception {
+        consumer.consume("{\"event_id\":\"e-" + UUID.randomUUID() + "\",\"kind\":\"meeting_notes\",\"run_id\":\""
+                + runId(meetingId, version) + "\",\"status\":\"succeeded\",\"payload\":" + DRAFT + "}");
+    }
+
+    private void fail(String meetingId, int version, String error) throws Exception {
+        consumer.consume("{\"event_id\":\"e-" + UUID.randomUUID() + "\",\"kind\":\"meeting_notes\",\"run_id\":\""
+                + runId(meetingId, version) + "\",\"status\":\"failed\",\"error\":\"" + error + "\"}");
     }
 
     private JsonNode awaitStatus(String meetingId, String expected) throws Exception {
