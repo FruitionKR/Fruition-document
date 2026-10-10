@@ -50,10 +50,10 @@ public class AiModelCatalogController {
                     example = "openai")
             String provider,
 
-            @Schema(description = "모델명. 요청의 model 필드에 그대로 넣는다.", example = "gpt-5-nano")
+            @Schema(description = "모델명. 요청의 model 필드에 그대로 넣는다.", example = "gpt-6-luna")
             String model,
 
             @JsonProperty("display_name")
-            @Schema(description = "화면에 보여줄 이름", example = "GPT-5 nano")
+            @Schema(description = "화면에 보여줄 이름", example = "GPT-6 Luna")
             String displayName) {}
 }

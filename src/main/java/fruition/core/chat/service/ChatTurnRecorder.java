@@ -32,7 +32,7 @@ public class ChatTurnRecorder {
                                   String question,
                                   Instant createdAt) {
         createPendingPair(sessionId, pairId, userMessageId, assistantMessageId, question, createdAt,
-                "openai", "gpt-5-nano");
+                "openai", "gpt-6-luna");
     }
 
     @Transactional

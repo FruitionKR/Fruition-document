@@ -176,7 +176,8 @@ class UsageChargeServiceIntegrationTest {
         var notes = new MeetingNotesClient(new PipelineClientFactory("internal-test"), base + "/meeting-notes/preview", 5, charges);
 
         assertThat(speech.transcribe("ws-1", user, MediaType.parseMediaType("audio/wav"), new byte[] {1})).isEqualTo("안녕하세요");
-        notes.preview("ws-1", user, "회의", List.of(Map.of("text", "안건")));
+        notes.preview("ws-1", user, "회의", List.of(Map.of("text", "안건")),
+                new fruition.core.authz.WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"));
 
         var runIds = jdbc.queryForList("SELECT id FROM ai_task_runs WHERE user_id = ? AND status = 'completed' ORDER BY kind",
                 String.class, user);

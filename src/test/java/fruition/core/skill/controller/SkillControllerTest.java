@@ -229,7 +229,7 @@ class SkillControllerTest {
     private WorkspaceAiModelClient workspaceAiModelClient() {
         var client = mock(WorkspaceAiModelClient.class);
         when(client.get(WORKSPACE_ID))
-                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"));
+                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"));
         return client;
     }
 }

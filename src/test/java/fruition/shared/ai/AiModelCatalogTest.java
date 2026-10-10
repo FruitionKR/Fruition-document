@@ -10,14 +10,33 @@ class AiModelCatalogTest {
     void enabledModels_returnsSeveralModelsPerProvider() {
         AiModelCatalog catalog = new AiModelCatalog("openai,gemini,claude");
 
-        assertThat(catalog.enabledModels()).hasSize(38);
-        assertThat(catalog.enabledModels()).filteredOn(model -> model.provider().equals("openai")).hasSize(21);
-        assertThat(catalog.enabledModels()).filteredOn(model -> model.provider().equals("gemini")).hasSize(8);
+        assertThat(catalog.enabledModels()).hasSize(28);
+        assertThat(catalog.enabledModels()).filteredOn(model -> model.provider().equals("openai")).hasSize(14);
+        assertThat(catalog.enabledModels()).filteredOn(model -> model.provider().equals("gemini")).hasSize(5);
         assertThat(catalog.enabledModels()).filteredOn(model -> model.provider().equals("claude")).hasSize(9);
         assertThat(catalog.enabledModels()).extracting(AiModelCatalog.AiModel::model)
-                .contains("gpt-5-nano", "gpt-6.1-sol", "o4-mini", "gemini-3.1-flash-lite", "gemini-3.8-flash",
+                .contains("gpt-6-luna", "gpt-6.1-sol", "gemini-3.5-flash-lite", "gemini-3.8-flash",
                         "claude-sonnet-5", "claude-opus-5-5", "claude-haiku-4-5-20251001")
+                .doesNotContain("gpt-5-nano", "gpt-5", "gpt-5-mini", "gpt-5.4-nano", "gpt-4.1-nano", "o3", "o4-mini",
+                        "gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.5-flash")
                 .doesNotHaveDuplicates();
+        assertThat(catalog.enabledModels().get(0).model()).isEqualTo("gpt-6-luna");
+    }
+
+    @Test
+    void resolve_rejectsRemovedModels() {
+        AiModelCatalog catalog = new AiModelCatalog("openai,gemini,claude");
+
+        for (String model : new String[]{"gpt-5-nano", "gpt-5", "gpt-5-mini", "gpt-5.4-nano", "gpt-4.1-nano", "o3", "o4-mini"}) {
+            assertThatThrownBy(() -> catalog.resolve("openai", model))
+                    .isInstanceOf(InvalidAiModelException.class)
+                    .hasMessage("선택할 수 없는 AI 모델입니다.");
+        }
+        for (String model : new String[]{"gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.5-flash"}) {
+            assertThatThrownBy(() -> catalog.resolve("gemini", model))
+                    .isInstanceOf(InvalidAiModelException.class)
+                    .hasMessage("선택할 수 없는 AI 모델입니다.");
+        }
     }
 
     @Test
@@ -26,7 +45,7 @@ class AiModelCatalogTest {
         assertThat(new AiModelCatalog("openai,gemini,claude").enabledModels().get(0))
                 .isEqualTo(new AiModelCatalog("openai").resolve(null, null));
         assertThat(new AiModelCatalog("gemini,claude").enabledModels().get(0).model())
-                .isEqualTo("gemini-3.1-flash-lite");
+                .isEqualTo("gemini-3.5-flash-lite");
         assertThat(new AiModelCatalog("claude").enabledModels().get(0).model())
                 .isEqualTo("claude-sonnet-5");
     }
@@ -63,7 +82,7 @@ class AiModelCatalogTest {
         AiModelCatalog catalog = new AiModelCatalog("openai");
 
         assertThat(catalog.resolve(null, null))
-                .isEqualTo(new AiModelCatalog.AiModel("openai", "gpt-5-nano", "GPT-5 nano"));
+                .isEqualTo(new AiModelCatalog.AiModel("openai", "gpt-6-luna", "GPT-6 Luna"));
     }
 
     @Test
@@ -72,7 +91,7 @@ class AiModelCatalogTest {
 
         assertThatThrownBy(() -> catalog.resolve("openai", null))
                 .isInstanceOf(InvalidAiModelException.class);
-        assertThatThrownBy(() -> catalog.resolve(null, "gpt-5-nano"))
+        assertThatThrownBy(() -> catalog.resolve(null, "gpt-6-luna"))
                 .isInstanceOf(InvalidAiModelException.class);
         assertThatThrownBy(() -> catalog.resolve("claude", "claude-legacy"))
                 .isInstanceOf(InvalidAiModelException.class);

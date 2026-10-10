@@ -3,6 +3,7 @@ package fruition.core.wikischema.repository;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.usage.service.UsageChargeService;
 import fruition.core.wikischema.exception.PipelineWikiSchemaException;
 import fruition.shared.http.PipelineClientFactory;
@@ -32,14 +33,18 @@ public class PipelineWikiSchemaRequester {
     }
 
     /** 미리보기·초안은 AI 모델을 부른다. AI가 사용량을 남기도록 사용자는 본문에, run_id는 {@code X-Request-Id} 헤더로 보낸다. */
-    public JsonNode preview(String rawMarkdown, String workspaceId, String userId) {
+    public JsonNode preview(String rawMarkdown, String workspaceId, String userId,
+                            WorkspaceAiModelClient.AiModelSelection model) {
         return usageCharges.track("wiki_schema_preview", workspaceId, userId, runId ->
-                requireBody(post(endpoint + "/preview", new PreviewPayload(rawMarkdown, workspaceId, userId), runId)));
+                requireBody(post(endpoint + "/preview", new PreviewPayload(rawMarkdown, workspaceId, userId,
+                        model.provider(), model.model()), runId)));
     }
 
-    public JsonNode createDraft(String rawMarkdown, String name, String workspaceId, String userId) {
+    public JsonNode createDraft(String rawMarkdown, String name, String workspaceId, String userId,
+                               WorkspaceAiModelClient.AiModelSelection model) {
         return usageCharges.track("wiki_schema_draft", workspaceId, userId, runId ->
-                requireBody(post(endpoint + "/drafts", new DraftPayload(rawMarkdown, name, workspaceId, userId), runId)));
+                requireBody(post(endpoint + "/drafts", new DraftPayload(rawMarkdown, name, workspaceId, userId,
+                        model.provider(), model.model()), runId)));
     }
 
     public JsonNode activate(String schemaId) {
@@ -120,7 +125,9 @@ public class PipelineWikiSchemaRequester {
     private record PreviewPayload(
             @JsonProperty("raw_markdown") String rawMarkdown,
             @JsonProperty("workspace_id") String workspaceId,
-            @JsonProperty("user_id") String userId
+            @JsonProperty("user_id") String userId,
+            @JsonProperty("provider") String provider,
+            @JsonProperty("model") String model
     ) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -128,6 +135,8 @@ public class PipelineWikiSchemaRequester {
             @JsonProperty("raw_markdown") String rawMarkdown,
             @JsonProperty("name") String name,
             @JsonProperty("workspace_id") String workspaceId,
-            @JsonProperty("user_id") String userId
+            @JsonProperty("user_id") String userId,
+            @JsonProperty("provider") String provider,
+            @JsonProperty("model") String model
     ) {}
 }

@@ -1,6 +1,7 @@
 package fruition.core.meeting;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.usage.service.UsageChargeService;
 import fruition.shared.http.PipelineClientFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,19 +34,22 @@ public class MeetingNotesClient {
     /**
      * 실패는 사용자용 오류 코드로 바꾼다. 제공자 원문은 노출하지 않는다. AI가 사용량을 남기도록 run_id를
      * {@code X-Request-Id} 헤더로 보낸다. 본문에 넣으면 ai-svc가 모르는 필드로 보고 422로 거부한다.
+     * 워크스페이스에서 고른 모델은 본문의 provider·model로 보낸다(없으면 ai-svc가 422로 거부한다).
      */
-    public JsonNode preview(String workspaceId, String userId, String displayName, List<Map<String, String>> segments) {
+    public JsonNode preview(String workspaceId, String userId, String displayName, List<Map<String, String>> segments,
+                            WorkspaceAiModelClient.AiModelSelection model) {
         return usageCharges.track("meeting_notes", workspaceId, userId,
-                runId -> preview(runId, workspaceId, userId, displayName, segments));
+                runId -> preview(runId, workspaceId, userId, displayName, segments, model));
     }
 
     private JsonNode preview(String runId, String workspaceId, String userId, String displayName,
-                             List<Map<String, String>> segments) {
+                             List<Map<String, String>> segments, WorkspaceAiModelClient.AiModelSelection model) {
         try {
             JsonNode body = restClient.post().uri(endpoint).contentType(MediaType.APPLICATION_JSON)
                     .header(UsageChargeService.RUN_ID_HEADER, runId)
                     .body(Map.of("workspace_id", workspaceId, "user_id", userId,
-                            "display_name", displayName, "segments", segments))
+                            "display_name", displayName, "segments", segments,
+                            "provider", model.provider(), "model", model.model()))
                     .retrieve().body(JsonNode.class);
             if (body == null || !body.path("summary").isArray()) {
                 throw new MeetingException(HttpStatus.BAD_GATEWAY, "MEETING_NOTES_INVALID", "회의록 형식이 올바르지 않습니다.");
