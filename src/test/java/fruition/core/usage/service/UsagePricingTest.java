@@ -32,29 +32,36 @@ class UsagePricingTest {
         assertThat(UsagePricing.chargeKrwMilli(BigDecimal.ZERO, new BigDecimal("1400"), 3000, 1000)).isZero();
     }
 
-    private static final UsagePricing.Price ALL = new UsagePricing.Price(new BigDecimal("1"), new BigDecimal("2"),
-            new BigDecimal("0.1"), new BigDecimal("1.25"), new BigDecimal("0.006"), new BigDecimal("15"));
+    /** 분당 과금 모델: 토큰 단가 열은 NOT NULL이라 0이다. */
+    private static final UsagePricing.Price PER_MINUTE = new UsagePricing.Price(BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("0.006"), null);
+    private static final UsagePricing.Price PER_MCHAR = new UsagePricing.Price(new BigDecimal("1"), new BigDecimal("2"),
+            new BigDecimal("0.1"), new BigDecimal("1.25"), null, new BigDecimal("15"));
 
     @Test
-    void tokenUsageIsPricedByTokensOnly() {
-        // 토큰과 TTS 글자 수가 함께 있으면 토큰 비용만. 글자 단가가 없어도 unpriced가 아니다.
+    void priceRowWithoutAudioOrTtsUnitChargesTokensOnly() {
+        // 토큰과 TTS 글자 수가 함께 있고 글자 단가가 없으면 토큰 비용만. unpriced가 아니다.
         assertThat(UsagePricing.callCostUsd(PRICE, 1000L, null, null, 0L, null, 10_000L)).isEqualByComparingTo("0.001");
-        // 글자 단가가 있어도 더하지 않는다(이중 청구 아님).
-        assertThat(UsagePricing.callCostUsd(ALL, 1000L, null, null, 0L, null, 10_000L)).isEqualByComparingTo("0.001");
-        // 토큰과 오디오 길이가 함께 있으면 토큰 비용만.
+        // 토큰과 오디오 길이가 함께 있고 분당 단가가 없으면 토큰 비용만.
         assertThat(UsagePricing.callCostUsd(PRICE, 0L, null, null, 500L, new BigDecimal("30"), null))
-                .isEqualByComparingTo("0.001");
-        assertThat(UsagePricing.callCostUsd(ALL, 0L, null, null, 500L, new BigDecimal("30"), null))
                 .isEqualByComparingTo("0.001");
     }
 
     @Test
-    void withoutTokensAudioAndTtsUseTheirOwnPrices() {
-        // 오디오만: 30초 × 0.006 / 60
-        assertThat(UsagePricing.callCostUsd(ALL, null, null, null, null, new BigDecimal("30"), null))
+    void priceRowUnitWinsOverTokensWithoutAddingThem() {
+        // 토큰 단가 0 + 분당 단가, 토큰과 오디오 길이가 함께 기록됨 → 분당 비용만(0원이 아니다). 30초 × 0.006 / 60
+        assertThat(UsagePricing.callCostUsd(PER_MINUTE, 1000L, null, null, 500L, new BigDecimal("30"), null))
                 .isEqualByComparingTo("0.003");
-        // 글자만: 1,000자 × 15 / 1M
-        assertThat(UsagePricing.callCostUsd(ALL, null, null, null, null, null, 1000L)).isEqualByComparingTo("0.015");
+        // 글자 단가가 있는 행은 토큰이 함께 있어도 글자 비용만. 1,000자 × 15 / 1M
+        assertThat(UsagePricing.callCostUsd(PER_MCHAR, 1000L, null, null, 500L, null, 1000L))
+                .isEqualByComparingTo("0.015");
+    }
+
+    @Test
+    void withoutTokensAudioAndTtsNeedTheirOwnPrices() {
+        assertThat(UsagePricing.callCostUsd(PER_MINUTE, null, null, null, null, new BigDecimal("30"), null))
+                .isEqualByComparingTo("0.003");
+        assertThat(UsagePricing.callCostUsd(PER_MCHAR, null, null, null, null, null, 1000L)).isEqualByComparingTo("0.015");
         // 그 단가가 없으면 계산할 수 없다.
         assertThat(UsagePricing.callCostUsd(PRICE, null, null, null, null, new BigDecimal("30"), null)).isNull();
         assertThat(UsagePricing.callCostUsd(PRICE, null, null, null, null, null, 10L)).isNull();
