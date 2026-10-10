@@ -2,6 +2,9 @@ package fruition.shared.idempotency;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -24,6 +27,8 @@ import java.util.function.Supplier;
 /** HTTP Idempotency-Key 요청을 실행 전에 선점하고 완료 응답을 저장·재생한다. */
 @Service
 public class IdempotencyService {
+
+    private static final Logger log = LoggerFactory.getLogger(IdempotencyService.class);
 
     static final long EXECUTION_LEASE_SECONDS = 15L * 60;
     static final long RESPONSE_TTL_SECONDS = 24L * 60 * 60;
@@ -173,6 +178,18 @@ public class IdempotencyService {
             throw new IllegalStateException("멱등성 완료 상태를 저장할 수 없습니다.");
         }
         restoreCurrentClaim(activeClaim.previous());
+    }
+
+    /**
+     * 만료 행을 지운다. 같은 키를 다시 쓸 때만 지우면 응답 본문(파일명·폴더명 등)이 기한 없이 남는다(#96).
+     * 조건부 DELETE라 여러 Pod가 동시에 돌아도 같은 행을 한 번만 지운다.
+     */
+    @Scheduled(initialDelay = 300_000, fixedDelayString = "${app.idempotency.cleanup-interval-ms:3600000}")
+    public void deleteExpired() {
+        Integer deleted = transaction.execute(status -> repository.deleteExpired(clock.instant()));
+        if (deleted != null && deleted > 0) {
+            log.info("[멱등성 기록 만료 정리] deleted={}", deleted);
+        }
     }
 
     /** 현재 실행에만 속하는 resource ID seed. lease 재선점 시 새 값으로 fencing된다. */

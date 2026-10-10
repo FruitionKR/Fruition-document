@@ -92,6 +92,23 @@ class AiTaskResultApplierTest {
     }
 
     @Test
+    void resultOfPurgedRunIsSkippedAndLaterResultsStillApply() throws Exception {
+        when(jdbcTemplate.queryForList(eq("SELECT status FROM ai_task_runs WHERE id = ? FOR UPDATE"),
+                eq(String.class), eq("restore-run-1"))).thenReturn(java.util.List.of());
+
+        assertThatCode(() -> applier.applyRestore(restoreEvent())).doesNotThrowAnyException();
+        verify(operationLogRepository, never()).findById(any());
+        verify(usageCharges, never()).enqueue("restore-run-1");
+
+        when(jdbcTemplate.update(any(String.class), any(), any(), any())).thenReturn(1);
+        var projection = applier.applyQuery(objectMapper.readTree(event("event-1", "succeeded", "answer", null)));
+
+        assertThat(projection.error()).isNull();
+        verify(queryService).completeAsync(eq("session-1"), eq("question"), eq("query-1"), any(), any());
+        verify(usageCharges).enqueue("query-1");
+    }
+
+    @Test
     void queryLateSuccessCannotReplaceCanonicalFailure() throws Exception {
         JsonNode incomingSuccess = objectMapper.readTree(event("event-2", "succeeded", "late answer", null));
         String canonicalFailure = event("event-1", "failed", null, "first failure");

@@ -42,7 +42,19 @@ public class DataPurgeService {
     private static final String USER_RUNS = "SELECT id FROM ai_task_runs WHERE user_id = ?";
 
     /**
+     * 워크스페이스 API의 멱등성 기록. endpoint_scope는 {@code METHOD:/api/workspaces/{ws}/...} 형식이라
+     * 네 번째 경로 조각을 정확히 비교한다. LIKE로 비교하면 id가 다른 id의 접두사일 때 남의 기록까지 지운다.
+     * agent 문서 이름 바꾸기는 scope에 워크스페이스가 없어 resource_id(문서 id)로 찾는다. 그래서 문서보다 먼저 지운다.
+     */
+    private static final String WORKSPACE_IDEMPOTENCY = "DELETE FROM idempotency_records"
+            + " WHERE (endpoint_scope LIKE '%:/api/workspaces/%' AND split_part(endpoint_scope, '/', 4) = ?)"
+            + " OR (endpoint_scope = 'POST:/internal/agent/tools/execute/rename_document'"
+            + " AND resource_id IN (SELECT id FROM documents WHERE workspace_id = ?))";
+
+    /**
      * FK 순서대로 나열한다. 위키 기여·버전과 AI 작업 변경분은 CASCADE 없이 로그·실행을 참조하므로 먼저 지운다.
+     * 미발행 AI command는 실행 기록이 없는 것(document_deleted 등)도 있어 run_id가 아니라 payload로 찾는다.
+     * 남겨 두면 파기 뒤에 ai로 발행돼 지운 범위의 데이터가 다시 만들어진다(#88).
      * 문서는 폴더보다 먼저 지운다. 폴더를 먼저 지우면 문서가 루트로 올라오며 이름 고유 제약에 걸릴 수 있다.
      * 문서에 딸린 본문·버전·잠금·asset 참조, 채팅 메시지, 회의 전사는 CASCADE로 함께 지워진다.
      */
@@ -55,12 +67,14 @@ public class DataPurgeService {
             new Step("ai_operation_logs", "DELETE FROM ai_operation_logs WHERE workspace_id = ?", 1),
             new Step("ai_task_result_receipts", "DELETE FROM ai_task_result_receipts WHERE run_id IN (" + WORKSPACE_RUNS + ")", 1),
             new Step("ai_task_changes", "DELETE FROM ai_task_changes WHERE run_id IN (" + WORKSPACE_RUNS + ")", 1),
+            new Step("ai_command_outbox", "DELETE FROM ai_command_outbox WHERE payload::jsonb->>'workspace_id' = ?", 1),
             new Step("ai_task_runs", "DELETE FROM ai_task_runs WHERE workspace_id = ?", 1),
             new Step("agent_apply_projections", "DELETE FROM agent_apply_projections WHERE workspace_id = ?", 1),
             new Step("chat_sessions", "DELETE FROM chat_sessions WHERE workspace_id = ?", 1),
             new Step("chat_partial_wiki", "DELETE FROM chat_partial_wiki WHERE workspace_id = ?", 1),
             new Step("meetings", "DELETE FROM meetings WHERE workspace_id = ?", 1),
             new Step("document_edit_outbox", "DELETE FROM document_edit_outbox WHERE workspace_id = ?", 1),
+            new Step("idempotency_records", WORKSPACE_IDEMPOTENCY, 2),
             new Step("documents", "DELETE FROM documents WHERE workspace_id = ?", 1),
             new Step("document_assets", "DELETE FROM document_assets WHERE workspace_id = ?", 1),
             new Step("folders", "DELETE FROM folders WHERE workspace_id = ?", 1),
@@ -74,6 +88,7 @@ public class DataPurgeService {
     private static final List<Step> USER_STEPS = List.of(
             new Step("ai_task_result_receipts", "DELETE FROM ai_task_result_receipts WHERE run_id IN (" + USER_RUNS + ")", 1),
             new Step("ai_task_changes", "DELETE FROM ai_task_changes WHERE run_id IN (" + USER_RUNS + ")", 1),
+            new Step("ai_command_outbox", "DELETE FROM ai_command_outbox WHERE payload::jsonb->>'user_id' = ?", 1),
             new Step("ai_task_runs", "DELETE FROM ai_task_runs WHERE user_id = ?", 1),
             new Step("agent_apply_projections", "DELETE FROM agent_apply_projections WHERE user_id = ?", 1),
             new Step("chat_sessions", "DELETE FROM chat_sessions WHERE user_id = ?", 1),

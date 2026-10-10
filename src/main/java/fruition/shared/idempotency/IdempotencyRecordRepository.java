@@ -93,4 +93,9 @@ public interface IdempotencyRecordRepository extends JpaRepository<IdempotencyRe
             WHERE id = :id AND status = 'IN_PROGRESS' AND claim_token = :claimToken
             """, nativeQuery = true)
     int release(@Param("id") UUID id, @Param("claimToken") UUID claimToken);
+
+    /** 보관 기간이 지난 완료 기록과 lease가 끝난 선점 기록을 한꺼번에 지운다. */
+    @Modifying
+    @Query(value = "DELETE FROM idempotency_records WHERE expires_at < :now", nativeQuery = true)
+    int deleteExpired(@Param("now") Instant now);
 }
