@@ -255,12 +255,12 @@ class MeetingNotesIntegrationTest {
     }
 
     @Test
-    void failedEvent_mapsInsufficientCreditAndOtherErrors() throws Exception {
+    void failedEvent_keepsAiCodesAndMapsOtherErrors() throws Exception {
         String meetingId = meetingWithTranscript(null, "finished");
         grant();
         generate(meetingId, "k1", false).andExpect(status().isAccepted());
-        fail(meetingId, 1, "INSUFFICIENT_CREDIT");
-        assertThat(awaitStatus(meetingId, "failed").path("error_code").asText()).isEqualTo("INSUFFICIENT_CREDIT");
+        fail(meetingId, 1, "MEETING_NOTES_UNAVAILABLE");
+        assertThat(awaitStatus(meetingId, "failed").path("error_code").asText()).isEqualTo("MEETING_NOTES_UNAVAILABLE");
 
         generate(meetingId, "k2", false).andExpect(status().isAccepted());
         fail(meetingId, 2, "anything_else");

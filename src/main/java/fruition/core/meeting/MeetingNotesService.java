@@ -39,6 +39,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -51,6 +52,9 @@ import java.util.UUID;
  */
 @Service
 public class MeetingNotesService {
+
+    private static final Set<String> AI_FAILURE_CODES =
+            Set.of("MEETING_NOTES_INPUT_REJECTED", "MEETING_NOTES_UNAVAILABLE", "MEETING_NOTES_FAILED");
     /**
      * 확정 구간을 약 1,000자까지 묶어 보낸다. 실시간 받아쓰기는 발화 하나가 구간 하나라 긴 회의가 회의록 AI의
      * 1,000구간 한도를 넘기 때문이다. 저장·순서·화면 표시는 발화 단위를 그대로 쓴다(ADR-0023 결정 7).
@@ -173,8 +177,8 @@ public class MeetingNotesService {
         String meetingId = note.get().meetingId();
         int version = note.get().version();
         if (!succeeded) {
-            boolean credit = error != null && error.toUpperCase(java.util.Locale.ROOT).contains("INSUFFICIENT_CREDIT");
-            notes.markFailed(meetingId, version, credit ? "INSUFFICIENT_CREDIT" : "MEETING_NOTES_FAILED");
+            // ai가 보내는 실패 code는 그대로 남기고, 모르는 값은 일반 실패로 본다. 크레딧 부족은 발행 전에 거른다.
+            notes.markFailed(meetingId, version, AI_FAILURE_CODES.contains(error) ? error : "MEETING_NOTES_FAILED");
         } else if (draft == null || !draft.path("summary").isArray()) {
             notes.markFailed(meetingId, version, "MEETING_NOTES_INVALID");
         } else {
