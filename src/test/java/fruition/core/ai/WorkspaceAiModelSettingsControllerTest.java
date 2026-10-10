@@ -31,20 +31,20 @@ class WorkspaceAiModelSettingsControllerTest {
     @Test
     void get_memberCanReadSettingButCannotUpdate() {
         when(client.get("ws_1")).thenReturn(
-                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"));
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"));
         when(accessGuard.isOwner("ws_1", "user_1")).thenReturn(false);
 
         var response = controller.get("user_1", "ws_1");
 
         verify(accessGuard).requireMember("ws_1", "user_1");
-        assertThat(response.getBody().ingestLint().model()).isEqualTo("gpt-5-nano");
+        assertThat(response.getBody().ingestLint().model()).isEqualTo("gpt-6-luna");
         assertThat(response.getBody().canUpdate()).isFalse();
     }
 
     @Test
     void get_ownerCanUpdate() {
         when(client.get("ws_1")).thenReturn(
-                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"));
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"));
         when(accessGuard.isOwner("ws_1", "owner_1")).thenReturn(true);
 
         var response = controller.get("owner_1", "ws_1");
@@ -73,7 +73,7 @@ class WorkspaceAiModelSettingsControllerTest {
         when(accessGuard.getRole("ws_1", "other_1")).thenReturn("NONE");
 
         var request = new WorkspaceAiModelSettingsController.SettingsRequest(
-                new WorkspaceAiModelSettingsController.AiModelSelection("openai", "gpt-5-nano"));
+                new WorkspaceAiModelSettingsController.AiModelSelection("openai", "gpt-6-luna"));
         assertThatThrownBy(() -> controller.update("member_1", "ws_1", request))
                 .isInstanceOf(WorkspaceAiModelForbiddenException.class);
         assertThatThrownBy(() -> controller.update("other_1", "ws_1", request))

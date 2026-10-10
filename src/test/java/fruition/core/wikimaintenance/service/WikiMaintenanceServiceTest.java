@@ -60,7 +60,7 @@ class WikiMaintenanceServiceTest {
                 runStatusRequester, lintStateRepository, wikiStateRequester, objectMapper,
                 "ai.maintenance.command", workspaceAiModelClient);
         org.mockito.Mockito.lenient().when(workspaceAiModelClient.get("ws_1"))
-                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"));
+                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"));
     }
 
     @Test
@@ -77,7 +77,7 @@ class WikiMaintenanceServiceTest {
         ArgumentCaptor<AiCommandOutbox> outbox = ArgumentCaptor.forClass(AiCommandOutbox.class);
         verify(outboxRepository).save(outbox.capture());
         assertThat(outbox.getValue().getPayload())
-                .contains("\"provider\":\"openai\"", "\"model\":\"gpt-5-nano\"");
+                .contains("\"provider\":\"openai\"", "\"model\":\"gpt-6-luna\"");
     }
 
     @Test

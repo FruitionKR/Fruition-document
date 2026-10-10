@@ -105,7 +105,7 @@ class QueryServiceTest {
 
         verify(chatTurnRecorder).createPendingPair(
                 eq(SESSION_ID), anyString(), anyString(), anyString(), eq("Self-Attention이 뭐야?"), any(),
-                eq("openai"), eq("gpt-5-nano"));
+                eq("openai"), eq("gpt-6-luna"));
         ArgumentCaptor<ChatMessage> messageCaptor = ArgumentCaptor.forClass(ChatMessage.class);
         verify(chatMessageRepository).save(messageCaptor.capture());
         assertThat(messageCaptor.getValue().getRole()).isEqualTo("assistant");
@@ -357,7 +357,7 @@ class QueryServiceTest {
         order.verify(chatMessageRepository).findAllBySessionIdInTurnOrder(SESSION_ID);
         order.verify(chatTurnRecorder).createPendingPair(
                 eq(SESSION_ID), anyString(), anyString(), anyString(), eq("새 질문"), any(),
-                eq("openai"), eq("gpt-5-nano"));
+                eq("openai"), eq("gpt-6-luna"));
     }
 
     @Test
@@ -412,7 +412,7 @@ class QueryServiceTest {
     }
 
     private QueryResponse complete(String question, boolean webSearch, PipelineQueryResponse response) {
-        var context = queryService.prepareMessages(SESSION_ID, question, "query_test", "openai", "gpt-5-nano", webSearch);
+        var context = queryService.prepareMessages(SESSION_ID, question, "query_test", "openai", "gpt-6-luna", webSearch);
         return queryService.completeAsync(SESSION_ID, question, "query_test", context, response);
     }
 

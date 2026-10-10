@@ -44,7 +44,7 @@ public class QueryService {
     }
 
     public QueryMessageContext prepareMessages(String sessionId, String question, String requestId) {
-        return prepareMessages(sessionId, question, requestId, "openai", "gpt-5-nano");
+        return prepareMessages(sessionId, question, requestId, "openai", "gpt-6-luna");
     }
 
     public QueryMessageContext prepareMessages(String sessionId, String question, String requestId,

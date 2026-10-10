@@ -66,7 +66,8 @@ class UsageChargeServiceIntegrationTest {
             String query = exchange.getRequestURI().getQuery();
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             requests.add(exchange.getRequestURI().getPath() + "?" + query + " " + body
-                    + " token=" + exchange.getRequestHeaders().getFirst("X-Internal-Token"));
+                    + " token=" + exchange.getRequestHeaders().getFirst("X-Internal-Token")
+                    + " request_id=" + exchange.getRequestHeaders().getFirst("X-Request-Id"));
             String response = switch (exchange.getRequestURI().getPath()) {
                 case "/internal/model-usage/calls" -> "{\"calls\":[" + callsByQuery.getOrDefault(
                         query.replaceAll(".*(finished_from=[^&]*).*", "$1"), "") + "]}";
@@ -112,7 +113,7 @@ class UsageChargeServiceIntegrationTest {
         assertThat(row.get("cost_usd_micro")).isEqualTo(1665L);
         assertThat(row.get("charge_krw_milli")).isEqualTo(3334L);
         assertThat(row.get("reasoning_tokens")).isEqualTo(300L);
-        assertThat(requests).allMatch(request -> request.endsWith("token=internal-test"));
+        assertThat(requests).allMatch(request -> request.contains(" token=internal-test "));
 
         // 호출 전부터 적용되는 비싼 단가 행을 넣고 다시 수집해도 확정된 청구는 다시 계산하지 않는다.
         price(model, "2041-01-15T00:00:00Z", "9");
@@ -175,17 +176,19 @@ class UsageChargeServiceIntegrationTest {
         var notes = new MeetingNotesClient(new PipelineClientFactory("internal-test"), base + "/meeting-notes/preview", 5, charges);
 
         assertThat(speech.transcribe("ws-1", user, MediaType.parseMediaType("audio/wav"), new byte[] {1})).isEqualTo("안녕하세요");
-        notes.preview("ws-1", user, "회의", List.of(Map.of("text", "안건")));
+        notes.preview("ws-1", user, "회의", List.of(Map.of("text", "안건")),
+                new fruition.core.authz.WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"));
 
         var runIds = jdbc.queryForList("SELECT id FROM ai_task_runs WHERE user_id = ? AND status = 'completed' ORDER BY kind",
                 String.class, user);
         assertThat(runIds).hasSize(2);
         assertThat(runIds.get(0)).startsWith("meeting_notes:");
         assertThat(runIds.get(1)).startsWith("speech_transcription:");
+        // ai-svc 계약: run_id는 X-Request-Id 헤더로만 보낸다. 본문·쿼리에 넣으면 버려지거나 422로 거부된다(#87).
         assertThat(requests).anySatisfy(request -> assertThat(request).startsWith("/speech/transcriptions?")
-                .contains("user_id=" + user, "run_id=" + runIds.get(1)));
+                .contains("user_id=" + user, "request_id=" + runIds.get(1)).doesNotContain("run_id"));
         assertThat(requests).anySatisfy(request -> assertThat(request).startsWith("/meeting-notes/preview")
-                .contains("\"user_id\":\"" + user + "\"", "\"run_id\":\"" + runIds.get(0) + "\""));
+                .contains("\"user_id\":\"" + user + "\"", "request_id=" + runIds.get(0)).doesNotContain("run_id"));
 
         // 대기열의 run을 worker가 꺼내 수집하고 지운다.
         callsByQuery.put("run_id=" + runIds.get(1), call("c-" + UUID.randomUUID(), runIds.get(1),
@@ -301,7 +304,7 @@ class UsageChargeServiceIntegrationTest {
                 {"id":"%s","run_id":"%s","workspace_id":"%s","user_id":"%s","kind":"agent","provider":"openai",
                  "requested_model":"%s","model":"%s","status":"%s","input_tokens":%s,"cached_input_tokens":%s,
                  "cache_creation_tokens":%s,"output_tokens":%s,"reasoning_tokens":%s,"audio_seconds":null,
-                 "tts_characters":null,"started_at":"%s","finished_at":"%s"}"""
+                 "input_characters":null,"started_at":"%s","finished_at":"%s"}"""
                 .formatted(id, runId, workspaceId, user, model, model, status, input, cached, creation, output, reasoning,
                         startedAt, startedAt);
     }

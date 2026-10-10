@@ -25,7 +25,7 @@ class IngestCommandOutboxTest {
     void enqueue_serializesProviderAndModelAtOutboxBoundary() {
         ObjectMapper objectMapper = new ObjectMapper();
         when(workspaceAiModelClient.get("ws_1"))
-                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.1-flash-lite"));
+                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
         AiCommandOutboxWriter writer = spy(new AiCommandOutboxWriter(outboxRepository, objectMapper,
                 org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class),
                 org.mockito.Mockito.mock(jakarta.persistence.EntityManager.class),
@@ -45,7 +45,7 @@ class IngestCommandOutboxTest {
         verify(outboxRepository).save(saved.capture());
         assertThat(saved.getValue().getPayload())
                 .contains("\"kind\":\"chat_wiki\"", "\"provider\":\"gemini\"",
-                        "\"model\":\"gemini-3.1-flash-lite\"",
+                        "\"model\":\"gemini-3.5-flash-lite\"",
                         "\"block_id\":\"session_1:pair_1\"");
     }
 }

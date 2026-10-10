@@ -27,7 +27,7 @@ public record QueryRun(
 
     public static QueryRun pending(String requestId, String workspaceId, String sessionId,
                                    String question, Instant createdAt) {
-        return pending(requestId, workspaceId, sessionId, "openai", "gpt-5-nano", false, question, createdAt);
+        return pending(requestId, workspaceId, sessionId, "openai", "gpt-6-luna", false, question, createdAt);
     }
 
     public QueryRun running() {

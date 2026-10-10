@@ -52,6 +52,8 @@ class MeetingRecordingIntegrationTest {
     static final String DEFAULT_TEXT = "출시는 금요일로 하겠습니다. 민수가 점검을 맡나요?\n네, 맡겠습니다!";
     static volatile String aiText = DEFAULT_TEXT;
     static final AtomicReference<String> lastContentType = new AtomicReference<>();
+    static final AtomicReference<String> lastRequestId = new AtomicReference<>();
+    static final AtomicReference<String> lastQuery = new AtomicReference<>();
 
     static {
         try {
@@ -62,6 +64,8 @@ class MeetingRecordingIntegrationTest {
         FAKE_AI.createContext("/speech/transcriptions", exchange -> {
             exchange.getRequestBody().readAllBytes();
             lastContentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
+            lastRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
+            lastQuery.set(exchange.getRequestURI().getRawQuery());
             byte[] body = (aiStatus == 200
                     ? new ObjectMapper().createObjectNode().put("text", aiText).toString()
                     : "{\"detail\":\"private\"}").getBytes(StandardCharsets.UTF_8);
@@ -113,6 +117,9 @@ class MeetingRecordingIntegrationTest {
 
         JsonNode meeting = awaitStatus(meetingId, "open");
         assertThat(lastContentType.get()).isEqualTo("audio/mp4");
+        // 사용량 귀속 run_id는 쿼리가 아니라 X-Request-Id 헤더로 보낸다(#87).
+        assertThat(lastRequestId.get()).startsWith("meeting_transcription:");
+        assertThat(lastQuery.get()).doesNotContain("run_id");
         // 문장을 약 1,000자 단위로 묶는다(회의록 AI의 1,000구간 한도).
         assertThat(meeting.path("segments")).extracting(s -> s.path("id").asText() + "=" + s.path("text").asText())
                 .containsExactly("s1_seg_0001=출시는 금요일로 하겠습니다. 민수가 점검을 맡나요? 네, 맡겠습니다!");

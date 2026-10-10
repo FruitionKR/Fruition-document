@@ -2,6 +2,7 @@ package fruition.core.wikischema.repository;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpServer;
+import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.wikischema.exception.PipelineWikiSchemaException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,7 @@ class PipelineWikiSchemaRequesterTest {
     private HttpServer server;
     private final AtomicReference<String> capturedUri = new AtomicReference<>();
     private final AtomicReference<String> capturedBody = new AtomicReference<>();
+    private final AtomicReference<String> capturedRequestId = new AtomicReference<>();
     private final AtomicReference<String> responseBody = new AtomicReference<>("{\"preview_markdown\":\"# 미리보기\"}");
     private final AtomicInteger responseStatus = new AtomicInteger(200);
 
@@ -30,6 +32,7 @@ class PipelineWikiSchemaRequesterTest {
         server.createContext("/wiki-schema", exchange -> {
             capturedUri.set(exchange.getRequestURI().toString());
             capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            capturedRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
             byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(responseStatus.get(), body.length);
@@ -46,24 +49,27 @@ class PipelineWikiSchemaRequesterTest {
 
     @Test
     void preview_sendsRawMarkdownSnakeCase() {
-        JsonNode response = requester().preview("# 원문", "ws_1", "user_1");
+        JsonNode response = requester().preview("# 원문", "ws_1", "user_1", new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
 
         assertThat(response.path("preview_markdown").asText()).isEqualTo("# 미리보기");
         assertThat(capturedUri.get()).isEqualTo("/wiki-schema/preview");
-        // AI가 사용량을 남기도록 실행 ID와 사용자를 보낸다(#78).
+        // AI가 사용량을 남기도록 사용자는 본문에, 실행 ID는 X-Request-Id 헤더로 보낸다(#78, #87).
         assertThat(capturedBody.get())
                 .contains("\"raw_markdown\":\"# 원문\"")
                 .contains("\"workspace_id\":\"ws_1\"")
                 .contains("\"user_id\":\"user_1\"")
-                .contains("\"run_id\":\"run-1\"")
+                .contains("\"provider\":\"gemini\"")
+                .contains("\"model\":\"gemini-3.5-flash-lite\"")
+                .doesNotContain("run_id")
                 .doesNotContain("rawMarkdown");
+        assertThat(capturedRequestId.get()).isEqualTo("run-1");
     }
 
     @Test
     void createDraft_sendsWorkspaceAndUserSnakeCase() {
         responseBody.set("{\"wiki_schema\":{\"id\":\"sch_1\"}}");
 
-        JsonNode response = requester().createDraft("# 원문", "기본", "ws_1", "user_1");
+        JsonNode response = requester().createDraft("# 원문", "기본", "ws_1", "user_1", new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
 
         assertThat(response.path("wiki_schema").path("id").asText()).isEqualTo("sch_1");
         assertThat(capturedUri.get()).isEqualTo("/wiki-schema/drafts");
@@ -72,14 +78,17 @@ class PipelineWikiSchemaRequesterTest {
                 .contains("\"name\":\"기본\"")
                 .contains("\"workspace_id\":\"ws_1\"")
                 .contains("\"user_id\":\"user_1\"")
-                .contains("\"run_id\":\"run-1\"");
+                .contains("\"provider\":\"gemini\"")
+                .contains("\"model\":\"gemini-3.5-flash-lite\"")
+                .doesNotContain("run_id");
+        assertThat(capturedRequestId.get()).isEqualTo("run-1");
     }
 
     @Test
     void createDraft_omitsNullName() {
         responseBody.set("{\"wiki_schema\":{\"id\":\"sch_1\"}}");
 
-        requester().createDraft("# 원문", null, "ws_1", "user_1");
+        requester().createDraft("# 원문", null, "ws_1", "user_1", new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
 
         assertThat(capturedBody.get()).doesNotContain("\"name\"");
     }
@@ -156,7 +165,7 @@ class PipelineWikiSchemaRequesterTest {
         responseStatus.set(422);
         responseBody.set("{\"detail\":[{\"loc\":[\"body\",\"raw_markdown\"],\"msg\":\"too short\"}]}");
 
-        assertThatThrownBy(() -> requester().preview("x", "ws_1", "user_1"))
+        assertThatThrownBy(() -> requester().preview("x", "ws_1", "user_1", new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite")))
                 .isInstanceOfSatisfying(PipelineWikiSchemaException.class, error -> {
                     assertThat(error.getHttpStatus()).isEqualTo(422);
                     assertThat(error.getResponseBody()).contains("too short");
@@ -180,7 +189,7 @@ class PipelineWikiSchemaRequesterTest {
         responseStatus.set(500);
         responseBody.set("{\"detail\":\"boom\"}");
 
-        assertThatThrownBy(() -> requester().preview("x", "ws_1", "user_1"))
+        assertThatThrownBy(() -> requester().preview("x", "ws_1", "user_1", new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite")))
                 .isInstanceOfSatisfying(PipelineWikiSchemaException.class, error -> {
                     assertThat(error.getHttpStatus()).isEqualTo(503);
                     assertThat(error.getResponseBody()).isNull();

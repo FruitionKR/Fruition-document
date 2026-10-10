@@ -68,8 +68,8 @@
 {
   "models": [
     {
-      "display_name": "GPT-5 nano",
-      "model": "gpt-5-nano",
+      "display_name": "GPT-6 Luna",
+      "model": "gpt-6-luna",
       "provider": "openai"
     },
     {
@@ -79,7 +79,7 @@
     },
     {
       "display_name": "Gemini 3.1 Flash-Lite",
-      "model": "gemini-3.1-flash-lite",
+      "model": "gemini-3.5-flash-lite",
       "provider": "gemini"
     },
     {
@@ -91,10 +91,10 @@
 }
 ```
 
-- provider마다 여러 모델을 반환한다(2026-10-06 기준 OpenAI 21개, Gemini 8개, Claude 9개). 순서는 provider별로 묶여 있다. 각 provider의 첫 항목은 기존 기본 모델(`gpt-5-nano`, `gemini-3.1-flash-lite`, `claude-sonnet-5`)이고, 그 뒤로 최신 모델부터 온다. 프론트는 저장된 선택이 없으면 첫 항목을 고르므로 기본 선택이 바뀌지 않는다. 위 예시는 일부만 보여준다.
-- 목록은 `AiModelCatalog`의 정적 화이트리스트다. 실제 호출에서 JSON 응답을 확인한 텍스트 생성 모델만 넣는다. 폐기된 모델(`gpt-5-chat-latest`, `gemini-2.5-*` 등), JSON 모드를 지원하지 않는 모델(`gpt-4`), image·tts·audio·embedding 계열은 넣지 않는다.
+- provider마다 여러 모델을 반환한다(2026-10-10 기준 OpenAI 14개, Gemini 5개, Claude 9개). 순서는 provider별로 묶여 있다. 각 provider의 첫 항목은 기존 기본 모델(`gpt-6-luna`, `gemini-3.5-flash-lite`, `claude-sonnet-5`)이고, 그 뒤로 최신 모델부터 온다. 프론트는 저장된 선택이 없으면 첫 항목을 고르므로 기본 선택이 바뀌지 않는다. 위 예시는 일부만 보여준다.
+- 목록은 `AiModelCatalog`의 정적 화이트리스트다. 실제 호출에서 JSON 응답을 확인한 텍스트 생성 모델만 넣는다. 폐기·종료 예정 모델(`gpt-5-nano`, `o4-mini`, `gemini-3.1-flash-lite` 등, `gpt-5-chat-latest`, `gemini-2.5-*` 등), JSON 모드를 지원하지 않는 모델(`gpt-4`), image·tts·audio·embedding 계열은 넣지 않는다.
 - `app.ai.enabled-providers`에서 비활성화한 provider의 모델은 빠진다. 같은 목록이 질의·Agent 요청과 워크스페이스 모델 설정의 `provider`/`model` 검증에도 쓰인다.
-- provider/model을 생략했을 때의 기본값은 `openai` / `gpt-5-nano`다.
+- provider/model을 생략했을 때의 기본값은 `openai` / `gpt-6-luna`다.
 
 #### 6. Error response
 
@@ -120,8 +120,8 @@ curl -X GET "$DOCUMENT/api/ai-models" \
 {
   "models": [
     {
-      "display_name": "GPT-5 nano",
-      "model": "gpt-5-nano",
+      "display_name": "GPT-6 Luna",
+      "model": "gpt-6-luna",
       "provider": "openai"
     },
     {
@@ -131,7 +131,7 @@ curl -X GET "$DOCUMENT/api/ai-models" \
     },
     {
       "display_name": "Gemini 3.1 Flash-Lite",
-      "model": "gemini-3.1-flash-lite",
+      "model": "gemini-3.5-flash-lite",
       "provider": "gemini"
     },
     {
@@ -203,7 +203,7 @@ ingest·lint 작업에 쓰는 provider/model 설정을 반환합니다. OWNER와
 {
   "can_update": true,
   "ingest_lint": {
-    "model": "gemini-3.1-flash-lite",
+    "model": "gemini-3.5-flash-lite",
     "provider": "gemini"
   }
 }
@@ -245,7 +245,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
 {
   "can_update": true,
   "ingest_lint": {
-    "model": "gemini-3.1-flash-lite",
+    "model": "gemini-3.5-flash-lite",
     "provider": "gemini"
   }
 }
@@ -304,7 +304,7 @@ ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있�
 ```json
 {
   "ingest_lint": {
-    "model": "gpt-5-nano",
+    "model": "gpt-6-luna",
     "provider": "openai"
   }
 }
@@ -319,7 +319,7 @@ ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있�
 {
   "can_update": true,
   "ingest_lint": {
-    "model": "gpt-5-nano",
+    "model": "gpt-6-luna",
     "provider": "openai"
   }
 }
@@ -365,14 +365,14 @@ ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있�
 curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-model-settings" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"ingest_lint":{"model":"gpt-5-nano","provider":"openai"}}'
+  --data '{"ingest_lint":{"model":"gpt-6-luna","provider":"openai"}}'
 ```
 
 ```json
 {
   "can_update": true,
   "ingest_lint": {
-    "model": "gpt-5-nano",
+    "model": "gpt-6-luna",
     "provider": "openai"
   }
 }

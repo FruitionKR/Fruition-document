@@ -74,14 +74,14 @@ class ConverterClientTest {
     void convertPdf_sendsMultipartFilePartAndReturnsMarkdown() {
         String markdown = client().convertPdf(
                 "보고서.pdf", "%PDF-1.4".getBytes(StandardCharsets.US_ASCII),
-                "gemini", "gemini-3.1-flash-lite");
+                "gemini", "gemini-3.5-flash-lite");
 
         assertThat(markdown).isEqualTo("# 변환 결과\n");
         assertThat(capturedContentType.get()).startsWith("multipart/form-data");
         assertThat(capturedBody.get())
                 .contains("name=\"file\"")
                 .containsPattern("(?s)name=\"provider\"\\r\\n.*?\\r\\n\\r\\ngemini\\r\\n--")
-                .containsPattern("(?s)name=\"model\"\\r\\n.*?\\r\\n\\r\\ngemini-3\\.1-flash-lite\\r\\n--")
+                .containsPattern("(?s)name=\"model\"\\r\\n.*?\\r\\n\\r\\ngemini-3\\.5-flash-lite\\r\\n--")
                 .contains("Content-Type: application/pdf")
                 .contains("%PDF-1.4");
     }
@@ -92,7 +92,7 @@ class ConverterClientTest {
         responseBody.set("{\"detail\":\"Command failed: ocrmypdf\"}");
 
         assertThatThrownBy(() -> client().convertPdf(
-                "보고서.pdf", new byte[]{1}, "openai", "gpt-5-nano"))
+                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna"))
                 .isInstanceOf(DocumentConvertException.class)
                 .hasMessageContaining("status=422");
     }
@@ -103,7 +103,7 @@ class ConverterClientTest {
         responseBody.set("{\"detail\":\"Command timeout: ocrmypdf\"}");
 
         assertThatThrownBy(() -> client().convertPdf(
-                "보고서.pdf", new byte[]{1}, "openai", "gpt-5-nano"))
+                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna"))
                 .isInstanceOf(DocumentConvertException.class)
                 .hasMessageContaining("status=504");
     }
@@ -113,7 +113,7 @@ class ConverterClientTest {
         responseBody.set("{\"filename\":\"보고서.pdf\"}");
 
         assertThatThrownBy(() -> client().convertPdf(
-                "보고서.pdf", new byte[]{1}, "openai", "gpt-5-nano"))
+                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna"))
                 .isInstanceOf(DocumentConvertException.class)
                 .hasMessageContaining("markdown");
     }
@@ -123,7 +123,7 @@ class ConverterClientTest {
         server.stop(0);
 
         assertThatThrownBy(() -> client().convertPdf(
-                "보고서.pdf", new byte[]{1}, "openai", "gpt-5-nano"))
+                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna"))
                 .isInstanceOf(DocumentConvertException.class);
     }
 

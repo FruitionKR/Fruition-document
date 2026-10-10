@@ -60,7 +60,7 @@ class PipelineSkillRequesterTest {
         requester().author("ws_1", "user_1", new SkillAuthoringRequest(
                 "personal", "meeting-notes", null,
                 "회의록을 작성해줘", "enhance", List.of("doc_1")),
-                new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.1-flash-lite"), "run-author");
+                new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"), "run-author");
 
         assertThat(method.get()).isEqualTo("POST");
         assertThat(uri.get()).isEqualTo("/skills/tasks");
@@ -70,7 +70,7 @@ class PipelineSkillRequesterTest {
                 .contains("\"user_id\":\"user_1\"")
                 .contains("\"reference_document_ids\":[\"doc_1\"]")
                 .contains("\"provider\":\"gemini\"")
-                .contains("\"model\":\"gemini-3.1-flash-lite\"")
+                .contains("\"model\":\"gemini-3.5-flash-lite\"")
                 .doesNotContain("capabilities", "allowed_tools");
     }
 
@@ -104,7 +104,7 @@ class PipelineSkillRequesterTest {
     void update_usesSkillPathAndScopePayload() {
         requester().update("ws_1", "user_1", "skill_1",
                 new SkillUpdateRequest("meeting-notes", "회의록 작성", "# 작성 절차"),
-                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run-update");
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-update");
 
         assertThat(method.get()).isEqualTo("POST");
         assertThat(uri.get()).isEqualTo("/skills/tasks");
@@ -113,7 +113,7 @@ class PipelineSkillRequesterTest {
                 .contains("\"user_id\":\"user_1\"")
                 .contains("\"instructions_markdown\":\"# 작성 절차\"")
                 .contains("\"provider\":\"openai\"")
-                .contains("\"model\":\"gpt-5-nano\"")
+                .contains("\"model\":\"gpt-6-luna\"")
                 .doesNotContain("api_key", "base_url");
     }
 
@@ -172,7 +172,7 @@ class PipelineSkillRequesterTest {
         org.assertj.core.api.Assertions.catchThrowableOfType(fruition.core.skill.exception.PipelineSkillException.class,
                 () -> requester(usageCharges).author("ws_1", "user_1", new SkillAuthoringRequest(
                         "personal", "meeting-notes", null, "회의록을 작성해줘", "enhance", List.of()),
-                        new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run-failed"));
+                        new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-failed"));
 
         var order = org.mockito.Mockito.inOrder(usageCharges);
         order.verify(usageCharges).failRun("run-failed");
@@ -182,7 +182,7 @@ class PipelineSkillRequesterTest {
     private void author() {
         requester().author("ws_1", "user_1", new SkillAuthoringRequest(
                 "personal", "meeting-notes", null, "ㅁㄴㅇㅁㄴㅇㅁㄴ", "enhance", List.of()),
-                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run-author");
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-author");
     }
 
     private PipelineSkillRequester requester() {
