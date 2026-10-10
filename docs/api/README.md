@@ -36,15 +36,16 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | 구분 | path 수 | 호출자 확인 | 호출자 없음 |
 |---|---:|---:|---:|
 | `/api/**` (프론트엔드 전용 표면) | 87 | 59 | **28** |
-| `/internal/**` (서비스 간 표면) | 11 | 9 | **2** |
-| 합계 | 98 | 68 | **30** |
+| `/internal/**` (서비스 간 표면) | 11 | 11 | **0** |
+| 합계 | 98 | 70 | **28** |
 
 ### 호출 주체
 
 - `/api/**`는 프론트엔드만 호출한다. ai-svc·access-svc 어느 쪽도 이 서비스의 `/api/**`를 호출하지 않는다
   (ai-svc의 outbound 조립은 `/internal/**`과 access-svc `/internal/authz/**`뿐이고, access-svc의 outbound RestClient는 `DocumentInternalClient` 하나다).
-- `/internal/**` 11개 중 8개는 ai-svc가, 1개(`POST /internal/workspaces/{workspace_id}/initial-note`)는 access-svc가 호출한다.
-  데이터 파기 2개(`POST /internal/purge/workspaces`, `POST /internal/purge/users`)는 access-svc 회원 탈퇴·워크스페이스 영구 삭제가 붙기 전이라 호출자가 없다.
+- `/internal/**` 11개 중 8개는 ai-svc가, 3개(`POST /internal/workspaces/{workspace_id}/initial-note`와 데이터 파기 2개)는 access-svc가 호출한다.
+  데이터 파기 2개(`POST /internal/purge/workspaces`, `POST /internal/purge/users`)는 access-svc `DataPurgeRequestJob`이 호출하고,
+  성공하면 access-svc가 이어서 ai-svc 파기 API를 부른다(document는 ai-svc 파기를 호출하지 않는다).
 - 주의: `/internal/agent/runs`와 `/internal/ai/tasks`는 이 서비스의 경로가 **아니다**. ai-svc가 노출하고 이 서비스가 호출하는 경로다
   (`pipeline/app/modules/agent_run/interfaces/http/routes.py:30`, `pipeline/app/modules/task_cancellation/interfaces/http/routes.py:10`).
 

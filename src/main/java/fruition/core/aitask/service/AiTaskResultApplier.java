@@ -533,7 +533,12 @@ public class AiTaskResultApplier {
 
     private boolean beginResult(String runId) {
         var states = jdbcTemplate.queryForList("SELECT status FROM ai_task_runs WHERE id = ? FOR UPDATE", String.class, runId);
-        if (states.isEmpty()) throw new IllegalStateException("AI 작업 등록을 찾을 수 없습니다: " + runId);
+        if (states.isEmpty()) {
+            // 파기(#88)로 지워진 실행이다. 예외를 던지면 같은 레코드를 끝없이 재시도해 파티션 전체가 멈춘다.
+            // 실행 기록 없이 나간 command(document_deleted 등)의 결과도 여기 오지만, 지금은 반영하지 않는 종류다.
+            log.warn("[AI task 결과 건너뜀] runId={} reason=run_not_found", runId);
+            return false;
+        }
         if (!Set.of("running", "completed").contains(states.getFirst())) return false;
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
         jdbcTemplate.update("UPDATE ai_task_runs SET status = 'completed', updated_at = now() WHERE id = ?", runId);
