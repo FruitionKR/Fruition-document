@@ -19,6 +19,7 @@ public class AiModelCatalog {
     // 표시 이름은 각 provider 공식 모델 문서의 표기를 따른다(2026-10-06 확인).
     // 화이트리스트라 폐기·JSON 모드 미지원·비텍스트 모델은 넣지 않는다.
     // Fruition-access에도 같은 목록이 있다(Fruition-access#8). 바꿀 때 함께 맞춘다.
+    // 모델을 추가하면 공식 단가 행도 마이그레이션으로 넣는다(AiModelCatalogPriceIntegrationTest가 확인한다).
     // 프론트는 저장된 선택이 없으면 첫 항목을 고른다. 그래서 provider마다 기본 모델(openai는 DEFAULT_MODEL)을 맨 앞에 둔다.
     private static final List<AiModel> SUPPORTED_MODELS = List.of(
             new AiModel("openai", "gpt-6-luna", "GPT-6 Luna"),
