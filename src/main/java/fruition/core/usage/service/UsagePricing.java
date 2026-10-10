@@ -41,25 +41,29 @@ public final class UsagePricing {
     }
 
     /**
-     * 호출 원가(USD). 토큰 우선 규칙(#93): 입력·출력 토큰 중 하나라도 있으면 토큰 단가로만 계산하고 오디오 길이·TTS 글자 수는
-     * 무시한다(저장만 한다). ai는 실시간 전사·TTS에 토큰과 오디오 길이·글자 수를 함께 남기므로 더하면 이중 청구가 된다.
-     * 토큰이 없을 때만 오디오 분당·TTS 100만 글자당 단가를 쓰고, 그 단가가 없으면 계산할 수 없어 null이다.
+     * 호출 원가(USD). 단가 행이 과금 단위를 정한다(#93). 단위는 하나만 쓰고 더하지 않는다.
+     * ai는 전사·TTS에 토큰과 오디오 길이·글자 수를 함께 남기므로 더하면 이중 청구가 된다.
+     *
+     * <ol>
+     *   <li>행에 오디오 분당 단가가 있고 오디오 길이가 있으면 분당 단가로만 계산한다. 분당 과금 모델은 토큰 단가 열이
+     *       NOT NULL이라 0으로 두므로, 토큰으로 계산하면 0원이 된다.</li>
+     *   <li>아니면 행에 TTS 100만 글자당 단가가 있고 글자 수가 있으면 글자 단가로만 계산한다.</li>
+     *   <li>그 밖은 토큰으로만 계산한다. 토큰이 없는데 오디오 길이·글자 수가 있으면 그 단가가 없어 null이다.</li>
+     * </ol>
      */
     public static BigDecimal callCostUsd(Price price, Long input, Long cached, Long creation, Long output,
                                          BigDecimal audioSeconds, Long ttsCharacters) {
-        if (input != null || output != null) {
-            return tokenCostUsd(price, zero(input), zero(cached), zero(creation), zero(output));
+        if (price.audioPerMinute() != null && audioSeconds != null) {
+            return audioSeconds.multiply(price.audioPerMinute()).divide(BigDecimal.valueOf(60), 12, RoundingMode.CEILING);
         }
-        BigDecimal cost = BigDecimal.ZERO;
-        if (audioSeconds != null && audioSeconds.signum() > 0) {
-            if (price.audioPerMinute() == null) return null;
-            cost = cost.add(audioSeconds.multiply(price.audioPerMinute()).divide(BigDecimal.valueOf(60), 12, RoundingMode.CEILING));
+        if (price.ttsPerMchar() != null && ttsCharacters != null) {
+            return BigDecimal.valueOf(ttsCharacters).multiply(price.ttsPerMchar()).movePointLeft(6);
         }
-        if (ttsCharacters != null && ttsCharacters > 0) {
-            if (price.ttsPerMchar() == null) return null;
-            cost = cost.add(BigDecimal.valueOf(ttsCharacters).multiply(price.ttsPerMchar()).movePointLeft(6));
+        if (input == null && output == null
+                && ((audioSeconds != null && audioSeconds.signum() > 0) || (ttsCharacters != null && ttsCharacters > 0))) {
+            return null;
         }
-        return cost;
+        return tokenCostUsd(price, zero(input), zero(cached), zero(creation), zero(output));
     }
 
     private static long zero(Long value) {

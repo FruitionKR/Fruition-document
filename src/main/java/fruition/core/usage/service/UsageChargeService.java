@@ -48,7 +48,7 @@ import java.util.stream.Stream;
  *   <li>단가는 실제 응답 모델 → 요청 모델 순으로 찾는다. 단가·환율·정책이 없으면 {@code unpriced}(금액 비움)다.</li>
  *   <li>{@code succeeded}가 아닌 호출과, 성공했지만 토큰·오디오 길이·TTS 글자 수를 모두 모르는 호출은
  *       {@code needs_review}(금액 0)다.</li>
- *   <li>토큰 사용량이 있으면 토큰 단가로만 계산한다({@link UsagePricing#callCostUsd}).</li>
+ *   <li>과금 단위(오디오 분·TTS 글자·토큰)는 단가 행이 정하고 하나만 쓴다({@link UsagePricing#callCostUsd}).</li>
  *   <li>{@code unpriced}·{@code needs_review} 행은 매시간 저장된 사용량으로 다시 계산한다({@link #recompute}).</li>
  * </ul>
  */
