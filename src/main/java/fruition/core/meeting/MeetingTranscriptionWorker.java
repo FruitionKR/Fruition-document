@@ -73,9 +73,10 @@ public class MeetingTranscriptionWorker {
             JsonNode body = usageCharges.track("meeting_transcription", meeting.workspaceId(), meeting.createdBy(), runId -> {
                 var uri = UriComponentsBuilder.fromUriString(endpoint)
                         .queryParam("workspace_id", "{workspaceId}").queryParam("user_id", "{userId}")
-                        .queryParam("run_id", "{runId}")
-                        .encode().buildAndExpand(meeting.workspaceId(), meeting.createdBy(), runId).toUri();
+                        .encode().buildAndExpand(meeting.workspaceId(), meeting.createdBy()).toUri();
+                // run_id는 ai-svc 계약대로 헤더로 보낸다. 쿼리로 보내면 버려지고 unattributed로 기록된다.
                 return restClient.post().uri(uri).contentType(MediaType.parseMediaType(meeting.recordingContentType()))
+                        .header(UsageChargeService.RUN_ID_HEADER, runId)
                         .body(audio).retrieve().body(JsonNode.class);
             });
             String text = body == null ? "" : body.path("text").asText("").strip();

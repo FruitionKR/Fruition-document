@@ -44,6 +44,7 @@ class MeetingNotesIntegrationTest {
     static final HttpServer FAKE_AI;
     static final AtomicInteger calls = new AtomicInteger();
     static final AtomicReference<String> lastRequest = new AtomicReference<>();
+    static final AtomicReference<String> lastRequestId = new AtomicReference<>();
     static volatile int aiStatus = 200;
     /** 생성이 끝나기 전에 응답하는지 보려고 가짜 AI를 잡아 둔다. null이면 바로 답한다. */
     static volatile CountDownLatch gate;
@@ -73,10 +74,13 @@ class MeetingNotesIntegrationTest {
                 }
             }
             lastRequest.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-            byte[] body = (aiStatus == 200 ? DRAFT : "{\"detail\":\"private-provider-detail\"}")
+            lastRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
+            // 실제 ai-svc MeetingNotesRequest는 정의되지 않은 필드를 거부한다(extra="forbid"). 본문 run_id는 422다(#87).
+            int status = lastRequest.get().contains("\"run_id\"") ? 422 : aiStatus;
+            byte[] body = (status == 200 ? DRAFT : "{\"detail\":\"private-provider-detail\"}")
                     .getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(aiStatus, body.length);
+            exchange.sendResponseHeaders(status, body.length);
             exchange.getResponseBody().write(body);
             exchange.close();
         });
@@ -140,6 +144,9 @@ class MeetingNotesIntegrationTest {
                 .extracting(JsonNode::asText).containsExactly("s1_a", "s1_b");
         JsonNode sent = objectMapper.readTree(lastRequest.get());
         assertThat(sent.path("display_name").asText()).isEqualTo("출시 회의");
+        // 사용량 귀속 run_id는 본문이 아니라 X-Request-Id 헤더로 보낸다(#87).
+        assertThat(sent.has("run_id")).isFalse();
+        assertThat(lastRequestId.get()).startsWith("meeting_notes:");
         assertThat(sent.path("segments")).extracting(s -> s.path("id").asText()).containsExactly("s1_a");
         assertThat(sent.path("segments").get(0).path("text").asText())
                 .isEqualTo("출시는 금요일로 확정하겠습니다. 민수가 배포 점검을 맡겠습니다.");

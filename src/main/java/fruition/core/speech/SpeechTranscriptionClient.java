@@ -31,7 +31,7 @@ public class SpeechTranscriptionClient {
         this.usageCharges = usageCharges;
     }
 
-    /** AI가 사용량을 남기도록 run_id를 함께 보낸다. */
+    /** AI가 사용량을 남기도록 run_id를 {@code X-Request-Id} 헤더로 보낸다. */
     public String transcribe(String workspaceId, String userId, MediaType mediaType, byte[] audio) {
         return usageCharges.track("speech_transcription", workspaceId, userId,
                 runId -> transcribe(runId, workspaceId, userId, mediaType, audio));
@@ -41,12 +41,12 @@ public class SpeechTranscriptionClient {
         URI uri = UriComponentsBuilder.fromUriString(endpoint)
                 .queryParam("workspace_id", "{workspaceId}")
                 .queryParam("user_id", "{userId}")
-                .queryParam("run_id", "{runId}")
                 .encode()
-                .buildAndExpand(workspaceId, userId, runId)
+                .buildAndExpand(workspaceId, userId)
                 .toUri();
         try {
-            JsonNode body = restClient.post().uri(uri).contentType(mediaType).body(audio)
+            JsonNode body = restClient.post().uri(uri).contentType(mediaType)
+                    .header(UsageChargeService.RUN_ID_HEADER, runId).body(audio)
                     .retrieve().body(JsonNode.class);
             if (body == null || !body.path("text").isTextual()) {
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "음성을 전사하지 못했습니다.");

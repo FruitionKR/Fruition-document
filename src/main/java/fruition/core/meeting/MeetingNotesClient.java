@@ -30,7 +30,10 @@ public class MeetingNotesClient {
         this.usageCharges = usageCharges;
     }
 
-    /** 실패는 사용자용 오류 코드로 바꾼다. 제공자 원문은 노출하지 않는다. AI가 사용량을 남기도록 run_id를 함께 보낸다. */
+    /**
+     * 실패는 사용자용 오류 코드로 바꾼다. 제공자 원문은 노출하지 않는다. AI가 사용량을 남기도록 run_id를
+     * {@code X-Request-Id} 헤더로 보낸다. 본문에 넣으면 ai-svc가 모르는 필드로 보고 422로 거부한다.
+     */
     public JsonNode preview(String workspaceId, String userId, String displayName, List<Map<String, String>> segments) {
         return usageCharges.track("meeting_notes", workspaceId, userId,
                 runId -> preview(runId, workspaceId, userId, displayName, segments));
@@ -40,7 +43,8 @@ public class MeetingNotesClient {
                              List<Map<String, String>> segments) {
         try {
             JsonNode body = restClient.post().uri(endpoint).contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of("run_id", runId, "workspace_id", workspaceId, "user_id", userId,
+                    .header(UsageChargeService.RUN_ID_HEADER, runId)
+                    .body(Map.of("workspace_id", workspaceId, "user_id", userId,
                             "display_name", displayName, "segments", segments))
                     .retrieve().body(JsonNode.class);
             if (body == null || !body.path("summary").isArray()) {

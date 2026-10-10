@@ -39,6 +39,7 @@ class SpeechTranscriptionIntegrationTest {
     static final AtomicReference<String> lastQuery = new AtomicReference<>();
     static final AtomicReference<String> lastContentType = new AtomicReference<>();
     static final AtomicReference<String> lastToken = new AtomicReference<>();
+    static final AtomicReference<String> lastRequestId = new AtomicReference<>();
     static final AtomicReference<byte[]> lastBody = new AtomicReference<>();
 
     static {
@@ -51,6 +52,7 @@ class SpeechTranscriptionIntegrationTest {
             lastQuery.set(exchange.getRequestURI().getRawQuery());
             lastContentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
             lastToken.set(exchange.getRequestHeaders().getFirst("X-Internal-Token"));
+            lastRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
             lastBody.set(exchange.getRequestBody().readAllBytes());
             byte[] body = aiBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -101,9 +103,9 @@ class SpeechTranscriptionIntegrationTest {
         assertThat(lastBody.get()).isEqualTo(audio);
         assertThat(lastContentType.get()).isEqualTo("audio/webm");  // codecs 파라미터는 떼고 넘긴다
         assertThat(lastToken.get()).isEqualTo("test-internal-callback");
-        // AI가 사용량을 남기도록 실행 ID를 함께 보낸다(#78).
-        assertThat(lastQuery.get()).startsWith("workspace_id=" + workspaceId + "&user_id=" + userId
-                + "&run_id=speech_transcription%3A");
+        // AI가 사용량을 남기도록 실행 ID를 X-Request-Id 헤더로 보낸다. 쿼리에 넣으면 버려진다(#87).
+        assertThat(lastQuery.get()).isEqualTo("workspace_id=" + workspaceId + "&user_id=" + userId);
+        assertThat(lastRequestId.get()).startsWith("speech_transcription:");
     }
 
     @Test
