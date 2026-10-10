@@ -1,0 +1,20 @@
+name: AI 모델 단가·폐기 점검
+on:
+  schedule:
+    - cron: '0 0 * * 1'  # 매주 월요일 09:00 KST
+  workflow_dispatch:
+permissions:
+  issues: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s scripts -p 'test_*.py'
+      - run: python scripts/ai_price_drift.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
