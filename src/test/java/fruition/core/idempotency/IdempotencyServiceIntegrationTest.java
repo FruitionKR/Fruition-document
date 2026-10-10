@@ -135,6 +135,26 @@ class IdempotencyServiceIntegrationTest {
     }
 
     @Test
+    void scheduledCleanupDeletesOnlyExpiredRecords() {
+        String expired = uniqueKey();
+        String live = uniqueKey();
+        execute(expired, "hash-a", () -> new TestResponse("old"));
+        execute(live, "hash-a", () -> new TestResponse("new"));
+        jdbcTemplate.update(
+                "UPDATE idempotency_records SET expires_at = ? WHERE idempotency_key = ?",
+                java.sql.Timestamp.from(Instant.now().minusSeconds(1)), expired);
+
+        idempotencyService.deleteExpired();
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM idempotency_records WHERE idempotency_key IN (?, ?)",
+                Integer.class, expired, live)).isOne();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM idempotency_records WHERE idempotency_key = ?",
+                Integer.class, live)).isOne();
+    }
+
+    @Test
     void inProgressLeaseIsFifteenMinutesAndCompletionStartsNewTwentyFourHourTtl() {
         String key = uniqueKey();
         Instant before = Instant.now();
