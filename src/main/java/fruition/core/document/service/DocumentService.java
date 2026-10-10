@@ -18,6 +18,7 @@ import fruition.core.document.exception.DocumentUploadException;
 import fruition.core.document.exception.InvalidDocumentOriginException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentVersionConflictException;
+import fruition.core.document.exception.TrashRetentionExpiredException;
 import fruition.core.document.exception.DocumentWriteForbiddenException;
 import fruition.core.document.exception.InvalidDocumentFilenameException;
 import fruition.core.document.exception.InvalidDocumentVersionException;
@@ -93,6 +94,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays; import java.util.Comparator;
 import java.util.HexFormat;
@@ -145,6 +147,8 @@ public class DocumentService {
     private final OperationRecorder operationRecorder;
     private final IngestOperationStarter ingestOperationStarter;
     private final fruition.core.document.repository.AiCommandOutboxWriter taskWriter;
+    private final DocumentAccessPolicy documentAccessPolicy;
+    private final Duration trashRetention;
 
     public DocumentService(DocumentRepository documentRepository,
                            FolderRepository folderRepository,
@@ -173,7 +177,11 @@ public class DocumentService {
                            IngestOperationStarter ingestOperationStarter,
                            WorkspaceAiModelClient workspaceAiModelClient,
                            fruition.core.document.repository.AiCommandOutboxWriter taskWriter,
-                           DocumentWikiRetirement documentWikiRetirement) {
+                           DocumentWikiRetirement documentWikiRetirement,
+                           DocumentAccessPolicy documentAccessPolicy,
+                           @Value("${app.document-trash.retention:30d}") Duration trashRetention) {
+        this.documentAccessPolicy = documentAccessPolicy;
+        this.trashRetention = trashRetention;
         this.taskWriter = taskWriter;
         this.documentWikiRetirement = documentWikiRetirement;
         this.documentRepository = documentRepository;
@@ -309,6 +317,10 @@ public class DocumentService {
             );
             document.place(folderId, placementSortOrder(workspaceId, folderId, document.getDocumentRole()));
             document.updateStatus(DocumentStatus.uploaded, null, null, null);
+            if (!markdownUpload && !(file instanceof StoredOriginal)) {
+                // 서버를 거친 PDF는 위에서 파일 전체 해시를 이미 계산했다. 직접 업로드는 worker가 나중에 채운다.
+                document.recordOriginalSha256(contentHash);
+            }
             documentRepository.save(document);
             if (markdownUpload) {
                 editStateRepository.save(new DocumentEditState(
@@ -388,7 +400,7 @@ public class DocumentService {
         validateIdempotencyKey(idempotencyKey);
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        verifyDocumentOwner(source, userId);
+        // 복제본은 요청한 사람 소유의 새 문서다. 원본을 읽을 수 있는 멤버면 복제할 수 있다.
         if (source.getDocumentRole() != DocumentRole.EDITABLE) {
             throw new DocumentWriteForbiddenException("편집 가능한 Markdown 문서만 복제할 수 있습니다.");
         }
@@ -1062,7 +1074,12 @@ public class DocumentService {
                 return null;
             });
             transactionTemplate.execute(status -> {
-                convertQueueRepository.findById(queueId).ifPresent(item -> { item.retry(); convertQueueRepository.save(item); });
+                convertQueueRepository.findById(queueId).ifPresent(item -> {
+                    item.retry();
+                    convertQueueRepository.save(item);
+                    // 더 시도하지 않으면 실행을 닫아 크레딧 예약을 푼다.
+                    if ("failed".equals(item.getStatus())) taskWriter.fail("convert:" + documentId);
+                });
                 return null;
             });
             log.warn("[문서 변환 실패 반영] documentId={} sourceDocumentId={} error={} cause={}",
@@ -1310,7 +1327,7 @@ public class DocumentService {
                     null
             );
             if (!result.replayed()) {
-                projectContentVersions(placeholder.getId(), content.markdown(), result);
+                projectContentVersions(placeholder.getId(), content.markdown(), result, placeholder.getUserId());
                 Instant now = Instant.now();
                 documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc ->
                         doc.completeConvert(content.contentHash(), content.bytes().length, now));
@@ -1323,21 +1340,23 @@ public class DocumentService {
     }
 
     String enqueueIngest(Document document) {
-        return enqueueIngest(document, UUID.randomUUID().toString());
+        return enqueueIngest(document, document.getUserId());
     }
 
-    private String enqueueIngest(Document document, String runId) {
-        ingestCommandOutbox.begin(runId, document.getWorkspaceId(), document.getUserId());
+    /** requesterId는 ingest를 요청한 사용자다. 공동 편집에서는 소유자와 다를 수 있다. */
+    private String enqueueIngest(Document document, String requesterId) {
+        String runId = UUID.randomUUID().toString();
+        ingestCommandOutbox.begin(runId, document.getWorkspaceId(), requesterId);
         String documentId = document.getId();
         Instant startedAt = Instant.now();
         document.markPipelineStarted(runId, startedAt);
         String operationId = ingestOperationStarter.start(
-                document.getWorkspaceId(), document.getUserId(), documentId,
+                document.getWorkspaceId(), requesterId, documentId,
                 document.getDisplayName(), startedAt);
         ingestCommandOutbox.enqueue(
                 runId,
                 documentId,
-                document.getUserId(),
+                requesterId,
                 document.getWorkspaceId(),
                 document.getSelectionMode(),
                 document.getPipelineInputMarkdown(),
@@ -1387,7 +1406,7 @@ public class DocumentService {
                 ? documentRepository.findVisibleByWorkspaceId(workspaceId)
                 : documentRepository.searchVisibleByWorkspaceId(workspaceId, query.trim());
 
-        return new DocumentListResponse(documentItemAssembler.assemble(documents));
+        return new DocumentListResponse(documentItemAssembler.assemble(workspaceId, userId, documents));
     }
 
     @Transactional(readOnly = true)
@@ -1420,6 +1439,7 @@ public class DocumentService {
             return doc.getCurrentVersion();
         });
 
+        DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
         List<DocumentWikiPageRef> wikiPages = pipelineWikiStateRequester
                 .documentContext(workspaceId, documentId).pages().stream()
                 .map(page -> new DocumentWikiPageRef(
@@ -1451,7 +1471,11 @@ public class DocumentService {
                 editState.map(DocumentEditState::getUpdatedAt).orElse(doc.getUpdatedAt()),
                 editState.map(DocumentEditState::getMarkdown).orElse(null),
                 editLockService.getStatus(doc.getId()),
-                doc.getFolderId()
+                doc.getFolderId(),
+                viewer.canEdit(doc),
+                viewer.canDelete(doc),
+                viewer.override(doc),
+                doc.getUpdatedBy()
         );
     }
 
@@ -1562,7 +1586,7 @@ public class DocumentService {
         Document document = documentRepository.findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .filter(value -> value.getDeletedAt() == null)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        verifyDocumentOwner(document, userId);
+        documentAccessPolicy.requireEdit(document, userId);
         if (document.getDocumentRole() != DocumentRole.EDITABLE) {
             throw new InvalidMarkdownContentException("편집 가능한 Markdown 문서만 저장할 수 있습니다.");
         }
@@ -1591,7 +1615,7 @@ public class DocumentService {
         }
         if (hasApplyOperation) {
             transactionTemplate.execute(status -> {
-                projectContentVersions(documentId, content.markdown(), result);
+                projectContentVersions(documentId, content.markdown(), result, lastAuthor(document));
                 if (result.changed()) {
                     int linked = contentVersionRepository.linkOperation(documentId, result.revision(), applyOperationId);
                     if (linked == 1) {
@@ -1613,14 +1637,14 @@ public class DocumentService {
                 return null;
             });
         } else {
-            projectContentVersions(documentId, content.markdown(), result);
+            projectContentVersions(documentId, content.markdown(), result, lastAuthor(document));
         }
         if (result.changed()) {
             if (restoredFromVersion != null) {
                 contentVersionRepository.markRestoredFrom(documentId, result.revision(), restoredFromVersion);
             }
             // 재ingest 필요 판단용 projection: 목록 API가 PG만으로 현재 편집본 해시를 비교할 수 있게 한다.
-            documentRepository.updateCurrentContentHash(documentId, result.contentHash(), result.updatedAt());
+            documentRepository.updateCurrentContentHash(documentId, result.contentHash(), result.updatedAt(), userId);
             // 이미지를 첨부하지 않는 저장에서도 본문에 남은 관리 이미지를 기준으로 참조를 맞춘다.
             // 그러지 않으면 본문에서 지운 이미지가 참조된 상태로 남아 정리 대상이 되지 않는다.
             assetReferenceSynchronizer.synchronize(
@@ -1663,11 +1687,15 @@ public class DocumentService {
     /**
      * PostgreSQL 편집 상태·write receipt·version/hash read model·감사·outbox와 같은 transaction에서 projection한다.
      * DB 단계가 실패하면 변경은 함께 rollback되고, object storage 정리는 호출자가 맡는다.
+     *
+     * <p>저장 전 버전과 저장 결과를 버전 이력에 남긴다. 저장 전 버전은 대개 이전 저장 때 이미 들어가 있고, 없을 때만 넣는다.
+     * 그 작성자는 이번에 저장한 사람이 아니라 직전 수정자(없으면 소유자)다. 공동 편집에서 둘이 다르다.
      */
     private void projectContentVersions(
             String documentId,
             String resultMarkdown,
-            PostgresDocumentEditSaveResult result
+            PostgresDocumentEditSaveResult result,
+            String baseAuthor
     ) {
         if (!result.changed()) {
             return;
@@ -1677,7 +1705,7 @@ public class DocumentService {
                 result.baseRevision(),
                 result.baseMarkdown(),
                 result.baseContentHash(),
-                result.actorUserId(),
+                baseAuthor,
                 result.updatedAt()
         );
         recordContentVersion(
@@ -1702,7 +1730,7 @@ public class DocumentService {
         verifyWorkspaceOwnership(workspaceId, userId);
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        verifyDocumentOwner(document, userId);
+        documentAccessPolicy.requireEdit(document, userId);
         if (document.getDocumentRole() != DocumentRole.EDITABLE) {
             throw new InvalidMarkdownContentException("편집 가능한 Markdown 문서만 저장할 수 있습니다.");
         }
@@ -1897,7 +1925,7 @@ public class DocumentService {
         verifyWorkspaceOwnership(workspaceId, userId);
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        verifyDocumentOwner(document, userId);
+        // 버전 조회는 읽기다. 복원은 본문 저장 경로에서 편집 권한을 다시 확인한다.
         if (document.getDocumentRole() != DocumentRole.EDITABLE) {
             throw new InvalidMarkdownContentException("편집 가능한 Markdown 문서만 버전 이력을 제공합니다.");
         }
@@ -1914,7 +1942,7 @@ public class DocumentService {
         Document document = documentRepository.findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .filter(value -> value.getDeletedAt() == null)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        verifyDocumentOwner(document, userId);
+        documentAccessPolicy.requireEdit(document, userId);
         if (document.isSkillReference()) {
             throw new InvalidMarkdownContentException("스킬 참고 문서는 위키에 편입할 수 없습니다.");
         }
@@ -1925,7 +1953,7 @@ public class DocumentService {
             // 저장한 문답과 provenance를 그대로 사용한다. 편집본 승격은 필요하지 않다.
             document.updateStatus(DocumentStatus.processing, document.getExtractedTextUri(), null, null);
             document.markReconciled(null);
-            String runId = enqueueIngest(document);
+            String runId = enqueueIngest(document, userId);
             return new DocumentIngestResponse(documentId, runId, document.getStatus());
         }
         if (document.getDocumentRole() != DocumentRole.EDITABLE) {
@@ -1962,7 +1990,7 @@ public class DocumentService {
         document.reopenForReingest(currentContentHash, bytes.length);
         log.info("[문서 재ingest DB 갱신 완료] documentId={} contentHashPrefix={} byteSize={}",
                 documentId, contentHashPrefix(currentContentHash), bytes.length);
-        String runId = enqueueIngest(document);
+        String runId = enqueueIngest(document, userId);
         return new DocumentIngestResponse(documentId, runId, document.getStatus());
     }
 
@@ -1980,7 +2008,7 @@ public class DocumentService {
 
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        verifyDocumentOwner(document, userId);
+        documentAccessPolicy.requireEdit(document, userId);
         if (document.getCurrentVersion() != request.baseVersion()) {
             throw versionConflict();
         }
@@ -2021,10 +2049,8 @@ public class DocumentService {
         );
     }
 
-    private void verifyDocumentOwner(Document document, String userId) {
-        if (!document.getUserId().equals(userId)) {
-            throw new DocumentWriteForbiddenException("문서 소유자만 변경할 수 있습니다.");
-        }
+    private static String lastAuthor(Document document) {
+        return document.getUpdatedBy() != null ? document.getUpdatedBy() : document.getUserId();
     }
 
     private DocumentVersionConflictException versionConflict() {
@@ -2054,7 +2080,7 @@ public class DocumentService {
         Document document = documentRepository
                 .findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        verifyDocumentOwner(document, userId);
+        documentAccessPolicy.requireDelete(document, userId);
         String endpointScope = "DELETE:/api/workspaces/" + workspaceId + "/documents";
         String requestHash = requestHash(
                 documentId, "delete", Long.toString(request.baseVersion()));
@@ -2095,10 +2121,12 @@ public class DocumentService {
 
     public DocumentTrashResponse trash(String workspaceId, String userId) {
         verifyWorkspaceOwnership(workspaceId, userId);
+        Instant now = Instant.now();
         return new DocumentTrashResponse(
                 documentRepository
                         .findAllByWorkspaceIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(workspaceId)
                         .stream()
+                        .filter(document -> !isTrashExpired(document.getDeletedAt(), now))
                         .map(document -> new DocumentTrashResponse.DocumentTrashItem(
                                 document.getId(),
                                 document.getFilename(),
@@ -2108,7 +2136,8 @@ public class DocumentService {
                                 document.getDeletedAt(),
                                 document.getDeletedBy(),
                                 document.getDeleteOperationId(),
-                                document.getSourceDocumentId()
+                                document.getSourceDocumentId(),
+                                document.getDeletedAt().plus(trashRetention)
                         ))
                         .toList()
         );
@@ -2128,7 +2157,7 @@ public class DocumentService {
         Document document = documentRepository
                 .findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        verifyDocumentOwner(document, userId);
+        documentAccessPolicy.requireDelete(document, userId);
         String endpointScope = "POST:/api/workspaces/" + workspaceId + "/documents/restore";
         String requestHash = requestHash(
                 documentId, "restore", Long.toString(request.baseVersion()));
@@ -2140,6 +2169,10 @@ public class DocumentService {
         }
         if (document.getDeletedAt() == null) {
             throw new DocumentNotFoundException(documentId);
+        }
+        // 영구 삭제 작업이 원본 객체를 먼저 지우므로, 보관 기간이 지난 문서를 되살리면 원본 없는 문서가 된다.
+        if (isTrashExpired(document.getDeletedAt(), Instant.now())) {
+            throw new TrashRetentionExpiredException("휴지통 보관 기간이 지나 복구할 수 없습니다.");
         }
         List<Document> rootItems = documentRepository.findRootItemsForUpdate(
                 workspaceId, document.getDocumentRole());
@@ -2176,31 +2209,8 @@ public class DocumentService {
         return response;
     }
 
-    /** 워크스페이스 삭제 시 소속 문서를 함께 정리한다. DB에 workspace_id FK CASCADE가 없어 애플리케이션에서 직접 처리한다. */
-    @Transactional
-    public void deleteAllByWorkspaceId(String workspaceId) {
-        documentRepository.findAllByWorkspaceId(workspaceId).forEach(this::deleteInternal);
-    }
-
-    private void deleteInternal(Document document) {
-        String documentId = document.getId();
-        String sourceUri = document.getSourceUri();
-        String extractedTextUri = document.getExtractedTextUri();
-
-        // document 삭제
-        documentRepository.delete(document);
-        ingestCommandOutbox.enqueueDelete(documentId, document.getWorkspaceId());
-
-        // commit 이후 MinIO 오브젝트 삭제
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                deleteMinioObject(sourceUri);
-                if (extractedTextUri != null) {
-                    deleteMinioObject(extractedTextUri);
-                }
-            }
-        });
+    private boolean isTrashExpired(Instant deletedAt, Instant now) {
+        return !deletedAt.plus(trashRetention).isAfter(now);
     }
 
     private void validateLifecycleRequest(DocumentLifecycleRequest request) {

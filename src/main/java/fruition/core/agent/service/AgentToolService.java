@@ -26,6 +26,7 @@ import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.repository.DocumentEditStateRepository;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
+import fruition.core.document.service.DocumentAccessPolicy;
 import fruition.core.document.service.DocumentPlacementService;
 import fruition.core.document.service.DocumentEditStateInitializer;
 import fruition.core.document.service.DocumentService;
@@ -78,6 +79,7 @@ public class AgentToolService {
     private final IdempotencyService idempotencyService;
     private final TransactionTemplate transactionTemplate;
     private final AiTaskCancellationService taskCancellationClient;
+    private final DocumentAccessPolicy documentAccessPolicy;
 
     public AgentToolService(
             PipelineAgentToolAuthorizationClient authorizationClient,
@@ -93,7 +95,8 @@ public class AgentToolService {
             DocumentEditStateInitializer editStateInitializer,
             IdempotencyService idempotencyService,
             TransactionTemplate transactionTemplate,
-            AiTaskCancellationService taskCancellationClient) {
+            AiTaskCancellationService taskCancellationClient,
+            DocumentAccessPolicy documentAccessPolicy) {
         this.authorizationClient = authorizationClient;
         this.artifactClient = artifactClient;
         this.runCommandRepository = runCommandRepository;
@@ -108,6 +111,7 @@ public class AgentToolService {
         this.idempotencyService = idempotencyService;
         this.transactionTemplate = transactionTemplate;
         this.taskCancellationClient = taskCancellationClient;
+        this.documentAccessPolicy = documentAccessPolicy;
     }
 
     public Object read(String toolName, AgentToolReadRequest request) {
@@ -179,8 +183,7 @@ public class AgentToolService {
         Document document = documentRepository.findById(documentId)
                 .filter(value -> request.workspaceId().equals(value.getWorkspaceId()))
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        if (!request.userId().equals(document.getUserId()))
-            throw new DocumentWriteForbiddenException("문서 소유자만 변경할 수 있습니다.");
+        documentAccessPolicy.requireDelete(document, request.userId());
         long baseVersion = positiveLong(request.arguments(), "base_version");
         if (document.getDeletedAt() == null && document.getCurrentVersion() != baseVersion)
             throw new ResponseStatusException(HttpStatus.CONFLICT, "문서가 변경되어 취소 삭제할 수 없습니다.");
@@ -216,7 +219,7 @@ public class AgentToolService {
                 || !target.has("type") || !target.has("start_line") || !target.has("end_line")) {
             throw badRequest("target 값이 올바르지 않습니다.");
         }
-        requireOwnedDocument(request.workspaceId(), request.userId(), documentId);
+        requireEditableDocument(request.workspaceId(), request.userId(), documentId);
         PipelineAgentArtifactClient.ResolvedArtifact artifact =
                 artifactClient.resolve(request, "apply_document_edit", arguments);
         requireResolvedArtifact(artifact, arguments, "apply_document_edit");
@@ -255,11 +258,9 @@ public class AgentToolService {
         }
     }
 
-    private Document requireOwnedDocument(String workspaceId, String userId, String documentId) {
+    private Document requireEditableDocument(String workspaceId, String userId, String documentId) {
         Document document = requireDocument(workspaceId, userId, documentId);
-        if (!userId.equals(document.getUserId())) {
-            throw new DocumentWriteForbiddenException("문서 소유자만 변경할 수 있습니다.");
-        }
+        documentAccessPolicy.requireEdit(document, userId);
         return document;
     }
 

@@ -15,6 +15,7 @@ import fruition.core.wikischema.exception.PipelineWikiSchemaException;
 import fruition.core.skill.exception.PipelineSkillException;
 import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
 import fruition.core.wikimaintenance.exception.PipelineWikiMaintenanceException;
+import fruition.core.document.exception.ConflictAlreadyResolvedException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentContentVersionNotFoundException;
 import fruition.core.document.exception.DocumentLockedException;
@@ -23,6 +24,7 @@ import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.DocumentOriginalNotFoundException;
 import fruition.core.document.exception.DocumentUploadException;
 import fruition.core.document.exception.DocumentVersionConflictException;
+import fruition.core.document.exception.EditConflictNotFoundException;
 import fruition.core.document.exception.DocumentWriteForbiddenException;
 import fruition.core.document.exception.DuplicateDocumentException;
 import fruition.core.document.exception.InvalidDocumentConvertRequestException;
@@ -34,6 +36,7 @@ import fruition.core.document.exception.MarkdownContentTooLargeException;
 import fruition.core.document.exception.MarkdownDiffTooLargeException;
 import fruition.core.document.exception.HierarchyItemNotFoundException;
 import fruition.core.document.exception.HierarchyVersionConflictException;
+import fruition.core.document.exception.TrashRetentionExpiredException;
 import fruition.core.document.exception.HierarchyCycleException;
 import fruition.core.document.exception.InvalidHierarchyRequestException;
 import fruition.core.document.exception.HierarchyWriteForbiddenException;
@@ -47,6 +50,7 @@ import fruition.core.query.exception.QueryRunNotFoundException;
 import fruition.core.wiki.exception.InvalidWikiPageTitleException;
 import fruition.core.wiki.exception.PipelineWikiPageException;
 import fruition.core.authz.WorkspaceNotFoundException;
+import fruition.core.notification.exception.NotificationNotFoundException;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
 import fruition.core.wiki.exception.WikiPageSlugConflictException;
 import fruition.core.wiki.exception.WikiPageVersionNotFoundException;
@@ -180,6 +184,15 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
     }
 
 
+    @ExceptionHandler(fruition.core.usage.service.CreditService.InsufficientCreditException.class)
+    public ResponseEntity<ErrorResponse> handleInsufficientCredit(
+            fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+        logHandled(e, HttpStatus.PAYMENT_REQUIRED, "INSUFFICIENT_CREDIT");
+        return ResponseEntity
+                .status(HttpStatus.PAYMENT_REQUIRED)
+                .body(ErrorResponse.of("INSUFFICIENT_CREDIT", e.getMessage()));
+    }
+
     @ExceptionHandler(MeetingException.class)
     public ResponseEntity<ErrorResponse> handleMeeting(MeetingException e) {
         logHandled(e, e.getStatus(), e.getCode());
@@ -223,7 +236,28 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         logHandled(e, HttpStatus.CONFLICT, "DOCUMENT_VERSION_CONFLICT");
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
-                .body(ErrorResponse.of("DOCUMENT_VERSION_CONFLICT", e.getMessage()));
+                .body(ErrorResponse.ofVersionConflict(e.getMessage(), e.getCurrentRevision()));
+    }
+
+    @ExceptionHandler(EditConflictNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleEditConflictNotFound(EditConflictNotFoundException e) {
+        logHandled(e, HttpStatus.NOT_FOUND, "EDIT_CONFLICT_NOT_FOUND");
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of("EDIT_CONFLICT_NOT_FOUND", e.getMessage()));
+    }
+
+    @ExceptionHandler(NotificationNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNotificationNotFound(NotificationNotFoundException e) {
+        logHandled(e, HttpStatus.NOT_FOUND, "NOTIFICATION_NOT_FOUND");
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of("NOTIFICATION_NOT_FOUND", e.getMessage()));
+    }
+
+    @ExceptionHandler(ConflictAlreadyResolvedException.class)
+    public ResponseEntity<ErrorResponse> handleConflictAlreadyResolved(ConflictAlreadyResolvedException e) {
+        logHandled(e, HttpStatus.CONFLICT, "CONFLICT_ALREADY_RESOLVED");
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("CONFLICT_ALREADY_RESOLVED", e.getMessage()));
     }
 
     @ExceptionHandler(DocumentAlreadyProcessingException.class)
@@ -379,6 +413,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of("HIERARCHY_VERSION_CONFLICT", e.getMessage()));
+    }
+
+    @ExceptionHandler(TrashRetentionExpiredException.class)
+    public ResponseEntity<ErrorResponse> handleTrashRetentionExpired(TrashRetentionExpiredException e) {
+        logHandled(e, HttpStatus.CONFLICT, "TRASH_RETENTION_EXPIRED");
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("TRASH_RETENTION_EXPIRED", e.getMessage()));
     }
 
     @ExceptionHandler(HierarchyCycleException.class)

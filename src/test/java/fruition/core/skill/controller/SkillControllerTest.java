@@ -165,7 +165,8 @@ class SkillControllerTest {
                     new PipelineClientFactory("unused-internal-token"),
                     "http://localhost:" + pipeline.getAddress().getPort() + "/skills",
                     "agent-token",
-                    5, mock(fruition.core.aitask.service.AiTaskCancellationService.class), objectMapper
+                    5, mock(fruition.core.aitask.service.AiTaskCancellationService.class), objectMapper,
+                    mock(fruition.core.usage.service.UsageChargeService.class)
             );
             var service = new SkillService(mock(WorkspaceAccessGuard.class), requester,
                     workspaceAiModelClient());

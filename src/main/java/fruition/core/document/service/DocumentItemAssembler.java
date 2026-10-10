@@ -28,23 +28,28 @@ public class DocumentItemAssembler {
     private static final int STALLED_THRESHOLD_SECONDS = 60;
 
     private final DocumentEditStateRepository editStateRepository;
+    private final DocumentAccessPolicy documentAccessPolicy;
 
-    public DocumentItemAssembler(DocumentEditStateRepository editStateRepository) {
+    public DocumentItemAssembler(DocumentEditStateRepository editStateRepository,
+                                 DocumentAccessPolicy documentAccessPolicy) {
         this.editStateRepository = editStateRepository;
+        this.documentAccessPolicy = documentAccessPolicy;
     }
 
-    /** 편집 상태는 문서 ID를 모아 한 번에 읽는다. 문서마다 조회하면 N+1이 된다. */
-    public List<DocumentListResponse.DocumentItem> assemble(List<Document> documents) {
+    /** 편집 상태와 권한 설정은 한 번에 읽는다. 문서마다 조회하면 N+1이 된다. */
+    public List<DocumentListResponse.DocumentItem> assemble(String workspaceId, String userId, List<Document> documents) {
+        DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
         Set<String> editableDocumentIds = editStateRepository.findAllById(
                         documents.stream().map(Document::getId).toList()).stream()
                 .map(DocumentEditState::getDocumentId)
                 .collect(Collectors.toSet());
         return documents.stream()
-                .map(document -> toItem(document, editableDocumentIds.contains(document.getId())))
+                .map(document -> toItem(document, editableDocumentIds.contains(document.getId()), viewer))
                 .toList();
     }
 
-    private DocumentListResponse.DocumentItem toItem(Document doc, boolean hasEditState) {
+    private DocumentListResponse.DocumentItem toItem(Document doc, boolean hasEditState,
+                                                     DocumentAccessPolicy.Viewer viewer) {
         return new DocumentListResponse.DocumentItem(
                 doc.getId(),
                 doc.getFilename(),
@@ -70,7 +75,21 @@ public class DocumentItemAssembler {
                 doc.getSourceDocumentId(),
                 doc.getUpdatedAt(),
                 needsReingest(doc),
-                doc.getFolderId());
+                doc.getFolderId(),
+                fileSha256Of(doc),
+                viewer.canEdit(doc),
+                viewer.canDelete(doc),
+                viewer.override(doc),
+                doc.getUpdatedBy());
+    }
+
+    /** 편집 문서는 현재 본문 해시, 원본은 파일 전체 해시. 원본 해시가 계산 전이거나 계산할 수 없으면 null이다. */
+    static String fileSha256Of(Document doc) {
+        if (doc.getDocumentRole() == DocumentRole.EDITABLE) {
+            return doc.getCurrentContentHash();
+        }
+        String sha256 = doc.getOriginalSha256();
+        return sha256 == null || sha256.isEmpty() ? null : sha256;
     }
 
     static DocumentProcessingState resolveProcessingState(Document doc) {

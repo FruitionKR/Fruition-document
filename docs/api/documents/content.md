@@ -128,7 +128,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/assets
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string` |
 | 출력 | `200` 잠금 획득/갱신 — `EditLockResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `403` 문서 소유자가 아님 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`423` 다른 사용자가 편집 중 — `EditLockResponse` |
+| 주요 오류 | `403` 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`423` 다른 사용자가 편집 중 — `EditLockResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -176,7 +176,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/assets
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
-| `403` | 문서 소유자가 아님 | `ErrorResponse` |
+| `403` | 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `423` | 다른 사용자가 편집 중 | `EditLockResponse` |
 
@@ -579,7 +579,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Body** — `apply_operation_id`, `base_revision`, `markdown`, `metadata`, `revision_write_id`, `source` |
 | 출력 | `200` 저장 성공 또는 동일 본문 no-op — `DocumentContentSaveResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 Markdown, base_revision 또는 revision_write_id — `ErrorResponse`<br>`403` 문서 소유자가 아님 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 편집 revision 또는 revision_write_id 충돌, PDF 변환 중인 문서(`DOCUMENT_ALREADY_PROCESSING`) — `ErrorResponse`<br>`413` Markdown 5MB 또는 이미지 제한 초과 — `ErrorResponse`<br>`415` 지원하지 않는 이미지 형식 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 Markdown, base_revision 또는 revision_write_id — `ErrorResponse`<br>`403` 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 편집 revision 충돌(`DOCUMENT_VERSION_CONFLICT`, `error.current_revision`에 서버 현재 revision) 또는 revision_write_id 충돌, PDF 변환 중인 문서(`DOCUMENT_ALREADY_PROCESSING`) — `ErrorResponse`<br>`413` Markdown 5MB 또는 이미지 제한 초과 — `ErrorResponse`<br>`415` 지원하지 않는 이미지 형식 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -648,9 +648,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 Markdown, base_revision 또는 revision_write_id | `ErrorResponse` |
-| `403` | 문서 소유자가 아님 | `ErrorResponse` |
+| `403` | 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `409` | 편집 revision 또는 revision_write_id 충돌, PDF 변환 중인 문서(`DOCUMENT_ALREADY_PROCESSING`) | `ErrorResponse` |
+| `409` | 편집 revision 충돌(`DOCUMENT_VERSION_CONFLICT`, `error.current_revision`에 서버 현재 revision) 또는 revision_write_id 충돌, PDF 변환 중인 문서(`DOCUMENT_ALREADY_PROCESSING`) | `ErrorResponse` |
 | `413` | Markdown 5MB 또는 이미지 제한 초과 | `ErrorResponse` |
 | `415` | 지원하지 않는 이미지 형식 | `ErrorResponse` |
 
@@ -665,6 +665,19 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
       }
     ],
     "message": "요청 형식이 올바르지 않습니다."
+  }
+}
+```
+
+편집 revision 충돌 응답은 서버 현재 revision을 함께 준다. 클라이언트는 이 값으로 최신 본문을 다시 읽거나,
+내 본문을 [편집 충돌](README.md#편집-충돌)로 등록해 OWNER가 고르게 한다.
+
+```json
+{
+  "error": {
+    "code": "DOCUMENT_VERSION_CONFLICT",
+    "message": "문서 편집 버전이 일치하지 않습니다.",
+    "current_revision": 5
   }
 }
 ```

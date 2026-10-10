@@ -193,6 +193,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/g
 
 특정 Wiki 페이지의 상세 정보를 반환합니다. source_documents와 related_pages를 포함합니다.
 
+- `revision`: 이 페이지의 `wiki_page_versions` 최대 revision. 버전 이력이 아직 없으면 키가 빠진다. `updated_at`은 AI 서비스가 준 페이지 변경 시각이다.
+- `markdown`: AI 서비스가 본문을 비워 보내면 최신 버전 본문을, 버전도 없으면 `markdown_uri`(또는 최신 버전의 `markdown_key`) 객체를 읽어 채운다. 그래도 없으면 키가 빠진다. 클라이언트는 `markdown_uri`를 직접 읽지 않아도 된다.
+
 #### 3. Auth 필요 여부
 
 - 필요
@@ -230,6 +233,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/g
       "title": "역색인"
     }
   ],
+  "revision": 3,
   "slug": "search-indexing",
   "source_documents": [
     {
@@ -241,7 +245,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/g
     }
   ],
   "status": "published",
-  "summary": "string"
+  "summary": "string",
+  "title": "검색 인덱싱",
+  "updated_at": "2026-08-13T04:25:24.371948Z"
 }
 ```
 
@@ -296,6 +302,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
       "title": "역색인"
     }
   ],
+  "revision": 3,
   "slug": "search-indexing",
   "source_documents": [
     {
@@ -307,7 +314,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
     }
   ],
   "status": "published",
-  "summary": "string"
+  "summary": "string",
+  "title": "검색 인덱싱",
+  "updated_at": "2026-08-13T04:25:24.371948Z"
 }
 ```
 
@@ -316,7 +325,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
 - 진입점: `src/main/java/fruition/core/wiki/controller/WikiController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getPage`)
 - 호출자: 프론트엔드 — `src/entities/wiki/api/wiki.ts:112`(`fetchWikiPage`)
-- 하위 호출: ai-svc `GET ${WIKI_STATE_ENDPOINT}/pages/{pageId}?workspace_id` (`PipelineWikiStateRequester`)
+- 하위 호출: ai-svc `GET ${WIKI_STATE_ENDPOINT}/pages/{pageId}?workspace_id` (`PipelineWikiStateRequester`), `wiki_page_versions` 최신 행, 본문이 비면 object storage(`WikiObjectReader`)
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-pages-wiki-page-id)

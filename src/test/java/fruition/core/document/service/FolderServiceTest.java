@@ -9,6 +9,7 @@ import fruition.core.document.dto.FolderResponse;
 import fruition.core.document.exception.HierarchyCycleException;
 import fruition.core.document.exception.HierarchyVersionConflictException;
 import fruition.core.document.exception.InvalidHierarchyRequestException;
+import fruition.core.document.exception.TrashRetentionExpiredException;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
@@ -18,7 +19,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -26,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -34,6 +39,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 
 @ExtendWith(MockitoExtension.class)
 class FolderServiceTest {
@@ -42,6 +48,7 @@ class FolderServiceTest {
     private static final String USER_ID = "user_1";
 
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
+    @Mock JdbcTemplate jdbcTemplate;
     @Mock FolderRepository folderRepository;
     @Mock DocumentRepository documentRepository;
     @Mock IdempotencyService idempotencyService;
@@ -55,7 +62,8 @@ class FolderServiceTest {
     void setUp() {
         service = new FolderService(workspaceAccessGuard,
                 folderRepository, documentRepository,
-                idempotencyService, siblingReorderer, documentItemAssembler, documentWikiRetirement);
+                idempotencyService, siblingReorderer, documentItemAssembler, documentWikiRetirement,
+                new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate), Duration.ofDays(30));
         lenient().when(idempotencyService.execute(
                 any(), any(), any(), any(), any(), anyInt(), any(), any()))
                 .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(7).get());
@@ -166,5 +174,19 @@ class FolderServiceTest {
         assertThatThrownBy(() -> service.move(WORKSPACE_ID, USER_ID, movingId, "key-1",
                 new FolderPositionRequest(null, null, 2L)))
                 .isInstanceOf(HierarchyVersionConflictException.class);
+    }
+
+    @Test
+    void restore_rejectsFolderPastTrashRetention() {
+        memberOk();
+        UUID id = UUID.randomUUID();
+        Folder deleted = mock(Folder.class);
+        when(deleted.getDeletedAt()).thenReturn(Instant.now().minus(Duration.ofDays(30)));
+        when(folderRepository.findByIdAndWorkspaceIdAndDeletedAtIsNotNull(id, WORKSPACE_ID))
+                .thenReturn(Optional.of(deleted));
+
+        assertThatThrownBy(() -> service.restore(WORKSPACE_ID, USER_ID, id, "key-1", 2L))
+                .isInstanceOf(TrashRetentionExpiredException.class);
+        verify(folderRepository, never()).restoreRootIfVersionMatches(any(), any(), anyLong(), any(), anyLong(), any());
     }
 }

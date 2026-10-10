@@ -28,7 +28,8 @@ class IngestCommandOutboxTest {
                 .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.1-flash-lite"));
         AiCommandOutboxWriter writer = spy(new AiCommandOutboxWriter(outboxRepository, objectMapper,
                 org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class),
-                org.mockito.Mockito.mock(jakarta.persistence.EntityManager.class)));
+                org.mockito.Mockito.mock(jakarta.persistence.EntityManager.class),
+                org.mockito.Mockito.mock(fruition.core.usage.service.CreditService.class)));
         IngestCommandOutbox outbox = new IngestCommandOutbox(
                 writer,
                 "ai.ingest.command", workspaceAiModelClient, objectMapper);

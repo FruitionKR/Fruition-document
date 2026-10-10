@@ -1,6 +1,7 @@
 package fruition.shared.util;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.util.List;
@@ -22,7 +23,12 @@ public record ErrorResponse(
             String message,
 
             @Schema(description = "검증 실패(400 INVALID_REQUEST)일 때만 존재한다. 값이 없으면 키 자체가 빠지므로 null 체크가 아니라 존재 여부로 확인한다.")
-            List<FieldError> details) {
+            List<FieldError> details,
+
+            @JsonProperty("current_revision")
+            @Schema(description = "본문 저장 충돌(409 DOCUMENT_VERSION_CONFLICT)일 때만 존재한다. 서버의 현재 편집 revision으로, 충돌 등록에 쓴다.",
+                    example = "5")
+            Long currentRevision) {
 
         public record FieldError(
                 @Schema(description = "문제가 된 요청 필드명", example = "email")
@@ -33,10 +39,14 @@ public record ErrorResponse(
     }
 
     public static ErrorResponse of(String code, String message) {
-        return new ErrorResponse(new ErrorDetail(code, message, null));
+        return new ErrorResponse(new ErrorDetail(code, message, null, null));
+    }
+
+    public static ErrorResponse ofVersionConflict(String message, Long currentRevision) {
+        return new ErrorResponse(new ErrorDetail("DOCUMENT_VERSION_CONFLICT", message, null, currentRevision));
     }
 
     public static ErrorResponse ofValidation(List<ErrorDetail.FieldError> details) {
-        return new ErrorResponse(new ErrorDetail("INVALID_REQUEST", "요청 형식이 올바르지 않습니다.", details));
+        return new ErrorResponse(new ErrorDetail("INVALID_REQUEST", "요청 형식이 올바르지 않습니다.", details, null));
     }
 }

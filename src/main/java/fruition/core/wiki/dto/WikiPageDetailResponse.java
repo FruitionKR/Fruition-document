@@ -40,6 +40,9 @@ public record WikiPageDetailResponse(
         @Schema(description = "생성 시각(ISO-8601 UTC)", example = "2026-08-13T04:25:24.371948Z")
         Instant createdAt,
 
+        @Schema(description = "현재 본문 revision. 버전 이력이 아직 없으면 키가 빠진다.", example = "3")
+        Long revision,
+
         @JsonProperty("updated_at")
         @Schema(description = "마지막 변경 시각(ISO-8601 UTC)", example = "2026-08-13T04:25:24.371948Z")
         Instant updatedAt,

@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -40,6 +41,7 @@ class DocumentPlacementServiceTest {
     private static final String DOCUMENT_ID = "doc_1";
 
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
+    @Mock JdbcTemplate jdbcTemplate;
     @Mock DocumentRepository documentRepository;
     @Mock FolderRepository folderRepository;
     @Mock IdempotencyService idempotencyService;
@@ -51,7 +53,7 @@ class DocumentPlacementServiceTest {
     void setUp() {
         service = new DocumentPlacementService(
                 workspaceAccessGuard,
-                documentRepository, folderRepository, idempotencyService, siblingReorderer);
+                documentRepository, folderRepository, idempotencyService, siblingReorderer, new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate));
         lenient().when(idempotencyService.execute(
                 any(), any(), any(), any(), any(), anyInt(), any(), any()))
                 .thenAnswer(invocation -> invocation.<java.util.function.Supplier<?>>getArgument(7).get());
