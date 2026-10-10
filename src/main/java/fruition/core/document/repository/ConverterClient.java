@@ -2,6 +2,7 @@ package fruition.core.document.repository;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import fruition.core.document.exception.DocumentConvertException;
+import fruition.core.usage.service.UsageChargeService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
@@ -55,8 +56,14 @@ public class ConverterClient {
                 .build();
     }
 
+    /**
+     * 변환의 공급사 호출을 사용량 원장에 귀속할 값(#91). runId는 변환 실행({@code convert:<placeholderId>})이다.
+     * converter 계약: run_id는 {@code X-Request-Id} 헤더, workspace_id·user_id는 Form·body 필드로 보낸다.
+     */
+    public record Attribution(String runId, String workspaceId, String userId) {}
+
     /** PDF 원본을 변환기에 보내 Markdown 본문을 받는다. 실패는 상태 코드를 담아 DocumentConvertException으로 알린다. */
-    public String convertPdf(String filename, byte[] pdfBytes, String provider, String model) {
+    public String convertPdf(String filename, byte[] pdfBytes, String provider, String model, Attribution attribution) {
         HttpHeaders fileHeaders = new HttpHeaders();
         fileHeaders.setContentType(MediaType.APPLICATION_PDF);
         MultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
@@ -68,10 +75,13 @@ public class ConverterClient {
         }, fileHeaders));
         parts.add("provider", provider);
         parts.add("model", model);
+        parts.add("workspace_id", attribution.workspaceId());
+        parts.add("user_id", attribution.userId());
 
         try {
             ConvertResponse response = restClient.post()
                     .uri("/convert")
+                    .header(UsageChargeService.RUN_ID_HEADER, attribution.runId())
                     .contentType(MediaType.MULTIPART_FORM_DATA)
                     .body(parts)
                     .retrieve()
@@ -90,10 +100,10 @@ public class ConverterClient {
         }
     }
 
-    public String convertPdf(String filename, byte[] pdfBytes, String provider, String model,
+    public String convertPdf(String filename, byte[] pdfBytes, String provider, String model, Attribution attribution,
                              java.util.function.BooleanSupplier active) {
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
-            var request = executor.submit(() -> convertPdf(filename, pdfBytes, provider, model));
+            var request = executor.submit(() -> convertPdf(filename, pdfBytes, provider, model, attribution));
             try {
                 while (active.getAsBoolean()) {
                     try {
@@ -119,12 +129,14 @@ public class ConverterClient {
                         boolean heartbeat, boolean done, String error) {}
 
     public Batch convertSourceBatch(String sourceUrl, long byteSize, String provider, String model,
-            int startPage, java.util.function.BooleanSupplier active) {
+            int startPage, Attribution attribution, java.util.function.BooleanSupplier active) {
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             var request = executor.submit(() -> restClient.post().uri("/convert-source-batch")
                     .contentType(MediaType.APPLICATION_JSON)
+                    .header(UsageChargeService.RUN_ID_HEADER, attribution.runId())
                     .body(java.util.Map.of("source_url", sourceUrl, "byte_size", byteSize,
-                            "provider", provider, "model", model, "start_page", startPage))
+                            "provider", provider, "model", model, "start_page", startPage,
+                            "workspace_id", attribution.workspaceId(), "user_id", attribution.userId()))
                     .retrieve().body(Batch.class));
             try {
                 while (active.getAsBoolean()) {
