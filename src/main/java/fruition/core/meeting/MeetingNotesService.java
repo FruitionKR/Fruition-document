@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.exception.DocumentLockedException;
 import fruition.core.document.exception.DocumentNotFoundException;
@@ -63,6 +64,7 @@ public class MeetingNotesService {
     private final MeetingService meetingService;
     private final MeetingNotesRepository notes;
     private final MeetingNotesClient client;
+    private final WorkspaceAiModelClient workspaceAiModelClient;
     private final DocumentService documentService;
     private final DocumentEditLockService documentEditRules;
     private final PostgresDocumentEditStore editStore;
@@ -86,7 +88,8 @@ public class MeetingNotesService {
 
     public MeetingNotesService(MeetingService meetingService, MeetingNotesRepository notes, MeetingNotesClient client,
                                DocumentService documentService, DocumentEditLockService documentEditRules,
-                               PostgresDocumentEditStore editStore, ObjectMapper objectMapper) {
+                               PostgresDocumentEditStore editStore, ObjectMapper objectMapper,
+                               WorkspaceAiModelClient workspaceAiModelClient) {
         this.meetingService = meetingService;
         this.notes = notes;
         this.client = client;
@@ -94,6 +97,7 @@ public class MeetingNotesService {
         this.documentEditRules = documentEditRules;
         this.editStore = editStore;
         this.objectMapper = objectMapper;
+        this.workspaceAiModelClient = workspaceAiModelClient;
     }
 
     public record AppendPreview(String documentId, long baseRevision, String markdown) {}
@@ -150,7 +154,8 @@ public class MeetingNotesService {
     private void generate(String workspaceId, String userId, String displayName, String meetingId, int version,
                           List<Map<String, String>> segments, List<Bundle> bundles) {
         try {
-            JsonNode draft = client.preview(workspaceId, userId, displayName, segments);
+            JsonNode draft = client.preview(workspaceId, userId, displayName, segments,
+                    workspaceAiModelClient.get(workspaceId));
             notes.markReady(meetingId, version, json(stored(draft, bundles)));
         } catch (MeetingException e) {
             notes.markFailed(meetingId, version, e.getCode());

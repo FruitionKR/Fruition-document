@@ -63,7 +63,7 @@
 ```json
 {
   "allow_web_search": false,
-  "model": "gpt-5-nano",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "question": "검색 인덱싱은 어떻게 동작하나요?"
 }
@@ -210,7 +210,7 @@
 curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/sessions/<value>/query" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"allow_web_search":false,"model":"gpt-5-nano","provider":"openai","question":"검색 인덱싱은 어떻게 동작하나요?"}'
+  --data '{"allow_web_search":false,"model":"gpt-6-luna","provider":"openai","question":"검색 인덱싱은 어떻게 동작하나요?"}'
 ```
 
 ```json
@@ -360,7 +360,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 ```json
 {
   "allow_web_search": false,
-  "model": "gpt-5-nano",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "question": "검색 인덱싱은 어떻게 동작하나요?"
 }
@@ -416,7 +416,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/sessions/<value>/query/runs" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"allow_web_search":false,"model":"gpt-5-nano","provider":"openai","question":"검색 인덱싱은 어떻게 동작하나요?"}'
+  --data '{"allow_web_search":false,"model":"gpt-6-luna","provider":"openai","question":"검색 인덱싱은 어떻게 동작하나요?"}'
 ```
 
 ```json
@@ -484,7 +484,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 ```json
 {
   "error": "string",
-  "model": "gpt-5-nano",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "request_id": "query_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
@@ -616,7 +616,7 @@ curl -X GET "$DOCUMENT/api/query/runs/<value>" \
 ```json
 {
   "error": "string",
-  "model": "gpt-5-nano",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "request_id": "query_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {

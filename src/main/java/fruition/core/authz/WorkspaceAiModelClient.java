@@ -81,6 +81,6 @@ public class WorkspaceAiModelClient {
                     example = "openai")
             String provider,
 
-            @Schema(description = "모델명", example = "gpt-5-nano")
+            @Schema(description = "모델명", example = "gpt-6-luna")
             String model) {}
 }

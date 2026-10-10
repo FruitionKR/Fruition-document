@@ -574,7 +574,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
   },
   "allow_web_search": false,
   "message": "이 문단을 표로 정리해줘",
-  "model": "gpt-5-nano",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "session_id": "session_0ff8564ea24047cd8144d3f48badfe3f",
   "skill_draft_excluded_literals": [
@@ -649,7 +649,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/turn" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"session_id":"session_0ff8564ea24047cd8144d3f48badfe3f","documentId":"doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83","baseVersion":3,"message":"이 문단을 표로 정리해줘","conversationContext":{"selected_pair_ids":["pair_01"],"referenceContext":{}},"editorSnapshot":{"markdown":"# 회의록\n\n정리할 문단","target":{"endLine":3,"startLine":3,"type":"selection"}},"provider":"openai","model":"gpt-5-nano"}'
+  --data '{"session_id":"session_0ff8564ea24047cd8144d3f48badfe3f","documentId":"doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83","baseVersion":3,"message":"이 문단을 표로 정리해줘","conversationContext":{"selected_pair_ids":["pair_01"],"referenceContext":{}},"editorSnapshot":{"markdown":"# 회의록\n\n정리할 문단","target":{"endLine":3,"startLine":3,"type":"selection"}},"provider":"openai","model":"gpt-6-luna"}'
 ```
 
 ```json
@@ -1153,7 +1153,7 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
   "currency": "USD", "total_usd": 3.000000, "price_missing": false,
   "users": [{
     "user_id": "user_1", "amount_usd": 3.000000, "price_missing": false,
-    "models": [{"provider": "openai", "model": "gpt-5-nano", "calls": 12, "unknown_usage_calls": 0,
+    "models": [{"provider": "openai", "model": "gpt-6-luna", "calls": 12, "unknown_usage_calls": 0,
       "unfinished_calls": 0, "input_tokens": 2000000, "cached_input_tokens": 0, "cache_creation_tokens": 0,
       "output_tokens": 0, "reasoning_tokens": 0, "amount_usd": 3.000000, "price_missing": false}]
   }],
@@ -1173,7 +1173,7 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 {
   "user_id": "user_1", "from_at": "2026-09-01T00:00:00Z", "to_at": "2026-10-01T00:00:00Z",
   "currency": "KRW", "charge_krw_milli": 3334, "unpriced_calls": 0, "needs_review_calls": 1,
-  "models": [{"provider": "openai", "model": "gpt-5-nano", "calls": 2, "input_tokens": 1000,
+  "models": [{"provider": "openai", "model": "gpt-6-luna", "calls": 2, "input_tokens": 1000,
     "cached_input_tokens": 400, "cache_creation_tokens": 100, "output_tokens": 500, "reasoning_tokens": 300,
     "audio_seconds": 0, "tts_characters": 0, "charge_krw_milli": 3334, "unpriced_calls": 0, "needs_review_calls": 1}]
 }
@@ -1187,6 +1187,7 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 - 수집: 비동기 실행은 결과 반영(`beginResult`)과 같은 트랜잭션에, PDF 변환은 완료(`AiCommandOutboxWriter.complete`)나 재시도 소진 실패와 같은 트랜잭션에, 동기 호출은 호출이 끝난 뒤(실패 포함) run_id를 `usage_collect_queue`에 넣는다. 실패한 동기 호출과 재시도를 다 쓴 변환은 `ai_task_runs.status`를 `failed`로 닫는다. worker가 `FOR UPDATE SKIP LOCKED`로 하나씩 선점해 AI `GET ${MODEL_USAGE_CALLS_ENDPOINT}?run_id=`(`X-Internal-Token`)로 가져온다. 실패하면 시도 횟수의 제곱(분)만큼 늦춰 최대 10번 재시도한다. 대사 작업이 하루 주기로 커서(`usage_reconcile_cursor`)부터 1시간 전까지를 하루치씩 `?finished_from=&finished_to=`로 다시 조회해 빠진 호출(늦게 커밋됨·취소된 실행·수집 포기)을 채운다. 대사 트랜잭션에는 청구 행 기록과 커서 갱신만 두고, 크레딧 정산은 커밋한 뒤 실행별로 한다. 값을 해석할 수 없는 호출 1건(시각 형식 오류 등)은 오류 로그를 남기고 건너뛴다.
 - 청구 사용자: 실행을 예약한 사용자(`ai_task_runs.user_id`)다. 실행 행이 없을 때만 AI 원장의 `user_id`를 쓰므로, AI가 사용자를 몰라 `unattributed`로 남긴 호출도 실행자에게 청구된다.
 - 동기 AI 호출의 run_id: 실행 ID가 없는 회의록 초안·녹음 파일 전사·음성 전사·실시간 전사·Wiki 스키마 미리보기·초안은 호출마다 `ai_task_runs`에 실행(`kind:uuid`)을 등록하고, ai-svc 계약대로 **`X-Request-Id` 헤더**로 run_id를 보낸다. `workspace_id`·`user_id`는 기존처럼 본문 또는 query로 보낸다. run_id를 본문·query에 넣으면 ai-svc가 버리거나(`unattributed`로 기록) 정의되지 않은 필드로 보고 422로 거부한다. Skill은 기존 run_id를 쓴다.
+- 회의록 초안(`POST /meeting-notes/preview`)과 Wiki 스키마 미리보기·초안(`POST /wiki-schema/preview`, `/wiki-schema/drafts`) 요청 본문에는 워크스페이스에 설정된 AI 모델(`WorkspaceAiModelClient.get(workspaceId)`)의 `provider`·`model` 문자열을 항상 넣는다. ai-svc는 둘이 없으면 422로 거부한다.
 - AI 응답 계약(FruitionKR/Fruition-ai#60): `{"calls": [{"id", "run_id", "workspace_id", "user_id", "kind", "provider", "requested_model", "model", "status", "input_tokens", "cached_input_tokens", "cache_creation_tokens", "output_tokens", "reasoning_tokens", "audio_seconds", "input_characters", "started_at", "finished_at"}]}`. 응답 모델이 없으면 `requested_model`을 남긴다. AI의 `input_characters`(TTS 입력 문자 수)는 `usage_charges.tts_characters`에 저장한다.
 - 대사: `scripts/sql/usage-cost-monthly.sql`로 월별 공급사·모델 원가 합계를 공급사 청구서와 비교한다.
 - 진입점: `src/main/java/fruition/core/usage/controller/UsageChargeController.java`, `src/main/java/fruition/core/usage/service/UsageChargeService.java`

@@ -60,7 +60,7 @@ class QueryControllerTest {
     @Test
     void query_ownedSession_returns200() throws Exception {
         when(aiModelCatalog.resolve(null, null))
-                .thenReturn(new AiModelCatalog.AiModel("openai", "gpt-5-nano", "GPT-5 nano"));
+                .thenReturn(new AiModelCatalog.AiModel("openai", "gpt-6-luna", "GPT-6 Luna"));
         when(chatSessionService.verifyOwnedSession(WORKSPACE_ID, USER_ID, SESSION_ID))
                 .thenReturn(new ChatSession(SESSION_ID, WORKSPACE_ID, USER_ID, null));
         QueryResponse response = new QueryResponse(
@@ -68,7 +68,7 @@ class QueryControllerTest {
                 new QueryResponse.MessageSummary("chat_assistant_1", "assistant", "답변", "completed", Instant.now()),
                 null, null, null, null, false, false, 0, null);
         QueryRun run = QueryRun.pending("query_test", WORKSPACE_ID, SESSION_ID, "질문", Instant.now());
-        when(queryRunService.start(WORKSPACE_ID, USER_ID, SESSION_ID, "질문", "openai", "gpt-5-nano", false, null)).thenReturn(run);
+        when(queryRunService.start(WORKSPACE_ID, USER_ID, SESSION_ID, "질문", "openai", "gpt-6-luna", false, null)).thenReturn(run);
         when(queryRunService.awaitResult(run, USER_ID)).thenReturn(response);
 
         mockMvc.perform(post(basePath() + "/query")
@@ -82,7 +82,7 @@ class QueryControllerTest {
     @Test
     void query_webSearchAllowed_passesRequestSetting() throws Exception {
         when(aiModelCatalog.resolve(null, null))
-                .thenReturn(new AiModelCatalog.AiModel("openai", "gpt-5-nano", "GPT-5 nano"));
+                .thenReturn(new AiModelCatalog.AiModel("openai", "gpt-6-luna", "GPT-6 Luna"));
         when(chatSessionService.verifyOwnedSession(WORKSPACE_ID, USER_ID, SESSION_ID))
                 .thenReturn(new ChatSession(SESSION_ID, WORKSPACE_ID, USER_ID, null));
         QueryResponse response = new QueryResponse(
@@ -90,7 +90,7 @@ class QueryControllerTest {
                 new QueryResponse.MessageSummary("chat_assistant_1", "assistant", "답변", "completed", Instant.now()),
                 null, null, null, null, true, true, 1, null);
         QueryRun run = QueryRun.pending("query_test", WORKSPACE_ID, SESSION_ID, "질문", Instant.now());
-        when(queryRunService.start(WORKSPACE_ID, USER_ID, SESSION_ID, "질문", "openai", "gpt-5-nano", true, null)).thenReturn(run);
+        when(queryRunService.start(WORKSPACE_ID, USER_ID, SESSION_ID, "질문", "openai", "gpt-6-luna", true, null)).thenReturn(run);
         when(queryRunService.awaitResult(run, USER_ID)).thenReturn(response);
 
         mockMvc.perform(post(basePath() + "/query")
@@ -99,7 +99,7 @@ class QueryControllerTest {
                         .content(objectMapper.writeValueAsString(new QueryRequest("질문", null, null, true))))
                 .andExpect(status().isOk());
 
-        verify(queryRunService).start(WORKSPACE_ID, USER_ID, SESSION_ID, "질문", "openai", "gpt-5-nano", true, null);
+        verify(queryRunService).start(WORKSPACE_ID, USER_ID, SESSION_ID, "질문", "openai", "gpt-6-luna", true, null);
     }
 
     @Test
@@ -155,13 +155,13 @@ class QueryControllerTest {
     @Test
     void createRun_ownedSession_returns202() throws Exception {
         when(aiModelCatalog.resolve(null, null))
-                .thenReturn(new AiModelCatalog.AiModel("openai", "gpt-5-nano", "GPT-5 nano"));
+                .thenReturn(new AiModelCatalog.AiModel("openai", "gpt-6-luna", "GPT-6 Luna"));
         when(chatSessionService.verifyOwnedSession(WORKSPACE_ID, USER_ID, SESSION_ID))
                 .thenReturn(new ChatSession(SESSION_ID, WORKSPACE_ID, USER_ID, null));
         QueryRun run = QueryRun.pending(
-                "query_abc123", WORKSPACE_ID, SESSION_ID, "openai", "gpt-5-nano", false, "질문", Instant.now());
+                "query_abc123", WORKSPACE_ID, SESSION_ID, "openai", "gpt-6-luna", false, "질문", Instant.now());
         when(queryRunService.start(WORKSPACE_ID, USER_ID, SESSION_ID, "질문",
-                "openai", "gpt-5-nano", false)).thenReturn(run);
+                "openai", "gpt-6-luna", false)).thenReturn(run);
 
         mockMvc.perform(post(basePath() + "/query/runs")
                         .header("Authorization", bearerToken())
@@ -175,13 +175,13 @@ class QueryControllerTest {
     @Test
     void createRun_webSearchAllowed_passesRequestSetting() throws Exception {
         when(aiModelCatalog.resolve(null, null))
-                .thenReturn(new AiModelCatalog.AiModel("openai", "gpt-5-nano", "GPT-5 nano"));
+                .thenReturn(new AiModelCatalog.AiModel("openai", "gpt-6-luna", "GPT-6 Luna"));
         when(chatSessionService.verifyOwnedSession(WORKSPACE_ID, USER_ID, SESSION_ID))
                 .thenReturn(new ChatSession(SESSION_ID, WORKSPACE_ID, USER_ID, null));
         QueryRun run = QueryRun.pending(
-                "query_abc123", WORKSPACE_ID, SESSION_ID, "openai", "gpt-5-nano", true, "질문", Instant.now());
+                "query_abc123", WORKSPACE_ID, SESSION_ID, "openai", "gpt-6-luna", true, "질문", Instant.now());
         when(queryRunService.start(WORKSPACE_ID, USER_ID, SESSION_ID, "질문",
-                "openai", "gpt-5-nano", true)).thenReturn(run);
+                "openai", "gpt-6-luna", true)).thenReturn(run);
 
         mockMvc.perform(post(basePath() + "/query/runs")
                         .header("Authorization", bearerToken())
@@ -190,6 +190,6 @@ class QueryControllerTest {
                 .andExpect(status().isAccepted());
 
         verify(queryRunService).start(
-                WORKSPACE_ID, USER_ID, SESSION_ID, "질문", "openai", "gpt-5-nano", true);
+                WORKSPACE_ID, USER_ID, SESSION_ID, "질문", "openai", "gpt-6-luna", true);
     }
 }

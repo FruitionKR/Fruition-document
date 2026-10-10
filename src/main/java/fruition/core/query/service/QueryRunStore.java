@@ -54,7 +54,7 @@ public class QueryRunStore {
     }
 
     public QueryRun create(String workspaceId, String sessionId, String question) {
-        return create(workspaceId, sessionId, "openai", "gpt-5-nano", false, question);
+        return create(workspaceId, sessionId, "openai", "gpt-6-luna", false, question);
     }
 
     public QueryRun createWithId(String requestId, String workspaceId, String sessionId,

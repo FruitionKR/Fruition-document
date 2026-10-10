@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import fruition.TestcontainersConfiguration;
+import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.shared.security.JwtTokenProvider;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
@@ -30,6 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -76,7 +79,11 @@ class MeetingNotesIntegrationTest {
             lastRequest.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             lastRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
             // 실제 ai-svc MeetingNotesRequest는 정의되지 않은 필드를 거부한다(extra="forbid"). 본문 run_id는 422다(#87).
-            int status = lastRequest.get().contains("\"run_id\"") ? 422 : aiStatus;
+            // provider·model은 필수다(ai#68). 빠지면 422다.
+            String sent = lastRequest.get();
+            boolean contractOk = !sent.contains("\"run_id\"") && sent.contains("\"provider\":\"gemini\"")
+                    && sent.contains("\"model\":\"gemini-3.5-flash-lite\"");
+            int status = contractOk ? aiStatus : 422;
             byte[] body = (status == 200 ? DRAFT : "{\"detail\":\"private-provider-detail\"}")
                     .getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -98,6 +105,7 @@ class MeetingNotesIntegrationTest {
         FAKE_AI.stop(0);
     }
 
+    @MockBean WorkspaceAiModelClient workspaceAiModelClient;
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired JdbcTemplate jdbc;
@@ -113,6 +121,8 @@ class MeetingNotesIntegrationTest {
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;
         redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
+        when(workspaceAiModelClient.get(workspaceId))
+                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
         aiStatus = 200;
         gate = null;
         calls.set(0);
@@ -147,6 +157,8 @@ class MeetingNotesIntegrationTest {
         // 사용량 귀속 run_id는 본문이 아니라 X-Request-Id 헤더로 보낸다(#87).
         assertThat(sent.has("run_id")).isFalse();
         assertThat(lastRequestId.get()).startsWith("meeting_notes:");
+        assertThat(sent.path("provider").asText()).isEqualTo("gemini");
+        assertThat(sent.path("model").asText()).isEqualTo("gemini-3.5-flash-lite");
         assertThat(sent.path("segments")).extracting(s -> s.path("id").asText()).containsExactly("s1_a");
         assertThat(sent.path("segments").get(0).path("text").asText())
                 .isEqualTo("출시는 금요일로 확정하겠습니다. 민수가 배포 점검을 맡겠습니다.");

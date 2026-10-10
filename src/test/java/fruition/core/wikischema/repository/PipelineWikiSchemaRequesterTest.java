@@ -2,6 +2,7 @@ package fruition.core.wikischema.repository;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpServer;
+import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.wikischema.exception.PipelineWikiSchemaException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,7 +49,7 @@ class PipelineWikiSchemaRequesterTest {
 
     @Test
     void preview_sendsRawMarkdownSnakeCase() {
-        JsonNode response = requester().preview("# 원문", "ws_1", "user_1");
+        JsonNode response = requester().preview("# 원문", "ws_1", "user_1", new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
 
         assertThat(response.path("preview_markdown").asText()).isEqualTo("# 미리보기");
         assertThat(capturedUri.get()).isEqualTo("/wiki-schema/preview");
@@ -57,6 +58,8 @@ class PipelineWikiSchemaRequesterTest {
                 .contains("\"raw_markdown\":\"# 원문\"")
                 .contains("\"workspace_id\":\"ws_1\"")
                 .contains("\"user_id\":\"user_1\"")
+                .contains("\"provider\":\"gemini\"")
+                .contains("\"model\":\"gemini-3.5-flash-lite\"")
                 .doesNotContain("run_id")
                 .doesNotContain("rawMarkdown");
         assertThat(capturedRequestId.get()).isEqualTo("run-1");
@@ -66,7 +69,7 @@ class PipelineWikiSchemaRequesterTest {
     void createDraft_sendsWorkspaceAndUserSnakeCase() {
         responseBody.set("{\"wiki_schema\":{\"id\":\"sch_1\"}}");
 
-        JsonNode response = requester().createDraft("# 원문", "기본", "ws_1", "user_1");
+        JsonNode response = requester().createDraft("# 원문", "기본", "ws_1", "user_1", new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
 
         assertThat(response.path("wiki_schema").path("id").asText()).isEqualTo("sch_1");
         assertThat(capturedUri.get()).isEqualTo("/wiki-schema/drafts");
@@ -75,6 +78,8 @@ class PipelineWikiSchemaRequesterTest {
                 .contains("\"name\":\"기본\"")
                 .contains("\"workspace_id\":\"ws_1\"")
                 .contains("\"user_id\":\"user_1\"")
+                .contains("\"provider\":\"gemini\"")
+                .contains("\"model\":\"gemini-3.5-flash-lite\"")
                 .doesNotContain("run_id");
         assertThat(capturedRequestId.get()).isEqualTo("run-1");
     }
@@ -83,7 +88,7 @@ class PipelineWikiSchemaRequesterTest {
     void createDraft_omitsNullName() {
         responseBody.set("{\"wiki_schema\":{\"id\":\"sch_1\"}}");
 
-        requester().createDraft("# 원문", null, "ws_1", "user_1");
+        requester().createDraft("# 원문", null, "ws_1", "user_1", new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
 
         assertThat(capturedBody.get()).doesNotContain("\"name\"");
     }
@@ -160,7 +165,7 @@ class PipelineWikiSchemaRequesterTest {
         responseStatus.set(422);
         responseBody.set("{\"detail\":[{\"loc\":[\"body\",\"raw_markdown\"],\"msg\":\"too short\"}]}");
 
-        assertThatThrownBy(() -> requester().preview("x", "ws_1", "user_1"))
+        assertThatThrownBy(() -> requester().preview("x", "ws_1", "user_1", new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite")))
                 .isInstanceOfSatisfying(PipelineWikiSchemaException.class, error -> {
                     assertThat(error.getHttpStatus()).isEqualTo(422);
                     assertThat(error.getResponseBody()).contains("too short");
@@ -184,7 +189,7 @@ class PipelineWikiSchemaRequesterTest {
         responseStatus.set(500);
         responseBody.set("{\"detail\":\"boom\"}");
 
-        assertThatThrownBy(() -> requester().preview("x", "ws_1", "user_1"))
+        assertThatThrownBy(() -> requester().preview("x", "ws_1", "user_1", new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite")))
                 .isInstanceOfSatisfying(PipelineWikiSchemaException.class, error -> {
                     assertThat(error.getHttpStatus()).isEqualTo(503);
                     assertThat(error.getResponseBody()).isNull();

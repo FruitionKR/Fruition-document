@@ -18,7 +18,7 @@ public record QueryRunStatusResponse(
         @Schema(description = "이 질의를 처리한 LLM provider(실행 시점 snapshot)", example = "openai")
         String provider,
 
-        @Schema(description = "이 질의를 처리한 모델명(실행 시점 snapshot)", example = "gpt-5-nano")
+        @Schema(description = "이 질의를 처리한 모델명(실행 시점 snapshot)", example = "gpt-6-luna")
         String model,
 
         @JsonProperty("web_search_enabled")

@@ -6,6 +6,7 @@ import fruition.core.wikischema.dto.WikiSchemaPreviewRequest;
 import fruition.core.wikischema.repository.PipelineWikiSchemaRequester;
 import fruition.core.authz.WorkspaceNotFoundException;
 import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.authz.WorkspaceAiModelClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -26,19 +27,24 @@ class WikiSchemaServiceTest {
 
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
     @Mock PipelineWikiSchemaRequester requester;
+    @Mock WorkspaceAiModelClient workspaceAiModelClient;
+
+    private static final WorkspaceAiModelClient.AiModelSelection MODEL =
+            new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna");
 
     private WikiSchemaService service;
 
     @BeforeEach
     void setUp() {
         service = new WikiSchemaService(
-                workspaceAccessGuard, requester);
+                workspaceAccessGuard, requester, workspaceAiModelClient);
     }
 
     @Test
     void preview_delegatesToRequesterForMember() throws Exception {
         doNothing().when(workspaceAccessGuard).requireMember("ws_1", "user_1");
-        when(requester.preview("# 원문", "ws_1", "user_1"))
+        when(workspaceAiModelClient.get("ws_1")).thenReturn(MODEL);
+        when(requester.preview("# 원문", "ws_1", "user_1", MODEL))
                 .thenReturn(new ObjectMapper().readTree("{\"preview_markdown\":\"# 미리보기\"}"));
 
         var result = service.preview("ws_1", "user_1", new WikiSchemaPreviewRequest("# 원문"));
@@ -49,13 +55,14 @@ class WikiSchemaServiceTest {
     @Test
     void createDraft_forwardsPathWorkspaceAndPrincipalUser() throws Exception {
         doNothing().when(workspaceAccessGuard).requireMember("ws_1", "user_1");
-        when(requester.createDraft("# 원문", "기본", "ws_1", "user_1"))
+        when(workspaceAiModelClient.get("ws_1")).thenReturn(MODEL);
+        when(requester.createDraft("# 원문", "기본", "ws_1", "user_1", MODEL))
                 .thenReturn(new ObjectMapper().readTree("{\"wiki_schema\":{\"id\":\"sch_1\"}}"));
 
         var result = service.createDraft("ws_1", "user_1", new WikiSchemaDraftRequest("# 원문", "기본"));
 
         assertThat(result.path("wiki_schema").path("id").asText()).isEqualTo("sch_1");
-        verify(requester).createDraft("# 원문", "기본", "ws_1", "user_1");
+        verify(requester).createDraft("# 원문", "기본", "ws_1", "user_1", MODEL);
     }
 
     @Test

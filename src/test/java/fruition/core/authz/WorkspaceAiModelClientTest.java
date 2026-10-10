@@ -18,7 +18,7 @@ class WorkspaceAiModelClientTest {
 
     private static final String WS = "ws_1";
     private static final String URL = "http://access/internal/workspaces/ws_1/ai-model-settings";
-    private static final String BODY = "{\"ingest_lint\":{\"provider\":\"openai\",\"model\":\"gpt-5-nano\"}}";
+    private static final String BODY = "{\"ingest_lint\":{\"provider\":\"openai\",\"model\":\"gpt-6-luna\"}}";
 
     private final RestClient.Builder restClientBuilder = RestClient.builder()
             .baseUrl("http://access")
@@ -36,7 +36,7 @@ class WorkspaceAiModelClientTest {
         WorkspaceAiModelClient.AiModelSelection selection = client.get(WS);
 
         assertThat(selection.provider()).isEqualTo("openai");
-        assertThat(selection.model()).isEqualTo("gpt-5-nano");
+        assertThat(selection.model()).isEqualTo("gpt-6-luna");
         server.verify();
     }
 
@@ -49,7 +49,7 @@ class WorkspaceAiModelClientTest {
                 .andExpect(content().json(BODY))
                 .andRespond(withSuccess(BODY, MediaType.APPLICATION_JSON));
 
-        WorkspaceAiModelClient.AiModelSelection selection = client.update(WS, "openai", "gpt-5-nano");
+        WorkspaceAiModelClient.AiModelSelection selection = client.update(WS, "openai", "gpt-6-luna");
 
         assertThat(selection.provider()).isEqualTo("openai");
         server.verify();

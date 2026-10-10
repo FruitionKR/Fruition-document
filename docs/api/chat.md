@@ -531,7 +531,7 @@ Agent turn이 만든 메시지는 `run_id`와 `action`이 함께 온다. 질의 
       "created_at": "2026-08-13T04:25:24.371948Z",
       "error_message": "string",
       "id": "string",
-      "model": "gpt-5-nano",
+      "model": "gpt-6-luna",
       "pair_id": "string",
       "partial_wiki_page_ids": [
         "string"
@@ -614,7 +614,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/s
       "created_at": "2026-08-13T04:25:24.371948Z",
       "error_message": "string",
       "id": "string",
-      "model": "gpt-5-nano",
+      "model": "gpt-6-luna",
       "pair_id": "string",
       "partial_wiki_page_ids": [
         "string"

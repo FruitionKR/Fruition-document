@@ -34,7 +34,7 @@ class SkillServiceTest {
     void setUp() {
         service = new SkillService(workspaceAccessGuard, requester, workspaceAiModelClient);
         lenient().when(workspaceAiModelClient.get("ws_1"))
-                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"));
+                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"));
     }
 
     @Test
@@ -65,7 +65,7 @@ class SkillServiceTest {
         verify(workspaceAccessGuard).requireMember("ws_1", "user_1");
         verify(workspaceAiModelClient).get("ws_1");
         verify(requester).author("ws_1", "user_1", request,
-                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run");
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run");
     }
 
     @Test
@@ -79,9 +79,9 @@ class SkillServiceTest {
         service.update("ws_1", "user_1", "skill_1", update, "run");
 
         verify(requester).publish("ws_1", "user_1", publish,
-                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run");
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run");
         verify(requester).update("ws_1", "user_1", "skill_1", update,
-                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run");
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run");
     }
 
     @Test
