@@ -46,6 +46,9 @@ import java.util.function.Function;
 @Service
 public class UsageChargeService {
 
+    /** ai-svc가 HTTP 동기 호출의 사용량을 귀속할 run_id를 받는 헤더. 본문·쿼리로 보내면 버려지거나 거부된다. */
+    public static final String RUN_ID_HEADER = "X-Request-Id";
+
     private static final Logger log = LoggerFactory.getLogger(UsageChargeService.class);
     private static final int MAX_ATTEMPTS = 10;
     private static final Duration RECONCILE_DELAY = Duration.ofHours(1);
@@ -268,7 +271,7 @@ public class UsageChargeService {
         Long creation = count(call, "cache_creation_tokens");
         Long output = count(call, "output_tokens");
         BigDecimal audioSeconds = call.path("audio_seconds").isNumber() ? call.path("audio_seconds").decimalValue() : null;
-        Long ttsCharacters = count(call, "tts_characters");
+        Long ttsCharacters = count(call, "input_characters");
 
         String status;
         Timestamp priceFrom = null, fxFrom = null, policyFrom = null;

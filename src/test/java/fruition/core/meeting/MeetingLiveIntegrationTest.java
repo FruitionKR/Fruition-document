@@ -101,6 +101,9 @@ class MeetingLiveIntegrationTest {
         assertThat(meeting.path("streams")).extracting(s -> s.path("end_reason").asText())
                 .containsExactly("finished", "interrupted");
         assertThat(meeting.path("transcript_complete").asBoolean()).isFalse();
+        // 사용량 귀속 run_id는 연결 주소 쿼리가 아니라 X-Request-Id 헤더로 보낸다(#87).
+        assertThat(FakeAi.lastRequestId).startsWith("meeting_live:");
+        assertThat(FakeAi.lastQuery).doesNotContain("run_id");
     }
 
     @Test
@@ -337,6 +340,8 @@ class MeetingLiveIntegrationTest {
     /** ai-svc 실시간 전사 계약을 흉내 낸다. mode로 완료 순서·중복·충돌·개수 불일치를 만든다. */
     static final class FakeAi extends AbstractWebSocketHandler {
         static volatile String mode = "normal";
+        static volatile String lastRequestId;
+        static volatile String lastQuery;
 
         /** 연결마다 ai-svc 구간 번호가 1부터 다시 시작한다. */
         private static final class State {
@@ -347,6 +352,8 @@ class MeetingLiveIntegrationTest {
         @Override
         public void afterConnectionEstablished(WebSocketSession session) throws Exception {
             assertThat(session.getHandshakeHeaders().getFirst("X-Internal-Token")).isEqualTo("test-internal-callback");
+            lastRequestId = session.getHandshakeHeaders().getFirst("X-Request-Id");
+            lastQuery = session.getUri() == null ? null : session.getUri().getRawQuery();
             session.getAttributes().put("state", new State());
             session.setBinaryMessageSizeLimit(64 * 1024);  // 실제 ai-svc도 1초 frame(48,000 bytes)을 받는다
             send(session, "{\"type\":\"ready\",\"sample_rate\":24000}");

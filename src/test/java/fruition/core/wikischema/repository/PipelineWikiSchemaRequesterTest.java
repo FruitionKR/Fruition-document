@@ -21,6 +21,7 @@ class PipelineWikiSchemaRequesterTest {
     private HttpServer server;
     private final AtomicReference<String> capturedUri = new AtomicReference<>();
     private final AtomicReference<String> capturedBody = new AtomicReference<>();
+    private final AtomicReference<String> capturedRequestId = new AtomicReference<>();
     private final AtomicReference<String> responseBody = new AtomicReference<>("{\"preview_markdown\":\"# 미리보기\"}");
     private final AtomicInteger responseStatus = new AtomicInteger(200);
 
@@ -30,6 +31,7 @@ class PipelineWikiSchemaRequesterTest {
         server.createContext("/wiki-schema", exchange -> {
             capturedUri.set(exchange.getRequestURI().toString());
             capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            capturedRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
             byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(responseStatus.get(), body.length);
@@ -50,13 +52,14 @@ class PipelineWikiSchemaRequesterTest {
 
         assertThat(response.path("preview_markdown").asText()).isEqualTo("# 미리보기");
         assertThat(capturedUri.get()).isEqualTo("/wiki-schema/preview");
-        // AI가 사용량을 남기도록 실행 ID와 사용자를 보낸다(#78).
+        // AI가 사용량을 남기도록 사용자는 본문에, 실행 ID는 X-Request-Id 헤더로 보낸다(#78, #87).
         assertThat(capturedBody.get())
                 .contains("\"raw_markdown\":\"# 원문\"")
                 .contains("\"workspace_id\":\"ws_1\"")
                 .contains("\"user_id\":\"user_1\"")
-                .contains("\"run_id\":\"run-1\"")
+                .doesNotContain("run_id")
                 .doesNotContain("rawMarkdown");
+        assertThat(capturedRequestId.get()).isEqualTo("run-1");
     }
 
     @Test
@@ -72,7 +75,8 @@ class PipelineWikiSchemaRequesterTest {
                 .contains("\"name\":\"기본\"")
                 .contains("\"workspace_id\":\"ws_1\"")
                 .contains("\"user_id\":\"user_1\"")
-                .contains("\"run_id\":\"run-1\"");
+                .doesNotContain("run_id");
+        assertThat(capturedRequestId.get()).isEqualTo("run-1");
     }
 
     @Test

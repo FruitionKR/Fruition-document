@@ -171,11 +171,11 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         live.billing = billingRenewer.scheduleWithFixedDelay(() -> renewCredit(live), interval, interval, TimeUnit.SECONDS);
         live.stream = repository.openStream(ticket.meetingId());
         URI uri = URI.create(environment.getRequiredProperty("app.speech.live-endpoint")
-                + "?workspace_id=" + encode(ticket.workspaceId()) + "&user_id=" + encode(ticket.userId())
-                + "&run_id=" + encode(live.runId));
+                + "?workspace_id=" + encode(ticket.workspaceId()) + "&user_id=" + encode(ticket.userId()));
         // ai-svc 연결(실측 ready까지 약 3.5초)을 기다리며 요청 스레드를 잡지 않는다. 연결 객체는 onOpen에서 잡는다.
         httpClient.newWebSocketBuilder()
                 .header("X-Internal-Token", internalToken)
+                .header(UsageChargeService.RUN_ID_HEADER, live.runId)
                 .buildAsync(uri, new AiListener(live))
                 .orTimeout(15, TimeUnit.SECONDS)
                 .whenComplete((upstream, error) -> {
