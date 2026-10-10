@@ -11,6 +11,7 @@ workspace AI 모델을 확인한 뒤 ai-svc 내부 HTTP로 전달한다.
 호출자가 ID를 미리 지정하면 HTTP 응답을 기다리는 중에도 [공통 취소 API](tasks.md)를
 호출할 수 있다. Backend는 `/skills/tasks` 내부 API에 원래 body와 검증한 actor·모델을 전달하며,
 취소는 생성한 Skill 삭제 또는 이전 게시 버전·설정 복구까지 확인한다.
+응답 대기가 `app.skill.timeout-seconds`(기본 60초)를 넘기면 core가 같은 run에 취소를 요청해 AI가 변경을 복구하고, 호출자에는 `503 SKILL_AI_UNAVAILABLE`을 반환한다. AI도 55초에 자체 중단한다.
 
 ## API 목차
 

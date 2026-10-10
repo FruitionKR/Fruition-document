@@ -77,23 +77,6 @@ public class AiTaskCancellationService {
         return status(id, workspaceId, userId);
     }
 
-    public boolean cancelDocumentTasks(String documentId, String workspaceId, String userId) {
-        var tasks = jdbc.queryForList("SELECT id FROM ai_task_runs WHERE workspace_id = ? AND user_id = ? "
-                + "AND command->>'document_id' = ? ORDER BY created_at DESC", String.class, workspaceId, userId, documentId);
-        for (String id : tasks) {
-            transaction.executeWithoutResult(tx -> {
-                owned(id, workspaceId, userId, true);
-                jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL "
-                        + "WHERE id = ? AND status NOT IN ('cancelled', 'rolling_back')", id);
-            });
-        }
-        for (String id : tasks) {
-            advance(id);
-            if (!owned(id, workspaceId, userId, false).get("status").equals("cancelled")) return false;
-        }
-        return pipeline.cancelDocumentTasks(documentId, workspaceId, userId);
-    }
-
     public java.util.Optional<Map<String, Object>> findStatus(String id, String workspaceId, String userId) {
         var rows = jdbc.queryForList("SELECT id, status, error_code FROM ai_task_runs WHERE id = ? AND workspace_id = ? AND user_id = ?",
                 id, workspaceId, userId);
