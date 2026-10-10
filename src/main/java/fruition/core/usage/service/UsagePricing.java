@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.regex.Pattern;
 
 /**
  * 모델 단가로 AI 사용 금액을 계산하는 순수 함수(#78). 기간 정산(#59)과 호출 단위 청구가 같은 식을 쓴다.
@@ -39,19 +40,49 @@ public final class UsagePricing {
                 .movePointLeft(6);
     }
 
-    /** 호출 원가(USD). 오디오·TTS 사용량이 있는데 그 단가가 없으면 계산할 수 없어 null이다. */
-    public static BigDecimal callCostUsd(Price price, long input, long cached, long creation, long output,
-                                         BigDecimal audioSeconds, long ttsCharacters) {
-        BigDecimal cost = tokenCostUsd(price, input, cached, creation, output);
+    /**
+     * 호출 원가(USD). 토큰 우선 규칙(#93): 입력·출력 토큰 중 하나라도 있으면 토큰 단가로만 계산하고 오디오 길이·TTS 글자 수는
+     * 무시한다(저장만 한다). ai는 실시간 전사·TTS에 토큰과 오디오 길이·글자 수를 함께 남기므로 더하면 이중 청구가 된다.
+     * 토큰이 없을 때만 오디오 분당·TTS 100만 글자당 단가를 쓰고, 그 단가가 없으면 계산할 수 없어 null이다.
+     */
+    public static BigDecimal callCostUsd(Price price, Long input, Long cached, Long creation, Long output,
+                                         BigDecimal audioSeconds, Long ttsCharacters) {
+        if (input != null || output != null) {
+            return tokenCostUsd(price, zero(input), zero(cached), zero(creation), zero(output));
+        }
+        BigDecimal cost = BigDecimal.ZERO;
         if (audioSeconds != null && audioSeconds.signum() > 0) {
             if (price.audioPerMinute() == null) return null;
             cost = cost.add(audioSeconds.multiply(price.audioPerMinute()).divide(BigDecimal.valueOf(60), 12, RoundingMode.CEILING));
         }
-        if (ttsCharacters > 0) {
+        if (ttsCharacters != null && ttsCharacters > 0) {
             if (price.ttsPerMchar() == null) return null;
             cost = cost.add(BigDecimal.valueOf(ttsCharacters).multiply(price.ttsPerMchar()).movePointLeft(6));
         }
         return cost;
+    }
+
+    private static long zero(Long value) {
+        return value == null ? 0 : value;
+    }
+
+    /**
+     * 공급사가 붙이는 스냅샷·버전 접미사. 2026-10-10 개발 DB ai 원장에서 확인한 실제 값은 OpenAI 날짜
+     * ({@code gpt-5-nano} → {@code gpt-5-nano-2025-08-07})뿐이다. 나머지는 공급사 모델 이름 관례다.
+     * Anthropic {@code -20251001}, Gemini {@code -001}, 별칭 {@code -latest}.
+     */
+    private static final Pattern SNAPSHOT_SUFFIX = Pattern.compile("\\d{4}-\\d{2}-\\d{2}|\\d{8}|\\d{3}|latest");
+
+    /**
+     * 요청 모델과 실제 응답 모델의 관계(#99). 같으면 {@code same}, 요청 모델에 스냅샷 접미사만 붙었으면 {@code snapshot},
+     * 그 밖은 공급사가 다른 모델로 보낸 것으로 보고 {@code routed}다. 둘 중 하나를 모르면 null이다.
+     */
+    public static String routing(String requested, String actual) {
+        if (requested == null || actual == null) return null;
+        if (actual.equals(requested)) return "same";
+        if (actual.startsWith(requested + "-")
+                && SNAPSHOT_SUFFIX.matcher(actual.substring(requested.length() + 1)).matches()) return "snapshot";
+        return "routed";
     }
 
     /** 원가를 micro-USD 정수로 올림한다. */

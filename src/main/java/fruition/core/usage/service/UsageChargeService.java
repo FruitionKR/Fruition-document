@@ -23,13 +23,18 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 /**
  * 호출 단위 AI 사용 금액(#78). AI 원장의 호출 1건을 {@code usage_charges} 1행으로 옮기며 금액을 계산한다.
@@ -40,7 +45,11 @@ import java.util.function.Function;
  *   <li>같은 호출(call_id)은 여러 번 수집해도 한 행이다. 금액이 확정된({@code charged}) 행은 다시 계산하지 않아
  *       이후 단가가 바뀌어도 과거 청구가 변하지 않는다.</li>
  *   <li>단가·환율·정책 버전은 호출 {@code started_at}에 적용 중인 행을 고른다.</li>
- *   <li>단가·환율·정책이 없으면 {@code unpriced}(금액 비움), 토큰을 모르는 호출은 {@code needs_review}(금액 0)다.</li>
+ *   <li>단가는 실제 응답 모델 → 요청 모델 순으로 찾는다. 단가·환율·정책이 없으면 {@code unpriced}(금액 비움)다.</li>
+ *   <li>{@code succeeded}가 아닌 호출과, 성공했지만 토큰·오디오 길이·TTS 글자 수를 모두 모르는 호출은
+ *       {@code needs_review}(금액 0)다.</li>
+ *   <li>토큰 사용량이 있으면 토큰 단가로만 계산한다({@link UsagePricing#callCostUsd}).</li>
+ *   <li>{@code unpriced}·{@code needs_review} 행은 매시간 저장된 사용량으로 다시 계산한다({@link #recompute}).</li>
  * </ul>
  */
 @Service
@@ -54,6 +63,7 @@ public class UsageChargeService {
     private static final Duration RECONCILE_DELAY = Duration.ofHours(1);
     private static final Duration RECONCILE_CHUNK = Duration.ofDays(1);
     private static final Duration MAX_PERIOD = Duration.ofDays(366);
+    private static final int RECOMPUTE_BATCH = 500;
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
@@ -62,6 +72,7 @@ public class UsageChargeService {
     private final ObjectMapper mapper;
     private final RestClient client;
     private final String endpoint;
+    private final Map<String, LocalDate> warnedOn = new ConcurrentHashMap<>();
 
     public UsageChargeService(JdbcTemplate jdbc, PlatformTransactionManager manager, AiTaskCancellationService runs,
                               CreditService credits,
@@ -264,8 +275,9 @@ public class UsageChargeService {
         if (callId.isBlank()) throw new IllegalArgumentException("호출 id가 없습니다.");
         Timestamp startedAt = Timestamp.from(Instant.parse(call.path("started_at").asText()));
         String provider = call.path("provider").asText(null);
-        // 단가는 실제 응답 모델 기준이다. 실패해 응답 모델이 없으면 요청 모델을 남긴다.
-        String model = call.path("model").isTextual() ? call.path("model").asText() : call.path("requested_model").asText(null);
+        String requestedModel = call.path("requested_model").asText(null);
+        // 실패해 응답 모델이 없으면 요청 모델을 남긴다.
+        String model = call.path("model").isTextual() ? call.path("model").asText() : requestedModel;
         Long input = count(call, "input_tokens");
         Long cached = count(call, "cached_input_tokens");
         Long creation = count(call, "cache_creation_tokens");
@@ -273,51 +285,24 @@ public class UsageChargeService {
         BigDecimal audioSeconds = call.path("audio_seconds").isNumber() ? call.path("audio_seconds").decimalValue() : null;
         Long ttsCharacters = count(call, "input_characters");
 
-        String status;
-        Timestamp priceFrom = null, fxFrom = null, policyFrom = null;
-        Long cost = null, charge = null;
-        if (!"succeeded".equals(callStatus)) {
-            status = "needs_review";
-            cost = 0L;
-            charge = 0L;
+        Priced p = price(callStatus, provider, model, requestedModel, startedAt, input, cached, creation, output,
+                audioSeconds, ttsCharacters);
+        if ("needs_review".equals(p.status())) {
             log.warn("[AI 사용량 확인 필요] callId={} runId={} status={}", callId, call.path("run_id").asText(), callStatus);
-        } else {
-            var prices = jdbc.query("SELECT * FROM ai_model_prices WHERE provider = ? AND model = ? AND effective_from <= ? "
-                    + "ORDER BY effective_from DESC LIMIT 1", (rs, i) -> Map.entry(rs.getTimestamp("effective_from"),
-                    UsagePricing.Price.from(rs)), provider, model, startedAt);
-            var fx = jdbc.queryForList("SELECT * FROM fx_rates WHERE effective_from <= ? ORDER BY effective_from DESC LIMIT 1",
-                    startedAt);
-            var policy = jdbc.queryForList("SELECT * FROM pricing_policies WHERE effective_from <= ? "
-                    + "ORDER BY effective_from DESC LIMIT 1", startedAt);
-            BigDecimal costUsd = prices.isEmpty() ? null : UsagePricing.callCostUsd(prices.getFirst().getValue(),
-                    zero(input), zero(cached), zero(creation), zero(output), audioSeconds, zero(ttsCharacters));
-            if (costUsd != null) {
-                priceFrom = prices.getFirst().getKey();
-                cost = UsagePricing.costUsdMicro(costUsd);
-            }
-            if (costUsd != null && !fx.isEmpty() && !policy.isEmpty()) {
-                status = "charged";
-                fxFrom = (Timestamp) fx.getFirst().get("effective_from");
-                policyFrom = (Timestamp) policy.getFirst().get("effective_from");
-                charge = UsagePricing.chargeKrwMilli(costUsd, (BigDecimal) fx.getFirst().get("krw_per_usd"),
-                        ((Number) policy.getFirst().get("margin_bp")).intValue(),
-                        ((Number) policy.getFirst().get("vat_bp")).intValue());
-            } else {
-                status = "unpriced";
-                log.warn("[AI 단가 없음] callId={} provider={} model={} price={} fx={} policy={}", callId, provider, model,
-                        costUsd != null, !fx.isEmpty(), !policy.isEmpty());
-            }
         }
-        // 확정된 청구는 다시 계산하지 않는다. 단가 없음·확인 필요 행은 단가를 넣은 뒤 다시 수집하면 갱신된다.
+        // 확정된 청구는 다시 계산하지 않는다. 단가 없음·확인 필요 행은 다시 수집하거나 재계산 작업이 갱신한다.
         jdbc.update("""
-                INSERT INTO usage_charges (call_id, user_id, workspace_id, run_id, kind, provider, model, call_status,
+                INSERT INTO usage_charges (call_id, user_id, workspace_id, run_id, kind, provider, model, requested_model,
+                    price_model, model_routing, call_status,
                     input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_tokens,
                     audio_seconds, tts_characters, price_effective_from, fx_effective_from, policy_effective_from,
                     cost_usd_micro, charge_krw_milli, status, started_at)
                 VALUES (?, coalesce((SELECT nullif(user_id, '') FROM ai_task_runs WHERE id = ?), ?),
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (call_id) DO UPDATE SET user_id = EXCLUDED.user_id, workspace_id = EXCLUDED.workspace_id,
                     run_id = EXCLUDED.run_id, kind = EXCLUDED.kind, provider = EXCLUDED.provider, model = EXCLUDED.model,
+                    requested_model = EXCLUDED.requested_model, price_model = EXCLUDED.price_model,
+                    model_routing = EXCLUDED.model_routing,
                     call_status = EXCLUDED.call_status, input_tokens = EXCLUDED.input_tokens,
                     cached_input_tokens = EXCLUDED.cached_input_tokens, cache_creation_tokens = EXCLUDED.cache_creation_tokens,
                     output_tokens = EXCLUDED.output_tokens, reasoning_tokens = EXCLUDED.reasoning_tokens,
@@ -328,17 +313,135 @@ public class UsageChargeService {
                 WHERE usage_charges.status <> 'charged'
                 """, callId, call.path("run_id").asText(null), call.path("user_id").asText("unattributed"),
                 call.path("workspace_id").asText(null),
-                call.path("run_id").asText(null), call.path("kind").asText(null), provider, model, callStatus,
+                call.path("run_id").asText(null), call.path("kind").asText(null), provider, model, requestedModel,
+                p.priceModel(), p.routing(), callStatus,
                 input, cached, creation, output, count(call, "reasoning_tokens"), audioSeconds, ttsCharacters,
-                priceFrom, fxFrom, policyFrom, cost, charge, status, startedAt);
+                p.priceFrom(), p.fxFrom(), p.policyFrom(), p.cost(), p.charge(), p.status(), startedAt);
+    }
+
+    /** 청구 상태·금액과 계산에 쓴 버전. 단가를 찾은 모델 이름({@code priceModel})과 모델 전환 분류를 함께 남긴다. */
+    private record Priced(String status, String priceModel, String routing, Timestamp priceFrom, Timestamp fxFrom,
+                          Timestamp policyFrom, Long cost, Long charge) {
+    }
+
+    /**
+     * 사용량으로 청구 상태와 금액을 정한다. 수집과 재계산이 같은 규칙을 쓴다.
+     *
+     * <ul>
+     *   <li>{@code succeeded}가 아니거나, 입력·출력 토큰·오디오 길이·TTS 글자 수를 모두 모르면 {@code needs_review}(금액 0)다.
+     *       공급사가 usage를 주지 않은 호출을 0원으로 확정하지 않는다(#98).</li>
+     *   <li>단가는 실제 응답 모델 → 요청 모델 순으로 찾고, 둘 다 없으면 {@code unpriced}다(#99).</li>
+     *   <li>단가·환율·정책 버전은 호출 {@code started_at}에 적용 중인 행이다.</li>
+     * </ul>
+     */
+    private Priced price(String callStatus, String provider, String model, String requestedModel, Timestamp startedAt,
+                         Long input, Long cached, Long creation, Long output, BigDecimal audioSeconds, Long ttsCharacters) {
+        String routing = UsagePricing.routing(requestedModel, model);
+        if ("routed".equals(routing) && firstToday("routed|" + provider + "|" + requestedModel + "|" + model)) {
+            log.warn("[AI 모델 전환 감지] provider={} requested={} actual={}", provider, requestedModel, model);
+        }
+        if (!"succeeded".equals(callStatus)
+                || (input == null && output == null && audioSeconds == null && ttsCharacters == null)) {
+            return new Priced("needs_review", null, routing, null, null, null, 0L, 0L);
+        }
+        String priceModel = null;
+        Map.Entry<Timestamp, UsagePricing.Price> price = null;
+        for (String candidate : Stream.of(model, requestedModel).filter(Objects::nonNull).distinct().toList()) {
+            var rows = jdbc.query("SELECT * FROM ai_model_prices WHERE provider = ? AND model = ? AND effective_from <= ? "
+                    + "ORDER BY effective_from DESC LIMIT 1", (rs, i) -> Map.entry(rs.getTimestamp("effective_from"),
+                    UsagePricing.Price.from(rs)), provider, candidate, startedAt);
+            if (!rows.isEmpty()) {
+                priceModel = candidate;
+                price = rows.getFirst();
+                break;
+            }
+        }
+        BigDecimal costUsd = price == null ? null : UsagePricing.callCostUsd(price.getValue(), input, cached, creation,
+                output, audioSeconds, ttsCharacters);
+        if (costUsd == null) {
+            if (firstToday("unpriced|" + provider + "|" + model + "|" + requestedModel)) {
+                log.warn("[AI 단가 미등록] provider={} model={} requested={}", provider, model, requestedModel);
+            }
+            return new Priced("unpriced", null, routing, null, null, null, null, null);
+        }
+        var fx = jdbc.queryForList("SELECT * FROM fx_rates WHERE effective_from <= ? ORDER BY effective_from DESC LIMIT 1",
+                startedAt);
+        var policy = jdbc.queryForList("SELECT * FROM pricing_policies WHERE effective_from <= ? "
+                + "ORDER BY effective_from DESC LIMIT 1", startedAt);
+        if (fx.isEmpty() || policy.isEmpty()) {
+            if (firstToday("versions|" + fx.isEmpty() + "|" + policy.isEmpty())) {
+                log.warn("[AI 환율·정책 없음] fx={} policy={} startedAt={}", !fx.isEmpty(), !policy.isEmpty(), startedAt);
+            }
+            return new Priced("unpriced", priceModel, routing, price.getKey(), null, null,
+                    UsagePricing.costUsdMicro(costUsd), null);
+        }
+        long charge = UsagePricing.chargeKrwMilli(costUsd, (BigDecimal) fx.getFirst().get("krw_per_usd"),
+                ((Number) policy.getFirst().get("margin_bp")).intValue(),
+                ((Number) policy.getFirst().get("vat_bp")).intValue());
+        return new Priced("charged", priceModel, routing, price.getKey(),
+                (Timestamp) fx.getFirst().get("effective_from"), (Timestamp) policy.getFirst().get("effective_from"),
+                UsagePricing.costUsdMicro(costUsd), charge);
+    }
+
+    /** 같은 경고를 프로세스·UTC 날짜마다 한 번만 남긴다. 키는 공급사·모델 조합이라 수가 적다. */
+    private boolean firstToday(String key) {
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        return !today.equals(warnedOn.put(key, today));
+    }
+
+    /**
+     * 최근 90일의 {@code unpriced}·{@code needs_review} 행을 저장된 사용량으로 다시 계산한다(#99). AI 원장을 다시 조회하지
+     * 않는다. {@code charged} 행은 건드리지 않는다. 행 잠금(SKIP LOCKED)으로 여러 Pod가 같은 행을 동시에 계산하지 않고,
+     * 금액이 확정된 실행은 커밋한 뒤 수집과 같은 경로({@link CreditService#settle})로 정산한다.
+     * {@code succeeded}가 아닌 호출은 규칙상 계속 {@code needs_review}라 대상에서 뺀다.
+     */
+    @Scheduled(initialDelay = 180_000, fixedDelayString = "${app.usage-charge.recompute-interval-ms:3600000}")
+    public void recompute() {
+        try {
+            long after = 0;
+            Batch batch;
+            do {
+                long from = after;
+                batch = transaction.execute(tx -> recomputeBatch(from));
+                settleQuietly(batch.runIds());
+                after = batch.lastId();
+            } while (batch.more());
+        } catch (RuntimeException e) {
+            log.warn("[사용 금액 재계산 실패] error={}", e.toString());
+        }
+    }
+
+    private record Batch(Set<String> runIds, long lastId, boolean more) {
+    }
+
+    private Batch recomputeBatch(long after) {
+        var rows = jdbc.queryForList("""
+                SELECT * FROM usage_charges WHERE id > ? AND status IN ('unpriced', 'needs_review')
+                    AND call_status = 'succeeded' AND started_at >= now() - interval '90 days'
+                ORDER BY id LIMIT ? FOR UPDATE SKIP LOCKED
+                """, after, RECOMPUTE_BATCH);
+        Set<String> runIds = new TreeSet<>();
+        long lastId = after;
+        for (var row : rows) {
+            lastId = ((Number) row.get("id")).longValue();
+            Priced p = price((String) row.get("call_status"), (String) row.get("provider"), (String) row.get("model"),
+                    (String) row.get("requested_model"), (Timestamp) row.get("started_at"),
+                    (Long) row.get("input_tokens"), (Long) row.get("cached_input_tokens"),
+                    (Long) row.get("cache_creation_tokens"), (Long) row.get("output_tokens"),
+                    (BigDecimal) row.get("audio_seconds"), (Long) row.get("tts_characters"));
+            jdbc.update("""
+                    UPDATE usage_charges SET status = ?, price_model = ?, model_routing = ?, price_effective_from = ?,
+                        fx_effective_from = ?, policy_effective_from = ?, cost_usd_micro = ?, charge_krw_milli = ?
+                    WHERE id = ?
+                    """, p.status(), p.priceModel(), p.routing(), p.priceFrom(), p.fxFrom(), p.policyFrom(), p.cost(),
+                    p.charge(), lastId);
+            if ("charged".equals(p.status()) && row.get("run_id") != null) runIds.add((String) row.get("run_id"));
+        }
+        return new Batch(runIds, lastId, rows.size() == RECOMPUTE_BATCH);
     }
 
     private static Long count(JsonNode call, String field) {
         return call.path(field).isNumber() ? call.path(field).asLong() : null;
-    }
-
-    private static long zero(Long value) {
-        return value == null ? 0 : value;
     }
 
     /** 사용자 본인의 기간 [from, to) 청구 합계. 워크스페이스를 가로질러 합친다. */
