@@ -222,4 +222,12 @@ class AiTaskResultConsumerTest {
 
         verify(applier).applyPostIngest(org.mockito.ArgumentMatchers.any());
     }
+
+    @Test
+    void convertBatchEventIsAppliedWithoutQueryProjection() throws Exception {
+        consumer.consume("{\"kind\":\"convert_batch\",\"run_id\":\"convert:doc_1:0\",\"status\":\"succeeded\"}");
+
+        verify(applier).applyConvertBatch(any());
+        verifyNoInteractions(queryRunStore, queryEventBroker);
+    }
 }

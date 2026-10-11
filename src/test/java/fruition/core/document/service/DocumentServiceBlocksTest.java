@@ -112,7 +112,9 @@ class DocumentServiceBlocksTest {
     @Mock DocumentWikiRetirement documentWikiRetirement;
     @Mock PipelineWikiStateRequester pipelineWikiStateRequester;
     @Mock fruition.core.document.repository.DocumentConvertQueueRepository convertQueueRepository;
-    @Mock fruition.core.document.repository.ConverterClient converterClient;
+    @Mock fruition.core.document.repository.DocumentConvertBatchStore convertBatchStore;
+    @Mock fruition.core.document.repository.ConvertCommandOutbox convertCommandOutbox;
+    @Mock fruition.core.aitask.repository.PipelineTaskCancellationClient pipelineCancellation;
     @Mock TransactionTemplate transactionTemplate;
     @Mock DocumentEditStateInitializer editStateInitializer;
     @Mock DocumentEditStateRepository editStateRepository;
@@ -145,7 +147,7 @@ class DocumentServiceBlocksTest {
         documentService = new DocumentService(documentRepository, folderRepository,
                 workspaceAccessGuard, minioClient, storageProps,
                 ingestCommandOutbox, pipelineWikiStateRequester,
-                convertQueueRepository, converterClient, transactionTemplate,
+                convertQueueRepository, convertBatchStore, convertCommandOutbox, pipelineCancellation, transactionTemplate,
                 editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository, accessPolicy),
                 postgresDocumentEditStore,
                 contentVersionRepository, markdownDiffService,
@@ -157,7 +159,7 @@ class DocumentServiceBlocksTest {
                 operationRecorder,
                 ingestOperationStarter,
                 workspaceAiModelClient, workspaceSettingsClient, taskWriter, documentWikiRetirement, accessPolicy,
-                java.time.Duration.ofDays(30));
+                java.time.Duration.ofDays(30), 10, 3);
         lenient().when(pipelineWikiStateRequester.documentContext(anyString(), anyString()))
                 .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(), null));
         // 직접 생성·복제·변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.

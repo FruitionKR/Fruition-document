@@ -225,6 +225,14 @@ public class AiTaskResultApplier {
                 event.path("error").asText(null));
     }
 
+    /**
+     * PDF 변환 batch 결과(ai ADR 0034). batch run_id는 document가 등록한 실행이 아니라 변환 run({@code convert:<id>})의
+     * 하위 단위라 {@link #beginResult}를 쓰지 않는다. 멱등·병합은 변환 대기열 행 잠금 안에서 처리한다.
+     */
+    public void applyConvertBatch(JsonNode event) {
+        documentService.applyConvertBatch(event);
+    }
+
     /** post_ingest(품질 평가) 종료 이벤트. 결과는 AI에 남아 있어 사용 금액 정산과 ingest 예약 해제만 한다. */
     @Transactional
     public void applyPostIngest(JsonNode event) {

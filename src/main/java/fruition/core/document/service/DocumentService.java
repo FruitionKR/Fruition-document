@@ -2,6 +2,7 @@ package fruition.core.document.service;
 
 import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.shared.util.StorageProperties;
@@ -56,7 +57,8 @@ import fruition.core.document.dto.DocumentWikiPageRef;
 import fruition.core.document.domain.DocumentConvertQueue;
 import fruition.core.document.exception.DocumentConvertException;
 import fruition.core.document.exception.InvalidDocumentConvertRequestException;
-import fruition.core.document.repository.ConverterClient;
+import fruition.core.document.repository.ConvertCommandOutbox;
+import fruition.core.document.repository.DocumentConvertBatchStore;
 import fruition.core.document.repository.DocumentConvertQueueRepository;
 import fruition.core.document.repository.IngestCommandOutbox;
 import fruition.core.document.repository.DocumentEditStateRepository;
@@ -132,7 +134,11 @@ public class DocumentService {
     private final DocumentWikiRetirement documentWikiRetirement;
     private final PipelineWikiStateRequester pipelineWikiStateRequester;
     private final DocumentConvertQueueRepository convertQueueRepository;
-    private final ConverterClient converterClient;
+    private final DocumentConvertBatchStore convertBatchStore;
+    private final ConvertCommandOutbox convertCommandOutbox;
+    private final fruition.core.aitask.repository.PipelineTaskCancellationClient pipelineCancellation;
+    private final int convertPagesPerBatch;
+    private final int convertMaxInFlight;
     private final WorkspaceAiModelClient workspaceAiModelClient;
     private final WorkspaceSettingsClient workspaceSettingsClient;
     private final TransactionTemplate transactionTemplate;
@@ -163,7 +169,9 @@ public class DocumentService {
                            IngestCommandOutbox ingestCommandOutbox,
                            PipelineWikiStateRequester pipelineWikiStateRequester,
                            DocumentConvertQueueRepository convertQueueRepository,
-                           ConverterClient converterClient,
+                           DocumentConvertBatchStore convertBatchStore,
+                           ConvertCommandOutbox convertCommandOutbox,
+                           fruition.core.aitask.repository.PipelineTaskCancellationClient pipelineCancellation,
                            TransactionTemplate transactionTemplate,
                            DocumentEditStateInitializer editStateInitializer,
                            DocumentEditStateRepository editStateRepository,
@@ -185,7 +193,11 @@ public class DocumentService {
                            fruition.core.document.repository.AiCommandOutboxWriter taskWriter,
                            DocumentWikiRetirement documentWikiRetirement,
                            DocumentAccessPolicy documentAccessPolicy,
-                           @Value("${app.document-trash.retention:30d}") Duration trashRetention) {
+                           @Value("${app.document-trash.retention:30d}") Duration trashRetention,
+                           @Value("${app.convert.pages-per-batch:10}") int convertPagesPerBatch,
+                           @Value("${app.convert.max-in-flight:3}") int convertMaxInFlight) {
+        this.convertPagesPerBatch = convertPagesPerBatch;
+        this.convertMaxInFlight = convertMaxInFlight;
         this.documentAccessPolicy = documentAccessPolicy;
         this.trashRetention = trashRetention;
         this.taskWriter = taskWriter;
@@ -198,7 +210,9 @@ public class DocumentService {
         this.ingestCommandOutbox = ingestCommandOutbox;
         this.pipelineWikiStateRequester = pipelineWikiStateRequester;
         this.convertQueueRepository = convertQueueRepository;
-        this.converterClient = converterClient;
+        this.convertBatchStore = convertBatchStore;
+        this.convertCommandOutbox = convertCommandOutbox;
+        this.pipelineCancellation = pipelineCancellation;
         this.workspaceAiModelClient = workspaceAiModelClient;
         this.workspaceSettingsClient = workspaceSettingsClient;
         this.transactionTemplate = transactionTemplate;
@@ -944,7 +958,7 @@ public class DocumentService {
 
     /**
      * PDF 원본 문서의 Markdown 변환을 요청한다. 변환 결과를 담을 placeholder Markdown 문서를 즉시 만들어
-     * 반환하고, 실제 변환은 convert queue worker가 백그라운드에서 수행한다.
+     * 반환하고, 실제 변환은 첫 batch command를 Kafka로 발행해 converter worker가 비동기로 수행한다.
      */
     @Transactional
     public DocumentUploadResponse convertToMarkdown(
@@ -1008,7 +1022,7 @@ public class DocumentService {
         documentRepository.save(placeholder);
         editStateRepository.save(new DocumentEditState(
                 placeholderId, content.markdown(), content.contentHash(), 1));
-        requestConvertAfterCommit(placeholderId, source.getId());
+        startConvert(placeholder, source);
 
         DocumentUploadResponse response = toUploadResponse(placeholder, true);
         saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
@@ -1041,166 +1055,245 @@ public class DocumentService {
         return "POST:/api/workspaces/" + workspaceId + "/documents/convert-markdown";
     }
 
-    private void requestConvertAfterCommit(String documentId, String sourceDocumentId) {
-        enqueueAfterCommit("문서 변환 큐", documentId,
-                () -> convertQueueRepository.save(new DocumentConvertQueue(documentId, sourceDocumentId)));
+    /**
+     * 변환 요청 트랜잭션 안에서 진행 상태 행을 만들고 첫 batch command를 outbox에 넣는다. 변환 run 등록·예약과
+     * placeholder 생성이 같은 커밋이라 command만 사라지거나 run 없이 command가 나가지 않는다.
+     * 이후 batch는 결과 이벤트({@link #applyConvertBatch})가 진행한다.
+     */
+    private void startConvert(Document placeholder, Document source) {
+        // queue 행이 placeholder를 FK로 참조한다. IDENTITY라 저장 즉시 INSERT되므로 placeholder를 먼저 내보낸다.
+        documentRepository.flush();
+        var queue = convertQueueRepository.save(new DocumentConvertQueue(placeholder.getId(), source.getId()));
+        var model = workspaceAiModelClient.get(placeholder.getWorkspaceId());
+        dispatchConvertBatch(queue, placeholder, normalizeObjectKey(source.getSourceUri()),
+                model.provider(), model.model(), 0, convertPagesPerBatch);
+        queue.dispatchedUpTo(convertPagesPerBatch);
+    }
+
+    private void dispatchConvertBatch(DocumentConvertQueue queue, Document placeholder, String sourceKey,
+                                      String provider, String model, int startPage, int pageCount) {
+        String command = convertCommandOutbox.enqueue(placeholder.getId(), placeholder.getWorkspaceId(),
+                placeholder.getUserId(), sourceKey, startPage, pageCount, provider, model);
+        convertBatchStore.insertDispatched(queue.getId(), startPage, pageCount, command);
+        log.info("[문서 변환 batch 발행] documentId={} startPage={} pageCount={}", placeholder.getId(), startPage, pageCount);
+    }
+
+    private static final java.util.regex.Pattern CONVERT_BATCH_RUN_ID =
+            java.util.regex.Pattern.compile("^convert:([^:]+):(\\d+)$");
+
+    /** 변환 batch 이벤트를 반영한 결과. 트랜잭션이 끝난 뒤에 할 일(취소 요청·자동 ingest)을 담는다. */
+    private record ConvertOutcome(Document placeholder, boolean completed, List<DocumentConvertBatchStore.Batch> toCancel) {}
+
+    /**
+     * {@code ai.task.event}의 {@code convert_batch} 결과를 반영한다. placeholder 삭제·run 종료·중복 이벤트는 로그만 남기고 무시한다.
+     * 성공이면 결과를 기록하고 쪽 순서로 이어진 결과를 모두 병합한 뒤 비어 가는 만큼 다음 batch를 발행하고,
+     * 모두 병합되면 정산하고 자동 ingest를 시작한다. 실패는 변환을 실패로 닫고 남은 batch를 취소한다.
+     */
+    public void applyConvertBatch(JsonNode event) {
+        var matcher = CONVERT_BATCH_RUN_ID.matcher(event.path("run_id").asText(""));
+        if (!matcher.matches()) {
+            log.warn("[문서 변환 이벤트 무시] runId={} reason=invalid_run_id", event.path("run_id").asText(""));
+            return;
+        }
+        String documentId = matcher.group(1);
+        int startPage = Integer.parseInt(matcher.group(2));
+        ConvertOutcome outcome = transactionTemplate.execute(status -> mergeConvertBatch(event, documentId, startPage));
+        if (outcome == null) return;
+        // 남은 batch 취소는 HTTP라 커밋 뒤에 한다. 실패해도 변환은 이미 닫혔고 AI의 batch 마감이 정리한다.
+        for (var batch : outcome.toCancel()) {
+            try {
+                pipelineCancellation.cancel(ConvertCommandOutbox.batchRunId(documentId, batch.startPage()),
+                        outcome.placeholder().getWorkspaceId(), outcome.placeholder().getUserId(),
+                        objectMapper.readTree(batch.command()));
+            } catch (Exception e) {
+                log.warn("[문서 변환 batch 취소 실패] documentId={} startPage={} errorType={}",
+                        documentId, batch.startPage(), e.getClass().getSimpleName());
+            }
+        }
+        if (outcome.completed()) ingestConvertedParts(outcome.placeholder());
+    }
+
+    private ConvertOutcome mergeConvertBatch(JsonNode event, String documentId, int startPage) {
+        Document placeholder = documentRepository.findByIdInActiveWorkspace(documentId).orElse(null);
+        if (placeholder == null) {
+            log.info("[문서 변환 이벤트 무시] documentId={} startPage={} reason=document_not_found", documentId, startPage);
+            return null;
+        }
+        // 같은 문서의 이벤트가 동시에 와도 결과 기록·병합·발행을 한 번에 하나씩 처리한다.
+        var queue = convertQueueRepository.findByDocumentIdForUpdate(documentId).orElse(null);
+        String convertRunId = "convert:" + documentId;
+        if (queue == null || !taskWriter.join(convertRunId)) {
+            log.info("[문서 변환 이벤트 무시] documentId={} startPage={} reason=run_not_active", documentId, startPage);
+            return null;
+        }
+        var batch = convertBatchStore.find(queue.getId(), startPage).orElse(null);
+        if (batch == null || !DocumentConvertBatchStore.DISPATCHED.equals(batch.status())) {
+            log.info("[문서 변환 이벤트 무시] documentId={} startPage={} reason=duplicate", documentId, startPage);
+            return null;
+        }
+        if (!"succeeded".equals(event.path("status").asText())) {
+            return failConvert(queue, placeholder, event.path("error").asText(null), startPage);
+        }
+        JsonNode payload = event.path("payload");
+        int pageEnd = payload.path("page_end").asInt(-1);
+        int total = payload.path("total_pages").asInt(-1);
+        String resultKey = payload.path("result_key").asText("");
+        String expectedKey = "tmp/convert/" + placeholder.getWorkspaceId() + "/" + documentId + "/" + startPage + ".md";
+        int expectedEnd = startPage + batch.pageCount();
+        // 이후 batch를 시작 쪽으로 이어 붙이므로 쪽 범위가 발행한 범위와 맞지 않으면 병합할 수 없다.
+        if (payload.path("page_start").asInt(-1) != startPage + 1 || total < 1 || pageEnd < startPage + 1
+                || pageEnd != Math.min(expectedEnd, total) || !expectedKey.equals(resultKey)) {
+            log.warn("[문서 변환 결과 거절] documentId={} startPage={} reason=invalid_result", documentId, startPage);
+            return failConvert(queue, placeholder, "internal_error", startPage);
+        }
+        convertBatchStore.markReady(queue.getId(), startPage, pageEnd, resultKey);
+        queue.recordTotalPages(total);
+        try {
+            while (queue.getCompletedPages() < total) {
+                var next = convertBatchStore.find(queue.getId(), queue.getCompletedPages()).orElse(null);
+                if (next == null || !DocumentConvertBatchStore.READY.equals(next.status())) break;
+                mergeConvertedBatch(queue, placeholder, readConvertResult(next.resultKey()),
+                        next.startPage() + 1, next.pageEnd(), total);
+                convertBatchStore.delete(queue.getId(), next.startPage());
+            }
+        } catch (DocumentConvertException e) {
+            log.warn("[문서 변환 병합 실패] documentId={} error={}", documentId, e.getMessage());
+            return failConvert(queue, placeholder, "internal_error", -1);
+        }
+        if (queue.getCompletedPages() >= total) {
+            documentRepository.findByIdInActiveWorkspace(documentId).ifPresent(doc -> {
+                var content = editStateRepository.findById(doc.getId()).orElseThrow();
+                if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
+                    doc.completeConvert(content.getContentHash(),
+                            content.getMarkdown().getBytes(StandardCharsets.UTF_8).length, Instant.now());
+                }
+            });
+            // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 푼다. 남겨 두면 그 예약이 가용 잔액을 줄여 ingest를 거절시킨다.
+            taskWriter.completeAndSettle(convertRunId);
+            convertQueueRepository.delete(queue);
+            log.info("[문서 변환 완료] documentId={} totalPages={}", documentId, total);
+            return new ConvertOutcome(placeholder, true, List.of());
+        }
+        // 결과를 기다리는 batch와 순서를 기다리는 결과를 합쳐 최대 maxInFlight개만 문서에 열어 둔다.
+        JsonNode template = readCommand(batch.command());
+        int inFlight = convertBatchStore.count(queue.getId());
+        int nextStart = queue.getNextStartPage();
+        while (inFlight < convertMaxInFlight && nextStart < total) {
+            dispatchConvertBatch(queue, placeholder, template.path("source_key").asText(),
+                    template.path("provider").asText(), template.path("model").asText(), nextStart, batch.pageCount());
+            nextStart += batch.pageCount();
+            inFlight++;
+        }
+        queue.dispatchedUpTo(nextStart);
+        return new ConvertOutcome(placeholder, false, List.of());
+    }
+
+    private JsonNode readCommand(String command) {
+        try {
+            return objectMapper.readTree(command);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("저장된 변환 command를 읽을 수 없습니다.", e);
+        }
     }
 
     /**
-     * convert queue worker 전용. 원본 PDF를 변환기로 변환해 placeholder Markdown 문서 본문에 반영한다.
-     * 실패(변환기 4xx/5xx·timeout·원본 읽기 실패)는 placeholder 문서를 failed로 반영하고 원인을 로그로 남긴다.
+     * 변환을 실패로 닫는다. 문구는 AI가 준 오류 코드로만 만들고 예외 원문은 싣지 않는다.
+     * 결과를 기다리는 나머지 batch는 호출자가 커밋 뒤에 취소한다.
      */
-    void doConvert(long queueId, String documentId, String sourceDocumentId) {
-        Document placeholder = documentRepository.findByIdInActiveWorkspace(documentId).orElse(null);
-        if (placeholder == null) {
-            log.warn("[문서 변환 생략] documentId={} reason=document_not_found", documentId);
-            return;
+    private ConvertOutcome failConvert(DocumentConvertQueue queue, Document placeholder, String code, int failedStartPage) {
+        var toCancel = convertBatchStore.findDispatched(queue.getId()).stream()
+                .filter(batch -> batch.startPage() != failedStartPage).toList();
+        if (placeholder.getPipelineRunId() == null || placeholder.getPipelineRunId().startsWith("convert:")) {
+            placeholder.markProcessingFailed("PDF 변환에 실패했습니다: " + convertFailureMessage(code), Instant.now());
         }
-        if (!taskWriter.active("convert:" + documentId)) return;
-        try {
-            Document source = documentRepository.findById(sourceDocumentId)
-                    .orElseThrow(() -> new DocumentConvertException(
-                            "원본 문서를 찾을 수 없습니다: " + sourceDocumentId));
-            if ("aws".equals(storageProps.getCredentialsMode())) {
-                doConvertBatches(queueId, placeholder, source);
-                return;
-            }
-            byte[] pdfBytes = readOriginalBytes(source);
-            log.info("[문서 변환 시작] documentId={} sourceDocumentId={} pdfByteSize={}",
-                    documentId, sourceDocumentId, pdfBytes.length);
-            WorkspaceAiModelClient.AiModelSelection aiModel =
-                    workspaceAiModelClient.get(placeholder.getWorkspaceId());
-            String markdown = converterClient.convertPdf(
-                    source.getFilename(), pdfBytes, aiModel.provider(), aiModel.model(), convertAttribution(placeholder),
-                    () -> taskWriter.active("convert:" + documentId));
-            boolean autoIngest = autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId());
-            DocumentEditingRules.MarkdownContent content =
-                    applyConvertedMarkdown(queueId, placeholder, markdown, autoIngest);
-            if (content != null) {
-                log.info("[문서 변환 완료] documentId={} sourceDocumentId={} markdownByteSize={}",
-                        documentId, sourceDocumentId, content.bytes().length);
-            }
-        } catch (Exception e) {
-            // DocumentConvertException 메시지에 변환기 상태 코드(422/504/503 등) 원인이 담겨 온다.
-            Instant now = Instant.now();
-            transactionTemplate.execute(status -> {
-                if (!taskWriter.join("convert:" + documentId)) return null;
-                documentRepository.findByIdInActiveWorkspace(documentId).ifPresent(doc -> {
-                    // 일부 분할 문서가 이미 AI 큐에 등록된 뒤의 실패는 진행 중인 AI 상태를 덮어쓰지 않는다.
-                    if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
-                        doc.markProcessingFailed("PDF 변환에 실패했습니다.", now);
-                    }
-                });
-                return null;
-            });
-            transactionTemplate.execute(status -> {
-                convertQueueRepository.findById(queueId).ifPresent(item -> {
-                    item.retry();
-                    convertQueueRepository.save(item);
-                    // 더 시도하지 않으면 실행을 닫아 크레딧 예약을 푼다.
-                    if ("failed".equals(item.getStatus())) taskWriter.fail("convert:" + documentId);
-                });
-                return null;
-            });
-            log.warn("[문서 변환 실패 반영] documentId={} sourceDocumentId={} error={} cause={}",
-                    documentId, sourceDocumentId, e.getMessage(), e.getCause() == null ? "-" : e.getCause().toString());
-        }
+        // 다시 시도하지 않으므로 실행을 닫아 크레딧 예약을 푼다. AI가 batch를 나눠 다시 시도한 뒤의 실패라 문서 단위 재시도는 없다.
+        taskWriter.fail("convert:" + placeholder.getId());
+        convertQueueRepository.delete(queue);
+        log.warn("[문서 변환 실패 반영] documentId={} code={}", placeholder.getId(), code);
+        return new ConvertOutcome(placeholder, false, toCancel);
     }
 
-    /** 변환 요청 때 만든 실행({@code convert:<placeholderId>})과 요청자에게 converter 사용량을 귀속한다(#91). */
-    private static ConverterClient.Attribution convertAttribution(Document placeholder) {
-        return new ConverterClient.Attribution("convert:" + placeholder.getId(), placeholder.getWorkspaceId(),
-                placeholder.getUserId());
-    }
-
-    private void doConvertBatches(long queueId, Document placeholder, Document source) throws Exception {
-        var queue = convertQueueRepository.findById(queueId).orElseThrow();
-        int completed = queue.getCompletedPages();
-        transactionTemplate.execute(status -> {
-            if (taskWriter.join("convert:" + placeholder.getId())) {
-                documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc -> {
-                    if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
-                        doc.updateStatus(DocumentStatus.processing, null, null, null);
-                    }
-                });
-            }
-            return null;
-        });
-        var model = workspaceAiModelClient.get(placeholder.getWorkspaceId());
-        java.util.concurrent.atomic.AtomicLong lastTouch = new java.util.concurrent.atomic.AtomicLong();
-        java.util.function.BooleanSupplier active = () -> {
-            if (!taskWriter.active("convert:" + placeholder.getId())) return false;
-            long now = System.currentTimeMillis();
-            if (now - lastTouch.get() > 10000 && lastTouch.getAndSet(now) != now) {
-                transactionTemplate.execute(status -> {
-                    convertQueueRepository.findById(queueId).ifPresent(item -> { item.heartbeat(); convertQueueRepository.save(item); });
-                    documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc ->
-                            doc.markProcessingHeartbeat("PDF 페이지 묶음 변환 중", Instant.now()));
-                    return null;
-                });
-            }
-            return true;
+    private static String convertFailureMessage(String code) {
+        return switch (code == null ? "" : code) {
+            case "provider_rate_limited" -> "AI 공급사의 요청 한도를 넘었습니다. 잠시 뒤 다시 시도해 주세요.";
+            case "provider_unavailable" -> "AI 공급사가 일시적으로 응답하지 않습니다. 잠시 뒤 다시 시도해 주세요.";
+            case "input_rejected" -> "암호가 걸렸거나 손상되어 변환할 수 없는 PDF입니다.";
+            case "deadline_exceeded" -> "변환 시간이 너무 오래 걸려 중단했습니다.";
+            case "cancelled" -> "변환이 취소되었습니다.";
+            default -> "변환 중 오류가 발생했습니다.";
         };
-        while (active.getAsBoolean()) {
-            // 페이지 묶음마다 새 서명을 발급하므로 수 시간 변환에도 URL이 만료되지 않는다.
-            String url = minioClient.getPresignedObjectUrl(io.minio.GetPresignedObjectUrlArgs.builder()
-                    .bucket(storageProps.getBucket()).object(normalizeObjectKey(source.getSourceUri()))
-                    .method(io.minio.http.Method.GET).expiry(3600).build());
-            var batch = converterClient.convertSourceBatch(url, source.getByteSize(), model.provider(), model.model(),
-                    completed, convertAttribution(placeholder), active);
-            if (batch.page_start() != completed + 1 || (batch.done() && batch.page_end() != batch.total_pages())
-                    || batch.page_end() < completed || batch.total_pages() < batch.page_end()
-                    || (!batch.done() && batch.page_end() == completed)) {
-                throw new DocumentConvertException("변환 페이지 체크포인트가 올바르지 않습니다.");
-            }
-            if (batch.page_end() > completed) saveConvertedBatch(queueId, placeholder, batch);
-            completed = batch.page_end();
-            if (batch.done()) {
-                // 설정·권한은 변환을 요청한 사용자 기준이며, 변환이 끝나는 시점에 판정한다(트랜잭션 밖).
-                boolean autoIngest = autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId());
+    }
+
+    /** 변환이 끝난 문서와 상한을 넘어 생긴 파트를 각각 한 번씩 AI 큐로 보낸다. */
+    private void ingestConvertedParts(Document placeholder) {
+        // 설정·권한은 변환을 요청한 사용자 기준이며, 변환이 끝나는 시점에 판정한다(트랜잭션 밖).
+        boolean autoIngest = autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId());
+        java.util.List<Document> parts = new java.util.ArrayList<>();
+        parts.add(documentRepository.findById(placeholder.getId()).orElseThrow());
+        parts.addAll(documentRepository.findConvertedParts(placeholder.getWorkspaceId(), placeholder.getId()));
+        for (Document part : parts) {
+            try {
                 transactionTemplate.execute(status -> {
                     if (!taskWriter.join("convert:" + placeholder.getId())) return null;
-                    documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc -> {
-                        var content = editStateRepository.findById(doc.getId()).orElseThrow();
-                        if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
-                            doc.completeConvert(content.getContentHash(), content.getMarkdown().getBytes(StandardCharsets.UTF_8).length, Instant.now());
-                        }
-                    });
-                    return null;
-                });
-                // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 푼다. 남겨 두면 그 예약이 가용 잔액을 줄여 ingest를 거절시킨다.
-                transactionTemplate.execute(status -> {
-                    if (taskWriter.join("convert:" + placeholder.getId())) taskWriter.completeAndSettle("convert:" + placeholder.getId());
-                    return null;
-                });
-                // 원본 문서와 상한을 넘어 생긴 파트를 각각 한 번씩 AI 큐로 보낸다.
-                java.util.List<Document> parts = new java.util.ArrayList<>();
-                parts.add(documentRepository.findById(placeholder.getId()).orElseThrow());
-                parts.addAll(documentRepository.findConvertedParts(placeholder.getWorkspaceId(), placeholder.getId()));
-                for (Document part : parts) {
-                    try {
-                    transactionTemplate.execute(status -> {
-                        if (!taskWriter.join("convert:" + placeholder.getId())) return null;
-                        Document doc = documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
-                                .filter(value -> value.getDeletedAt() == null).orElse(null);
-                        if (doc == null) return null;
-                        var content = editStateRepository.findById(doc.getId()).orElseThrow();
-                        recordContentVersion(doc.getId(), content.getRevision(), content.getMarkdown(),
-                                content.getContentHash(), doc.getUserId(), Instant.now());
-                        if (autoIngest && (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:"))) {
-                            doc.reopenForReingest(content.getContentHash(), content.getMarkdown().getBytes(StandardCharsets.UTF_8).length);
-                            enqueueIngest(doc);
-                        }
-                        return null;
-                    });
-                    } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
-                        // 변환은 성공했고 다시 시도하지 않는다. 자동 ingest만 크레딧 부족으로 시작하지 못했음을 문서에 남긴다.
-                        markAutoIngestRejected(part, e);
+                    Document doc = documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
+                            .filter(value -> value.getDeletedAt() == null).orElse(null);
+                    if (doc == null) return null;
+                    var content = editStateRepository.findById(doc.getId()).orElseThrow();
+                    recordContentVersion(doc.getId(), content.getRevision(), content.getMarkdown(),
+                            content.getContentHash(), doc.getUserId(), Instant.now());
+                    if (autoIngest && (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:"))) {
+                        doc.reopenForReingest(content.getContentHash(), content.getMarkdown().getBytes(StandardCharsets.UTF_8).length);
+                        enqueueIngest(doc);
                     }
-                }
-                return;
+                    return null;
+                });
+            } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+                // 변환은 성공했고 다시 시도하지 않는다. 자동 ingest만 크레딧 부족으로 시작하지 못했음을 문서에 남긴다.
+                markAutoIngestRejected(part, e);
             }
         }
+    }
+
+    /** converter worker가 쓴 batch 결과(Markdown, 이미지는 data: URI)를 읽는다. */
+    private String readConvertResult(String resultKey) {
+        try (InputStream stream = minioClient.getObject(GetObjectArgs.builder()
+                .bucket(storageProps.getBucket()).object(resultKey).build())) {
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (io.minio.errors.ErrorResponseException e) {
+            // 결과 object가 없거나 접근할 수 없으면 같은 이벤트를 다시 받아도 같다.
+            throw new DocumentConvertException("변환 결과를 읽지 못했습니다: " + resultKey, e);
+        } catch (Exception e) {
+            // 일시적인 저장소 장애는 이벤트를 다시 받아 재시도한다.
+            throw new IllegalStateException("변환 결과를 읽는 중 오류가 발생했습니다: " + resultKey, e);
+        }
+    }
+
+    /**
+     * 사용자가 placeholder를 삭제하면 변환 run을 닫고 결과를 기다리는 batch를 취소한다. 삭제 뒤 도착한 이벤트는 무시되므로
+     * 취소하지 않으면 쓰이지 않을 모델 비용만 계속 든다.
+     */
+    private void cancelConvertOnDelete(Document placeholder) {
+        var batches = convertBatchStore.findDispatchedByDocument(placeholder.getId());
+        taskWriter.fail("convert:" + placeholder.getId());
+        convertQueueRepository.findByDocumentId(placeholder.getId()).ifPresent(convertQueueRepository::delete);
+        if (batches.isEmpty()) return;
+        Runnable cancel = () -> batches.forEach(batch -> {
+            try {
+                pipelineCancellation.cancel(ConvertCommandOutbox.batchRunId(placeholder.getId(), batch.startPage()),
+                        placeholder.getWorkspaceId(), placeholder.getUserId(), readCommand(batch.command()));
+            } catch (RuntimeException e) {
+                log.warn("[문서 변환 batch 취소 실패] documentId={} startPage={} errorType={}",
+                        placeholder.getId(), batch.startPage(), e.getClass().getSimpleName());
+            }
+        });
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            cancel.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() { cancel.run(); }
+        });
     }
 
     /** 변환 뒤 자동 ingest가 크레딧 부족으로 거절됐을 때 문서에 INSUFFICIENT_CREDIT으로 기록한다. 변환 결과는 그대로 둔다. */
@@ -1215,48 +1308,47 @@ public class DocumentService {
         log.warn("[변환 뒤 자동 ingest 거절] documentId={} reason=INSUFFICIENT_CREDIT", part.getId());
     }
 
-    private void saveConvertedBatch(long queueId, Document parent, ConverterClient.Batch batch) {
-        transactionTemplate.execute(status -> {
-            if (!taskWriter.join("convert:" + parent.getId())) return null;
-            var checkpoint = convertQueueRepository.findById(queueId).orElseThrow();
-            if (checkpoint.getCompletedPages() >= batch.page_end()) return null;
-            // data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다.
-            String markdown = ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitizeConverted(
-                    externalizeConvertedImages(parent, batch.markdown())), batch.page_start());
-            // PDF 하나를 문서 하나로 이어 붙이고, 편집 문서 상한을 넘을 때만 다음 파트 문서로 넘어간다.
-            // 버전 기록은 변환 완료 시 한 번만 남겨 묶음마다 누적 본문이 쌓이지 않게 한다.
-            var parts = documentRepository.findConvertedParts(parent.getWorkspaceId(), parent.getId());
-            int partCount = parts.size();
-            String targetId = parts.isEmpty() ? parent.getId() : parts.getLast().getId();
-            var pieces = ConvertedMarkdownChunks.split(markdown, DocumentEditingRules.MAX_MARKDOWN_BYTES);
-            // 저장은 JDBC라 같은 트랜잭션에서 JPA로 다시 읽으면 갱신 전 값이 온다. 대상 본문·revision은 한 번만 읽고 직접 갱신한다.
-            var state = editStateRepository.findById(targetId).orElseThrow();
-            String existing = CONVERT_PLACEHOLDER_MARKDOWN.equals(state.getMarkdown()) ? "" : state.getMarkdown();
-            long revision = state.getRevision();
-            for (int index = 0; index < pieces.size(); index++) {
-                String merged = existing.isEmpty() ? pieces.get(index) : existing.stripTrailing() + "\n\n" + pieces.get(index);
-                if (merged.getBytes(StandardCharsets.UTF_8).length > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
-                    targetId = createConvertedPart(parent, ++partCount, pieces.get(index));
-                    existing = pieces.get(index);
-                    revision = 1;
-                    continue;
-                }
-                var content = DocumentEditingRules.markdown(merged);
-                var saved = postgresDocumentEditStore.save(parent.getWorkspaceId(), targetId, content.markdown(),
-                        content.contentHash(), revision, "convert:" + queueId + ":" + batch.page_end() + ":" + index,
-                        parent.getUserId(), null);
-                existing = content.markdown();
-                revision = saved.revision();
-                storeMarkdownSource(targetId, content.bytes());
-                // 이미지 참조를 등록해 조회 권한·orphan 수거와 연결한다.
-                assetReferenceSynchronizer.synchronize(targetId, parent.getWorkspaceId(), assetReferenceParser.parse(content.markdown()));
+    /**
+     * batch 하나를 placeholder(와 상한을 넘으면 파트 문서)에 이어 붙이고 체크포인트를 옮긴다.
+     * 호출자의 트랜잭션·queue 행 잠금·run join 안에서 쓴다.
+     */
+    private void mergeConvertedBatch(DocumentConvertQueue queue, Document parent, String batchMarkdown,
+                                     int pageStart, int pageEnd, int totalPages) {
+        if (queue.getCompletedPages() >= pageEnd) return;
+        // data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다.
+        String markdown = ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitizeConverted(
+                externalizeConvertedImages(parent, batchMarkdown)), pageStart);
+        // PDF 하나를 문서 하나로 이어 붙이고, 편집 문서 상한을 넘을 때만 다음 파트 문서로 넘어간다.
+        // 버전 기록은 변환 완료 시 한 번만 남겨 묶음마다 누적 본문이 쌓이지 않게 한다.
+        var parts = documentRepository.findConvertedParts(parent.getWorkspaceId(), parent.getId());
+        int partCount = parts.size();
+        String targetId = parts.isEmpty() ? parent.getId() : parts.getLast().getId();
+        var pieces = ConvertedMarkdownChunks.split(markdown, DocumentEditingRules.MAX_MARKDOWN_BYTES);
+        // 저장은 JDBC라 같은 트랜잭션에서 JPA로 다시 읽으면 갱신 전 값이 온다. 대상 본문·revision은 한 번만 읽고 직접 갱신한다.
+        var state = editStateRepository.findById(targetId).orElseThrow();
+        String existing = CONVERT_PLACEHOLDER_MARKDOWN.equals(state.getMarkdown()) ? "" : state.getMarkdown();
+        long revision = state.getRevision();
+        for (int index = 0; index < pieces.size(); index++) {
+            String merged = existing.isEmpty() ? pieces.get(index) : existing.stripTrailing() + "\n\n" + pieces.get(index);
+            if (merged.getBytes(StandardCharsets.UTF_8).length > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
+                targetId = createConvertedPart(parent, ++partCount, pieces.get(index));
+                existing = pieces.get(index);
+                revision = 1;
+                continue;
             }
-            checkpoint.checkpoint(batch.page_end(), batch.total_pages());
-            convertQueueRepository.save(checkpoint);
-            documentRepository.findById(parent.getId()).ifPresent(doc -> doc.markProcessingHeartbeat(
-                    "PDF " + batch.page_end() + "/" + batch.total_pages() + "페이지 변환 완료", Instant.now()));
-            return null;
-        });
+            var content = DocumentEditingRules.markdown(merged);
+            var saved = postgresDocumentEditStore.save(parent.getWorkspaceId(), targetId, content.markdown(),
+                    content.contentHash(), revision, "convert:" + queue.getId() + ":" + pageEnd + ":" + index,
+                    parent.getUserId(), null);
+            existing = content.markdown();
+            revision = saved.revision();
+            storeMarkdownSource(targetId, content.bytes());
+            // 이미지 참조를 등록해 조회 권한·orphan 수거와 연결한다.
+            assetReferenceSynchronizer.synchronize(targetId, parent.getWorkspaceId(), assetReferenceParser.parse(content.markdown()));
+        }
+        queue.checkpoint(pageEnd, totalPages);
+        documentRepository.findById(parent.getId()).ifPresent(doc -> doc.markProcessingHeartbeat(
+                "PDF " + pageEnd + "/" + totalPages + "페이지 변환 완료", Instant.now()));
     }
 
     private String createConvertedPart(Document parent, int partNumber, String markdown) {
@@ -1328,69 +1420,6 @@ public class DocumentService {
         return output.toString()
                 .replaceAll("!?\\[[^\\]\\n]*\\]\\(" + OVERSIZED_CONVERTED_IMAGE + "\\)", "(이미지가 너무 커서 생략됨)")
                 .replace(OVERSIZED_CONVERTED_IMAGE, "");
-    }
-
-    private byte[] readOriginalBytes(Document source) {
-        if (source.getSourceUri() == null) {
-            throw new DocumentConvertException("원본 파일 경로가 없습니다: " + source.getId());
-        }
-        try (InputStream stream = minioClient.getObject(
-                GetObjectArgs.builder()
-                        .bucket(storageProps.getBucket())
-                        .object(normalizeObjectKey(source.getSourceUri()))
-                        .build())) {
-            return stream.readAllBytes();
-        } catch (Exception e) {
-            throw new DocumentConvertException("원본 PDF를 읽지 못했습니다: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * 변환 Markdown을 placeholder 문서에 반영하고 저장한 본문을 돌려준다(작업이 취소됐으면 null).
-     * 묶음 경로와 같이 data: 이미지를 asset으로 옮겨 크기·해상도 상한을 적용하고, 저장·asset 참조를 한
-     * 트랜잭션에 묶어 저장이 실패하면 옮긴 이미지도 함께 되돌린다.
-     *
-     * <p>시스템 쓰기라 revision 충돌 우려가 없어 base_revision 1로
-     * 저장하고, write_id({@code convert:<queueId>}) 재시도는 PostgreSQL write receipt가 멱등하게 처리한다.
-     */
-    private DocumentEditingRules.MarkdownContent applyConvertedMarkdown(
-            long queueId,
-            Document placeholder,
-            String convertedMarkdown,
-            boolean autoIngest
-    ) {
-        TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
-        return executeWithSaveRetry(() -> saveTransaction.execute(status -> {
-            if (!taskWriter.join("convert:" + placeholder.getId())) return null;
-            DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(
-                    AiMarkdownSanitizer.sanitizeConverted(externalizeConvertedImages(placeholder, convertedMarkdown)));
-            PostgresDocumentEditSaveResult result = postgresDocumentEditStore.save(
-                    placeholder.getWorkspaceId(),
-                    placeholder.getId(),
-                    content.markdown(),
-                    content.contentHash(),
-                    1L,
-                    "convert:" + queueId,
-                    placeholder.getUserId(),
-                    null
-            );
-            if (!result.replayed()) {
-                projectContentVersions(placeholder.getId(), content.markdown(), result, placeholder.getUserId());
-                Instant now = Instant.now();
-                documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc -> {
-                    doc.completeConvert(content.contentHash(), content.bytes().length, now);
-                    // 변환 완료와 같은 트랜잭션에서 outbox에 등록한다. 내용 버전은 위에서 이미 남겼다.
-                    if (autoIngest) {
-                        doc.reopenForReingest(content.contentHash(), content.bytes().length);
-                        enqueueIngest(doc);
-                    }
-                });
-                assetReferenceSynchronizer.synchronize(placeholder.getId(), placeholder.getWorkspaceId(),
-                        assetReferenceParser.parse(content.markdown()));
-            }
-            taskWriter.complete("convert:" + placeholder.getId());
-            return content;
-        }));
     }
 
     /**
@@ -2219,6 +2248,7 @@ public class DocumentService {
             throw conditionalUpdateFailure(workspaceId, documentId);
         }
         documentWikiRetirement.retire(workspaceId, List.of(documentId));
+        if ("convert".equals(document.getOrigin())) cancelConvertOnDelete(document);
 
         DocumentLifecycleResponse response = new DocumentLifecycleResponse(
                 documentId,

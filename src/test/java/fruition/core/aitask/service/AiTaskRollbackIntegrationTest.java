@@ -207,4 +207,40 @@ class AiTaskRollbackIntegrationTest {
         assertThat(cancellation.finalizeEdits(id, "ws", "user")).isEqualTo(events);
     }
 
+
+    @Test
+    void convertCancellationCancelsEveryInFlightBatchWithItsCommandThenClosesTheQueue() throws Exception {
+        String placeholder = "doc_cv_" + UUID.randomUUID().toString().replace("-", "");
+        String source = placeholder + "_src";
+        for (String documentId : new String[]{source, placeholder}) {
+            jdbc.update("INSERT INTO documents(id, byte_size, content_hash, filename, display_name, normalized_filename, "
+                    + "mime_type, status, uploaded_at, updated_at, user_id, workspace_id, current_content_hash, current_version, document_role, sort_order) "
+                    + "VALUES (?, 1, 'h', ?, ?, ?, 'text/markdown', 'processing', now(), now(), 'user', 'ws', 'h', 1, 'EDITABLE', 0)",
+                    documentId, documentId, documentId, documentId);
+        }
+        String id = "convert:" + placeholder;
+        jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, status) VALUES (?, 'ws', 'user', 'convert', 'cancel_requested')", id);
+        long queueId = jdbc.queryForObject("INSERT INTO document_convert_queue(document_id, source_document_id, status, created_at) "
+                + "VALUES (?, ?, 'processing', now()) RETURNING id", Long.class, placeholder, source);
+        var commands = new java.util.HashMap<Integer, com.fasterxml.jackson.databind.JsonNode>();
+        for (int startPage : new int[]{10, 20, 30}) {
+            var command = mapper.createObjectNode().put("run_id", id + ":" + startPage).put("kind", "convert_batch")
+                    .put("start_page", startPage);
+            commands.put(startPage, command);
+            jdbc.update("INSERT INTO document_convert_batches(queue_id, start_page, page_count, command, status, page_end, result_key) "
+                    + "VALUES (?, ?, 10, CAST(? AS jsonb), ?, ?, ?)", queueId, startPage, command.toString(),
+                    startPage == 30 ? "ready" : "dispatched", startPage == 30 ? 40 : null, startPage == 30 ? "tmp/convert/ws/x/30.md" : null);
+        }
+
+        cancellation.resume();
+
+        // 결과를 기다리는 batch만 각자 발행한 command로 취소한다. 이미 결과가 온 batch는 취소하지 않는다.
+        org.mockito.Mockito.verify(pipeline).cancel(id + ":10", "ws", "user", commands.get(10));
+        org.mockito.Mockito.verify(pipeline).cancel(id + ":20", "ws", "user", commands.get(20));
+        org.mockito.Mockito.verify(pipeline, org.mockito.Mockito.never()).cancel(org.mockito.ArgumentMatchers.eq(id + ":30"),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, id)).isEqualTo("cancelled");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM document_convert_queue WHERE id = ?", Integer.class, queueId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM document_convert_batches WHERE queue_id = ?", Integer.class, queueId)).isZero();
+    }
 }

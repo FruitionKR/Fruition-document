@@ -89,6 +89,14 @@ public class AiCommandOutboxWriter {
         return true;
     }
 
+    /**
+     * 이미 등록·예약된 부모 실행에 딸린 command를 outbox에만 저장한다. {@link #enqueue}와 달리 이 runId로
+     * 실행 행을 만들거나 크레딧을 예약하지 않는다(PDF 변환 batch는 변환 run 하나가 예약한다).
+     */
+    public void enqueueJoined(String runId, String topic, String messageKey, String payload) {
+        repository.save(new AiCommandOutbox(UUID.randomUUID().toString(), runId, topic, messageKey, payload));
+    }
+
     public void enqueue(String runId, String topic, String messageKey, Object command) {
         try {
             var payload = objectMapper.valueToTree(command);
