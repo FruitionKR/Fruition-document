@@ -64,6 +64,18 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             @Param("selectionMode") String selectionMode
     );
 
+    /**
+     * 편입할 수 있는 활성 문서가 둘 이상인 표시 이름만 골라낸다. 위키 소스 제목에 폴더 경로를 붙일지 한 번에 판단한다.
+     * PDF 원본은 변환본과 표시 이름이 같고 스킬 참고 문서는 트리에 보이지 않으므로 겹침으로 세지 않는다.
+     */
+    @Query("SELECT d.displayName FROM Document d WHERE d.workspaceId = :workspaceId "
+            + "AND d.deletedAt IS NULL AND d.displayName IN :names "
+            + "AND d.documentRole = fruition.core.document.domain.DocumentRole.EDITABLE "
+            + "AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
+            + "GROUP BY d.displayName HAVING COUNT(d) > 1")
+    List<String> findDuplicatedDisplayNames(@Param("workspaceId") String workspaceId,
+                                            @Param("names") java.util.Collection<String> names);
+
     /** 완료 후처리(reconcile) 대상: 아직 후처리 안 된(reconciled_at IS NULL) origin·status 문서. */
     List<Document> findAllByOriginAndStatusAndReconciledAtIsNull(String origin, DocumentStatus status);
 

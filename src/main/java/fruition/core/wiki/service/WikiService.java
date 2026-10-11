@@ -36,19 +36,22 @@ public class WikiService {
     private final WikiPageVersionRepository versionRepository;
     private final MarkdownDiffService markdownDiffService;
     private final WikiObjectReader wikiObjectReader;
+    private final WikiSourceTitleResolver sourceTitleResolver;
 
     public WikiService(DocumentRepository documentRepository,
                        WorkspaceAccessGuard workspaceAccessGuard,
                        PipelineWikiStateRequester pipelineWikiStateRequester,
                        WikiPageVersionRepository versionRepository,
                        MarkdownDiffService markdownDiffService,
-                       WikiObjectReader wikiObjectReader) {
+                       WikiObjectReader wikiObjectReader,
+                       WikiSourceTitleResolver sourceTitleResolver) {
         this.documentRepository = documentRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.pipelineWikiStateRequester = pipelineWikiStateRequester;
         this.versionRepository = versionRepository;
         this.markdownDiffService = markdownDiffService;
         this.wikiObjectReader = wikiObjectReader;
+        this.sourceTitleResolver = sourceTitleResolver;
     }
 
     private void verifyWorkspaceOwnership(String workspaceId, String userId) {
@@ -67,11 +70,13 @@ public class WikiService {
                 .toList();
         Map<String, Document> docMap = documentRepository.findAllById(documentIds).stream()
                 .collect(Collectors.toMap(Document::getId, d -> d));
+        Map<String, String> titles = sourceTitleResolver.titles(workspaceId, docMap.values());
         List<WikiGraphNode> nodes = graph.nodes().stream().map(node -> {
             var source = node.sourceDocument();
             Document document = source == null ? null : docMap.get(source.id());
+            String title = source == null ? node.title() : titles.getOrDefault(source.id(), node.title());
             return new WikiGraphNode(
-                    node.id(), node.pageType(), node.title(), node.slug(), node.summary(), node.status(),
+                    node.id(), node.pageType(), title, node.slug(), node.summary(), node.status(),
                     source == null ? null : new WikiGraphNode.SourceDocRef(
                             source.id(), document == null ? null : document.getFilename()));
         }).toList();
@@ -85,6 +90,11 @@ public class WikiService {
         Map<String, Document> documents = documentRepository.findAllById(
                         page.sourceDocuments().stream().map(WikiPageSourceDoc::id).toList()).stream()
                 .collect(Collectors.toMap(Document::getId, document -> document));
+        String title = page.title();
+        if ("source".equalsIgnoreCase(page.pageType()) && !page.sourceDocuments().isEmpty()) {
+            title = sourceTitleResolver.titles(workspaceId, documents.values())
+                    .getOrDefault(page.sourceDocuments().get(0).id(), title);
+        }
         List<WikiPageSourceDoc> sourceDocuments = page.sourceDocuments().stream()
                 .map(source -> {
                     Document document = documents.get(source.id());
@@ -99,7 +109,7 @@ public class WikiService {
 
         WikiPageVersion latest = versionRepository.findTopByIdPageIdOrderByIdRevisionDesc(id).orElse(null);
         return new WikiPageDetailResponse(
-                page.id(), page.pageType(), page.title(), page.slug(), page.summary(),
+                page.id(), page.pageType(), title, page.slug(), page.summary(),
                 page.markdownUri(), markdownOf(workspaceId, page, latest), page.status(), page.createdAt(),
                 latest == null ? null : latest.getRevision(), page.updatedAt(),
                 sourceDocuments,

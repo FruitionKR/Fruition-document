@@ -3,12 +3,14 @@ package fruition.core.wiki.service;
 import fruition.core.aihistory.exception.WikiObjectReadException;
 import fruition.core.aihistory.service.WikiObjectReader;
 import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.document.domain.Document;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.service.MarkdownDiffService;
 import fruition.core.wiki.domain.WikiPageVersion;
 import fruition.core.wiki.dto.WikiGraphNode;
 import fruition.core.wiki.dto.WikiGraphResponse;
 import fruition.core.wiki.dto.WikiPageDetailResponse;
+import fruition.core.wiki.dto.WikiPageSourceDoc;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.wiki.repository.WikiPageVersionRepository;
@@ -20,10 +22,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -37,12 +42,13 @@ class WikiServiceTest {
     @Mock WikiPageVersionRepository versionRepository;
     @Mock MarkdownDiffService markdownDiffService;
     @Mock WikiObjectReader wikiObjectReader;
+    @Mock WikiSourceTitleResolver sourceTitleResolver;
     WikiService service;
 
     @BeforeEach
     void setUp() {
         service = new WikiService(documentRepository, workspaceAccessGuard,
-                stateRequester, versionRepository, markdownDiffService, wikiObjectReader);
+                stateRequester, versionRepository, markdownDiffService, wikiObjectReader, sourceTitleResolver);
     }
 
     @Test
@@ -117,6 +123,49 @@ class WikiServiceTest {
 
         assertThat(detail.id()).isEqualTo("wp_1");
         assertThat(detail.markdown()).isNull();
+    }
+
+    @Test
+    void graphReplacesSourceTitleButKeepsConceptAndMissingDocumentTitles() {
+        Document doc = new Document("doc_1", "ws_1", "user_1", "새이름.pdf", "application/pdf", 1, "k", "h");
+        WikiGraphResponse graph = new WikiGraphResponse(List.of(
+                new WikiGraphNode("wp_c", "concept", "개념", "c", null, "active", null),
+                new WikiGraphNode("wp_s", "source", "옛이름", "doc_1", null, "active",
+                        new WikiGraphNode.SourceDocRef("doc_1", null)),
+                new WikiGraphNode("wp_m", "source", "삭제된문서", "doc_2", null, "active",
+                        new WikiGraphNode.SourceDocRef("doc_2", null))), List.of());
+        when(stateRequester.graph("ws_1")).thenReturn(graph);
+        when(documentRepository.findAllById(List.of("doc_1", "doc_2"))).thenReturn(List.of(doc));
+        when(sourceTitleResolver.titles(eq("ws_1"), any())).thenReturn(Map.of("doc_1", "새이름 · 최상위"));
+
+        List<WikiGraphNode> nodes = service.findGraph("ws_1", "user_1").nodes();
+
+        assertThat(nodes).extracting(WikiGraphNode::title).containsExactly("개념", "새이름 · 최상위", "삭제된문서");
+    }
+
+    @Test
+    void detailReplacesOnlySourcePageTitle() {
+        Document doc = new Document("doc_1", "ws_1", "user_1", "새이름.pdf", "application/pdf", 1, "k", "h");
+        WikiPageDetailResponse base = page("# 본문", null);
+        WikiPageDetailResponse source = withType(base, "source", List.of(new WikiPageSourceDoc("doc_1", null, null, "source", 1)));
+        WikiPageDetailResponse concept = withType(base, "concept", List.of(new WikiPageSourceDoc("doc_1", null, null, "support", 1)));
+        when(documentRepository.findAllById(List.of("doc_1"))).thenReturn(List.of(doc));
+        when(sourceTitleResolver.titles(eq("ws_1"), any())).thenReturn(Map.of("doc_1", "새이름"));
+
+        when(stateRequester.page("ws_1", "wp_1")).thenReturn(Optional.of(source));
+        assertThat(service.findById("ws_1", "user_1", "wp_1").title()).isEqualTo("새이름");
+
+        when(stateRequester.page("ws_1", "wp_1")).thenReturn(Optional.of(concept));
+        assertThat(service.findById("ws_1", "user_1", "wp_1").title()).isEqualTo("제목");
+
+        when(sourceTitleResolver.titles(eq("ws_1"), any())).thenReturn(Map.of());
+        when(stateRequester.page("ws_1", "wp_1")).thenReturn(Optional.of(source));
+        assertThat(service.findById("ws_1", "user_1", "wp_1").title()).isEqualTo("제목");
+    }
+
+    private static WikiPageDetailResponse withType(WikiPageDetailResponse p, String type, List<WikiPageSourceDoc> docs) {
+        return new WikiPageDetailResponse(p.id(), type, p.title(), p.slug(), p.summary(), p.markdownUri(), p.markdown(),
+                p.status(), p.createdAt(), p.revision(), p.updatedAt(), docs, p.relatedPages());
     }
 
     static WikiPageDetailResponse page(String markdown, String markdownUri) {

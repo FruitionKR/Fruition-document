@@ -47,7 +47,8 @@ class WikiServiceMarkdownObjectIntegrationTest {
             var versionRepository = mock(WikiPageVersionRepository.class);
             var service = new WikiService(mock(DocumentRepository.class), mock(WorkspaceAccessGuard.class),
                     stateRequester, versionRepository,
-                    mock(MarkdownDiffService.class), new WikiObjectReader(storage, props));
+                    mock(MarkdownDiffService.class), new WikiObjectReader(storage, props),
+                    mock(WikiSourceTitleResolver.class));
             when(stateRequester.page("ws_1", "wp_1")).thenReturn(Optional.of(WikiServiceTest.page(
                     "", "s3://wiki-markdown-test/wiki/ws_1/pages/wp_1/ops/op_0.md")));
             when(versionRepository.findTopByIdPageIdOrderByIdRevisionDesc("wp_1")).thenReturn(Optional.empty());
