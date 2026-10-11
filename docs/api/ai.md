@@ -694,7 +694,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 | 입력 | **Path** — `workspace_id`: `string`, `operation_id`: `string`<br>**Body** — `RestoreExecuteRequest` |
 | 출력 | `200` 문서 편집 복구 즉시 완료 — `RestoreExecuteResponse`<br>`202` Wiki 복구 queued 등록 — `RestoreExecuteResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 되돌릴 수 없는 작업이거나 대상이 없음 — `ErrorResponse`<br>`404` 작업 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 미리보기 이후 대상이 변경됨 — `ErrorResponse` |
+| 주요 오류 | `400` 되돌릴 수 없는 작업이거나 대상이 없음 — `ErrorResponse`<br>`403` 문서 편집 복구에서 실행자에게 해당 문서의 편집 권한이 없음(`DOCUMENT_WRITE_FORBIDDEN`) — `ErrorResponse`<br>`404` 작업 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 미리보기 이후 대상이 변경됨 — `ErrorResponse`<br>`423` 문서 편집 복구에서 다른 사용자가 편집 잠금을 쥐고 있음(`DOCUMENT_EDIT_LOCKED`) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -754,8 +754,10 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 되돌릴 수 없는 작업이거나 대상이 없음 | `ErrorResponse` |
+| `403` | 문서 편집 복구에서 실행자에게 해당 문서의 편집 권한이 없음(`DOCUMENT_WRITE_FORBIDDEN`). 문서·폴더 권한이 view이고 실행자가 문서 소유자·OWNER가 아닌 경우 | `ErrorResponse` |
 | `404` | 작업 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 미리보기 이후 대상이 변경됨 | `ErrorResponse` |
+| `423` | 문서 편집 복구에서 다른 사용자가 편집 잠금을 쥐고 있음(`DOCUMENT_EDIT_LOCKED`) | `ErrorResponse` |
 
 ```json
 {
