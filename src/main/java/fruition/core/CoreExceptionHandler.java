@@ -11,7 +11,6 @@ import fruition.core.aihistory.exception.OperationPayloadConflictException;
 import fruition.core.aihistory.exception.OperationNotFoundException;
 import fruition.core.aihistory.exception.RestorePreviewStaleException;
 import fruition.core.aihistory.exception.WikiObjectReadException;
-import fruition.core.wikischema.exception.PipelineWikiSchemaException;
 import fruition.core.skill.exception.PipelineSkillException;
 import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
 import fruition.core.wikimaintenance.exception.PipelineWikiMaintenanceException;
@@ -47,12 +46,10 @@ import fruition.core.chat.exception.EmptyChatWikiExportException;
 import fruition.core.chat.exception.InvalidChatWikiExportRequestException;
 import fruition.core.query.exception.PipelineQueryException;
 import fruition.core.query.exception.QueryRunNotFoundException;
-import fruition.core.wiki.exception.InvalidWikiPageTitleException;
 import fruition.core.wiki.exception.PipelineWikiPageException;
 import fruition.core.authz.WorkspaceNotFoundException;
 import fruition.core.notification.exception.NotificationNotFoundException;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
-import fruition.core.wiki.exception.WikiPageSlugConflictException;
 import fruition.core.wiki.exception.WikiPageVersionNotFoundException;
 import fruition.shared.util.BaseExceptionHandler;
 import fruition.shared.util.ErrorResponse;
@@ -146,19 +143,6 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         logHandled(e, HttpStatus.NOT_FOUND, "AGENT_RUN_NOT_FOUND");
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("AGENT_RUN_NOT_FOUND", e.getMessage()));
-    }
-
-    @ExceptionHandler(PipelineWikiSchemaException.class)
-    public ResponseEntity<?> handlePipelineWikiSchema(PipelineWikiSchemaException e) {
-        if (e.getResponseBody() != null && !e.getResponseBody().isBlank()) {
-            logHandled(e, e.getHttpStatus(), PIPELINE_RELAYED);
-            return ResponseEntity.status(e.getHttpStatus())
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(e.getResponseBody());
-        }
-        logHandled(e, e.getHttpStatus(), "WIKI_SCHEMA_PIPELINE_UNAVAILABLE");
-        return ResponseEntity.status(e.getHttpStatus())
-                .body(ErrorResponse.of("WIKI_SCHEMA_PIPELINE_UNAVAILABLE", e.getMessage()));
     }
 
     @ExceptionHandler(PipelineWikiMaintenanceException.class)
@@ -461,22 +445,6 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("WIKI_PAGE_NOT_FOUND", "Wiki 페이지를 찾을 수 없습니다."));
-    }
-
-    @ExceptionHandler(InvalidWikiPageTitleException.class)
-    public ResponseEntity<ErrorResponse> handleInvalidWikiPageTitle(InvalidWikiPageTitleException e) {
-        logHandled(e, HttpStatus.BAD_REQUEST, "INVALID_WIKI_PAGE_TITLE");
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of("INVALID_WIKI_PAGE_TITLE", e.getMessage()));
-    }
-
-    @ExceptionHandler(WikiPageSlugConflictException.class)
-    public ResponseEntity<ErrorResponse> handleWikiPageSlugConflict(WikiPageSlugConflictException e) {
-        logHandled(e, HttpStatus.CONFLICT, "WIKI_PAGE_SLUG_CONFLICT");
-        return ResponseEntity
-                .status(HttpStatus.CONFLICT)
-                .body(ErrorResponse.of("WIKI_PAGE_SLUG_CONFLICT", e.getMessage()));
     }
 
     @ExceptionHandler(DuplicateDocumentException.class)

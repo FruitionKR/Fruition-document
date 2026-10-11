@@ -13,13 +13,11 @@ import fruition.core.wiki.exception.WikiPageVersionNotFoundException;
 import fruition.core.wiki.repository.WikiPageVersionRepository;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
 import fruition.core.wiki.dto.*;
-import fruition.core.wiki.repository.PipelineWikiPageRequester;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.authz.WorkspaceAccessGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -34,7 +32,6 @@ public class WikiService {
 
     private final DocumentRepository documentRepository;
     private final WorkspaceAccessGuard workspaceAccessGuard;
-    private final PipelineWikiPageRequester pipelineWikiPageRequester;
     private final PipelineWikiStateRequester pipelineWikiStateRequester;
     private final WikiPageVersionRepository versionRepository;
     private final MarkdownDiffService markdownDiffService;
@@ -42,14 +39,12 @@ public class WikiService {
 
     public WikiService(DocumentRepository documentRepository,
                        WorkspaceAccessGuard workspaceAccessGuard,
-                       PipelineWikiPageRequester pipelineWikiPageRequester,
                        PipelineWikiStateRequester pipelineWikiStateRequester,
                        WikiPageVersionRepository versionRepository,
                        MarkdownDiffService markdownDiffService,
                        WikiObjectReader wikiObjectReader) {
         this.documentRepository = documentRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
-        this.pipelineWikiPageRequester = pipelineWikiPageRequester;
         this.pipelineWikiStateRequester = pipelineWikiStateRequester;
         this.versionRepository = versionRepository;
         this.markdownDiffService = markdownDiffService;
@@ -143,13 +138,6 @@ public class WikiService {
         }
         log.warn("[Wiki 본문 없음] pageId={}", page.id());
         return null;
-    }
-
-    @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    public WikiPageRenameResponse rename(String workspaceId, String userId, String wikiPageId,
-                                         WikiPageRenameRequest request) {
-        verifyWorkspaceOwnership(workspaceId, userId);
-        return pipelineWikiPageRequester.rename(workspaceId, userId, wikiPageId, request);
     }
 
     /**
