@@ -778,7 +778,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: "실행자에게 문서 편집 권한이 없음(문서 편집 복구, DOCUMENT_WRITE_FORBIDDEN)"
+          description: "실행자에게 문서 편집 권한이 없음(문서 편집 복구, DOCUMENT_WRITE_FORBIDDEN), 또는 위키 작업(ingest·lint)인데 작업 실행자도 OWNER도 아니고 wiki.restore 권한이 없음(WORKSPACE_PERMISSION_REQUIRED)"
         "404":
           content:
             '*/*':
@@ -824,6 +824,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/RestorePreviewResponse"
           description: 계산 성공
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 위키 작업(ingest·lint)인데 실행자도 OWNER도 아니고 wiki.restore 권한이 없음(WORKSPACE_PERMISSION_REQUIRED)
         "404":
           content:
             '*/*':
@@ -1418,7 +1424,7 @@ paths:
       tags:
       - Documents
     post:
-      description: "PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다."
+      description: "PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_on_upload가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다."
       operationId: upload
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -2008,6 +2014,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: PDF 원본 문서가 아니거나 잘못된 Idempotency-Key
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 남이 올린 PDF인데 document.convert 권한이 없음(WORKSPACE_PERMISSION_REQUIRED). 업로더 본인과 OWNER는 항상 가능
         "404":
           content:
             '*/*':
@@ -2306,7 +2318,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 문서 소유자가 아님
+          description: "wiki.ingest 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능) 또는 문서 편집 권한 없음"
         "404":
           content:
             '*/*':
@@ -3988,6 +4000,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: "AI가 거절한 요청. code: SKILL_INTENT_AMBIGUOUS(작업을 특정할 수 없음), SKILL_INTENT_UNSUPPORTED(지원하지 않는 작업), SKILL_INSTRUCTION_INVALID(지침 길이·이름 형식·참조 문서 오류), SKILL_REQUEST_REJECTED(그 밖의 거절)"
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다"
         "404":
           content:
             '*/*':
@@ -4065,6 +4083,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 잘못된 Skill 정의
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다"
         "404":
           content:
             '*/*':
@@ -4126,6 +4150,12 @@ paths:
       responses:
         "204":
           description: 삭제 성공
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다"
         "404":
           content:
             '*/*':
@@ -4233,6 +4263,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 잘못된 Skill 정의
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다"
         "404":
           content:
             '*/*':
@@ -4299,6 +4335,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/SkillResponse"
           description: 비활성화 성공
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다. 활성 상태는 워크스페이스 전체에 적용된다"
         "404":
           content:
             '*/*':
@@ -4351,6 +4393,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/SkillResponse"
           description: 활성화 성공
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다. 활성 상태는 워크스페이스 전체에 적용된다"
         "404":
           content:
             '*/*':
@@ -4874,6 +4922,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 잘못된 검사 옵션
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "wiki.lint 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). dry_run도 같다"
         "404":
           content:
             '*/*':

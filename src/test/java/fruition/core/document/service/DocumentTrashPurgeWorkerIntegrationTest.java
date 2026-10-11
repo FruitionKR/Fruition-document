@@ -104,7 +104,7 @@ class DocumentTrashPurgeWorkerIntegrationTest {
     void trashListShowsPurgeTime() {
         Instant deletedAt = now.minus(Duration.ofDays(3));
         insertDocument(null, deletedAt);
-        redis.opsForValue().set("authz:role:" + workspace + ":" + user, "OWNER");
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":" + user, "{\"role\":\"OWNER\",\"permissions\":[]}");
 
         assertThat(documentService.trash(workspace, user).documents())
                 .singleElement()

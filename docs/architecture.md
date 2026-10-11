@@ -8,7 +8,7 @@ Document는 문서·폴더·채팅·Wiki 공개 API와 AI 요청 중계를 담�
 - `api-specs/openapi.yaml`: HTTP 계약
 - `scripts/sql/`: 문서 DB 전용 점검 SQL
 
-워크스페이스 권한은 Access의 내부 API·Redis projection으로 확인합니다. AI 작업은 HTTP 또는 Kafka로 AI에 전달하며 PDF 변환은 converter를 호출합니다. 실행 상태·문서 변경·outbox는 core_db에서 관리하고 AI의 Wiki 현재 상태·embedding·checkpoint는 AI가 소유합니다.
+워크스페이스 권한은 Access의 내부 API·Redis projection으로 확인합니다. Redis 값(`authz:role:v2:{workspace_id}:{user_id}`, TTL 300초)은 `{"role":"MEMBER","permissions":["wiki.ingest"]}` JSON이고, 옛 키(`authz:role:{workspace_id}:{user_id}`, 평문 역할)는 구버전 pod 전용이라 읽지도 쓰지도 않습니다. 읽을 수 없거나 알 수 없는 역할이면 miss로 보고 내부 API 결과로 덮어씁니다. 위키 편입·정리, 팀 Skill 관리, 남의 위키 작업 복구, 남의 PDF 변환은 이 권한 항목으로 판정하고 없으면 `403 WORKSPACE_PERMISSION_REQUIRED`입니다. 업로드·변환 뒤 자동 편입은 워크스페이스 설정과 요청자의 `wiki.ingest`가 모두 있을 때만 합니다. 결정 근거: [ADR-0030](adr/0030-wiki-permission-enforcement.md). AI 작업은 HTTP 또는 Kafka로 AI에 전달하며 PDF 변환은 converter를 호출합니다. 실행 상태·문서 변경·outbox는 core_db에서 관리하고 AI의 Wiki 현재 상태·embedding·checkpoint는 AI가 소유합니다.
 
 서비스 간 메시지·복구·권한 경계는 [공통 아키텍처](https://github.com/FruitionKR/Fruition-flatform/blob/main/docs/architecture.md), 공개 endpoint는 [API 문서](api/README.md)를 따릅니다.
 

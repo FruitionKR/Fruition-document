@@ -66,7 +66,7 @@ class MeetingLiveIntegrationTest {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"OWNER\",\"permissions\":[]}");
         FakeAi.mode = "normal";
     }
 
@@ -180,7 +180,7 @@ class MeetingLiveIntegrationTest {
     void otherUserCannotSeeMeetingAndDocumentMustBeOwned() throws Exception {
         String meetingId = createMeeting();
         String other = "user_" + UUID.randomUUID().toString().substring(0, 8);
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + other, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + other, "{\"role\":\"OWNER\",\"permissions\":[]}");
 
         mockMvc.perform(get(base() + "/" + meetingId)
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(other, other + "@example.com")))

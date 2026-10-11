@@ -33,7 +33,7 @@ public class WorkspaceAiModelClient {
         this.restClient = restClient;
     }
 
-    private static RestClient buildRestClient(String accessBaseUrl, String internalToken) {
+    static RestClient buildRestClient(String accessBaseUrl, String internalToken) {
         var factory = new JdkClientHttpRequestFactory(HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(CONNECT_TIMEOUT)

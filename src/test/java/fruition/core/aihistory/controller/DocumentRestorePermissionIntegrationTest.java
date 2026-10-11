@@ -116,7 +116,7 @@ class DocumentRestorePermissionIntegrationTest {
     }
 
     private void role(String userId, String role) {
-        redis.opsForValue().set("authz:role:" + workspace + ":" + userId, role);
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":" + userId, "{\"role\":\"" + role + "\",\"permissions\":[]}");
     }
 
     private String bearer(String userId) {

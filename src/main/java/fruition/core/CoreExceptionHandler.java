@@ -50,6 +50,7 @@ import fruition.core.query.exception.QueryRunNotFoundException;
 import fruition.core.wiki.exception.InvalidWikiPageTitleException;
 import fruition.core.wiki.exception.PipelineWikiPageException;
 import fruition.core.authz.WorkspaceNotFoundException;
+import fruition.core.authz.WorkspacePermissionRequiredException;
 import fruition.core.notification.exception.NotificationNotFoundException;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
 import fruition.core.wiki.exception.WikiPageSlugConflictException;
@@ -521,6 +522,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("WORKSPACE_NOT_FOUND", e.getMessage()));
+    }
+
+    @ExceptionHandler(WorkspacePermissionRequiredException.class)
+    public ResponseEntity<ErrorResponse> handleWorkspacePermissionRequired(WorkspacePermissionRequiredException e) {
+        logHandled(e, HttpStatus.FORBIDDEN, "WORKSPACE_PERMISSION_REQUIRED");
+        return ResponseEntity
+                .status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of("WORKSPACE_PERMISSION_REQUIRED", e.getMessage()));
     }
 
     @ExceptionHandler(WorkspaceAiModelForbiddenException.class)

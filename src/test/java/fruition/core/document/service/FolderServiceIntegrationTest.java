@@ -66,7 +66,7 @@ class FolderServiceIntegrationTest {
 
     /** guard가 access DB 대신 Redis projection을 읽으므로 멤버십을 projection에도 심는다. */
     private void seedAuthzProjection(String memberId, String role) {
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + memberId, role);
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + memberId, "{\"role\":\"" + role + "\",\"permissions\":[]}");
     }
 
     @Test

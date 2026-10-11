@@ -89,7 +89,6 @@ public class RestoreExecuteService {
     public RestoreExecuteResponse execute(String workspaceId, String userId,
                                           String operationId, String previewToken) {
         OperationLog target = previewService.loadOperation(workspaceId, userId, operationId);
-        validator.requireRestorable(target);
         // 인가·대상 유형을 확인한 뒤 claim을 먼저 본다. 이후 상태가 바뀌어도 재실행은 중복이다.
         String restoreTokenHash = tokenHash(previewToken);
         if (lifecycle.isClaimed(target.getOperationId(), restoreTokenHash)) {

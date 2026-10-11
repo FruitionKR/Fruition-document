@@ -64,6 +64,25 @@ class WikiMaintenanceServiceTest {
     }
 
     @Test
+    void lint_withoutWikiLintPermission_isForbiddenEvenForDryRun() {
+        doThrow(new fruition.core.authz.WorkspacePermissionRequiredException("wiki.lint"))
+                .when(workspaceAccessGuard).requirePermission("ws_1", "user_1", "wiki.lint");
+
+        assertThatThrownBy(() -> service.lint("ws_1", "user_1", new WikiLintRequest(true, false)))
+                .isInstanceOf(fruition.core.authz.WorkspacePermissionRequiredException.class);
+        assertThatThrownBy(() -> service.lint("ws_1", "user_1", null))
+                .isInstanceOf(fruition.core.authz.WorkspacePermissionRequiredException.class);
+        verify(outboxWriter, never()).begin(any(), any(), any(), any());
+    }
+
+    @Test
+    void lint_checksWikiLintPermission() {
+        service.lint("ws_1", "user_1", new WikiLintRequest(false, false));
+
+        verify(workspaceAccessGuard).requirePermission("ws_1", "user_1", "wiki.lint");
+    }
+
+    @Test
     void lint_dryRunQueuesWithoutOperation() {
         var result = service.lint("ws_1", "user_1", new WikiLintRequest(true, true));
 

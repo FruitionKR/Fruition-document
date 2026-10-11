@@ -15,6 +15,7 @@ import fruition.core.wikimaintenance.dto.WikiMaintenanceStatusResponse;
 import fruition.core.wikimaintenance.exception.PipelineWikiMaintenanceException;
 import fruition.core.wikimaintenance.repository.WikiLintStateRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.authz.WorkspacePermissions;
 import fruition.core.authz.WorkspaceAiModelClient;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
@@ -59,6 +60,8 @@ public class WikiMaintenanceService {
     @Transactional
     public JsonNode lint(String workspaceId, String userId, WikiLintRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
+        // dry_run도 LLM 비용을 쓰므로 모든 lint 요청에 권한을 요구한다.
+        workspaceAccessGuard.requirePermission(workspaceId, userId, WorkspacePermissions.WIKI_LINT);
         WikiLintRequest safe = request == null ? new WikiLintRequest(null, null) : request;
         boolean dryRun = !Boolean.FALSE.equals(safe.dryRun());
         String runId = UUID.randomUUID().toString();

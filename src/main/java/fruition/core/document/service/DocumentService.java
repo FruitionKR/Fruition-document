@@ -71,6 +71,9 @@ import fruition.core.aihistory.service.OperationRecorder;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.authz.WorkspacePermissionRequiredException;
+import fruition.core.authz.WorkspacePermissions;
+import fruition.core.authz.WorkspaceSettingsClient;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -131,6 +134,7 @@ public class DocumentService {
     private final DocumentConvertQueueRepository convertQueueRepository;
     private final ConverterClient converterClient;
     private final WorkspaceAiModelClient workspaceAiModelClient;
+    private final WorkspaceSettingsClient workspaceSettingsClient;
     private final TransactionTemplate transactionTemplate;
     private final DocumentEditStateInitializer editStateInitializer;
     private final DocumentEditStateRepository editStateRepository;
@@ -177,6 +181,7 @@ public class DocumentService {
                            OperationRecorder operationRecorder,
                            IngestOperationStarter ingestOperationStarter,
                            WorkspaceAiModelClient workspaceAiModelClient,
+                           WorkspaceSettingsClient workspaceSettingsClient,
                            fruition.core.document.repository.AiCommandOutboxWriter taskWriter,
                            DocumentWikiRetirement documentWikiRetirement,
                            DocumentAccessPolicy documentAccessPolicy,
@@ -195,6 +200,7 @@ public class DocumentService {
         this.convertQueueRepository = convertQueueRepository;
         this.converterClient = converterClient;
         this.workspaceAiModelClient = workspaceAiModelClient;
+        this.workspaceSettingsClient = workspaceSettingsClient;
         this.transactionTemplate = transactionTemplate;
         this.editStateInitializer = editStateInitializer;
         this.editStateRepository = editStateRepository;
@@ -329,6 +335,11 @@ public class DocumentService {
             }
             DocumentUploadResponse response = toUploadResponse(document, markdownUpload);
             saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
+            // 스킬 참고 문서는 편입 대상이 아니다. 자동 편입은 업로드 커밋 뒤 별도 트랜잭션에서 한다.
+            if (markdownUpload && !skillReference) {
+                autoIngestAfterCommit(workspaceId, userId, documentId,
+                        markdownContent.contentHash(), markdownContent.bytes().length);
+            }
             log.info("[문서 DB 저장 완료] documentId={} workspaceId={} userId={} filename={} status={} sourceUri={}",
                     document.getId(), document.getWorkspaceId(), document.getUserId(),
                     document.getFilename(), document.getStatus(), document.getSourceUri());
@@ -951,6 +962,11 @@ public class DocumentService {
         if (source.getSourceUri() == null) {
             throw new InvalidDocumentConvertRequestException("원본 파일이 없는 문서는 변환할 수 없습니다.");
         }
+        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다.
+        if (!userId.equals(source.getUserId())
+                && !workspaceAccessGuard.hasPermission(workspaceId, userId, WorkspacePermissions.DOCUMENT_CONVERT)) {
+            throw new WorkspacePermissionRequiredException(WorkspacePermissions.DOCUMENT_CONVERT);
+        }
 
         String endpointScope = convertEndpointScope(workspaceId);
         String requestHash = requestHash(documentId, "convert-markdown", "");
@@ -1056,7 +1072,9 @@ public class DocumentService {
             String markdown = converterClient.convertPdf(
                     source.getFilename(), pdfBytes, aiModel.provider(), aiModel.model(), convertAttribution(placeholder),
                     () -> taskWriter.active("convert:" + documentId));
-            DocumentEditingRules.MarkdownContent content = applyConvertedMarkdown(queueId, placeholder, markdown);
+            boolean autoIngest = autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId());
+            DocumentEditingRules.MarkdownContent content =
+                    applyConvertedMarkdown(queueId, placeholder, markdown, autoIngest);
             if (content != null) {
                 log.info("[문서 변환 완료] documentId={} sourceDocumentId={} markdownByteSize={}",
                         documentId, sourceDocumentId, content.bytes().length);
@@ -1137,6 +1155,8 @@ public class DocumentService {
             if (batch.page_end() > completed) saveConvertedBatch(queueId, placeholder, batch);
             completed = batch.page_end();
             if (batch.done()) {
+                // 설정·권한은 변환을 요청한 사용자 기준이며, 변환이 끝나는 시점에 판정한다(트랜잭션 밖).
+                boolean autoIngest = autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId());
                 transactionTemplate.execute(status -> {
                     if (!taskWriter.join("convert:" + placeholder.getId())) return null;
                     documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc -> {
@@ -1160,7 +1180,7 @@ public class DocumentService {
                         var content = editStateRepository.findById(doc.getId()).orElseThrow();
                         recordContentVersion(doc.getId(), content.getRevision(), content.getMarkdown(),
                                 content.getContentHash(), doc.getUserId(), Instant.now());
-                        if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
+                        if (autoIngest && (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:"))) {
                             doc.reopenForReingest(content.getContentHash(), content.getMarkdown().getBytes(StandardCharsets.UTF_8).length);
                             enqueueIngest(doc);
                         }
@@ -1317,7 +1337,8 @@ public class DocumentService {
     private DocumentEditingRules.MarkdownContent applyConvertedMarkdown(
             long queueId,
             Document placeholder,
-            String convertedMarkdown
+            String convertedMarkdown,
+            boolean autoIngest
     ) {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
         return executeWithSaveRetry(() -> saveTransaction.execute(status -> {
@@ -1337,14 +1358,70 @@ public class DocumentService {
             if (!result.replayed()) {
                 projectContentVersions(placeholder.getId(), content.markdown(), result, placeholder.getUserId());
                 Instant now = Instant.now();
-                documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc ->
-                        doc.completeConvert(content.contentHash(), content.bytes().length, now));
+                documentRepository.findByIdInActiveWorkspace(placeholder.getId()).ifPresent(doc -> {
+                    doc.completeConvert(content.contentHash(), content.bytes().length, now);
+                    // 변환 완료와 같은 트랜잭션에서 outbox에 등록한다. 내용 버전은 위에서 이미 남겼다.
+                    if (autoIngest) {
+                        doc.reopenForReingest(content.contentHash(), content.bytes().length);
+                        enqueueIngest(doc);
+                    }
+                });
                 assetReferenceSynchronizer.synchronize(placeholder.getId(), placeholder.getWorkspaceId(),
                         assetReferenceParser.parse(content.markdown()));
             }
             taskWriter.complete("convert:" + placeholder.getId());
             return content;
         }));
+    }
+
+    /**
+     * 업로드·변환 뒤 자동 편입 여부. 워크스페이스 설정이 켜져 있고 요청자에게 wiki.ingest 권한이 있을 때만 true다.
+     * 판정에 실패하면 업로드·변환을 막지 않고 편입하지 않는다.
+     */
+    private boolean autoIngestAllowed(String workspaceId, String requesterId) {
+        try {
+            return workspaceSettingsClient.autoIngestOnUpload(workspaceId)
+                    && workspaceAccessGuard.hasPermission(workspaceId, requesterId, WorkspacePermissions.WIKI_INGEST);
+        } catch (RuntimeException e) {
+            log.warn("[자동 편입] 판정 실패 — 편입하지 않음 workspaceId={} userId={} cause={}",
+                    workspaceId, requesterId, e.toString());
+            return false;
+        }
+    }
+
+    /**
+     * 업로드 커밋 뒤 자동 편입을 판정하고 별도 트랜잭션에서 등록한다. 설정·권한 HTTP 조회는 DB 트랜잭션 밖이고,
+     * 등록이 실패하면 그 트랜잭션만 롤백돼 문서는 uploaded(신규)로 남는다. 업로드 원본이 곧 본문이라 원본은 다시 쓰지 않는다.
+     */
+    private void autoIngestAfterCommit(String workspaceId, String userId, String documentId,
+                                       String contentHash, long byteSize) {
+        Runnable autoIngest = () -> {
+            try {
+                if (!autoIngestAllowed(workspaceId, userId)) return;
+                requiresNewSaveTransactionTemplate().execute(status -> {
+                    documentRepository.findByIdInActiveWorkspace(documentId)
+                            .filter(doc -> doc.getStatus() == DocumentStatus.uploaded)
+                            .ifPresent(doc -> {
+                                doc.reopenForReingest(contentHash, byteSize);
+                                enqueueIngest(doc, userId);
+                            });
+                    return null;
+                });
+            } catch (RuntimeException e) {
+                log.warn("[자동 편입] 업로드 직후 편입 등록 실패 — 문서는 신규로 남음 documentId={} cause={}",
+                        documentId, e.toString());
+            }
+        };
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            autoIngest.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                autoIngest.run();
+            }
+        });
     }
 
     String enqueueIngest(Document document) {
@@ -1947,6 +2024,7 @@ public class DocumentService {
     @Transactional
     public DocumentIngestResponse ingest(String workspaceId, String userId, String documentId) {
         verifyWorkspaceOwnership(workspaceId, userId);
+        workspaceAccessGuard.requirePermission(workspaceId, userId, WorkspacePermissions.WIKI_INGEST);
         Document document = documentRepository.findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .filter(value -> value.getDeletedAt() == null)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
@@ -1972,6 +2050,12 @@ public class DocumentService {
             throw new DocumentAlreadyProcessingException("이미 처리 중인 문서입니다.");
         }
 
+        return new DocumentIngestResponse(documentId, promoteAndEnqueueIngest(document, userId), document.getStatus());
+    }
+
+    /** 최신 편집본을 원본으로 승격하고 ingest outbox에 등록한다(수동 편입). 자동 편입은 업로드 본문이 곧 원본이라 승격 없이 등록한다. */
+    private String promoteAndEnqueueIngest(Document document, String userId) {
+        String documentId = document.getId();
         editStateInitializer.initializeIfNeeded(document);
         DocumentEditState editState = editStateRepository.findById(documentId)
                 .orElseThrow(() -> new InvalidMarkdownContentException(
@@ -1998,8 +2082,7 @@ public class DocumentService {
         document.reopenForReingest(currentContentHash, bytes.length);
         log.info("[문서 재ingest DB 갱신 완료] documentId={} contentHashPrefix={} byteSize={}",
                 documentId, contentHashPrefix(currentContentHash), bytes.length);
-        String runId = enqueueIngest(document, userId);
-        return new DocumentIngestResponse(documentId, runId, document.getStatus());
+        return enqueueIngest(document, userId);
     }
 
     @Transactional

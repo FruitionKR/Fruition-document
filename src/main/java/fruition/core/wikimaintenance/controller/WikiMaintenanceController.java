@@ -53,6 +53,8 @@ public class WikiMaintenanceController {
             content = @Content(schema = @Schema(implementation = WikiLintResponseSchema.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 검사 옵션",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "wiki.lint 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). dry_run도 같다",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "503", description = "llmPipeline 사용 불가",

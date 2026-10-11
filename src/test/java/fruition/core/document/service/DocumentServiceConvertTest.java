@@ -100,6 +100,7 @@ class DocumentServiceConvertTest {
     @Mock fruition.core.aihistory.service.IngestOperationStarter ingestOperationStarter;
     @Mock fruition.core.aihistory.service.AgentApplyOperationStore applyOperationStore;
     @Mock WorkspaceAiModelClient workspaceAiModelClient;
+    @Mock fruition.core.authz.WorkspaceSettingsClient workspaceSettingsClient;
 
     DocumentService documentService;
 
@@ -126,7 +127,7 @@ class DocumentServiceConvertTest {
                 applyOperationStore,
                 operationRecorder,
                 ingestOperationStarter,
-                workspaceAiModelClient, taskWriter, documentWikiRetirement, accessPolicy,
+                workspaceAiModelClient, workspaceSettingsClient, taskWriter, documentWikiRetirement, accessPolicy,
                 java.time.Duration.ofDays(30));
         // 변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.
         lenient().when(storageProps.getBucket()).thenReturn("fruition-storage");
@@ -159,6 +160,168 @@ class DocumentServiceConvertTest {
     private static String sha256(String value) throws Exception {
         return HexFormat.of().formatHex(
                 MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    /** 워크스페이스 자동 편입 설정과 요청자의 wiki.ingest 권한을 stub한다. */
+    private void enableAutoIngest(boolean permission) {
+        when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(permission);
+    }
+
+    private void stubSinglePathConvert(Document placeholder, Document source) throws Exception {
+        byte[] pdfBytes = "%PDF-1.4".getBytes(StandardCharsets.US_ASCII);
+        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder")).thenReturn(Optional.of(placeholder));
+        when(documentRepository.findById(SOURCE_DOCUMENT_ID)).thenReturn(Optional.of(source));
+        when(storageProps.getBucket()).thenReturn("fruition-storage");
+        when(minioClient.getObject(any())).thenReturn(new GetObjectResponse(
+                Headers.of(), "fruition-storage", "us-east-1",
+                source.getSourceUri(), new ByteArrayInputStream(pdfBytes)));
+        when(converterClient.convertPdf(eq("보고서.pdf"), eq(pdfBytes), eq("gemini"), eq("gemini-3.5-flash-lite"), any(),
+                any(java.util.function.BooleanSupplier.class))).thenReturn("# 변환된 본문\n");
+        when(postgresDocumentEditStore.save(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
+                anyString(), any())).thenAnswer(invocation -> new PostgresDocumentEditSaveResult(
+                        invocation.getArgument(4), "", "", invocation.<Long>getArgument(4) + 1,
+                        invocation.getArgument(3), Instant.now(), invocation.getArgument(6), true, false));
+    }
+
+    @Test
+    @DisplayName("비AWS 변환: 자동 편입이 켜져 있고 요청자에게 wiki.ingest가 있으면 변환 완료와 함께 편입을 등록한다")
+    void doConvert_singlePath_autoIngestEnqueues() throws Exception {
+        enableAutoIngest(true);
+        Document placeholder = placeholderDocument();
+        stubSinglePathConvert(placeholder, sourcePdf());
+
+        documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
+
+        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+        assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.processing);
+    }
+
+    @Test
+    @DisplayName("비AWS 변환: 설정이 꺼져 있으면(조회 실패 포함) 편입하지 않고 문서는 completed로 남는다")
+    void doConvert_singlePath_settingOff_doesNotIngest() throws Exception {
+        Document placeholder = placeholderDocument();
+        stubSinglePathConvert(placeholder, sourcePdf());
+
+        documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
+
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.completed);
+    }
+
+    @Test
+    @DisplayName("비AWS 변환: 설정이 켜져 있어도 요청자에게 wiki.ingest가 없으면 편입하지 않는다")
+    void doConvert_singlePath_withoutPermission_doesNotIngest() throws Exception {
+        enableAutoIngest(false);
+        Document placeholder = placeholderDocument();
+        stubSinglePathConvert(placeholder, sourcePdf());
+
+        documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
+
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.completed);
+    }
+
+    @Test
+    @DisplayName("AWS 변환: 설정이 꺼져 있으면 편입하지 않고 문서는 completed로 남는다")
+    void batchConvert_settingOff_doesNotIngest() throws Exception {
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
+        stubBatchConvert(parent, source, queue, states);
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any(), any()))
+                .thenReturn(new ConverterClient.Batch(1, 3, 3, "<!-- page 1 -->\n\n# 본문\n", true, true, null));
+
+        documentService.doConvert(7L, parent.getId(), source.getId());
+
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
+    }
+
+    @Test
+    @DisplayName("AWS 변환: 설정이 켜져 있어도 요청자에게 wiki.ingest가 없으면 편입하지 않는다")
+    void batchConvert_withoutPermission_doesNotIngest() throws Exception {
+        enableAutoIngest(false);
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
+        stubBatchConvert(parent, source, queue, states);
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any(), any()))
+                .thenReturn(new ConverterClient.Batch(1, 3, 3, "<!-- page 1 -->\n\n# 본문\n", true, true, null));
+
+        documentService.doConvert(7L, parent.getId(), source.getId());
+
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("AWS 변환: 변환 도중 권한이 회수되면 완료 시점 판정에서 편입하지 않는다")
+    void batchConvert_permissionRevokedMidConversion_doesNotIngest() throws Exception {
+        when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        var batchesReturned = new java.util.concurrent.atomic.AtomicInteger();
+        // 첫 묶음이 끝나기 전에는 권한이 있고, 마지막 묶음 이후에는 회수된 상태다.
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest"))
+                .thenAnswer(invocation -> batchesReturned.get() < 2);
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
+        stubBatchConvert(parent, source, queue, states);
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any(), any()))
+                .thenAnswer(invocation -> {
+                    batchesReturned.incrementAndGet();
+                    return new ConverterClient.Batch(1, 3, 6, "<!-- page 1 -->\n\n# 앞\n", true, false, null);
+                });
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(3), any(), any()))
+                .thenAnswer(invocation -> {
+                    batchesReturned.incrementAndGet();
+                    return new ConverterClient.Batch(4, 6, 6, "<!-- page 1 -->\n\n# 뒤\n", true, true, null);
+                });
+
+        documentService.doConvert(7L, parent.getId(), source.getId());
+
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
+    }
+
+    @Test
+    @DisplayName("남이 올린 PDF 변환은 document.convert 권한(또는 OWNER)이 있어야 하고, 없으면 WorkspacePermissionRequiredException")
+    void convertToMarkdown_otherUsersPdf_requiresConvertPermission() {
+        stubOwnedWorkspace();
+        Document othersPdf = new Document(SOURCE_DOCUMENT_ID, WORKSPACE_ID, "user_other", "보고서.pdf",
+                "application/pdf", 1234L, "sources/documents/" + SOURCE_DOCUMENT_ID + "/original", "pdf-hash");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(othersPdf));
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "document.convert")).thenReturn(false);
+
+        assertThatThrownBy(() -> documentService.convertToMarkdown(
+                WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key"))
+                .isInstanceOf(fruition.core.authz.WorkspacePermissionRequiredException.class)
+                .hasMessageContaining("document.convert");
+        verify(documentRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("남이 올린 PDF라도 document.convert 권한자(OWNER 포함)는 변환을 요청할 수 있다")
+    void convertToMarkdown_otherUsersPdf_withPermission_allowed() {
+        stubOwnedWorkspace();
+        Document othersPdf = new Document(SOURCE_DOCUMENT_ID, WORKSPACE_ID, "user_other", "보고서.pdf",
+                "application/pdf", 1234L, "sources/documents/" + SOURCE_DOCUMENT_ID + "/original", "pdf-hash");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(othersPdf));
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "document.convert")).thenReturn(true);
+        when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.EDITABLE)).thenReturn(0L);
+
+        DocumentUploadResponse response = documentService.convertToMarkdown(
+                WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key");
+
+        assertThat(response.status()).isEqualTo(DocumentStatus.processing);
+        verify(convertQueueRepository).save(any());
     }
 
     @Test
@@ -302,6 +465,7 @@ class DocumentServiceConvertTest {
     @Test
     @DisplayName("재시작한 페이지 묶음은 원본 문서에 이어 붙고, 문서 하나만 AI 큐에 한 번 등록된다")
     void largePdfResumesAtCompletedPagesAndAppendsToSingleDocument() throws Exception {
+        enableAutoIngest(true);
         var parent = placeholderDocument();
         var source = sourcePdf();
         var queue = new DocumentConvertQueue(parent.getId(), source.getId());
@@ -398,6 +562,7 @@ class DocumentServiceConvertTest {
     @Test
     @DisplayName("첫 페이지 묶음은 변환 중 placeholder를 대체한다")
     void firstBatchReplacesPlaceholder() throws Exception {
+        enableAutoIngest(true);
         var parent = placeholderDocument();
         var source = sourcePdf();
         var queue = new DocumentConvertQueue(parent.getId(), source.getId());
@@ -465,6 +630,7 @@ class DocumentServiceConvertTest {
     @Test
     @DisplayName("이어 붙인 본문이 편집 상한을 넘으면 다음 파트 문서로 넘어가고 파트마다 AI 큐에 등록된다")
     void batchOverEditLimitStartsNextPart() throws Exception {
+        enableAutoIngest(true);
         var parent = placeholderDocument();
         var source = sourcePdf();
         var queue = new DocumentConvertQueue(parent.getId(), source.getId());

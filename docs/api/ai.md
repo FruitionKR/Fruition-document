@@ -694,7 +694,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 | 입력 | **Path** — `workspace_id`: `string`, `operation_id`: `string`<br>**Body** — `RestoreExecuteRequest` |
 | 출력 | `200` 문서 편집 복구 즉시 완료 — `RestoreExecuteResponse`<br>`202` Wiki 복구 queued 등록 — `RestoreExecuteResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 되돌릴 수 없는 작업이거나 대상이 없음 — `ErrorResponse`<br>`403` 문서 편집 복구에서 실행자에게 해당 문서의 편집 권한이 없음(`DOCUMENT_WRITE_FORBIDDEN`) — `ErrorResponse`<br>`404` 작업 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 미리보기 이후 대상이 변경됨 — `ErrorResponse`<br>`423` 문서 편집 복구에서 다른 사용자가 편집 잠금을 쥐고 있음(`DOCUMENT_EDIT_LOCKED`) — `ErrorResponse` |
+| 주요 오류 | `400` 되돌릴 수 없는 작업이거나 대상이 없음 — `ErrorResponse`<br>`403` 문서 편집 복구에서 실행자에게 해당 문서의 편집 권한이 없음(`DOCUMENT_WRITE_FORBIDDEN`) — `ErrorResponse`<br>`403` 위키 작업(ingest·lint)에서 작업 실행자도 OWNER도 아니고 `wiki.restore` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` 작업 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 미리보기 이후 대상이 변경됨 — `ErrorResponse`<br>`423` 문서 편집 복구에서 다른 사용자가 편집 잠금을 쥐고 있음(`DOCUMENT_EDIT_LOCKED`) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -756,6 +756,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 | `400` | 되돌릴 수 없는 작업이거나 대상이 없음 | `ErrorResponse` |
 | `403` | 문서 편집 복구에서 실행자에게 해당 문서의 편집 권한이 없음(`DOCUMENT_WRITE_FORBIDDEN`). 문서·폴더 권한이 view이고 실행자가 문서 소유자·OWNER가 아닌 경우 | `ErrorResponse` |
 | `404` | 작업 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
+| `403` | 위키 작업(ingest·lint)인데 작업 실행자도 OWNER도 아니고 `wiki.restore` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) | `ErrorResponse` |
 | `409` | 미리보기 이후 대상이 변경됨 | `ErrorResponse` |
 | `423` | 문서 편집 복구에서 다른 사용자가 편집 잠금을 쥐고 있음(`DOCUMENT_EDIT_LOCKED`) | `ErrorResponse` |
 
@@ -783,6 +784,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 위키 작업(ingest·lint)은 작업을 실행한 본인, 워크스페이스 OWNER, `wiki.restore` 권한을 받은 멤버만 되돌릴 수 있다. 문서 편집 복구에는 적용하지 않는다.
 
 #### 9. 예시 요청/응답
 
@@ -827,7 +829,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-op
 | 입력 | **Path** — `workspace_id`: `string`, `operation_id`: `string` |
 | 출력 | `200` 계산 성공 — `RestorePreviewResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `404` 작업 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
+| 주요 오류 | `403` 위키 작업(ingest·lint)에서 작업 실행자도 OWNER도 아니고 `wiki.restore` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` 작업 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -891,6 +893,7 @@ Wiki 복구에서 남은 기여가 있는 Concept의 `pages[].action`은 항상 
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
+| `403` | 위키 작업(ingest·lint)인데 작업 실행자도 OWNER도 아니고 `wiki.restore` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) | `ErrorResponse` |
 | `404` | 작업 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 
 ```json
@@ -911,6 +914,7 @@ Wiki 복구에서 남은 기여가 있는 Concept의 `pages[].action`은 항상 
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 복구 실행과 같은 규칙으로 위키 작업(ingest·lint)은 실행자 본인, OWNER, `wiki.restore` 권한자만 미리볼 수 있다.
 
 #### 9. 예시 요청/응답
 
@@ -963,7 +967,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string` |
 | 출력 | `202` 변환 요청 접수 및 placeholder 문서 생성 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` PDF 원본 문서가 아니거나 잘못된 Idempotency-Key — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
+| 주요 오류 | `400` PDF 원본 문서가 아니거나 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 남이 올린 PDF인데 `document.convert` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`). 업로더 본인과 OWNER는 항상 가능 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1019,6 +1023,7 @@ PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | PDF 원본 문서가 아니거나 잘못된 Idempotency-Key | `ErrorResponse` |
+| `403` | 남이 올린 PDF인데 `document.convert` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`). 업로더 본인과 OWNER는 항상 가능 | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 | `ErrorResponse` |
 
@@ -1046,6 +1051,8 @@ PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 원본 PDF를 올린 사용자 본인, 워크스페이스 OWNER, `document.convert` 권한을 받은 멤버만 변환을 요청할 수 있다.
+- 변환이 끝나면 워크스페이스 설정 `auto_ingest_on_upload`가 켜져 있고 요청자에게 `wiki.ingest`가 있을 때만 자동으로 위키에 편입한다(AWS 묶음 경로와 단일 경로 모두). 그렇지 않으면 편입하지 않는다.
 
 #### 9. 예시 요청/응답
 
@@ -1092,7 +1099,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string` |
 | 출력 | `202` 재처리 큐 등록됨 — `DocumentIngestResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 편집 가능한 Markdown 문서가 아님 — `ErrorResponse`<br>`403` 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 이미 처리 중인 문서 — `ErrorResponse` |
+| 주요 오류 | `400` 편집 가능한 Markdown 문서가 아님 — `ErrorResponse`<br>`403` `wiki.ingest` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능) 또는 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 이미 처리 중인 문서 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1140,7 +1147,7 @@ Markdown 문서를 Wiki 파이프라인에 넣습니다. 일반 문서는 최신
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 편집 가능한 Markdown 문서가 아니거나 스킬 참고 문서임 | `ErrorResponse` |
-| `403` | 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
+| `403` | `wiki.ingest` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능) 또는 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 이미 처리 중인 문서 | `ErrorResponse` |
 
@@ -1168,6 +1175,7 @@ Markdown 문서를 Wiki 파이프라인에 넣습니다. 일반 문서는 최신
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 일반 문서와 채팅 내보내기 문서 모두 `wiki.ingest` 권한(OWNER는 항상 가능)이 필요하다.
 
 #### 9. 예시 요청/응답
 

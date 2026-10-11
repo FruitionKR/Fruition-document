@@ -68,8 +68,9 @@ public class AiTaskCancellationService {
 
     public Map<String, Object> cancel(String id, String workspaceId, String userId) {
         access.requireMember(workspaceId, userId);
+        String taskUserId = taskOwner(id, workspaceId, userId);
         transaction.executeWithoutResult(tx -> {
-            owned(id, workspaceId, userId, true);
+            owned(id, workspaceId, taskUserId, true);
             jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
                     + "WHERE id = ? AND status NOT IN ('cancelled', 'rolling_back')", id);
         });
@@ -94,7 +95,7 @@ public class AiTaskCancellationService {
 
     public Map<String, Object> status(String id, String workspaceId, String userId) {
         access.requireMember(workspaceId, userId);
-        Map<String, Object> row = owned(id, workspaceId, userId, false);
+        Map<String, Object> row = owned(id, workspaceId, taskOwner(id, workspaceId, userId), false);
         return Map.of("id", id, "status", row.get("status"), "error_code",
                 row.get("error_code") == null ? "" : row.get("error_code"));
     }
@@ -220,6 +221,17 @@ public class AiTaskCancellationService {
     private void requireRollingBack(Map<String, Object> row) {
         if (!List.of("cancel_requested", "rolling_back").contains(row.get("status")))
             throw new ResponseStatusException(HttpStatus.CONFLICT, "취소 중인 작업만 복구할 수 있습니다.");
+    }
+
+    /**
+     * 취소·조회를 요청한 사용자 기준의 작업 소유자. 요청자 본인의 작업이면 요청자이고,
+     * 요청자가 워크스페이스 OWNER이면 같은 워크스페이스 작업의 요청자(행의 user_id)로 대신한다.
+     * 해당 작업이 없으면 요청자를 그대로 돌려 {@link #owned}가 404를 낸다.
+     */
+    private String taskOwner(String id, String workspaceId, String requesterId) {
+        if (!access.isOwner(workspaceId, requesterId)) return requesterId;
+        return jdbc.queryForList("SELECT user_id FROM ai_task_runs WHERE id = ? AND workspace_id = ?",
+                String.class, id, workspaceId).stream().findFirst().orElse(requesterId);
     }
 
     private Map<String, Object> owned(String id, String workspaceId, String userId, boolean lock) {
