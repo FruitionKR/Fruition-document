@@ -59,6 +59,7 @@ class AgentTurnServiceTest {
     private AgentTurnService service;
 
     @Mock fruition.core.aitask.service.AiTaskCancellationService cancellation;
+    @Mock fruition.core.usage.service.UsageChargeService usageCharges;
 
     @BeforeEach
     void setUp() {
@@ -69,7 +70,8 @@ class AgentTurnServiceTest {
                         java.util.List.of(), null));
         service = new AgentTurnService(documentService, editLockService, workspaceAccessGuard, runRepository,
                 statusRequester, outboxWriter, applyOperationStore, aiModelCatalog,
-                chatSessionService, chatConversationReader, chatTurnRecorder, "ai.agent.command", cancellation, new ObjectMapper());
+                chatSessionService, chatConversationReader, chatTurnRecorder, "ai.agent.command", cancellation, new ObjectMapper(),
+                usageCharges);
     }
 
     @Test
@@ -556,6 +558,77 @@ class AgentTurnServiceTest {
         service.revise("ws_1", "user_1", runId, revise);
 
         verify(workspaceAccessGuard, org.mockito.Mockito.times(5)).requireMember("ws_1", "user_1");
+    }
+
+    @Test
+    void reviseAndApproveReserveAutonomousRunBeforeForwardingAndDoNotForwardWhenShort() {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";  // ai가 새로 만든 AgentRun id
+        JsonNode response = new ObjectMapper().createObjectNode().put("id", runId).put("status", "executing");
+        when(statusRequester.revise("ws_1", "user_1", runId, "좁혀줘")).thenReturn(response);
+        when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64))).thenReturn(response);
+
+        service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("좁혀줘"));
+        service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64)));
+
+        var order = org.mockito.Mockito.inOrder(usageCharges, statusRequester);
+        order.verify(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
+        order.verify(statusRequester).revise("ws_1", "user_1", runId, "좁혀줘");
+        order.verify(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
+        order.verify(statusRequester).approve("ws_1", "user_1", runId, 1, "a".repeat(64));
+        verify(usageCharges, never()).endAutonomousRun(anyString());
+
+        org.mockito.Mockito.doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("부족"))
+                .when(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
+        org.mockito.Mockito.clearInvocations(statusRequester);
+        assertThatThrownBy(() -> service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("또")))
+                .isInstanceOf(fruition.core.usage.service.CreditService.InsufficientCreditException.class);
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(fruition.core.usage.service.CreditService.InsufficientCreditException.class);
+        verify(statusRequester, never()).revise(anyString(), anyString(), anyString(), anyString());
+        verify(statusRequester, never()).approve(anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt(), anyString());
+    }
+
+    @Test
+    void failedForwardReleasesOnlyThisAttemptAndKeepsRunOpen() {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        when(statusRequester.revise("ws_1", "user_1", runId, "좁혀줘")).thenThrow(new IllegalStateException("conflict"));
+
+        assertThatThrownBy(() -> service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("좁혀줘")))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(usageCharges).abortAutonomousAttempt(runId, "user_1");
+        verify(usageCharges, never()).endAutonomousRun(anyString());
+    }
+
+    @Test
+    void ownershipIsCheckedBeforeReservingAndTerminalRunIsNotReserved() {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        // 소유 확인(조회)이 404면 예약하지 않는다.
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId))
+                .thenThrow(new fruition.core.agent.exception.AgentRunNotFoundException(runId));
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(fruition.core.agent.exception.AgentRunNotFoundException.class);
+        verify(usageCharges, never()).reserveAutonomousRun(anyString(), anyString(), anyString());
+
+        // 이미 끝난 실행은 예약 없이 전달한다(ai-svc가 거절).
+        JsonNode done = new ObjectMapper().createObjectNode().put("id", runId).put("status", "completed");
+        org.mockito.Mockito.reset(statusRequester);
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(done);
+        when(usageCharges.isAutonomousTerminal(done)).thenReturn(true);
+        service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("좁혀줘"));
+        verify(usageCharges, never()).reserveAutonomousRun(anyString(), anyString(), anyString());
+        verify(statusRequester).revise("ws_1", "user_1", runId, "좁혀줘");
+    }
+
+    @Test
+    void autonomousRunStateIsReportedToCreditsSoTerminalStateSettles() {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        JsonNode done = new ObjectMapper().createObjectNode().put("id", runId).put("status", "completed");
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(done);
+
+        service.getRun("ws_1", "user_1", runId);
+
+        verify(usageCharges).endAutonomousRunIfTerminal(runId, done);
     }
 
     @Test

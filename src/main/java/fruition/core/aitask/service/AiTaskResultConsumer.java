@@ -61,6 +61,10 @@ public class AiTaskResultConsumer {
                 applier.applyIngest(event);
                 return;
             }
+            if ("post_ingest".equals(kind)) {
+                applier.applyPostIngest(event);
+                return;
+            }
             if ("lint".equals(kind)) {
                 applier.applyLint(event);
                 return;

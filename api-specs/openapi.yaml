@@ -331,6 +331,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/JsonNode"
           description: OK
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 계획을 다시 돌리지 않음
       summary: AgentRun 승인
       tags:
       - Agent
@@ -418,6 +424,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/JsonNode"
           description: OK
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 계획을 다시 돌리지 않음
       summary: AgentRun 계획 수정
       tags:
       - Agent
@@ -452,6 +464,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 잘못된 요청
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "404":
           content:
             '*/*':
@@ -771,6 +789,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 되돌릴 수 없는 작업이거나 대상이 없음
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "403":
           content:
             '*/*':
@@ -1100,6 +1124,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 잘못된 요청 (질문이 비어 있는 경우)
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "404":
           content:
             '*/*':
@@ -1165,6 +1195,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 잘못된 요청 (질문이 비어 있는 경우)
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "404":
           content:
             '*/*':
@@ -2012,6 +2048,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: PDF 원본 문서가 아니거나 잘못된 Idempotency-Key
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "403":
           content:
             '*/*':
@@ -2311,6 +2353,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 편집 가능한 Markdown 문서가 아님
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "403":
           content:
             '*/*':
@@ -3998,6 +4046,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: "AI가 거절한 요청. code: SKILL_INTENT_AMBIGUOUS(작업을 특정할 수 없음), SKILL_INTENT_UNSUPPORTED(지원하지 않는 작업), SKILL_INSTRUCTION_INVALID(지침 길이·이름 형식·참조 문서 오류), SKILL_REQUEST_REJECTED(그 밖의 거절)"
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "403":
           content:
             '*/*':
@@ -4081,6 +4135,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 잘못된 Skill 정의
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "403":
           content:
             '*/*':
@@ -4261,6 +4321,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 잘못된 Skill 정의
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "403":
           content:
             '*/*':
@@ -4527,6 +4593,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/SpeechTranscriptionResponse"
           description: 전사 성공
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "403":
           content:
             '*/*':
@@ -4755,6 +4827,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 잘못된 검사 옵션
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
         "403":
           content:
             '*/*':

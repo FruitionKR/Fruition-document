@@ -55,6 +55,8 @@ public class SpeechController {
                         @Content(mediaType = "audio/wav", schema = @Schema(type = "string", format = "binary"))
                     }))
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "200", description = "전사 성공",
             content = @Content(schema = @Schema(implementation = TranscriptionResponse.class))),
         @ApiResponse(responseCode = "403", description = "워크스페이스 접근 권한 없음",

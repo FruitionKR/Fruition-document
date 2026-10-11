@@ -411,7 +411,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 
 **워크스페이스당 생성은 하나다.** 같은 워크스페이스에서 다른 초안이 `generating`이면(회의가 달라도) 새 요청은 바로 `409 MEETING_NOTES_BUSY`다. 워크스페이스 단위 `pg_advisory_xact_lock`을 쥔 트랜잭션에서 확인과 행 삽입을 해 Pod가 여럿이어도 하나만 통과한다. `failed`(만료·취소 포함)·`ready`·`applied` 초안은 세지 않는다. 같은 `Idempotency-Key` 재시도는 BUSY가 아니라 기존 버전을 돌려준다. 다른 워크스페이스는 서로 영향이 없다.
 
-생성은 비동기다. `202`를 받은 뒤 조회(`GET`)로 `status`가 `ready`나 `failed`가 될 때까지 기다린다. 생성 실패는 HTTP 오류가 아니라 그 버전의 `failed`와 `error_code`(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INPUT_REJECTED`·`MEETING_NOTES_UNAVAILABLE`(ai 실패 이벤트의 코드), `MEETING_NOTES_INVALID`(성공 이벤트의 초안 형식 오류), `INSUFFICIENT_CREDIT`(`app.billing.enforce`에서 크레딧 부족, 명령을 발행하지 않는다))로 알리고, 이전 `ready` 초안은 그대로 쓸 수 있다.
+생성은 비동기다. `202`를 받은 뒤 조회(`GET`)로 `status`가 `ready`나 `failed`가 될 때까지 기다린다. 생성 실패는 HTTP 오류가 아니라 그 버전의 `failed`와 `error_code`(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INPUT_REJECTED`·`MEETING_NOTES_UNAVAILABLE`(ai 실패 이벤트의 코드), `MEETING_NOTES_INVALID`(성공 이벤트의 초안 형식 오류), `INSUFFICIENT_CREDIT`(`app.billing.enforce`에서 가용 잔액이 최저 비용 미만이면 크레딧 부족, 명령을 발행하지 않는다))로 알리고, 이전 `ready` 초안은 그대로 쓸 수 있다.
 
 #### Kafka 계약 (`kind=meeting_notes`)
 
@@ -529,7 +529,7 @@ WebSocket은 OpenAPI로 표현되지 않아 이 문서에만 계약을 둔다.
 | `invalid_audio` | `ready` 전 전송, 알 수 없는 명령 | `1008` |
 | `meeting_not_open` | 받아쓰기할 수 없는 회의 | `1008` |
 | `transcript_limit` | 회의 전사 한도(10,000구간, 글자 수는 회의록 AI에 보내는 묶음 글자의 합 100,000) 초과. 이미 한도에 닿은 회의는 연결 직후 거절하고 연결 기록을 남기지 않는다. 저장된 전사로 회의록은 만들 수 있다 | `1008` |
-| `insufficient_credit` | 크레딧 잔액 부족(`app.billing.enforce`가 true일 때). 연결을 시작할 때 예약한 금액만큼 잔액이 없으면 ai-svc에 연결하지 않고 닫는다. 연결 중에도 `app.billing.live-renew-seconds`(기본 60초)마다 사용량을 차감하고 다음 구간을 다시 예약하며, 잔액이 모자라면 이 오류로 닫는다. 확정 구간은 남는다 | `1008` |
+| `insufficient_credit` | 크레딧 잔액 부족(`app.billing.enforce`가 true일 때). 연결을 시작할 때 가용 잔액이 최저 비용(`app.billing.minimum.meeting_live`, 없으면 상한의 10%)보다 작으면 ai-svc에 연결하지 않고 닫는다. 통과하면 `min(상한, 가용 잔액)`을 예약한다. 연결 중에도 `app.billing.live-renew-seconds`(기본 60초)마다 사용량을 차감하고 다음 구간을 다시 예약하며, 가용 잔액이 최저 비용보다 작으면 이 오류로 닫는다. 확정 구간은 남는다 | `1008` |
 | `segment_conflict` | 같은 구간에 다른 확정 문장이 옴(덮어쓰지 않음) | `1011` |
 | `transcript_incomplete` | `finished` 구간 수와 저장 수가 다름 | `1011` |
 | `transcript_save_failed` | 전사 저장 실패 | `1011` |

@@ -42,6 +42,8 @@ public class AgentTurnController {
 
     @Operation(summary = "Agent turn 실행", description = "사용자 요청을 비동기 Agent 실행 대기열에 등록합니다.")
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "202", description = "Agent 실행이 대기열에 등록됨",
             content = @Content(schema = @Schema(implementation = AgentTurnResponse.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 요청",
@@ -92,6 +94,12 @@ public class AgentTurnController {
     }
 
     @Operation(summary = "AgentRun 승인", description = "현재 AgentRun 계획을 승인합니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK",
+            content = @Content(schema = @Schema(implementation = JsonNode.class))),
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 계획을 다시 돌리지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
     @PostMapping("/runs/{run_id}/approve")
     public ResponseEntity<JsonNode> approve(
             @PathVariable("workspace_id") String workspaceId,
@@ -142,6 +150,12 @@ public class AgentTurnController {
     }
 
     @Operation(summary = "AgentRun 계획 수정", description = "현재 AgentRun에 새 계획을 요청합니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK",
+            content = @Content(schema = @Schema(implementation = JsonNode.class))),
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 계획을 다시 돌리지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
     @PostMapping("/runs/{run_id}/revise")
     public ResponseEntity<JsonNode> revise(
             @PathVariable("workspace_id") String workspaceId,

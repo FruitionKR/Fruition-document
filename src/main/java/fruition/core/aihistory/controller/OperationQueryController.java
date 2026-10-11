@@ -119,6 +119,8 @@ public class OperationQueryController {
                     + "재작성이 있으면 status가 rebuilding으로 돌아오며 결과는 로그 상세로 확인합니다. "
                     + "ingest 되돌리기는 Wiki만 되돌리고 원문 문서는 건드리지 않습니다.")
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @ApiResponse(responseCode = "200", description = "문서 편집 복구 즉시 완료"),
             @ApiResponse(responseCode = "202", description = "Wiki 복구 queued 등록"),
             @ApiResponse(responseCode = "400", description = "되돌릴 수 없는 작업이거나 대상이 없음",

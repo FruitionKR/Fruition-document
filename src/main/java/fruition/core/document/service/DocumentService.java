@@ -1168,11 +1168,17 @@ public class DocumentService {
                     });
                     return null;
                 });
+                // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 푼다. 남겨 두면 그 예약이 가용 잔액을 줄여 ingest를 거절시킨다.
+                transactionTemplate.execute(status -> {
+                    if (taskWriter.join("convert:" + placeholder.getId())) taskWriter.completeAndSettle("convert:" + placeholder.getId());
+                    return null;
+                });
                 // 원본 문서와 상한을 넘어 생긴 파트를 각각 한 번씩 AI 큐로 보낸다.
                 java.util.List<Document> parts = new java.util.ArrayList<>();
                 parts.add(documentRepository.findById(placeholder.getId()).orElseThrow());
                 parts.addAll(documentRepository.findConvertedParts(placeholder.getWorkspaceId(), placeholder.getId()));
                 for (Document part : parts) {
+                    try {
                     transactionTemplate.execute(status -> {
                         if (!taskWriter.join("convert:" + placeholder.getId())) return null;
                         Document doc = documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
@@ -1187,14 +1193,26 @@ public class DocumentService {
                         }
                         return null;
                     });
+                    } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+                        // 변환은 성공했고 다시 시도하지 않는다. 자동 ingest만 크레딧 부족으로 시작하지 못했음을 문서에 남긴다.
+                        markAutoIngestRejected(part, e);
+                    }
                 }
-                transactionTemplate.execute(status -> {
-                    if (taskWriter.join("convert:" + placeholder.getId())) taskWriter.complete("convert:" + placeholder.getId());
-                    return null;
-                });
                 return;
             }
         }
+    }
+
+    /** 변환 뒤 자동 ingest가 크레딧 부족으로 거절됐을 때 문서에 INSUFFICIENT_CREDIT으로 기록한다. 변환 결과는 그대로 둔다. */
+    private void markAutoIngestRejected(Document part, fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+        Instant now = Instant.now();
+        transactionTemplate.execute(status -> {
+            documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
+                    .filter(value -> value.getDeletedAt() == null)
+                    .ifPresent(doc -> doc.markProcessingFailed("INSUFFICIENT_CREDIT: " + e.getMessage(), now));
+            return null;
+        });
+        log.warn("[변환 뒤 자동 ingest 거절] documentId={} reason=INSUFFICIENT_CREDIT", part.getId());
     }
 
     private void saveConvertedBatch(long queueId, Document parent, ConverterClient.Batch batch) {

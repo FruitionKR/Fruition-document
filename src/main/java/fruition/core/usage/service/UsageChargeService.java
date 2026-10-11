@@ -72,12 +72,14 @@ public class UsageChargeService {
     private final ObjectMapper mapper;
     private final RestClient client;
     private final String endpoint;
+    private final long postIngestHoldSeconds;
     private final Map<String, LocalDate> warnedOn = new ConcurrentHashMap<>();
 
     public UsageChargeService(JdbcTemplate jdbc, PlatformTransactionManager manager, AiTaskCancellationService runs,
                               CreditService credits,
                               ObjectMapper mapper, PipelineClientFactory factory,
-                              @Value("${app.usage-charge.calls-endpoint}") String endpoint) {
+                              @Value("${app.usage-charge.calls-endpoint}") String endpoint,
+                              @Value("${app.billing.post-ingest-hold-seconds:900}") long postIngestHoldSeconds) {
         this.jdbc = jdbc;
         this.transaction = new TransactionTemplate(manager);
         this.runs = runs;
@@ -85,11 +87,104 @@ public class UsageChargeService {
         this.mapper = mapper;
         this.client = factory.restClient(30);
         this.endpoint = endpoint;
+        this.postIngestHoldSeconds = postIngestHoldSeconds;
     }
 
     /** 실행이 끝난 run_id를 수집 대기열에 넣는다. 호출자 트랜잭션이 있으면 함께 커밋된 뒤에 수집된다. */
     public void enqueue(String runId) {
         jdbc.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", runId);
+    }
+
+    private static final String AUTONOMOUS_KIND = "agent_run";
+    /** post_ingest 종료를 ingest run 기준으로 기록하는 receipt event_id 접두어. */
+    private static final String POST_INGEST_DONE = "post_ingest_done:";
+    /** AI가 더 이상 일하지 않는 AgentRun 상태. cancel_requested·rolling_back은 곧 cancelled가 되므로 뺀다. */
+    private static final Set<String> AUTONOMOUS_TERMINAL = Set.of(
+            "completed", "partial_failed", "failed", "conflicted", "rejected", "cancelled", "rollback_failed");
+
+    /**
+     * AgentRun 승인·수정은 ai-svc가 새 run_id(AgentRun id, 처음 요청의 turn id와 다르다)로 모델을 부른다. 전달하기 전에 그
+     * id를 {@code agent_run} 실행으로 등록해 예약한다(처음이면 사전 승인, 이미 등록돼 있으면 구간 갱신과 같은 규칙).
+     * 부족하면 {@link CreditService.InsufficientCreditException}("중단했습니다")을 던진다. enforce가 꺼져 있으면 아무것도 하지
+     * 않는다. 호출자는 AgentRun의 소유를 먼저 확인해야 한다(남의 id를 선점하지 못하게). 이어 가는 승인이 정리 작업에 밀려
+     * 끝난 것으로 보이지 않게 {@code updated_at}을 갱신한다.
+     */
+    public void reserveAutonomousRun(String runId, String workspaceId, String userId) {
+        if (!credits.enforcing()) return;
+        boolean known = jdbc.update("UPDATE ai_task_runs SET updated_at = now() WHERE id = ? AND kind = ? "
+                + "AND workspace_id = ? AND user_id = ? AND status = 'running'", runId, AUTONOMOUS_KIND, workspaceId, userId) == 1;
+        if (known) {
+            Integer seq = jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE run_id = ? AND type = 'reserve'",
+                    Integer.class, runId);
+            credits.renew(runId, userId, AUTONOMOUS_KIND, seq);
+            return;
+        }
+        try {
+            runs.register(mapper.createObjectNode().put("run_id", runId).put("kind", AUTONOMOUS_KIND)
+                    .put("workspace_id", workspaceId).put("user_id", userId));
+        } catch (CreditService.InsufficientCreditException e) {
+            throw new CreditService.InsufficientCreditException(CreditService.STOPPED_MESSAGE);
+        }
+    }
+
+    /**
+     * 전달이 거절된 시도의 예약만 푼다. 실행은 닫지 않고 {@code running}으로 두어 다음 시도가 잔액을 다시 확인한다
+     * (종료 해제 키는 진짜 종료 정산용으로 남긴다).
+     */
+    public void abortAutonomousAttempt(String runId, String userId) {
+        if (credits.enforcing()) credits.abort(runId, userId);
+    }
+
+    /** AgentRun 응답의 상태가 끝났으면 {@link #endAutonomousRun}으로 닫는다. 등록하지 않은 실행이면 아무 일도 없다. */
+    public void endAutonomousRunIfTerminal(String runId, JsonNode run) {
+        if (isAutonomousTerminal(run)) endAutonomousRun(runId);
+    }
+
+    /** AgentRun 응답의 상태가 AI가 더 일하지 않는 끝난 상태인지. */
+    public boolean isAutonomousTerminal(JsonNode run) {
+        return run != null && AUTONOMOUS_TERMINAL.contains(run.path("status").asText());
+    }
+
+    /** 등록한 AgentRun 실행을 닫고 사용량 수집·정산을 대기열에 넣는다. 이미 닫았으면 다시 넣지 않는다. */
+    public void endAutonomousRun(String runId) {
+        if (jdbc.update("UPDATE ai_task_runs SET status = 'completed', updated_at = now() WHERE id = ? AND kind = ? "
+                + "AND status = 'running'", runId, AUTONOMOUS_KIND) == 1) {
+            enqueue(runId);
+        }
+    }
+
+    /**
+     * 성공한 ingest를 수집 대기열에 넣되 {@code app.billing.post-ingest-hold-seconds} 뒤로 미룬다. 정산이 예약을 푸는 시점이라,
+     * AI가 ingest 뒤에 따로 돌리는 post_ingest(품질 평가)가 끝날 때까지 ingest의 예약이 남아 가용 잔액을 줄인다.
+     * post_ingest 종료 이벤트가 오면 {@link #releasePostIngestHold}가 앞당기고, 오지 않으면 이 시간이 상한이다.
+     */
+    public void enqueueAfterPostIngest(String runId) {
+        // 거절하지 않는 환경이거나 post_ingest 종료 이벤트가 ingest 결과보다 먼저 왔으면 붙잡을 이유가 없어 바로 정산한다.
+        if (!credits.enforcing() || !jdbc.queryForList("SELECT 1 FROM ai_task_result_receipts WHERE event_id = ?",
+                Integer.class, POST_INGEST_DONE + runId).isEmpty()) {
+            enqueue(runId);
+            return;
+        }
+        jdbc.update("INSERT INTO usage_collect_queue (run_id, available_at) VALUES (?, now() + make_interval(secs => ?)) "
+                + "ON CONFLICT (run_id) DO NOTHING", runId, postIngestHoldSeconds);
+    }
+
+    /**
+     * post_ingest command의 호출을 바로 수집·정산하고, 이벤트의 {@code ingest_run_id}가 가리키는 ingest의 미뤄 둔 정산을
+     * 앞당긴다. 같은 사용자·워크스페이스의 ingest만 앞당긴다. {@code ingest_run_id}가 없는 이벤트(이전 ai-svc)는 앞당기지
+     * 않고, 그 ingest는 {@code app.billing.post-ingest-hold-seconds}가 지나면 정산된다.
+     */
+    public void releasePostIngestHold(String postRunId, String ingestRunId, String workspaceId, String userId) {
+        enqueue(postRunId);
+        if (ingestRunId == null || ingestRunId.isBlank()) return;
+        // ingest 결과가 아직 안 왔을 수도 있어 종료를 기록해 둔다. 뒤늦게 온 ingest 결과는 보류하지 않는다.
+        if (credits.enforcing()) {
+            jdbc.update("INSERT INTO ai_task_result_receipts (event_id, run_id, task_kind) VALUES (?, ?, 'post_ingest') "
+                    + "ON CONFLICT (event_id) DO NOTHING", POST_INGEST_DONE + ingestRunId, ingestRunId);
+        }
+        jdbc.update("UPDATE usage_collect_queue SET available_at = now() WHERE run_id = ? AND available_at > now() "
+                + "AND EXISTS (SELECT 1 FROM ai_task_runs t WHERE t.id = usage_collect_queue.run_id AND t.kind = 'document' "
+                + "AND t.workspace_id = ? AND t.user_id = ?)", ingestRunId, workspaceId, userId);
     }
 
     /**

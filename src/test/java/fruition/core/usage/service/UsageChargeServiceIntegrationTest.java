@@ -82,7 +82,7 @@ class UsageChargeServiceIntegrationTest {
         server.start();
         base = "http://127.0.0.1:" + server.getAddress().getPort();
         charges = new UsageChargeService(jdbc, manager, runs, credits, mapper, new PipelineClientFactory("internal-test"),
-                base + "/internal/model-usage/calls");
+                base + "/internal/model-usage/calls", 900);
         user = "user-" + UUID.randomUUID();
         model = "m-" + UUID.randomUUID();
     }

@@ -208,7 +208,8 @@ public class AiTaskResultApplier {
     public void applyIngest(JsonNode event) {
         String eventId = text(event, "event_id");
         String runId = text(event, "run_id");
-        if (!beginResult(runId)) return;
+        // 성공한 ingest만 AI가 post_ingest를 이어서 돌린다(#102).
+        if (!beginResult(runId, "succeeded".equals(text(event, "status")))) return;
         if (jdbcTemplate.update("""
                 INSERT INTO ai_task_result_receipts (event_id, run_id, task_kind)
                 VALUES (?, ?, 'ingest') ON CONFLICT (event_id) DO NOTHING
@@ -222,6 +223,16 @@ public class AiTaskResultApplier {
         documentService.applyPipelineResult(documentId, runId,
                 "succeeded".equals(text(event, "status")) ? "succeeded" : "failed",
                 event.path("error").asText(null));
+    }
+
+    /** post_ingest(품질 평가) 종료 이벤트. 결과는 AI에 남아 있어 사용 금액 정산과 ingest 예약 해제만 한다. */
+    @Transactional
+    public void applyPostIngest(JsonNode event) {
+        // 사용자 귀속이 없는 이벤트로 consumer 재시도 루프를 만들지 않는다.
+        String workspaceId = event.path("workspace_id").asText("");
+        String userId = event.path("user_id").asText("");
+        if (workspaceId.isBlank() || userId.isBlank()) return;
+        usageCharges.releasePostIngestHold(text(event, "run_id"), event.path("ingest_run_id").asText(null), workspaceId, userId);
     }
 
     /**
@@ -529,6 +540,11 @@ public class AiTaskResultApplier {
     }
 
     private boolean beginResult(String runId) {
+        return beginResult(runId, false);
+    }
+
+    /** holdForPostIngest면 사용 금액 수집·정산을 미뤄 post_ingest가 끝날 때까지 예약을 남긴다. */
+    private boolean beginResult(String runId, boolean holdForPostIngest) {
         var states = jdbcTemplate.queryForList("SELECT status FROM ai_task_runs WHERE id = ? FOR UPDATE", String.class, runId);
         if (states.isEmpty()) {
             // 파기(#88)로 지워진 실행이다. 예외를 던지면 같은 레코드를 끝없이 재시도해 파티션 전체가 멈춘다.
@@ -540,7 +556,8 @@ public class AiTaskResultApplier {
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
         jdbcTemplate.update("UPDATE ai_task_runs SET status = 'completed', updated_at = now() WHERE id = ?", runId);
         // 결과 반영과 같은 트랜잭션에 넣어 커밋된 뒤에 사용 금액을 수집한다(#78).
-        usageCharges.enqueue(runId);
+        if (holdForPostIngest) usageCharges.enqueueAfterPostIngest(runId);
+        else usageCharges.enqueue(runId);
         return true;
     }
 
