@@ -45,18 +45,20 @@ public final class UsagePricing {
      * ai는 전사·TTS에 토큰과 오디오 길이·글자 수를 함께 남기므로 더하면 이중 청구가 된다.
      *
      * <ol>
-     *   <li>행에 오디오 분당 단가가 있고 오디오 길이가 있으면 분당 단가로만 계산한다. 분당 과금 모델은 토큰 단가 열이
-     *       NOT NULL이라 0으로 두므로, 토큰으로 계산하면 0원이 된다.</li>
-     *   <li>아니면 행에 TTS 100만 글자당 단가가 있고 글자 수가 있으면 글자 단가로만 계산한다.</li>
+     *   <li>행에 오디오 분당 단가가 있으면 분당 단가로만 계산한다. 분당 과금 모델은 토큰 단가 열이 NOT NULL이라 0으로
+     *       두므로, 토큰으로 계산하면 0원이 확정된다. 오디오 길이가 없으면 null이다(나중에 복구할 수 있게 unpriced).</li>
+     *   <li>아니면 행에 TTS 100만 글자당 단가가 있으면 글자 단가로만 계산한다. 글자 수가 없으면 null이다.</li>
      *   <li>그 밖은 토큰으로만 계산한다. 토큰이 없는데 오디오 길이·글자 수가 있으면 그 단가가 없어 null이다.</li>
      * </ol>
      */
     public static BigDecimal callCostUsd(Price price, Long input, Long cached, Long creation, Long output,
                                          BigDecimal audioSeconds, Long ttsCharacters) {
-        if (price.audioPerMinute() != null && audioSeconds != null) {
+        if (price.audioPerMinute() != null) {
+            if (audioSeconds == null) return null;
             return audioSeconds.multiply(price.audioPerMinute()).divide(BigDecimal.valueOf(60), 12, RoundingMode.CEILING);
         }
-        if (price.ttsPerMchar() != null && ttsCharacters != null) {
+        if (price.ttsPerMchar() != null) {
+            if (ttsCharacters == null) return null;
             return BigDecimal.valueOf(ttsCharacters).multiply(price.ttsPerMchar()).movePointLeft(6);
         }
         if (input == null && output == null

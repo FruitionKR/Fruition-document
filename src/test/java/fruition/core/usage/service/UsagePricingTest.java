@@ -71,6 +71,13 @@ class UsagePricingTest {
     }
 
     @Test
+    void priceRowUnitWithoutMatchingQuantityIsUnpricedNotZero() {
+        // 분당 단가 행인데 audio_seconds가 없으면 토큰(단가 0)으로 0원 확정하지 않고 계산 불가(null)다.
+        assertThat(UsagePricing.callCostUsd(PER_MINUTE, 1000L, null, null, 500L, null, null)).isNull();
+        assertThat(UsagePricing.callCostUsd(PER_MCHAR, 1000L, null, null, 500L, null, null)).isNull();
+    }
+
+    @Test
     void routingSeparatesSnapshotsFromOtherModels() {
         assertThat(UsagePricing.routing("gpt-5-nano", "gpt-5-nano")).isEqualTo("same");
         assertThat(UsagePricing.routing("gpt-5-nano", "gpt-5-nano-2025-08-07")).isEqualTo("snapshot");

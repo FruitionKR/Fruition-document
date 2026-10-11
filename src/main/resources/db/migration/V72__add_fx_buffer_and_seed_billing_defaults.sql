@@ -9,18 +9,19 @@ ALTER TABLE pricing_policies
 -- 잠정값: margin_bp = 5000(원가의 +50%, 매출총이익률 약 33%)은 업계 기준(초기 AI 앱 최소 매출총이익률 25%, OpenRouter
 -- 수수료 5.5% 등)으로 정한 잠정값이다. 실제 원가 한 달 뒤 재산정한다. 바꿀 때는 effective_from이 더 늦은 새 행으로 넣는다
 -- (scripts/sql/insert-usage-price-versions.sql).
--- effective_from을 V70 단가와 같은 2026-01-01로 둔 것은 그 이후 unpriced로 남은 호출을 매시간 재계산이 다시 계산하게 하려는 것이다.
+-- effective_from은 소급하지 않고 마이그레이션 시각(now())으로 둔다. 과거로 두면 배포 직후 매시간 재계산이 최근 90일의
+-- unpriced 호출을 한꺼번에 크레딧 잔액에서 차감한다. 그 전 호출은 정책이 없어 unpriced로 남는다.
 INSERT INTO pricing_policies (effective_from, margin_bp, vat_bp, fx_buffer_bp)
-VALUES ('2026-01-01T00:00:00Z', 5000, 1000, 200)
+VALUES (now(), 5000, 1000, 200)
 ON CONFLICT DO NOTHING;
 
 -- 초기 환율. 첫 자동 갱신(FxRateService) 전에도 금액이 계산되게 하는 값이다.
 -- 2026-10-08(직전 영업일, 10-09는 한글날) USD 1339.20원. 서울외환시장 시장평균환율(매매기준율)을 한국 머니브로커
 -- (https://kmbco.com/kor/rate/exchange_rate.do?mkt=fx)에서 확인했다. 수출입은행 deal_bas_r 값을 직접 확인한 것은 아니다.
 -- 첫 갱신이 성공하면 수출입은행 값이 새 행으로 들어오고 이 행은 그 전 구간에만 쓰인다.
--- effective_from을 정책과 같은 2026-01-01로 둔 이유는 위와 같다. 1월~10월 호출의 환율은 실제와 다를 수 있다.
+-- effective_from을 정책과 같이 now()로 둔 이유는 위와 같다.
 INSERT INTO fx_rates (effective_from, krw_per_usd)
-VALUES ('2026-01-01T00:00:00Z', 1339.2000)
+VALUES (now(), 1339.2000)
 ON CONFLICT DO NOTHING;
 
 -- 음성 전사 모델 단가. 2026-10-11 OpenAI 공식 단가 페이지(https://developers.openai.com/api/docs/pricing)와

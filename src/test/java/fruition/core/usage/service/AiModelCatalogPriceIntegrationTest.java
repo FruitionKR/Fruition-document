@@ -48,4 +48,17 @@ class AiModelCatalogPriceIntegrationTest {
 
         assertThat(missing).isEmpty();
     }
+
+    /** 전사 모델은 분당 단가가 없으면 audio_seconds가 있어도 계산할 수 없어 unpriced가 된다. */
+    @Test
+    void speechModelsHaveAudioPerMinutePrice() {
+        var missing = SPEECH_BILLED.stream()
+                .filter(key -> !SPEECH_UNPRICED.containsKey(key))
+                .filter(key -> jdbc.queryForObject("SELECT count(*) FROM ai_model_prices WHERE provider = ? AND model = ? "
+                        + "AND effective_from <= now() AND audio_usd_per_minute IS NOT NULL", Long.class,
+                        key.split("/", 2)[0], key.split("/", 2)[1]) == 0)
+                .toList();
+
+        assertThat(missing).isEmpty();
+    }
 }

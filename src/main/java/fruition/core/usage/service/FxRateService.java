@@ -11,6 +11,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
@@ -23,10 +25,11 @@ import java.time.format.DateTimeFormatter;
  *
  * <p>평일 11:30(KST)에 돌고, 기동할 때도 한 번 돈다. 수출입은행은 영업일 11시경 이후에 그날 값을 내고
  * 비영업일·게시 전에는 빈 배열을 돌려주므로, 오늘부터 최대 {@value #LOOKBACK_DAYS}일 전까지 거슬러 올라가
- * 값이 있는 가장 최근 날짜를 쓴다. 이미 그 날짜 이후의 행이 있으면 더 부르지 않는다.
+ * 값이 있는 가장 최근 날짜를 쓴다.
  *
- * <p>여러 Pod가 동시에 돌아도 안전하다. {@code effective_from}을 게시일 00:00(KST)으로 고정해 같은 값은 같은 PK로
- * 들어가고 {@code ON CONFLICT DO NOTHING}이 중복을 막는다. 직전 환율과 같으면 넣지 않는다.
+ * <p>{@code effective_from}은 게시일이 아니라 가져온 시각(초 단위)이다. 게시일 00:00으로 두면 이미 청구된 호출에
+ * 소급되어, 같은 시각 호출도 수집 시점에 따라 환율이 달라진다. 직전 환율과 같으면 넣지 않는다.
+ * 여러 Pod가 동시에 돌아도 안전하도록 마지막 행 조회와 삽입을 advisory lock 트랜잭션으로 묶는다.
  * 실패하면 이전 환율을 그대로 쓰고 {@code [환율 갱신 실패]} 경고만 남긴다(알람 기준 문구).
  */
 @Service
@@ -43,11 +46,13 @@ public class FxRateService {
     private final RestClient client;
     private final String endpoint;
     private final String authKey;
+    private final TransactionTemplate transaction;
 
-    public FxRateService(JdbcTemplate jdbc, ObjectMapper mapper, PipelineClientFactory factory,
+    public FxRateService(JdbcTemplate jdbc, PlatformTransactionManager manager, ObjectMapper mapper, PipelineClientFactory factory,
                          @Value("${app.fx.koreaexim.endpoint}") String endpoint,
                          @Value("${app.fx.koreaexim.auth-key:}") String authKey) {
         this.jdbc = jdbc;
+        this.transaction = new TransactionTemplate(manager);
         this.mapper = mapper;
         // 내부 인증 헤더가 붙는 restClient()는 쓰지 않는다(외부 호출). timeout 설정만 가져온다.
         this.client = RestClient.builder().requestFactory(factory.requestFactory(10)).build();
@@ -69,8 +74,10 @@ public class FxRateService {
         try {
             update(LocalDate.now(KST));
         } catch (RuntimeException e) {
-            // 인증키가 URL 쿼리에 있어 예외 메시지(요청 URL 포함 가능)는 남기지 않고 종류만 남긴다.
-            log.warn("[환율 갱신 실패] 이전 환율을 유지한다. cause={}", e.getClass().getSimpleName());
+            // 인증키가 URL 쿼리에 있어 RestClient 예외 메시지(요청 URL 포함 가능)는 남기지 않고 종류만 남긴다.
+            // fetchUsd가 직접 만든 IllegalStateException 메시지(결과 코드 등)에는 URL이 없어 그대로 남긴다.
+            log.warn("[환율 갱신 실패] 이전 환율을 유지한다. cause={}", e instanceof IllegalStateException
+                    ? e.getMessage() : e.getClass().getSimpleName());
         }
     }
 
@@ -78,24 +85,25 @@ public class FxRateService {
     void update(LocalDate today) {
         for (int i = 0; i <= LOOKBACK_DAYS; i++) {
             LocalDate date = today.minusDays(i);
-            var latest = jdbc.queryForList("SELECT effective_from, krw_per_usd FROM fx_rates "
-                    + "ORDER BY effective_from DESC LIMIT 1");
-            if (!latest.isEmpty() && !((java.sql.Timestamp) latest.getFirst().get("effective_from")).toInstant()
-                    .isBefore(date.atStartOfDay(KST).toInstant())) {
-                return; // 그 날짜 이후 행이 이미 있다.
-            }
             BigDecimal rate = fetchUsd(date);
             if (rate == null) {
                 continue;
             }
-            if (latest.isEmpty() || rate.compareTo((BigDecimal) latest.getFirst().get("krw_per_usd")) != 0) {
-                jdbc.update("INSERT INTO fx_rates (effective_from, krw_per_usd) VALUES (?::timestamptz, ?) "
-                        + "ON CONFLICT DO NOTHING", date.atStartOfDay(KST).toOffsetDateTime().toString(), rate);
-                log.info("환율 갱신: date={} krwPerUsd={}", date, rate);
-            }
+            transaction.executeWithoutResult(tx -> insertIfChanged(date, rate));
             return;
         }
         log.warn("[환율 갱신 실패] 최근 {}일 안에 게시된 USD 환율이 없다. 이전 환율을 유지한다.", LOOKBACK_DAYS);
+    }
+
+    private void insertIfChanged(LocalDate date, BigDecimal rate) {
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtext('fx_rates'))", rs -> { });
+        var latest = jdbc.queryForList("SELECT krw_per_usd FROM fx_rates ORDER BY effective_from DESC LIMIT 1", BigDecimal.class);
+        if (latest.isEmpty() || rate.compareTo(latest.getFirst()) != 0) {
+            // 락을 기다린 뒤의 시각이어야 최신 행이 항상 가장 늦다(now()는 트랜잭션 시작 시각이라 쓰지 않는다).
+            jdbc.update("INSERT INTO fx_rates (effective_from, krw_per_usd) "
+                    + "VALUES (date_trunc('second', clock_timestamp()), ?) ON CONFLICT DO NOTHING", rate);
+            log.info("환율 갱신: date={} krwPerUsd={}", date, rate);
+        }
     }
 
     /** 그 날짜의 USD 매매기준율. 게시 전·비영업일이면 null이다. */
