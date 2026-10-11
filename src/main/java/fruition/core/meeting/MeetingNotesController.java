@@ -38,7 +38,8 @@ public class MeetingNotesController {
                     + "생성은 요청 스레드 밖에서 하므로 새 버전을 generating으로 만들고 바로 응답합니다(202). "
                     + "결과는 조회(GET)로 기다리고, 생성 실패는 그 버전의 failed 상태와 error_code로 알립니다. "
                     + "같은 Idempotency-Key는 같은 버전을 돌려주고, 다시 만들려면 새 키를 씁니다. "
-                    + "누락되었거나 정상 종료되지 않은 녹음이 있으면 allow_partial=true일 때만 만듭니다.")
+                    + "누락되었거나 정상 종료되지 않은 녹음이 있으면 allow_partial=true일 때만 만듭니다. "
+                    + "워크스페이스당 생성은 하나라서, 다른 회의록이 만들어지는 중이면 409 MEETING_NOTES_BUSY입니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "같은 키 재시도로 이미 끝난 버전을 반환",
             content = @Content(schema = @Schema(implementation = MeetingNotesResponse.class))),
@@ -46,7 +47,7 @@ public class MeetingNotesController {
             content = @Content(schema = @Schema(implementation = MeetingNotesResponse.class))),
         @ApiResponse(responseCode = "404", description = "회의를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "받아쓰기 중, 불완전 전사, 동시 생성",
+        @ApiResponse(responseCode = "409", description = "받아쓰기 중, 불완전 전사, 워크스페이스에서 다른 회의록 생성 중(MEETING_NOTES_BUSY)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "422", description = "확정 전사 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
@@ -62,6 +63,25 @@ public class MeetingNotesController {
         MeetingNotesResponse notes = service.generate(workspaceId, userId, meetingId, idempotencyKey, allowPartial);
         return ResponseEntity.status("generating".equals(notes.status()) ? HttpStatus.ACCEPTED : HttpStatus.OK)
                 .body(notes);
+    }
+
+    @Operation(operationId = "cancelMeetingNotes", summary = "회의록 초안 생성 취소",
+            description = "만들고 있는(generating) 초안을 실패(error_code=MEETING_NOTES_CANCELLED)로 바꾸고 ai 작업 취소를 요청합니다. "
+                    + "워크스페이스의 생성 자리를 바로 놓습니다. 늦게 온 결과는 반영하지 않습니다. 만드는 초안이 없으면 409입니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "취소됨",
+            content = @Content(schema = @Schema(implementation = MeetingNotesResponse.class))),
+        @ApiResponse(responseCode = "404", description = "회의를 찾을 수 없음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "409", description = "만드는 초안이 없음(MEETING_NOTES_NOT_GENERATING)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PostMapping("/cancel")
+    public MeetingNotesResponse cancel(
+            @AuthenticationPrincipal String userId,
+            @PathVariable("workspace_id") String workspaceId,
+            @PathVariable("meeting_id") String meetingId) {
+        return service.cancel(workspaceId, userId, meetingId);
     }
 
     @Operation(operationId = "getMeetingNotes", summary = "최신 회의록 초안 조회",

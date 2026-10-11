@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import fruition.core.aitask.service.AiTaskCancellationService;
 import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.exception.DocumentLockedException;
@@ -27,6 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -41,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -75,11 +78,12 @@ public class MeetingNotesService {
     private final DocumentEditLockService documentEditRules;
     private final PostgresDocumentEditStore editStore;
     private final ObjectMapper objectMapper;
+    private final AiTaskCancellationService aiCancellation;
     public MeetingNotesService(MeetingService meetingService, MeetingNotesRepository notes,
                                DocumentService documentService, DocumentEditLockService documentEditRules,
                                PostgresDocumentEditStore editStore, ObjectMapper objectMapper,
                                WorkspaceAiModelClient workspaceAiModelClient, AiCommandOutboxWriter outboxWriter,
-                               PlatformTransactionManager transactionManager,
+                               AiTaskCancellationService aiCancellation, PlatformTransactionManager transactionManager,
                                @Value("${app.maintenance.command-topic}") String commandTopic,
                                @Value("${app.speech.meeting-notes-generation-timeout-minutes}") long generationTimeoutMinutes) {
         this.meetingService = meetingService;
@@ -90,6 +94,7 @@ public class MeetingNotesService {
         this.objectMapper = objectMapper;
         this.workspaceAiModelClient = workspaceAiModelClient;
         this.outboxWriter = outboxWriter;
+        this.aiCancellation = aiCancellation;
         this.transaction = new TransactionTemplate(transactionManager);
         this.commandTopic = commandTopic;
         this.generationTimeout = Duration.ofMinutes(generationTimeoutMinutes);
@@ -142,7 +147,19 @@ public class MeetingNotesService {
                         "segment_ids", bundle.segmentIds()))
                 .toList();
         String runId = UUID.randomUUID().toString();
-        var inserted = notes.insertGenerating(meetingId, requestId, partial, json(snapshot), runId);
+        expireGenerating(workspaceId);
+        // 워크스페이스당 생성은 하나다(팀 회의는 한 사람이 녹음한다). 잠금은 같은 트랜잭션의 insert까지 쥐어 Pod 사이에서도 직렬이다.
+        var inserted = transaction.execute(status -> {
+            notes.lockWorkspace(workspaceId);
+            if (notes.findByRequest(meetingId, requestId).isPresent()) {
+                return Optional.<Integer>empty();  // 같은 요청 ID의 재시도·동시 재시도
+            }
+            if (notes.hasGenerating(workspaceId)) {
+                throw new MeetingException(HttpStatus.CONFLICT, "MEETING_NOTES_BUSY",
+                        "이 워크스페이스에서 다른 회의록을 만드는 중입니다. 끝난 뒤 다시 시도하세요.");
+            }
+            return notes.insertGenerating(meetingId, requestId, partial, json(snapshot), runId);
+        });
         if (inserted.isEmpty()) {
             return toResponse(notes.findByRequest(meetingId, requestId).orElseThrow(() ->
                     new MeetingException(HttpStatus.CONFLICT, "MEETING_NOTES_BUSY",
@@ -203,9 +220,37 @@ public class MeetingNotesService {
 
     public MeetingNotesResponse latest(String workspaceId, String userId, String meetingId) {
         meetingService.requireOwned(workspaceId, userId, meetingId);
-        notes.expireGenerating(meetingId, Instant.now().minus(generationTimeout));
+        expireGenerating(workspaceId);
         return toResponse(notes.latest(meetingId).orElseThrow(() ->
                 new MeetingException(HttpStatus.NOT_FOUND, "MEETING_NOTES_NOT_FOUND", "회의록 초안이 없습니다.")));
+    }
+
+    /**
+     * 오래 generating인 초안을 실패로 정리하고 ai 작업 취소를 요청한다. 정리와 취소 요청은 한 트랜잭션이고,
+     * 파이프라인 호출은 하지 않는다(요청 스레드를 막지 않도록 resume 스케줄러가 이어서 진행한다).
+     */
+    private void expireGenerating(String workspaceId) {
+        transaction.executeWithoutResult(status -> notes.expireGenerating(workspaceId, Instant.now().minus(generationTimeout))
+                .forEach(aiCancellation::requestCancel));
+    }
+
+    /** 아무도 조회하지 않아도 만료가 처리되게 모든 워크스페이스를 주기적으로 정리한다. 여러 Pod가 겹쳐도 UPDATE가 한 번만 반영한다. */
+    @Scheduled(fixedDelay = 60_000)
+    public void sweepExpired() {
+        expireGenerating(null);
+    }
+
+    /** 만들고 있는 초안을 취소한다. 만드는 초안이 없으면 409(MEETING_NOTES_NOT_GENERATING). */
+    public MeetingNotesResponse cancel(String workspaceId, String userId, String meetingId) {
+        meetingService.requireOwned(workspaceId, userId, meetingId);
+        int version = transaction.execute(status -> {
+            int cancelled = notes.cancelGenerating(meetingId).orElseThrow(() -> new MeetingException(HttpStatus.CONFLICT,
+                    "MEETING_NOTES_NOT_GENERATING", "만들고 있는 회의록 초안이 없습니다."));
+            notes.find(meetingId, cancelled).map(MeetingNotesRepository.Note::aiRunId)
+                    .ifPresent(aiCancellation::requestCancel);
+            return cancelled;
+        });
+        return toResponse(notes.find(meetingId, version).orElseThrow());
     }
 
     public AppendPreview appendPreview(String workspaceId, String userId, String meetingId, int version,

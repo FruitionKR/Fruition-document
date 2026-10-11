@@ -24,6 +24,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -47,6 +51,7 @@ class MeetingNotesIntegrationTest {
     /** 명령이 Kafka로 나가 outbox에서 사라지지 않게 한다(다른 outbox 통합 테스트와 같다). */
     @MockBean fruition.core.document.service.AiCommandOutboxPublisher outboxPublisher;
     @MockBean WorkspaceAiModelClient workspaceAiModelClient;
+    @MockBean fruition.core.aitask.repository.PipelineTaskCancellationClient pipeline;
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired JdbcTemplate jdbc;
@@ -54,6 +59,7 @@ class MeetingNotesIntegrationTest {
     @Autowired JwtTokenProvider jwtTokenProvider;
     @Autowired AiTaskResultConsumer consumer;
     @Autowired CreditService credits;
+    @Autowired MeetingNotesService notesService;
 
     private String userId;
     private String workspaceId;
@@ -297,6 +303,144 @@ class MeetingNotesIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE id = ?", Integer.class, runId)).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_command_outbox WHERE run_id = ?", Integer.class, runId))
                 .isZero();
+    }
+
+    @Test
+    void oneGenerationPerWorkspace_otherWorkspaceUnaffected() throws Exception {
+        String first = meetingWithTranscript(null, "finished");
+        String second = meetingWithTranscript(null, "finished");
+        grant();
+        generate(first, "k1", false).andExpect(status().isAccepted());
+        generate(second, "k2", false).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("MEETING_NOTES_BUSY"));
+        generate(first, "k1", false).andExpect(status().isAccepted());  // 같은 키 재시도는 BUSY가 아니다
+
+        succeed(first, 1);  // 끝나면 자리가 풀린다
+        awaitStatus(first, "ready");
+        generate(second, "k2", false).andExpect(status().isAccepted());
+
+        // 다른 워크스페이스는 영향이 없다.
+        String firstWorkspace = workspaceId;
+        setUp();
+        String other = meetingWithTranscript(null, "finished");
+        grant();
+        generate(other, "k3", false).andExpect(status().isAccepted());
+        assertThat(firstWorkspace).isNotEqualTo(workspaceId);
+    }
+
+    @Test
+    void concurrentRequestsInSameWorkspace_admitOne() throws Exception {
+        String first = meetingWithTranscript(null, "finished");
+        String second = meetingWithTranscript(null, "finished");
+        grant();
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        java.util.List<java.util.concurrent.Future<Integer>> results = new java.util.ArrayList<>();
+        for (String meeting : java.util.List.of(first, second)) {
+            results.add(pool.submit(() -> {
+                start.await();
+                return generate(meeting, "key-" + meeting, false).andReturn().getResponse().getStatus();
+            }));
+        }
+        start.countDown();
+        java.util.List<Integer> statuses = new java.util.ArrayList<>();
+        for (var result : results) {
+            statuses.add(result.get());
+        }
+        pool.shutdown();
+        assertThat(statuses).containsExactlyInAnyOrder(202, 409);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM meeting_notes n JOIN meetings m ON m.id = n.meeting_id
+                WHERE m.workspace_id = ? AND n.status = 'generating'
+                """, Integer.class, workspaceId)).isEqualTo(1);
+    }
+
+    @Test
+    void expiry_failsNoteAndRequestsAiCancellation() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        grant();
+        generate(meetingId, "k1", false).andExpect(status().isAccepted());
+        jdbc.update("UPDATE meeting_notes SET updated_at = now() - interval '31 minutes' WHERE meeting_id = ?", meetingId);
+
+        assertThat(awaitStatus(meetingId, "failed").path("error_code").asText()).isEqualTo("MEETING_NOTES_TIMEOUT");
+        verify(pipeline, timeout(5000)).cancel(eq(runId(meetingId, 1)), eq(workspaceId), eq(userId), any());
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, runId(meetingId, 1)))
+                .isEqualTo("cancel_requested");
+    }
+
+    @Test
+    void cancel_byOwner_releasesSlotAndIgnoresLateResult() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        String second = meetingWithTranscript(null, "finished");
+        grant();
+        generate(meetingId, "k1", false).andExpect(status().isAccepted());
+
+        String other = "user_" + UUID.randomUUID().toString().substring(0, 8);
+        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + other, "OWNER");
+        mockMvc.perform(post(notesUrl(meetingId) + "/cancel")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(other, other + "@x.com")))
+                .andExpect(status().isNotFound());
+        assertThat(awaitStatus(meetingId, "generating").path("version").asInt()).isEqualTo(1);
+
+        mockMvc.perform(post(notesUrl(meetingId) + "/cancel").header("Authorization", bearer()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("failed"))
+                .andExpect(jsonPath("$.error_code").value("MEETING_NOTES_CANCELLED"));
+        verify(pipeline, timeout(5000)).cancel(eq(runId(meetingId, 1)), eq(workspaceId), eq(userId), any());
+        mockMvc.perform(post(notesUrl(meetingId) + "/cancel").header("Authorization", bearer()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("MEETING_NOTES_NOT_GENERATING"));
+
+        succeed(meetingId, 1);  // 취소 뒤 늦게 온 성공은 되살리지 않는다
+        assertThat(awaitStatus(meetingId, "failed").path("error_code").asText()).isEqualTo("MEETING_NOTES_CANCELLED");
+        generate(second, "k2", false).andExpect(status().isAccepted());  // 자리가 풀렸다
+    }
+
+    @Test
+    void expiry_freesWorkspaceSlotForOtherMeeting() throws Exception {
+        String first = meetingWithTranscript(null, "finished");
+        String second = meetingWithTranscript(null, "finished");
+        grant();
+        generate(first, "k1", false).andExpect(status().isAccepted());
+        generate(second, "k2", false).andExpect(status().isConflict());
+        jdbc.update("UPDATE meeting_notes SET updated_at = now() - interval '31 minutes' WHERE meeting_id = ?", first);
+
+        generate(second, "k2", false).andExpect(status().isAccepted());  // 조회 없이도 만료를 정리한다
+        assertThat(jdbc.queryForObject("SELECT error_code FROM meeting_notes WHERE meeting_id = ?", String.class, first))
+                .isEqualTo("MEETING_NOTES_TIMEOUT");
+    }
+
+    @Test
+    void sweep_expiresStaleNoteWithoutAnyRequest() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        grant();
+        generate(meetingId, "k1", false).andExpect(status().isAccepted());
+        jdbc.update("UPDATE meeting_notes SET updated_at = now() - interval '31 minutes' WHERE meeting_id = ?", meetingId);
+
+        notesService.sweepExpired();
+
+        assertThat(jdbc.queryForObject("SELECT error_code FROM meeting_notes WHERE meeting_id = ?", String.class, meetingId))
+                .isEqualTo("MEETING_NOTES_TIMEOUT");
+        verify(pipeline, timeout(5000)).cancel(eq(runId(meetingId, 1)), eq(workspaceId), eq(userId), any());
+    }
+
+    @Test
+    void cancelRequestedRun_advancesToCancelledAndQueuesUsageCollection() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        grant();
+        generate(meetingId, "k1", false).andExpect(status().isAccepted());
+        String runId = runId(meetingId, 1);
+        when(pipeline.cancel(eq(runId), eq(workspaceId), eq(userId), any())).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(runId, "cancelled", null));
+
+        mockMvc.perform(post(notesUrl(meetingId) + "/cancel").header("Authorization", bearer())).andExpect(status().isOk());
+
+        for (int i = 0; i < 100 && !"cancelled".equals(jdbc.queryForObject(
+                "SELECT status FROM ai_task_runs WHERE id = ?", String.class, runId)); i++) {
+            Thread.sleep(100);
+        }
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, runId))
+                .isEqualTo("cancelled");
+        // 수집 큐 행은 처리되면 지워지므로, 큐에 넣는 전이가 일어났음은 취소 완료 상태로 확인한다.
     }
 
     // ---------- helpers
