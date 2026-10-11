@@ -44,7 +44,7 @@ tags:
   name: Query Runs
 - description: "재사용 가능한 Agent Skill 작성, 게시 및 실행 설정 API"
   name: Skills
-- description: 채팅 음성 입력. 음성과 전사 결과를 저장하지 않는다.
+- description: 채팅 음성 입력(음성과 전사 결과를 저장하지 않는다)과 답변 음성 듣기(완료된 합성만 30일 저장).
   name: Speech
 - description: Wiki 그래프 및 페이지 조회 API
   name: Wiki
@@ -4424,6 +4424,70 @@ paths:
       summary: Skill 활성화
       tags:
       - Skills
+  /api/workspaces/{workspace_id}/speech/synthesis:
+    post:
+      description: "완료된 assistant 답변을 음성으로 스트리밍합니다. 응답은 줄 단위 JSON(application/x-ndjson)입니다. {\"type\":\"audio\",\"delta\":\"<base64 PCM16 LE mono 24kHz>\"} 이벤트가 이어지고, 정확히 하나의 {\"type\":\"done\"} 또는 {\"type\":\"error\",\"code\":\"...\"}로 끝납니다. 끝까지 합성된 음성은 저장돼 같은 형식으로 다시 재생되며(과금 없음) 30일 뒤 삭제됩니다. 연결을 끊으면 합성을 멈춥니다. HTTP 상태 오류는 스트림이 시작되기 전에만 나옵니다."
+      operationId: synthesizeSpeech
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpeechSynthesisRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+          description: NDJSON 이벤트 스트림
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: message_id 누락 또는 답변이 합성 입력 한도 초과
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스·답변을 찾을 수 없음(멤버가 아니거나 내 세션의 assistant 답변이 아님)
+        "409":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 완료되지 않았거나 실패한 답변
+        "422":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 읽을 글이 없는 답변(코드만 있는 답변 등)
+        "503":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 음성 합성 서비스를 사용할 수 없음
+      summary: 채팅 답변 음성 듣기
+      tags:
+      - Speech
   /api/workspaces/{workspace_id}/speech/transcriptions:
     post:
       description: "짧은 음성을 텍스트로 바꿔 반환합니다. 결과를 질의·Agent에 자동으로 제출하지 않으며, 음성과 텍스트를 저장하지 않습니다. 인식된 말이 없으면 text는 빈 문자열입니다."
@@ -8610,6 +8674,16 @@ components:
           type: string
           description: 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+    SpeechSynthesisRequest:
+      type: object
+      properties:
+        message_id:
+          type: string
+          description: 음성으로 들을 assistant 메시지 ID
+          example: msg_2f0b8d3f1c9a4c4e9a3d6f7a1b2c3d4e
+          minLength: 1
+      required:
+      - message_id
     SpeechTranscriptionResponse:
       type: object
       description: 받아쓴 텍스트

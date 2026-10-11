@@ -9,6 +9,7 @@ import fruition.core.chat.exception.ChatSessionLimitExceededException;
 import fruition.core.chat.exception.ChatSessionNotFoundException;
 import fruition.core.chat.repository.ChatSessionRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.speech.SpeechAudioStore;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,10 +22,13 @@ public class ChatSessionService {
 
     private final ChatSessionRepository chatSessionRepository;
     private final WorkspaceAccessGuard workspaceAccessGuard;
+    private final SpeechAudioStore speechAudioStore;
 
-    public ChatSessionService(ChatSessionRepository chatSessionRepository, WorkspaceAccessGuard workspaceAccessGuard) {
+    public ChatSessionService(ChatSessionRepository chatSessionRepository, WorkspaceAccessGuard workspaceAccessGuard,
+                              SpeechAudioStore speechAudioStore) {
         this.chatSessionRepository = chatSessionRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
+        this.speechAudioStore = speechAudioStore;
     }
 
     private void verifyWorkspaceOwnership(String workspaceId, String userId) {
@@ -92,6 +96,8 @@ public class ChatSessionService {
         ChatSession session = verifyOwnedSession(workspaceId, userId, sessionId);
         // chat_messages/chat_message_references/chat_message_related_pages는
         // DB FK ON DELETE CASCADE로 함께 삭제된다 (ChatMessage.session 참고).
+        // 답변 음성 행도 CASCADE로 사라지므로 객체를 먼저 지운다.
+        speechAudioStore.deleteForSession(sessionId);
         chatSessionRepository.delete(session);
     }
 
