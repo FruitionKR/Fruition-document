@@ -1,6 +1,7 @@
 package fruition.core.query.controller;
 
-import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.chat.exception.ChatSessionNotFoundException;
+import fruition.core.chat.service.ChatSessionService;
 import fruition.core.query.domain.QueryRun;
 import fruition.core.query.dto.QueryResponse;
 import fruition.core.query.service.QueryEventBroker;
@@ -41,7 +42,7 @@ class QueryRunControllerTest {
     @Autowired JwtTokenProvider jwtTokenProvider;
     @MockBean QueryRunStore queryRunStore;
     @MockBean QueryEventBroker queryEventBroker;
-    @MockBean WorkspaceAccessGuard workspaceAccessGuard;
+    @MockBean ChatSessionService chatSessionService;
 
     private String bearerToken() {
         return "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com");
@@ -72,11 +73,34 @@ class QueryRunControllerTest {
     void getRun_notWorkspaceMember_returns404() throws Exception {
         when(queryRunStore.find("query_abc123")).thenReturn(Optional.of(pendingRun()));
         doThrow(new WorkspaceNotFoundException(WORKSPACE_ID))
-                .when(workspaceAccessGuard).requireMember(WORKSPACE_ID, USER_ID);
+                .when(chatSessionService).verifyOwnedSession(WORKSPACE_ID, USER_ID, "session_abc123");
 
         mockMvc.perform(get("/api/query/runs/query_abc123")
                         .header("Authorization", bearerToken()))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void getRun_otherMembersSession_returns404() throws Exception {
+        when(queryRunStore.find("query_abc123")).thenReturn(Optional.of(pendingRun()));
+        doThrow(new ChatSessionNotFoundException("session_abc123"))
+                .when(chatSessionService).verifyOwnedSession(WORKSPACE_ID, USER_ID, "session_abc123");
+
+        mockMvc.perform(get("/api/query/runs/query_abc123")
+                        .header("Authorization", bearerToken()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void subscribe_otherMembersSession_returns404() throws Exception {
+        when(queryRunStore.find("query_abc123")).thenReturn(Optional.of(pendingRun()));
+        doThrow(new ChatSessionNotFoundException("session_abc123"))
+                .when(chatSessionService).verifyOwnedSession(WORKSPACE_ID, USER_ID, "session_abc123");
+
+        mockMvc.perform(get("/api/query/runs/query_abc123/events")
+                        .header("Authorization", bearerToken()))
+                .andExpect(status().isNotFound());
+        verify(queryEventBroker, org.mockito.Mockito.never()).subscribe("query_abc123");
     }
 
     @Test
@@ -96,7 +120,7 @@ class QueryRunControllerTest {
                 .andExpect(jsonPath("$.result.web_search_executed").value(true))
                 .andExpect(jsonPath("$.result.result_count").value(2));
 
-        verify(workspaceAccessGuard).requireMember(WORKSPACE_ID, USER_ID);
+        verify(chatSessionService).verifyOwnedSession(WORKSPACE_ID, USER_ID, "session_abc123");
     }
 
     @Test
@@ -117,7 +141,7 @@ class QueryRunControllerTest {
                         .header("Authorization", bearerToken()))
                 .andExpect(request().asyncStarted());
 
-        verify(workspaceAccessGuard).requireMember(WORKSPACE_ID, USER_ID);
+        verify(chatSessionService).verifyOwnedSession(WORKSPACE_ID, USER_ID, "session_abc123");
     }
 
     /**
