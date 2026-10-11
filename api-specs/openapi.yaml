@@ -773,6 +773,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 되돌릴 수 없는 작업이거나 대상이 없음
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "실행자에게 문서 편집 권한이 없음(문서 편집 복구, DOCUMENT_WRITE_FORBIDDEN)"
         "404":
           content:
             '*/*':
@@ -785,6 +791,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 미리보기 이후 대상이 변경됨
+        "423":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "다른 사용자가 문서 편집 잠금을 쥠(문서 편집 복구, DOCUMENT_EDIT_LOCKED)"
       summary: 이 작업 되돌리기
       tags:
       - AI Operation Logs
