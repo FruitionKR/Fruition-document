@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>입력 토큰은 캐시 읽기·생성분을 포함한 합계라(LangChain usage_metadata) 일반 입력은 그 둘을 뺀다.</li>
  *   <li>reasoning 토큰은 출력에 포함돼 따로 과금하지 않는다.</li>
- *   <li>사용자 금액 = 원가 × 환율 × (1 + 마진) × (1 + 부가세), milli-KRW로 올림한다.</li>
+ *   <li>사용자 금액 = 원가 × 환율 × (1 + 환율 버퍼) × (1 + 마진) × (1 + 부가세), milli-KRW로 올림한다.</li>
  * </ul>
  */
 public final class UsagePricing {
@@ -95,11 +95,12 @@ public final class UsagePricing {
     }
 
     /** 사용자 금액(milli-KRW). 반올림 오차가 쌓이지 않게 올림 전 원가로 한 번에 계산한다. */
-    public static long chargeKrwMilli(BigDecimal costUsd, BigDecimal krwPerUsd, int marginBp, int vatBp) {
+    public static long chargeKrwMilli(BigDecimal costUsd, BigDecimal krwPerUsd, int fxBufferBp, int marginBp, int vatBp) {
         return costUsd.multiply(krwPerUsd)
+                .multiply(BigDecimal.valueOf(10_000L + fxBufferBp))
                 .multiply(BigDecimal.valueOf(10_000L + marginBp))
                 .multiply(BigDecimal.valueOf(10_000L + vatBp))
-                .movePointLeft(8 - 3)
+                .movePointLeft(12 - 3)
                 .setScale(0, RoundingMode.CEILING).longValueExact();
     }
 }

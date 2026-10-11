@@ -376,6 +376,7 @@ public class UsageChargeService {
                     UsagePricing.costUsdMicro(costUsd), null);
         }
         long charge = UsagePricing.chargeKrwMilli(costUsd, (BigDecimal) fx.getFirst().get("krw_per_usd"),
+                ((Number) policy.getFirst().get("fx_buffer_bp")).intValue(),
                 ((Number) policy.getFirst().get("margin_bp")).intValue(),
                 ((Number) policy.getFirst().get("vat_bp")).intValue());
         return new Priced("charged", priceModel, routing, price.getKey(),
