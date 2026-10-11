@@ -29,7 +29,8 @@ import java.util.regex.Pattern;
  */
 @Component
 public class MeetingTranscriptionWorker {
-    static final Duration STALE_CLAIM = Duration.ofMinutes(5);
+    /** 전사 대기(960초)보다 길어야 진행 중인 전사를 다른 Pod가 다시 잡지 않는다. */
+    static final Duration STALE_CLAIM = Duration.ofMinutes(20);
     static final int MAX_SEGMENT_CHARS = 10_000;
     /** 회의록 AI는 구간 1,000개·전체 100,000자까지 받는다. 문장을 이 길이까지 묶어 구간 수를 한도 안에 둔다. */
     static final int TARGET_SEGMENT_CHARS = 1_000;
@@ -47,7 +48,7 @@ public class MeetingTranscriptionWorker {
     public MeetingTranscriptionWorker(MeetingRepository repository, MinioClient minio, StorageProperties storage,
                                       PipelineClientFactory clientFactory,
                                       @Value("${app.speech.transcription-endpoint}") String endpoint,
-                                      @Value("${app.speech.transcription-timeout-seconds:150}") int timeoutSeconds,
+                                      @Value("${app.meeting.transcription-timeout-seconds:960}") int timeoutSeconds,
                                       UsageChargeService usageCharges) {
         this.usageCharges = usageCharges;
         this.repository = repository;
@@ -89,7 +90,14 @@ public class MeetingTranscriptionWorker {
                         "전사가 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요.");
                 return;
             }
-            repository.completeTranscription(meeting.id(), meeting.recordingKey(), segments(text));
+            List<String> segments = segments(text);
+            // 회의록 AI는 구간을 공백으로 이어 100,000자까지 받는다. 긴 문장을 자르며 늘어난 구분 공백까지 센다.
+            if (segments.stream().mapToInt(String::length).sum() + segments.size() - 1 > MAX_TOTAL_CHARS) {
+                repository.failTranscription(meeting.id(), meeting.recordingKey(),
+                        "전사가 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요.");
+                return;
+            }
+            repository.completeTranscription(meeting.id(), meeting.recordingKey(), segments);
         } catch (RestClientResponseException e) {
             log.warn("[회의 파일 전사 실패] meetingId={} status={}", meeting.id(), e.getStatusCode().value());
             repository.failTranscription(meeting.id(), meeting.recordingKey(), switch (e.getStatusCode().value()) {

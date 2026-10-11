@@ -106,7 +106,7 @@ class SpeechTranscriptionIntegrationTest {
         assertThat(lastContentType.get()).isEqualTo("audio/webm");  // codecs 파라미터는 떼고 넘긴다
         assertThat(lastToken.get()).isEqualTo("test-internal-callback");
         // AI가 사용량을 남기도록 실행 ID를 X-Request-Id 헤더로 보낸다. 쿼리에 넣으면 버려진다(#87).
-        assertThat(lastQuery.get()).isEqualTo("workspace_id=" + workspaceId + "&user_id=" + userId);
+        assertThat(lastQuery.get()).isEqualTo("workspace_id=" + workspaceId + "&user_id=" + userId + "&deadline_seconds=100");
         assertThat(lastRequestId.get()).startsWith("speech_transcription:");
     }
 

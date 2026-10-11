@@ -217,6 +217,26 @@ class MeetingLiveIntegrationTest {
                 Integer.class, meetingId)).isEqualTo(MeetingLiveHandler.MAX_SEGMENTS);
     }
 
+    @Test
+    void charsLimitCountsOneSeparatorPerSegment() {
+        // 글자 + 구간 수 + 새 글자가 정확히 100,000이면 허용하고, 1자만 넘어도 거절한다.
+        assertThat(MeetingLiveHandler.charsLimitExceeded(new long[]{2, 99_997}, 1)).isFalse();
+        assertThat(MeetingLiveHandler.charsLimitExceeded(new long[]{2, 99_998}, 0)).isFalse();
+        assertThat(MeetingLiveHandler.charsLimitExceeded(new long[]{2, 99_998}, 1)).isTrue();
+        assertThat(MeetingLiveHandler.charsLimitExceeded(new long[]{2, 99_997}, 2)).isTrue();
+    }
+
+    @Test
+    void charsPlusSeparatorsAtLimit_refusesConnection() throws Exception {
+        String meetingId = createMeeting();
+        jdbc.update("INSERT INTO meeting_streams (id, meeting_id, stream_order, end_reason, started_at) VALUES (?, ?, 0, 'finished', now())",
+                "seed_" + meetingId, meetingId);
+        // 글자 99,999자만으로는 한도 미만이지만 구간 1개의 구분 공백을 더하면 100,000자라 더 받을 수 없다.
+        jdbc.update("INSERT INTO meeting_segments (meeting_id, id, stream_id, position, text, created_at) VALUES (?, 's0_u1', ?, 1, ?, now())",
+                meetingId, "seed_" + meetingId, "가".repeat(99_999));
+        assertThat(connect(meetingId).untilType("error").path("code").asText()).isEqualTo("transcript_limit");
+    }
+
     // ---------- helpers
 
     /** 한도 검사용으로 확정 구간을 미리 채운다. 글자 수 한도에는 걸리지 않게 짧은 문장을 쓴다. */
