@@ -22,10 +22,9 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Wiki](wiki.md) | 7 | Wiki 조회·기여·유지보수 |
 | [Usage](agent.md#본인-모델-사용량-조회) | 1 | 본인 모델별 토큰 사용량 조회 |
 
-기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 93개(`/api/**` 82 + `/internal/**` 11), operation 104개**다.
+기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 109개(`/api/**` 97 + `/internal/**` 12), operation 121개**다.
 위 표의 "API 수"는 각 도메인 문서가 다루는 API 수이고, 충돌할 경우 실행 코드와 생성된 OpenAPI를 우선한다.
-표의 HTTP 합계는 107이고 위의 operation 108개와 1 차이가 난다. 96개 path 전부가 문서에 있음은 확인했으므로
-누락된 API가 아니라 도메인별 집계 단위(같은 path의 여러 method를 1개로 세는지)가 섞인 결과다. 정확한 수는 OpenAPI를 본다.
+표의 도메인별 API 수 합계는 같은 path의 여러 method를 세는 단위가 섞여 operation 수와 다를 수 있다. 정확한 수는 OpenAPI를 본다.
 
 ## 호출 관계(배선) 요약
 
