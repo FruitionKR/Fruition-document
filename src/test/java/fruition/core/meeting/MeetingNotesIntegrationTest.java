@@ -66,6 +66,9 @@ class MeetingNotesIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        // resume()은 오래된 cancel_requested부터 20건만 집는다. 다른 테스트(pipeline mock이 null을 돌려주는 것 포함)가 남긴
+        // 취소 대기 행이 20건을 넘으면 이 클래스의 run이 밀려 pipeline 호출이 늦어지므로 시작 전에 비운다.
+        jdbc.update("UPDATE ai_task_runs SET status = 'cancelled' WHERE status IN ('cancel_requested', 'rolling_back')");
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;
