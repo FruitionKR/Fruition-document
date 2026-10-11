@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.autoconfigure.web.servlet.MockMvcPrint;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -28,7 +29,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /** 채팅 음성 입력이 ai-svc 파일 전사 계약대로 중계되는지 가짜 ai-svc HTTP 서버로 확인한다. */
 @SpringBootTest
-@AutoConfigureMockMvc
+// 24MiB 초과 본문을 보내는 테스트가 있어, 실패 시 요청 본문을 문자열로 출력하면 테스트 JVM 힙을 다 쓴다.
+@AutoConfigureMockMvc(print = MockMvcPrint.NONE)
 @Import(TestcontainersConfiguration.class)
 class SpeechTranscriptionIntegrationTest {
 
