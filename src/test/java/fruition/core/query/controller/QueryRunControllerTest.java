@@ -70,7 +70,7 @@ class QueryRunControllerTest {
     }
 
     @Test
-    void getRun_notWorkspaceMember_returns404() throws Exception {
+    void getRun_notWorkspaceMemberOrSessionCheckFails_returns404() throws Exception {
         when(queryRunStore.find("query_abc123")).thenReturn(Optional.of(pendingRun()));
         doThrow(new WorkspaceNotFoundException(WORKSPACE_ID))
                 .when(chatSessionService).verifyOwnedSession(WORKSPACE_ID, USER_ID, "session_abc123");
