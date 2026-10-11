@@ -326,7 +326,7 @@ public class DocumentController {
                 workspaceId, userId, documentId, idempotencyKey, request));
     }
 
-    @Operation(summary = "문서 이름 변경", description = "Notion의 page title처럼 표시 이름만 변경하며 본문과 Wiki 제목은 유지합니다.")
+    @Operation(summary = "문서 이름 변경", description = "Notion의 page title처럼 표시 이름만 변경하며 본문은 유지합니다. 편집 문서는 같은 트랜잭션에서 `document_renamed` command를 보내 AI가 위키 소스 페이지 제목도 새 이름으로 갱신합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "이름 변경 성공",
             content = @Content(schema = @Schema(implementation = DocumentRenameResponse.class))),

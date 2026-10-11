@@ -85,6 +85,10 @@ public class AiTaskResultConsumer {
                 }
                 return;
             }
+            if ("document_cleanup".equals(kind) || "document_rename".equals(kind)) {
+                // 결과를 반영할 것이 없는 정리 command다. 경고 로그를 남기지 않는다.
+                return;
+            }
             if (!"query".equals(kind)) {
                 log.warn("[AI task 결과 소비 생략] kind={} flowId={} reason=unsupported_kind", kind, flowId);
                 return;
