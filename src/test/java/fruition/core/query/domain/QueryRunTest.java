@@ -55,10 +55,11 @@ class QueryRunTest {
     void failed_setsErrorMessageAndCompletedAt_resultStaysNull() {
         QueryRun running = QueryRun.pending("query_abc123", "ws_abc123", "session_abc123", "질문", CREATED_AT).running();
 
-        QueryRun failed = running.failed("파이프라인 오류", COMPLETED_AT);
+        QueryRun failed = running.failed("provider_unavailable", "파이프라인 오류", COMPLETED_AT);
 
         assertThat(failed.status()).isEqualTo(QueryRunStatus.FAILED);
         assertThat(failed.errorMessage()).isEqualTo("파이프라인 오류");
+        assertThat(failed.errorCode()).isEqualTo("provider_unavailable");
         assertThat(failed.result()).isNull();
         assertThat(failed.completedAt()).isEqualTo(COMPLETED_AT);
         assertThat(failed.isFinished()).isTrue();

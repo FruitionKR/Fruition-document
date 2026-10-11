@@ -129,11 +129,13 @@ public class QueryEventBroker implements MessageListener {
         log.info("[질의 SSE 완료 이벤트 발행] requestId={}", requestId);
     }
 
-    public void fail(String requestId, String errorMessage) {
+    /** error는 사용자 문구, code는 실패 코드다. 예외 원문은 어느 쪽에도 싣지 않는다. */
+    public void fail(String requestId, String errorCode, String errorMessage) {
         long sequence = nextSequence(requestId);
         storeAndBroadcast(new StoredEvent(requestId, sequence, EVENT_FAILED,
-                Map.of("request_id", requestId, "status", "failed", "error", errorMessage)));
-        log.warn("[질의 SSE 실패 이벤트 발행] requestId={} error={}", requestId, errorMessage);
+                Map.of("request_id", requestId, "status", "failed",
+                        "code", errorCode == null ? "internal_error" : errorCode, "error", errorMessage)));
+        log.warn("[질의 SSE 실패 이벤트 발행] requestId={} errorCode={}", requestId, errorCode);
     }
 
     public void cancel(String requestId) {

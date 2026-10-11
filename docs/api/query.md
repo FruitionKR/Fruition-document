@@ -484,6 +484,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 ```json
 {
   "error": "string",
+  "error_code": "string",
   "model": "gpt-6-luna",
   "provider": "openai",
   "request_id": "query_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
@@ -616,6 +617,7 @@ curl -X GET "$DOCUMENT/api/query/runs/<value>" \
 ```json
 {
   "error": "string",
+  "error_code": "string",
   "model": "gpt-6-luna",
   "provider": "openai",
   "request_id": "query_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
@@ -779,7 +781,7 @@ string
 |---|---|---|
 | `query.log` | AI worker가 단계마다 발행한 진행 상황을 중계 | `request_id`, `sequence`, `received_at`, `stage`, `message`, `data` |
 | `query.completed` | 최종 결과 반영 완료 | `request_id`, `status` |
-| `query.failed` | 실패 확정 | `request_id`, `status`, `error` |
+| `query.failed` | 실패 확정 | `request_id`, `status`, `code`(실패 코드), `error`(사용자용 한국어 문구) |
 | `query.cancelled` | 취소 및 변경 복구 완료 | `request_id`, `status` |
 
 - 구독 시점 이전 이벤트는 Redis buffer에서 최대 200건까지 재생한다. `sequence`가 뒤로 가는 이벤트는 전달하지 않는다.

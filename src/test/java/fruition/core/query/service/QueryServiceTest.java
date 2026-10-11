@@ -315,8 +315,9 @@ class QueryServiceTest {
     @Test
     void failAsync_marksPendingAssistantFailed() {
         var context = queryService.prepareMessages(SESSION_ID, "질문", "query_test");
-        queryService.failAsync("query_test", context, "처리 실패");
-        verify(chatTurnRecorder).markFailed(context.assistantMessageId(), "처리 실패");
+        queryService.failAsync("query_test", context, "provider_rate_limited");
+        verify(chatTurnRecorder).markFailed(context.assistantMessageId(),
+                "AI 서비스 요청이 많아 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     }
 
     @Test

@@ -1,5 +1,6 @@
 package fruition.core.query.service;
 
+import fruition.core.aitask.AiErrorMessages;
 import fruition.core.chat.service.ChatEvidenceRecorder;
 import fruition.core.chat.service.ChatTurnRecorder;
 import fruition.core.chat.domain.ChatMessage;
@@ -115,10 +116,10 @@ public class QueryService {
     }
 
     @Transactional
-    public void failAsync(String requestId, QueryMessageContext messageContext, String errorMessage) {
-        chatTurnRecorder.markFailed(messageContext.assistantMessageId(), errorMessage);
-        log.warn("[질의 Kafka 실패 반영] requestId={} assistantMessageId={} error={}",
-                requestId, messageContext.assistantMessageId(), errorMessage);
+    public void failAsync(String requestId, QueryMessageContext messageContext, String errorCode) {
+        chatTurnRecorder.markFailed(messageContext.assistantMessageId(), AiErrorMessages.query(errorCode));
+        log.warn("[질의 Kafka 실패 반영] requestId={} assistantMessageId={} errorCode={}",
+                requestId, messageContext.assistantMessageId(), errorCode);
     }
 
     private QueryResponse completeMessages(ChatSession session,

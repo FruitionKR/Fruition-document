@@ -648,7 +648,7 @@ class DocumentServiceConvertTest {
         documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
 
         assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.failed);
-        assertThat(placeholder.getErrorMessage()).contains("status=422");
+        assertThat(placeholder.getErrorMessage()).isEqualTo("PDF 변환에 실패했습니다.");
         verify(postgresDocumentEditStore, never()).save(
                 anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
                 anyString(), any());
@@ -665,7 +665,28 @@ class DocumentServiceConvertTest {
         documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
 
         assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.failed);
-        assertThat(placeholder.getErrorMessage()).contains(SOURCE_DOCUMENT_ID);
+        assertThat(placeholder.getErrorMessage()).isEqualTo("PDF 변환에 실패했습니다.");
+    }
+
+    @Test
+    @DisplayName("ingest 실패 코드는 카탈로그 문구로, 알 수 없는 원문은 기본 문구로 저장한다")
+    void applyPipelineResult_failureStoresCatalogMessage() {
+        Document known = placeholderDocument();
+        known.markPipelineStarted("run-1", Instant.now());
+        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder")).thenReturn(Optional.of(known));
+
+        documentService.applyPipelineResult("doc_placeholder", "run-1", "failed", "provider_rate_limited");
+
+        assertThat(known.getStatus()).isEqualTo(DocumentStatus.failed);
+        assertThat(known.getErrorMessage()).contains("요청이 많아").doesNotContain("provider_rate_limited");
+
+        Document raw = placeholderDocument();
+        raw.markPipelineStarted("run-2", Instant.now());
+        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder")).thenReturn(Optional.of(raw));
+
+        documentService.applyPipelineResult("doc_placeholder", "run-2", "failed", "ValueError: secret detail");
+
+        assertThat(raw.getErrorMessage()).isEqualTo("위키 편입에 실패했습니다.");
     }
 
     private Document placeholderDocument() {

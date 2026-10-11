@@ -1,5 +1,6 @@
 package fruition.core.aitask.service;
 
+import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -79,7 +80,7 @@ public class AiTaskResultConsumer {
                     if (result.error() == null) {
                         queryEventBroker.complete(flowId);
                     } else {
-                        queryEventBroker.fail(flowId, AiTaskResultApplier.describeAgentError(result.error()));
+                        queryEventBroker.fail(flowId, result.error(), AiErrorMessages.agent(result.error()));
                     }
                 }
                 return;
@@ -95,7 +96,8 @@ public class AiTaskResultConsumer {
                     queryEventBroker.complete(projection.runId());
                 }
             } else if (queryRunStore.markFailed(projection.runId(), projection.error())) {
-                queryEventBroker.fail(projection.runId(), projection.error());
+                queryEventBroker.fail(projection.runId(), projection.error(),
+                        AiErrorMessages.query(projection.error()));
             }
         } catch (Exception e) {
             log.error("[AI task 결과 소비 실패] kind={} flowId={} errorType={}",

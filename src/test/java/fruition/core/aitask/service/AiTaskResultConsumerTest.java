@@ -61,7 +61,7 @@ class AiTaskResultConsumerTest {
         consumer.consume("{\"kind\":\"query\"}");
 
         verify(queryEventBroker).complete("query-1");
-        verify(queryEventBroker, never()).fail("query-1", "late failure");
+        verify(queryEventBroker, never()).fail(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -163,14 +163,15 @@ class AiTaskResultConsumerTest {
     @Test
     void agentFailureEventFailsTheSseStream() throws Exception {
         when(applier.applyAgent(any())).thenReturn(
-                new AiTaskResultApplier.AgentApplyResult(true, "모델 호출 실패"));
+                new AiTaskResultApplier.AgentApplyResult(true, "provider_unavailable"));
 
         consumer.consume("""
                 {"event_id":"agent:agent-1:failed","kind":"agent","run_id":"agent-1",
-                 "status":"failed","error":"모델 호출 실패"}
+                 "status":"failed","error":"provider_unavailable"}
                 """);
 
-        verify(queryEventBroker).fail("agent-1", "모델 호출 실패");
+        verify(queryEventBroker).fail("agent-1", "provider_unavailable",
+                "AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     }
 
     @Test
@@ -184,7 +185,8 @@ class AiTaskResultConsumerTest {
                 """);
 
         // 내부 코드가 아니라 사용자에게 보일 문구가 나가야 한다.
-        verify(queryEventBroker).fail("agent-1", "Agent 결과 형식이 올바르지 않습니다.");
+        verify(queryEventBroker).fail("agent-1", "agent_result_invalid_payload",
+                "Agent 결과 형식이 올바르지 않습니다.");
         verify(queryEventBroker, never()).complete(anyString());
     }
 
@@ -199,7 +201,7 @@ class AiTaskResultConsumerTest {
                 """);
 
         verify(queryEventBroker, never()).complete(anyString());
-        verify(queryEventBroker, never()).fail(anyString(), anyString());
+        verify(queryEventBroker, never()).fail(anyString(), anyString(), anyString());
     }
 
     @Test
