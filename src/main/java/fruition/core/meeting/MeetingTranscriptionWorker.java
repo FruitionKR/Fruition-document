@@ -6,6 +6,7 @@ import fruition.shared.http.PipelineClientFactory;
 import fruition.shared.util.StorageProperties;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,7 +22,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
+import java.util.stream.IntStream;
 
 /**
  * 녹음 파일 회의의 전사 작업자. {@code status = 'transcribing'}인 회의를 한 건씩 선점해 AI 파일 전사를 부르고,
@@ -44,6 +50,9 @@ public class MeetingTranscriptionWorker {
     private final RestClient restClient;
     private final String endpoint;
     private final UsageChargeService usageCharges;
+    /** 전사는 최대 960초 걸리므로 공용 스케줄러 스레드를 막지 않게 전용 단일 스레드에서 돌린다. */
+    private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> new Thread(r, "meeting-transcription"));
+    private final AtomicBoolean busy = new AtomicBoolean();
 
     public MeetingTranscriptionWorker(MeetingRepository repository, MinioClient minio, StorageProperties storage,
                                       PipelineClientFactory clientFactory,
@@ -61,7 +70,34 @@ public class MeetingTranscriptionWorker {
     // ponytail: 한 번에 한 건씩 처리한다. 업로드가 몰리면 작업자 동시 실행 수를 늘린다.
     @Scheduled(fixedDelayString = "${app.meeting.transcription-poll-interval-ms:2000}")
     public void processNext() {
-        repository.claimTranscription(Instant.now().minus(STALE_CLAIM)).ifPresent(this::transcribe);
+        if (!busy.compareAndSet(false, true)) {
+            return;  // 전사 중이면 선점하지 않고 바로 돌아온다
+        }
+        try {
+            var claimed = repository.claimTranscription(Instant.now().minus(STALE_CLAIM));
+            if (claimed.isEmpty()) {
+                busy.set(false);
+                return;
+            }
+            executor.execute(() -> {
+                try {
+                    transcribe(claimed.get());
+                } finally {
+                    busy.set(false);
+                }
+            });
+        } catch (RuntimeException e) {
+            busy.set(false);
+            throw e;
+        }
+    }
+
+    @PreDestroy
+    void shutdown() throws InterruptedException {
+        executor.shutdown();
+        if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+            executor.shutdownNow();  // 못 끝낸 선점은 STALE_CLAIM 뒤 다른 Pod가 다시 잡는다
+        }
     }
 
     private void transcribe(MeetingRepository.Meeting meeting) {
@@ -91,8 +127,10 @@ public class MeetingTranscriptionWorker {
                 return;
             }
             List<String> segments = segments(text);
-            // 회의록 AI는 구간을 공백으로 이어 100,000자까지 받는다. 긴 문장을 자르며 늘어난 구분 공백까지 센다.
-            if (segments.stream().mapToInt(String::length).sum() + segments.size() - 1 > MAX_TOTAL_CHARS) {
+            // 회의록 AI가 세는 길이는 MeetingNotesService.bundles 묶음 글자의 합이다.
+            var items = IntStream.range(0, segments.size())
+                    .mapToObj(i -> new MeetingResponse.SegmentItem("s" + i, i, segments.get(i), "completed")).toList();
+            if (MeetingNotesService.bundles(items).stream().mapToInt(b -> b.text().length()).sum() > MAX_TOTAL_CHARS) {
                 repository.failTranscription(meeting.id(), meeting.recordingKey(),
                         "전사가 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요.");
                 return;

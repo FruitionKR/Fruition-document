@@ -51,6 +51,9 @@ class MeetingRecordingIntegrationTest {
     static volatile int aiStatus = 200;
     static final String DEFAULT_TEXT = "출시는 금요일로 하겠습니다. 민수가 점검을 맡나요?\n네, 맡겠습니다!";
     static volatile String aiText = DEFAULT_TEXT;
+    /** 설정하면 가짜 AI가 응답 전에 entered를 알리고 gate가 열릴 때까지 기다린다. */
+    static volatile java.util.concurrent.CountDownLatch aiEntered;
+    static volatile java.util.concurrent.CountDownLatch aiGate;
     static final AtomicReference<String> lastContentType = new AtomicReference<>();
     static final AtomicReference<String> lastRequestId = new AtomicReference<>();
     static final AtomicReference<String> lastQuery = new AtomicReference<>();
@@ -63,6 +66,16 @@ class MeetingRecordingIntegrationTest {
         }
         FAKE_AI.createContext("/speech/transcriptions", exchange -> {
             exchange.getRequestBody().readAllBytes();
+            var entered = aiEntered;
+            var gate = aiGate;
+            if (entered != null && gate != null) {
+                entered.countDown();
+                try {
+                    gate.await(30, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             lastContentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
             lastRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
             lastQuery.set(exchange.getRequestURI().getRawQuery());
@@ -95,6 +108,7 @@ class MeetingRecordingIntegrationTest {
     @Autowired JwtTokenProvider jwtTokenProvider;
     @Autowired MinioClient minio;
     @Autowired StorageProperties storage;
+    @Autowired MeetingTranscriptionWorker worker;
     @org.springframework.beans.factory.annotation.Value("${app.meeting.transcription-timeout-seconds}") int workerTimeoutSeconds;
     @org.springframework.beans.factory.annotation.Value("${app.speech.transcription-timeout-seconds}") int chatTimeoutSeconds;
 
@@ -210,6 +224,28 @@ class MeetingRecordingIntegrationTest {
     }
 
     @Test
+    void pollReturnsImmediatelyWhileTranscriptionInFlight() throws Exception {
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var gate = new java.util.concurrent.CountDownLatch(1);
+        aiEntered = entered;
+        aiGate = gate;
+        try {
+            String meetingId = createMeeting("upload");
+            upload(meetingId, "audio/mp4", new byte[]{1}).andExpect(status().isAccepted());
+            assertThat(entered.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            long start = System.nanoTime();
+            worker.processNext();  // 전사가 진행 중이어도 스케줄러 스레드를 막지 않는다
+            assertThat(java.time.Duration.ofNanos(System.nanoTime() - start)).isLessThan(java.time.Duration.ofSeconds(1));
+            gate.countDown();
+            awaitStatus(meetingId, "open");
+        } finally {
+            gate.countDown();
+            aiGate = null;
+            aiEntered = null;
+        }
+    }
+
+    @Test
     void workerWaitsLongerThanChatAndStaleClaimOutlastsIt() {
         assertThat(workerTimeoutSeconds).isEqualTo(960);
         assertThat(chatTimeoutSeconds).isEqualTo(150);
@@ -230,11 +266,11 @@ class MeetingRecordingIntegrationTest {
         upload(tooLong, "audio/mp4", new byte[]{1}).andExpect(status().isAccepted());
         assertThat(awaitStatus(tooLong, "failed").path("error").asText()).contains("100,000자");
 
-        // 10,000자 단위로 잘린 10구간은 구분 공백 9자가 더해져 100,000자를 넘는다.
+        // 10,000자 구간 10개는 묶이지 않아 정확히 100,000자이고 허용된다.
         aiText = "가".repeat(100_000);
-        String separators = createMeeting("upload");
-        upload(separators, "audio/mp4", new byte[]{1}).andExpect(status().isAccepted());
-        assertThat(awaitStatus(separators, "failed").path("error").asText()).contains("100,000자");
+        String exact = createMeeting("upload");
+        upload(exact, "audio/mp4", new byte[]{1}).andExpect(status().isAccepted());
+        assertThat(awaitStatus(exact, "open").path("segments")).hasSize(10);
     }
 
     @Test

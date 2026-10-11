@@ -23,6 +23,7 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -52,13 +53,13 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
      */
     static final int MAX_SEGMENTS = 10_000;
     static final long MAX_CHARS = 100_000;
-    /**
-     * 회의록 AI는 구간을 공백 하나로 이어 100,000자까지 받는다. 그래서 글자 수에 구간마다 구분 공백 1자를 더해 센다
-     * (구간 수는 이미 등록된 빈 구간까지 세어 한 자 넉넉하다). {@code incoming}은 새로 확정할 글자 수다.
-     */
-    static boolean charsLimitExceeded(long[] totals, int incoming) {
-        return totals[1] + totals[0] + incoming > MAX_CHARS;
+    /** 회의록 AI가 세는 길이: {@link MeetingNotesService#bundles} 묶음 글자의 합(구분 공백 포함). */
+    static long bundledChars(List<MeetingRepository.Segment> segments) {
+        return MeetingNotesService.bundles(segments.stream()
+                .map(s -> new MeetingResponse.SegmentItem(s.id(), s.position(), s.text(), "completed")).toList())
+                .stream().mapToLong(b -> b.text().length()).sum();
     }
+
     private static final String LIMIT_MESSAGE = "회의 전사 한도에 닿았습니다. 지금까지의 전사로 회의록을 만들거나 새 회의를 시작해 주세요.";
     private static final Duration SEND_TIMEOUT = Duration.ofSeconds(5);
     private static final Pattern SEGMENT_ID = Pattern.compile("[A-Za-z0-9_-]{1,128}");
@@ -162,7 +163,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
             return;
         }
         long[] totals = repository.totals(ticket.meetingId());
-        if (totals[0] >= MAX_SEGMENTS || charsLimitExceeded(totals, 1)) {
+        if (totals[0] >= MAX_SEGMENTS || bundledChars(repository.segments(ticket.meetingId())) >= MAX_CHARS) {
             // 한도에 닿은 회의는 연결을 받자마자 거절한다. 구간을 열지 않아 다시 연결할 때마다 실패한 연결이
             // 쌓이지 않고, 저장된 전사로 회의록을 만드는 길은 그대로 남는다.
             fail(live, "transcript_limit", LIMIT_MESSAGE, CloseStatus.POLICY_VIOLATION);
@@ -370,7 +371,10 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
             case "completed" -> {
                 String id = live.segmentId(event.get("segment_id"));
                 String text = event.path("text").asText();
-                if (charsLimitExceeded(repository.totals(meetingId), text.length())) {
+                // 새 문장이 들어간 뒤의 구간 목록으로 센다(n ≤ 10,000이라 매번 계산해도 된다).
+                var after = repository.segments(meetingId).stream()
+                        .map(s -> s.id().equals(id) ? new MeetingRepository.Segment(s.id(), s.position(), text) : s).toList();
+                if (bundledChars(after) > MAX_CHARS) {
                     fail(live, "transcript_limit", LIMIT_MESSAGE, CloseStatus.POLICY_VIOLATION);
                     return;
                 }
