@@ -33,6 +33,11 @@ public record OperationLogDetailResponse(
         @Schema(description = "작업 종류", example = "ingest")
         String operationType,
 
+        @JsonProperty("user_id")
+        @Schema(description = "작업을 시작한 사용자 ID. 복구는 복구를 실행한 사용자다. 이름은 멤버 목록의 user_id로 찾는다.",
+                example = "user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83")
+        String userId,
+
         @Schema(description = "작업 상태", example = "succeeded")
         String status,
 
@@ -73,12 +78,12 @@ public record OperationLogDetailResponse(
 ) {
 
     /** 기존 호출부를 위한 생성자. 복구가 아니면 restore는 응답에서 생략된다. */
-    public OperationLogDetailResponse(String operationId, String operationType, String status,
-                                      String targetDocumentId, String summary,
+    public OperationLogDetailResponse(String operationId, String operationType, String userId,
+                                      String status, String targetDocumentId, String summary,
                                       int changedResourceCount, String restoredFrom,
                                       Instant createdAt, Instant completedAt,
                                       List<Change> changes) {
-        this(operationId, operationType, status, targetDocumentId, null, summary,
+        this(operationId, operationType, userId, status, targetDocumentId, null, summary,
                 changedResourceCount, restoredFrom, createdAt, completedAt, changes, null);
     }
 
@@ -331,6 +336,7 @@ public record OperationLogDetailResponse(
         return new OperationLogDetailResponse(
                 log.getOperationId(),
                 log.getOperationType().name(),
+                log.getUserId(),
                 log.getStatus().name(),
                 log.getTargetDocumentId(),
                 log.getTargetDisplayName(),

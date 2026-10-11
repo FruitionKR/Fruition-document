@@ -34,6 +34,11 @@ public record OperationLogListResponse(
             @Schema(description = "작업 종류", example = "ingest")
             String operationType,
 
+            @JsonProperty("user_id")
+            @Schema(description = "작업을 시작한 사용자 ID. 복구는 복구를 실행한 사용자다. 이름은 멤버 목록의 user_id로 찾는다.",
+                    example = "user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83")
+            String userId,
+
             @Schema(description = "작업 상태", example = "succeeded")
             String status,
 
@@ -69,6 +74,7 @@ public record OperationLogListResponse(
             return new Item(
                     log.getOperationId(),
                     log.getOperationType().name(),
+                    log.getUserId(),
                     log.getStatus().name(),
                     log.getTargetDocumentId(),
                     log.getTargetDisplayName(),

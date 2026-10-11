@@ -452,7 +452,8 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
       "status": "succeeded",
       "summary": "string",
       "target_document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
-      "target_display_name": "설계문서"
+      "target_display_name": "설계문서",
+      "user_id": "user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83"
     }
   ],
   "next_cursor": "string"
@@ -504,7 +505,8 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
       "status": "succeeded",
       "summary": "string",
       "target_document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
-      "target_display_name": "설계문서"
+      "target_display_name": "설계문서",
+      "user_id": "user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83"
     }
   ],
   "next_cursor": "string"
@@ -600,7 +602,8 @@ ingest·lint는 생성·삭제된 Wiki의 제목과 page_type(concept/source)을
   "status": "succeeded",
   "summary": "string",
   "target_document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
-  "target_display_name": "설계문서"
+  "target_display_name": "설계문서",
+  "user_id": "user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83"
 }
 ```
 
@@ -665,7 +668,8 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
   "status": "succeeded",
   "summary": "string",
   "target_document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
-  "target_display_name": "설계문서"
+  "target_display_name": "설계문서",
+  "user_id": "user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83"
 }
 ```
 

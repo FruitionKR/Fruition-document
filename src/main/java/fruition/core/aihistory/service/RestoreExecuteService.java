@@ -97,7 +97,7 @@ public class RestoreExecuteService {
                     "같은 미리보기 토큰으로 복구가 이미 접수되었습니다.");
         }
         if (target.getOperationType() == OperationType.document_edit) {
-            return executeDocument(target, previewToken, restoreTokenHash);
+            return executeDocument(target, userId, previewToken, restoreTokenHash);
         }
 
         Set<String> excluded = scopeResolver.resolve(target);
@@ -125,7 +125,7 @@ public class RestoreExecuteService {
         Instant now = Instant.now();
         Map<String, List<String>> expected = contributionSignatures(contributions);
         OperationLog restore = lifecycle.startQueued(
-                        target, manifestJson(new RestoreManifest(plan, excluded, expected)),
+                        target, userId, manifestJson(new RestoreManifest(plan, excluded, expected)),
                         restoreTokenHash, now)
                 .orElseThrow(() -> new InvalidRestoreRequestException(
                         "같은 미리보기 토큰으로 복구가 이미 접수되었습니다."));
@@ -137,8 +137,8 @@ public class RestoreExecuteService {
     /**
      * 문서 편집 되돌리기. Wiki와 달리 재작성이 없어 llmPipeline을 부르지 않고 그 자리에서 끝난다.
      */
-    private RestoreExecuteResponse executeDocument(OperationLog target, String previewToken,
-                                                   String restoreTokenHash) {
+    private RestoreExecuteResponse executeDocument(OperationLog target, String userId,
+                                                   String previewToken, String restoreTokenHash) {
         DocumentRestorePlan plan = documentPlanner.plan(target);
         if (!tokenSigner.matches(previewToken, target.getOperationId(), plan)) {
             throw new RestorePreviewStaleException();
@@ -150,7 +150,7 @@ public class RestoreExecuteService {
             return executeWithDocumentRestoreRetry(() -> transaction.execute(status -> {
                 Instant now = Instant.now();
                 OperationLog restore = lifecycle.start(
-                                target, manifestJson(plan), restoreTokenHash, now)
+                                target, userId, manifestJson(plan), restoreTokenHash, now)
                         .orElseThrow(() -> new InvalidRestoreRequestException(
                                 "같은 미리보기 토큰으로 복구가 이미 접수되었습니다."));
                 long newVersion = documentApplier.apply(restore, plan);
