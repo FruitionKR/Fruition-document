@@ -31,9 +31,7 @@ ON CONFLICT DO NOTHING;
 -- ai는 두 모델 모두 audio_seconds를 원장에 남긴다(배치는 응답 usage.type=duration의 초, 실시간은 PCM 바이트로 센 초).
 -- 단가 행이 과금 단위를 정하므로(UsagePricing.callCostUsd) 분당 단가만 넣고 토큰 단가는 0이다.
 --
--- gpt-realtime-2.1-mini(TTS, 현재 호출하는 곳 없음)는 넣지 않는다. 공식 단가가 텍스트 토큰($0.60 입력)과 오디오 토큰
--- ($20.00 출력)으로 갈리는데 ai 원장은 토큰을 한 열로 합쳐 남기고, 글자 수당 단가 환산도 근거가 없다.
--- 토큰 종류를 나눠 남기는 변경이 먼저 필요하다.
+-- 음성 합성 모델(gpt-realtime-2.1-mini) 단가는 이 마이그레이션 범위가 아니다. 그 모델을 호출하는 변경이 단가를 함께 넣는다.
 INSERT INTO ai_model_prices (provider, model, effective_from, input_usd_per_mtok, output_usd_per_mtok,
     cache_read_usd_per_mtok, cache_write_usd_per_mtok, audio_usd_per_minute, tts_usd_per_mchar)
 VALUES
