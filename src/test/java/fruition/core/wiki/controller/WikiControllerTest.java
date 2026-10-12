@@ -4,6 +4,7 @@ import fruition.core.CoreExceptionHandler;
 import fruition.core.config.SecurityConfig;
 import fruition.core.wiki.dto.WikiGraphNode;
 import fruition.core.wiki.dto.WikiGraphResponse;
+import fruition.core.wiki.service.WikiPageEditService;
 import fruition.core.wiki.service.WikiService;
 import fruition.shared.security.JwtAuthenticationFilter;
 import fruition.shared.security.JwtTokenProvider;
@@ -34,6 +35,7 @@ class WikiControllerTest {
     @Autowired MockMvc mockMvc;
     @Autowired JwtTokenProvider jwtTokenProvider;
     @MockBean WikiService wikiService;
+    @MockBean WikiPageEditService wikiPageEditService;
 
     @Test
     void graph_returns304WhenGraphIsUnchanged() throws Exception {

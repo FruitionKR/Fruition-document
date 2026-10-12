@@ -2,10 +2,10 @@
 
 [서비스 문서](../README.md) / [document-svc](README.md)
 
-Wiki 그래프·페이지·기여·유지보수 Gateway API다. 조회는 ai-svc 내부 HTTP,
+Wiki 그래프·페이지·기여·유지보수 Gateway API와 사람의 페이지 본문 수정 API다. 조회는 ai-svc 내부 HTTP,
 lint·복구는 Kafka `ai.maintenance.command`로 전달한다.
 
-- API 수: 7
+- API 수: 8
 
 ## API 목차
 
@@ -13,6 +13,7 @@ lint·복구는 Kafka `ai.maintenance.command`로 전달한다.
 |---|---|
 | [`GET /api/workspaces/{workspace_id}/wiki/graph`](#summary-get-api-workspaces-workspace-id-wiki-graph) | 모든 Wiki 노드(pages)와 엣지(links)를 반환합니다. 중앙 그래프 렌더링과 답변 후 하이라이트에 사용됩니다. |
 | [`GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}`](#summary-get-api-workspaces-workspace-id-wiki-pages-wiki-page-id) | 특정 Wiki 페이지의 상세 정보를 반환합니다. source_documents와 related_pages를 포함합니다. |
+| [`PUT /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/content`](#summary-put-api-workspaces-workspace-id-wiki-pages-wiki-page-id-content) | 사람이 고친 본문을 저장합니다. `base_revision` 충돌은 409, 같은 `revision_write_id` 재시도는 처음 결과를 돌려줍니다. |
 | [`GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/diff`](#summary-get-api-workspaces-workspace-id-wiki-pages-wiki-page-id-diff) | 두 revision 사이의 diff를 반환합니다. 저장된 본문을 읽어 요청 시점에 계산하며, 사용자가 펼칠 때만 호출됩니다. |
 | [`POST /api/workspaces/{workspace_id}/wiki/maintenance/lint`](#summary-post-api-workspaces-workspace-id-wiki-maintenance-lint) | 워크스페이스 Wiki 정합성 검사 실행을 비동기 대기열에 등록합니다. |
 | [`GET /api/workspaces/{workspace_id}/wiki/maintenance/runs/{run_id}`](#summary-get-api-workspaces-workspace-id-wiki-maintenance-runs-run-id) | 실행 중이거나 완료된 Wiki 정합성 검사 결과를 반환합니다. |
@@ -328,6 +329,131 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-pages-wiki-page-id)
+
+</details>
+
+<a id="summary-put-api-workspaces-workspace-id-wiki-pages-wiki-page-id-content"></a>
+### `PUT /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/content`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 사람이 고친 Wiki 페이지(source·concept) 본문을 저장합니다(#75). `base_revision`이 현재 revision과 같을 때만 반영하고 revision을 하나 올립니다. |
+| 입력 | **Path** — `workspace_id`: `string`, `wiki_page_id`: `string`<br>**Body** — `WikiPageContentSaveRequest`(`markdown`, `base_revision`, `revision_write_id`) |
+| 출력 | `200` 저장 성공·같은 본문 no-op·같은 write ID 재시도 — `WikiPageContentSaveResponse` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>OWNER 또는 `wiki.ingest` 권한을 받은 멤버만 고칠 수 있다. |
+| 주요 오류 | `400` 잘못된 Markdown·`base_revision`(`INVALID_MARKDOWN_CONTENT`)·`revision_write_id`(`INVALID_IDEMPOTENCY_KEY`)<br>`403` `wiki.ingest` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`)<br>`404` 워크스페이스 멤버가 아님, 페이지 없음·다른 워크스페이스·비활성(`WIKI_PAGE_NOT_FOUND`)<br>`409` revision 충돌(`WIKI_PAGE_VERSION_CONFLICT`, `error.current_revision`에 현재 revision), 같은 write ID를 다른 요청에 사용(`IDEMPOTENCY_CONFLICT`)<br>`413` Markdown 5MB 초과(`MARKDOWN_CONTENT_TOO_LARGE`)<br>`503` AI 서비스 저장 실패(`WIKI_PAGE_PIPELINE_UNAVAILABLE`) |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-put-api-workspaces-workspace-id-wiki-pages-wiki-page-id-content"></a>
+### `PUT /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/content` 상세
+
+#### 1. Method + Path
+
+`PUT /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/content`
+
+#### 2. 목적
+
+사람이 고친 본문을 ai의 수동 기여로 저장하고(ai ADR 0031) document가 revision·기여·작업 로그를 기록한다. 규칙은 문서 본문 저장(`PUT .../documents/{id}/content`)과 같다.
+
+- **revision**: `wiki_page_versions`의 최대 revision이 현재 revision이다(상세 조회의 `revision`). 버전 이력이 없는 페이지는 0이다. 페이지 단위 advisory lock(ingest·lint·복구 결과 반영과 같은 잠금)을 쥔 채 비교하고 ai를 호출하므로 그 사이에 다른 revision이 끼지 않는다. 다르면 `409 WIKI_PAGE_VERSION_CONFLICT`이며 ai를 부르지 않는다.
+- **같은 본문**: 최신 버전 본문과 같으면 ai를 부르지 않고 현재 revision을 그대로 돌려준다.
+- **멱등**: 작업 ID를 `workspace_id`·`wiki_page_id`·`revision_write_id`에서 정한다. 같은 write ID 재시도는 그 작업이 만든 버전을 돌려주고(`base_revision`·본문이 처음과 같아야 한다, 다르면 `409 IDEMPOTENCY_CONFLICT`), ai를 다시 부르지 않는다. ai 저장 뒤 응답을 못 받았거나(`503`) document 기록이 실패한 경우도 같은 write ID로 다시 보내면 ai가 같은 수동 기여를 돌려주고 document가 기록을 채운다.
+- **기록**(한 트랜잭션): `ai_operation_logs`에 `wiki_edit` 작업(`succeeded`), `wiki_page_contributions`에 수동 기여(`source_document_id` NULL, `object_key`=ai의 `contribution_key`), `wiki_page_versions`에 새 revision(`markdown_key`=ai의 `markdown_key`, `created_by`=요청자), `ai_operation_changes`에 `wiki_page` `updated` 한 건.
+- **복구와의 관계**: 수동 기여는 활성 기여라 ingest·lint 되돌리기의 `keep_contributions`에 남는다. `wiki_edit` 작업 자체를 되돌리는 것은 아직 지원하지 않는다.
+- 편집 잠금은 두지 않는다. 클라이언트는 revision 충돌로 판단한다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| path | `wiki_page_id` | `string` | 예 | Wiki 페이지 ID |
+| body | `markdown` | `string` | 예 | 전체 본문, UTF-8 5MB 이하 |
+| body | `base_revision` | `integer` | 예 | 클라이언트가 조회한 현재 revision. 이력이 없는 페이지는 0 |
+| body | `revision_write_id` | `string` | 예 | 같은 저장 재시도에 재사용하는 write ID(1~255자) |
+
+- Content-Type: `application/json` (`WikiPageContentSaveRequest`)
+
+```json
+{
+  "markdown": "# 캐시\n사람이 고친 본문",
+  "base_revision": 3,
+  "revision_write_id": "7c0e4f1a-..."
+}
+```
+
+#### 5. Response body
+
+- HTTP `200`: 저장 성공
+- Content-Type: `application/json` (`WikiPageContentSaveResponse`)
+
+```json
+{
+  "page_id": "string",
+  "revision": 4,
+  "updated_at": "2026-10-12T04:25:24.371948Z",
+  "markdown": "# 캐시\n사람이 고친 본문"
+}
+```
+
+#### 6. Error response
+
+| HTTP 상태 | 설명 | 응답 스키마 |
+|---|---|---|
+| `400` | 잘못된 Markdown, `base_revision` 또는 `revision_write_id` | `ErrorResponse` |
+| `403` | `wiki.ingest` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`) | `ErrorResponse` |
+| `404` | 워크스페이스 멤버가 아니거나 페이지를 찾을 수 없음(`WIKI_PAGE_NOT_FOUND`) | `ErrorResponse` |
+| `409` | revision 충돌(`WIKI_PAGE_VERSION_CONFLICT`) 또는 write ID 재사용 충돌(`IDEMPOTENCY_CONFLICT`) | `ErrorResponse` |
+| `413` | Markdown 5MB 초과 | `ErrorResponse` |
+| `503` | AI 서비스 저장 실패. 같은 `revision_write_id`로 다시 시도 | `ErrorResponse` |
+
+```json
+{
+  "error": {
+    "code": "WIKI_PAGE_VERSION_CONFLICT",
+    "message": "Wiki 페이지가 이미 변경되었습니다. 최신 본문을 다시 불러와 주세요.",
+    "current_revision": 5
+  }
+}
+```
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 멤버가 아니면 `404`.
+- OWNER 또는 `wiki.ingest` 권한(FruitionKR/Fruition-access#32의 권한 항목 재사용)을 받은 멤버만 고칠 수 있다. 없으면 `403 WORKSPACE_PERMISSION_REQUIRED`.
+- 위키는 워크스페이스 공유 자산이라 페이지 작성자는 확인하지 않는다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/pages/<value>/content" \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  --data '{"markdown":"# 캐시","base_revision":3,"revision_write_id":"<uuid>"}'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/wiki/controller/WikiController.java`
+- 서비스: `src/main/java/fruition/core/wiki/service/WikiPageEditService.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: saveWikiPageContent`)
+- 호출자: 없음 — 맥 데스크톱 앱이 연동할 예정
+- 하위 호출: ai-svc `POST ${WIKI_STATE_ENDPOINT}/pages/lookup`(표시 이름), `PUT ${WIKI_STATE_ENDPOINT}/pages/{pageId}/manual-edit`(`X-Internal-Token`, FruitionKR/Fruition-ai#64)
+- 배선 상태: **미배선 — 호출자 없음**. ai의 manual-edit API(Fruition-ai#64)가 배포돼야 동작한다
+
+[↑ 요약으로 돌아가기](#summary-put-api-workspaces-workspace-id-wiki-pages-wiki-page-id-content)
 
 </details>
 

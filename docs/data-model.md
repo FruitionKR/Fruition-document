@@ -25,7 +25,7 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | document_convert_queue | document-svc | PDF → Markdown 변환 진행 상태(문서당 1행) | `document_id`(placeholder, FK documents 삭제 cascade) UK, `source_document_id`, `status`(`processing`), `completed_pages`(쪽 순서로 병합을 마친 쪽 수), `total_pages`(첫 결과에서 알게 된 전체 쪽수), `next_start_page`(다음에 발행할 batch의 시작 쪽, 0부터). 변환이 끝나거나 실패하면 행을 지운다. 이벤트 처리는 이 행을 `FOR UPDATE`로 잠가 직렬화한다; V21·V50. V75에서 DB 폴링 worker용 `attempts`·`next_attempt_at`과 claim 인덱스를 지우고 `next_start_page`를 추가 |
 | document_convert_batches | document-svc | 발행했지만 아직 병합하지 않은 변환 batch | PK `(queue_id, start_page)`, `queue_id`(FK document_convert_queue 삭제 cascade), `page_count`, `command`(발행한 JSON 전문, 취소 요청에 그대로 싣는다), `status`(`dispatched` 결과 대기/`ready` 결과 도착·앞 쪽 병합 대기), `page_end`, `result_key`. 병합한 행은 지운다; V75 |
 | ai_command_outbox | document-svc | AI command의 transactional outbox | `run_id` UK, Kafka topic·key·payload. 데이터 파기는 미발행 행을 payload의 `workspace_id`·`user_id`로 지운다(실행 기록 없는 command 포함, #88) |
-| ai_operation_logs | document-svc | 문서·Wiki AI 작업 및 복구 감사 로그 | `target_display_name`은 작업 시작 시점 대상 이름 snapshot이다. `document_restore_blocked`는 V39 당시 기존 `document_edit`만 true로 표시하며 해당 감사 행의 복구를 차단한다. 새 작업과 ingest/lint는 false; 복구는 `restore_token_hash`(미리보기 토큰 SHA-256)와 `(restored_from, restore_token_hash)` partial unique로 동일 실행을 DB에서 1회만 선점 |
+| ai_operation_logs | document-svc | 문서·Wiki AI 작업, 사람의 Wiki 본문 수정(`wiki_edit`) 및 복구 감사 로그 | `target_display_name`은 작업 시작 시점 대상 이름 snapshot이다. `document_restore_blocked`는 V39 당시 기존 `document_edit`만 true로 표시하며 해당 감사 행의 복구를 차단한다. 새 작업과 ingest/lint는 false; 복구는 `restore_token_hash`(미리보기 토큰 SHA-256)와 `(restored_from, restore_token_hash)` partial unique로 동일 실행을 DB에서 1회만 선점 |
 | ai_operation_changes | document-svc | 작업별 변경 리소스 감사 내역 | `resource_display_name`은 변경 시점 리소스 이름 snapshot이며 이후 Wiki rename/delete와 무관하게 유지된다. |
 | ai_task_runs·ai_task_changes | document-svc | 공개 AI 작업 상태·업무 행의 변경 전후 값·복구 완료 기록 | run ID와 actor, trigger로 같은 트랜잭션에 기록. `status`는 `running`/`completed`/`failed`(동기 AI 호출 실패·변환 batch 실패)/취소 상태이며 종료하면 사용 금액 수집 대기열에 넣는다; V47. V58 `resume_claimed_by`·`resume_claimed_until`: 취소 진행을 한 Pod만 하도록 선점(3분 lease) |
 | ai_task_result_receipts | document-svc | `ai.task.event` 멱등 반영 영수증 | `event_id` PK, `run_id`, `task_kind` |
@@ -42,7 +42,7 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | usage_collect_queue | document-svc | 호출 사용량 수집 대기열 | PK `run_id`, `attempts`, `available_at`. 실행 종료 시 넣고 worker가 SKIP LOCKED로 선점, 수집 후 삭제; V65 |
 | usage_reconcile_cursor | document-svc | 종료 시각 구간 대사 진행 위치 | 단일 행 `reconciled_to`. 1시간 넘게 지난 구간까지 하루치씩 진행; V65 |
 | wiki_page_versions | document-svc | Wiki 본문 revision 이력 | 복합 PK `(page_id, revision)`, 페이지 ID는 ai_db 논리 참조 |
-| wiki_page_contributions | document-svc | 복구용 ingest 기여 원장 | 복합 PK `(page_id, ingest_operation_id)`, 비활성화 이력 보존 |
+| wiki_page_contributions | document-svc | 복구용 기여 원장(ingest 기여와 사람 수정 기여) | 복합 PK `(page_id, ingest_operation_id)`, 비활성화 이력 보존. 사람 수정(`wiki_edit`) 기여는 `source_document_id`가 NULL이고 `object_key`가 ai 수동 기여 JSON(`ops/{operation_id}.json`)이다 |
 | chat_sessions | document-svc | 채팅 세션(workspace당 10개) | `context_summary` |
 | chat_messages | document-svc | 질의응답 메시지 | `pair_id`로 user·assistant 쌍 식별, user·assistant 모두 `ai_provider`·`ai_model`·`web_search_enabled` snapshot |
 | agent_route_outcomes (view) | document-svc | Agent route 운영 평가 후보 | 기존 적용 projection과 채팅을 연결하며 편집 적용은 `accepted`, 실행 실패는 `technical_failure`, 나머지는 `unlabeled`로 노출 |

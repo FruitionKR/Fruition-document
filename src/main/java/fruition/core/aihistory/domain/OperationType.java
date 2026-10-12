@@ -14,5 +14,7 @@ public enum OperationType {
     /** 기존 Wiki를 다듬는 작업. 원문 기여가 아니므로 기여 명단을 만들지 않는다. */
     lint,
     /** 특정 작업의 기여를 걷어내는 복구. */
-    restore
+    restore,
+    /** 사람이 Wiki 페이지 본문을 직접 고친 작업. 동기 처리이며 수동 기여 하나를 만든다. */
+    wiki_edit
 }

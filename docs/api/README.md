@@ -19,10 +19,10 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Query](query.md) | 4 | 동기·비동기 Query와 SSE |
 | [Speech](speech.md) | 2 | 채팅 음성 입력(음성 → 텍스트, 저장 없음), 답변 음성 듣기(NDJSON 스트림) |
 | [Skills](skills.md) | 8 | Skill 작성·게시·설정과 참조 읽기 |
-| [Wiki](wiki.md) | 7 | Wiki 조회·기여·유지보수 |
+| [Wiki](wiki.md) | 8 | Wiki 조회·사람의 본문 수정·기여·유지보수 |
 | [Usage](agent.md#본인-모델-사용량-조회) | 1 | 본인 모델별 토큰 사용량 조회 |
 
-기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 115개(`/api/**` 103 + `/internal/**` 12), operation 127개**다.
+기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 116개(`/api/**` 104 + `/internal/**` 12), operation 128개**다.
 위 표의 "API 수"는 각 도메인 문서가 다루는 API 수이고, 충돌할 경우 실행 코드와 생성된 OpenAPI를 우선한다.
 표의 도메인별 API 수 합계는 같은 path의 여러 method를 세는 단위가 섞여 operation 수와 다를 수 있다. 정확한 수는 OpenAPI를 본다.
 
@@ -97,9 +97,9 @@ path 수는 `api-specs/openapi.yaml`에서 센 값이다. 호출자 조사는 `/
 - 주의: `/internal/agent/runs`와 `/internal/ai/tasks`는 이 서비스의 경로가 **아니다**. ai-svc가 노출하고 이 서비스가 호출하는 경로다
   (`pipeline/app/modules/agent_run/interfaces/http/routes.py:30`, `pipeline/app/modules/task_cancellation/interfaces/http/routes.py:10`).
 
-### 호출자 없는 31개
+### 호출자 없는 32개
 
-의도된 미사용과 실제 공백을 구분한다. path 기준 집계이므로 한 path의 여러 method는 1개로 센다(13+1+4+4+1+2+1+5 = 31).
+의도된 미사용과 실제 공백을 구분한다. path 기준 집계이므로 한 path의 여러 method는 1개로 센다(13+1+4+4+2+2+1+5 = 32).
 
 | 분류 | API | 판정 |
 |---|---|---|
@@ -107,7 +107,7 @@ path 수는 `api-specs/openapi.yaml`에서 센 값이다. 호출자 조사는 `/
 | 동기 Query (1) | `chat/sessions/{id}/query` | **의도된 미사용** — 프론트엔드가 비동기 `query/runs` + SSE `GET /api/query/runs/{request_id}/events`를 쓴다. 결함이 아니다 |
 | 삭제 되돌리기 (4) | `documents/trash`, `documents/{id}/restore`, `folders/{id}/restore`, `documents/{id}/versions/{version}` | **공백** — 휴지통·복구 API가 있는데 UI에 되돌리기 경로가 없다 |
 | 탐색 (4) | `navigation`, `navigation/breadcrumb`, `navigation/search`, `folders/{id}/children` | **의도된 미사용** — 프론트엔드는 `GET .../document-tree` 하나로 트리를 통째로 받는다 |
-| Wiki 페이지 편집 (1) | `wiki/pages/{id}/diff` | **공백** |
+| Wiki 페이지 편집 (2) | `wiki/pages/{id}/diff`, `wiki/pages/{id}/content` | **공백** — 본문 수정은 맥 데스크톱 앱이 연동할 예정이다(#75) |
 | Agent 계획 (2) | `agent/runs/{run_id}/cancel`, `agent/runs/{run_id}/revise` | **공백** — `decideAgentPlan`은 `approve`·`reject`만 보낸다 |
 | Wiki 미리보기 (1) | `chat/sessions/{id}/wiki/preview` | **공백** — 사용자가 미리보기 없이 바로 저장한다 |
 | 그 밖 (5) | `documents/markdown`, `documents/{id}/blocks`, `documents/{id}/duplicate`, `documents/{id}/export`, `usage/models` | **공백** |

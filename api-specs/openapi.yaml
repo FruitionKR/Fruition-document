@@ -46,7 +46,7 @@ tags:
   name: Skills
 - description: 채팅 음성 입력(음성과 전사 결과를 저장하지 않는다)과 답변 음성 듣기(완료된 합성만 30일 저장).
   name: Speech
-- description: Wiki 그래프 및 페이지 조회 API
+- description: Wiki 그래프·페이지 조회와 페이지 본문 수정 API
   name: Wiki
 - description: Wiki 정합성 검사와 유지보수 실행 API
   name: Wiki Maintenance
@@ -5049,6 +5049,77 @@ paths:
       summary: Wiki 페이지 상세 조회
       tags:
       - Wiki
+  /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/content:
+    put:
+      description: 사람이 고친 본문을 저장합니다. base_revision이 현재 revision과 같을 때만 반영하고 revision을 하나 올립니다. 같은 revision_write_id 재시도는 처음 결과를 돌려줍니다. 본문이 같으면 revision을 올리지 않습니다. OWNER 또는 wiki.ingest 권한이 있는 멤버만 고칠 수 있습니다.
+      operationId: saveWikiPageContent
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - description: Wiki 페이지 ID
+        example: wp_abc123
+        in: path
+        name: wiki_page_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WikiPageContentSaveRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/WikiPageContentSaveResponse"
+          description: 저장 성공 또는 같은 본문 no-op·같은 write ID 재시도
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "잘못된 Markdown, base_revision 또는 revision_write_id"
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: wiki.ingest 권한 없음(WORKSPACE_PERMISSION_REQUIRED)
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스 멤버가 아니거나 페이지를 찾을 수 없음
+        "409":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "revision 충돌(WIKI_PAGE_VERSION_CONFLICT, error.current_revision에 현재 revision) 또는 revision_write_id 재사용 충돌"
+        "413":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Markdown 5MB 초과
+        "503":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: AI 서비스 저장 실패(WIKI_PAGE_PIPELINE_UNAVAILABLE). 같은 revision_write_id로 다시 시도
+      summary: Wiki 페이지 본문 수정
+      tags:
+      - Wiki
   /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/diff:
     get:
       description: "두 revision 사이의 diff를 반환합니다. 저장된 본문을 읽어 요청 시점에 계산하며, 사용자가 펼칠 때만 호출됩니다."
@@ -7163,7 +7234,7 @@ components:
         current_revision:
           type: integer
           format: int64
-          description: "본문 저장 충돌(409 DOCUMENT_VERSION_CONFLICT)일 때만 존재한다. 서버의 현재 편집 revision으로, 충돌 등록에 쓴다."
+          description: "본문 저장 충돌(409 DOCUMENT_VERSION_CONFLICT·WIKI_PAGE_VERSION_CONFLICT)일 때만 존재한다. 서버의 현재 revision으로, 충돌 등록에 쓴다."
           example: 5
         details:
           type: array
@@ -9123,6 +9194,40 @@ components:
           type: boolean
           description: 마지막 lint 이후 Wiki가 바뀌어 재점검이 필요한지 여부
           example: true
+    WikiPageContentSaveRequest:
+      type: object
+      description: Wiki 페이지 본문 수정 요청
+      properties:
+        base_revision:
+          type: integer
+          format: int64
+          description: 클라이언트가 조회한 현재 revision(상세 조회의 revision). 버전 이력이 없는 페이지는 0
+          example: 3
+        markdown:
+          type: string
+          description: 저장할 전체 Markdown 본문(UTF-8 5MB 이하)
+        revision_write_id:
+          type: string
+          description: 같은 저장 재시도에 재사용하는 write ID(1~255자)
+    WikiPageContentSaveResponse:
+      type: object
+      description: Wiki 페이지 본문 수정 결과
+      properties:
+        markdown:
+          type: string
+          description: 저장된 본문
+        page_id:
+          type: string
+          description: Wiki 페이지 ID
+        revision:
+          type: integer
+          format: int64
+          description: 저장 뒤 revision. 본문이 같으면 현재 revision 그대로
+          example: 4
+        updated_at:
+          type: string
+          format: date-time
+          description: 이 revision이 만들어진 시각
     WikiPageDetailResponse:
       type: object
       description: Wiki 페이지 상세. 값이 없는 필드는 키 자체가 빠진다.

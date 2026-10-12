@@ -26,7 +26,7 @@ public record ErrorResponse(
             List<FieldError> details,
 
             @JsonProperty("current_revision")
-            @Schema(description = "본문 저장 충돌(409 DOCUMENT_VERSION_CONFLICT)일 때만 존재한다. 서버의 현재 편집 revision으로, 충돌 등록에 쓴다.",
+            @Schema(description = "본문 저장 충돌(409 DOCUMENT_VERSION_CONFLICT·WIKI_PAGE_VERSION_CONFLICT)일 때만 존재한다. 서버의 현재 revision으로, 충돌 등록에 쓴다.",
                     example = "5")
             Long currentRevision) {
 

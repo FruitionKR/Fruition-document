@@ -329,4 +329,14 @@ class RestoreExecuteServiceTest {
         return OperationLog.completed(TARGET, WORKSPACE, USER, type,
                 "doc_A", "요약", 1, T);
     }
+
+    @Test
+    void rebuildPage_sendsEmptyDocumentIdForManualContribution() {
+        RestoreExecuteService.RebuildPage page = RestoreExecuteService.RebuildPage.from(PageRestorePlan.rebuild(
+                "wp_1", List.of(new PageRestorePlan.Kept("op_ingest", "doc_1", "k1"),
+                        new PageRestorePlan.Kept("op_manual", null, "k2"))));
+
+        assertThat(page.keepContributions()).extracting(RestoreExecuteService.Kept::documentId)
+                .containsExactly("doc_1", "");
+    }
 }

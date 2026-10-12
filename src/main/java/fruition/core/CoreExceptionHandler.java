@@ -51,6 +51,7 @@ import fruition.core.authz.WorkspaceNotFoundException;
 import fruition.core.authz.WorkspacePermissionRequiredException;
 import fruition.core.notification.exception.NotificationNotFoundException;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
+import fruition.core.wiki.exception.WikiPageVersionConflictException;
 import fruition.core.wiki.exception.WikiPageVersionNotFoundException;
 import fruition.shared.util.BaseExceptionHandler;
 import fruition.shared.util.ErrorResponse;
@@ -522,6 +523,13 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body(ErrorResponse.of("INVALID_RESTORE_REQUEST", e.getMessage()));
+    }
+
+    @ExceptionHandler(WikiPageVersionConflictException.class)
+    public ResponseEntity<ErrorResponse> handleWikiPageVersionConflict(WikiPageVersionConflictException e) {
+        logHandled(e, HttpStatus.CONFLICT, "WIKI_PAGE_VERSION_CONFLICT");
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(new ErrorResponse.ErrorDetail(
+                "WIKI_PAGE_VERSION_CONFLICT", e.getMessage(), null, e.getCurrentRevision())));
     }
 
     @ExceptionHandler(WikiPageVersionNotFoundException.class)
