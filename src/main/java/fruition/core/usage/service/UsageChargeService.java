@@ -399,7 +399,8 @@ public class UsageChargeService {
 
         Priced p = price(callStatus, provider, model, requestedModel, startedAt, input, cached, creation, output,
                 audioSeconds, ttsCharacters);
-        if ("needs_review".equals(p.status())) {
+        // 공급사 오류로 실패한 호출은 사용량이 없는 것이 정상이라 경보 대상 로그를 남기지 않는다(금액 0, needs_review로 남는다).
+        if ("needs_review".equals(p.status()) && !"failed".equals(callStatus)) {
             log.warn("[AI 사용량 확인 필요] callId={} runId={} status={}", callId, call.path("run_id").asText(), callStatus);
         }
         // 확정된 청구는 다시 계산하지 않는다. 단가 없음·확인 필요 행은 다시 수집하거나 재계산 작업이 갱신한다.
