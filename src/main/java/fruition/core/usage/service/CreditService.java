@@ -85,6 +85,18 @@ public class CreditService {
         });
     }
 
+    /**
+     * 예약 없이 지금 가용 잔액이 이 종류의 최저 비용 이상인지만 확인한다(대용량 업로드 전 사전 거절용).
+     * {@link #reserve}와 같은 규칙이며 enforce가 꺼져 있으면 항상 통과한다. 잔액은 바뀔 수 있어 실제 예약은 따로 한다.
+     */
+    public void checkAdmission(String userId, String kind) {
+        if (!enforce) return;
+        var rows = jdbc.queryForList("SELECT balance, reserved FROM credit_accounts WHERE user_id = ?", userId);
+        long available = rows.isEmpty() ? 0
+                : ((Number) rows.getFirst().get("balance")).longValue() - ((Number) rows.getFirst().get("reserved")).longValue();
+        admit(kind, estimate(kind), available, "크레딧이 부족해 작업을 시작하지 않았습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.");
+    }
+
     /** 사전 승인으로 거절하는 환경인지({@code app.billing.enforce}). */
     public boolean enforcing() {
         return enforce;

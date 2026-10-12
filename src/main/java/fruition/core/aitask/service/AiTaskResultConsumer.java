@@ -61,6 +61,10 @@ public class AiTaskResultConsumer {
                 applier.applyConvertBatch(event);
                 return;
             }
+            if ("meeting_transcription".equals(kind)) {
+                applier.applyMeetingTranscription(event);
+                return;
+            }
             if ("ingest".equals(kind)) {
                 applier.applyIngest(event);
                 return;
