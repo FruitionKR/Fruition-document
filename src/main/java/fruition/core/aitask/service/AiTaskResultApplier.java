@@ -212,8 +212,10 @@ public class AiTaskResultApplier {
     public void applyIngest(JsonNode event) {
         String eventId = text(event, "event_id");
         String runId = text(event, "run_id");
-        // 성공한 ingest만 AI가 post_ingest를 이어서 돌린다(#102).
-        if (!beginResult(runId, "succeeded".equals(text(event, "status")))) return;
+        // 성공한 ingest만 AI가 post_ingest를 이어서 돌린다(#102). AI가 post_ingest_dispatched=false로 알린 편입은 기다릴 결과가 없어 바로 정산한다.
+        // 필드가 없는 이벤트(이전 ai-svc)는 예전 동작인 보류를 유지한다. 배포 순서 때문에 남기는 기본값이며 별도 호환 경로가 아니다.
+        boolean holdForPostIngest = "succeeded".equals(text(event, "status")) && event.path("post_ingest_dispatched").asBoolean(true);
+        if (!beginResult(runId, holdForPostIngest)) return;
         if (jdbcTemplate.update("""
                 INSERT INTO ai_task_result_receipts (event_id, run_id, task_kind)
                 VALUES (?, ?, 'ingest') ON CONFLICT (event_id) DO NOTHING

@@ -611,6 +611,20 @@ class AiTaskResultApplierTest {
     }
 
     @Test
+    void succeededIngestHoldsOnlyWhenPostIngestWasDispatchedOrFieldIsAbsent() throws Exception {
+        when(jdbcTemplate.update(contains("ai_task_result_receipts"), anyString(), anyString())).thenReturn(1);
+
+        applier.applyIngest(objectMapper.readTree(ingestEvent("ingest-true", "succeeded").replaceFirst("\\{", "{\"post_ingest_dispatched\":true,")));
+        applier.applyIngest(objectMapper.readTree(ingestEvent("ingest-false", "succeeded").replaceFirst("\\{", "{\"post_ingest_dispatched\":false,")));
+        applier.applyIngest(objectMapper.readTree(ingestEvent("ingest-absent", "succeeded")));
+
+        verify(usageCharges).enqueueAfterPostIngest("ingest-true");
+        verify(usageCharges).enqueue("ingest-false");
+        verify(usageCharges, never()).enqueueAfterPostIngest("ingest-false");
+        verify(usageCharges).enqueueAfterPostIngest("ingest-absent");
+    }
+
+    @Test
     void postIngestEventReleasesIngestHoldAndIgnoresEventsWithoutOwner() throws Exception {
         applier.applyPostIngest(objectMapper.readTree("""
                 {"run_id":"post-1","ingest_run_id":"ingest-1","kind":"post_ingest","status":"succeeded","workspace_id":"ws-1","user_id":"user-1"}
