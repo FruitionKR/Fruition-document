@@ -42,7 +42,8 @@ class WikiServiceTest {
     @BeforeEach
     void setUp() {
         service = new WikiService(documentRepository, workspaceAccessGuard,
-                stateRequester, versionRepository, markdownDiffService, wikiObjectReader);
+                stateRequester, versionRepository, markdownDiffService, wikiObjectReader,
+                org.mockito.Mockito.mock(fruition.core.wiki.repository.WikiWorkspaceVersionRepository.class));
     }
 
     @Test

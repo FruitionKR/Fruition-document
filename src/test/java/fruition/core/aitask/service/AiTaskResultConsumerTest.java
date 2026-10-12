@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.query.dto.QueryResponse;
 import fruition.core.query.service.QueryEventBroker;
 import fruition.core.query.service.QueryRunStore;
+import fruition.core.wiki.repository.WikiWorkspaceVersionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +26,7 @@ class AiTaskResultConsumerTest {
     @Mock AiTaskResultApplier applier;
     @Mock QueryRunStore queryRunStore;
     @Mock QueryEventBroker queryEventBroker;
+    @Mock WikiWorkspaceVersionRepository wikiVersions;
 
     private AiTaskResultConsumer consumer;
 
@@ -32,7 +34,7 @@ class AiTaskResultConsumerTest {
     void setUp() {
         org.mockito.Mockito.lenient().when(applier.acceptsProgress(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         consumer = new AiTaskResultConsumer(
-                new ObjectMapper(), applier, queryRunStore, queryEventBroker);
+                new ObjectMapper(), applier, queryRunStore, queryEventBroker, wikiVersions);
     }
 
     @Test
@@ -237,5 +239,37 @@ class AiTaskResultConsumerTest {
 
         verify(applier).applyMeetingTranscription(any());
         verifyNoInteractions(queryRunStore, queryEventBroker);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "ingest", "post_ingest", "lint", "restore_ingest", "restore_lint", "document_cleanup", "document_rename"})
+    void wikiChangingResultBumpsWorkspaceWikiVersion(String kind) throws Exception {
+        consumer.consume("{\"kind\":\"" + kind + "\",\"status\":\"succeeded\",\"workspace_id\":\"ws_1\","
+                + "\"run_id\":\"run-1\",\"request\":{\"workspace_id\":\"ws_1\"}}");
+
+        verify(wikiVersions).bump("ws_1");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "query", "agent", "meeting_notes", "meeting_transcription", "convert_batch"})
+    void nonWikiResultDoesNotBumpWikiVersion(String kind) throws Exception {
+        org.mockito.Mockito.lenient().when(applier.applyAgent(any()))
+                .thenReturn(new AiTaskResultApplier.AgentApplyResult(false, null));
+        consumer.consume("{\"kind\":\"" + kind + "\",\"status\":\"succeeded\",\"workspace_id\":\"ws_1\","
+                + "\"run_id\":\"run-1\"}");
+
+        verifyNoInteractions(wikiVersions);
+    }
+
+    @Test
+    void lintDryRunAndProgressDoNotBumpWikiVersion() throws Exception {
+        consumer.consume("{\"kind\":\"lint\",\"status\":\"succeeded\",\"workspace_id\":\"ws_1\","
+                + "\"request\":{\"dry_run\":true}}");
+        consumer.consume("{\"kind\":\"ingest\",\"status\":\"progress\",\"workspace_id\":\"ws_1\","
+                + "\"run_id\":\"run-1\",\"payload\":{}}");
+
+        verifyNoInteractions(wikiVersions);
     }
 }

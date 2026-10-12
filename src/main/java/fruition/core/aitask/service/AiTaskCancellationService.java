@@ -28,12 +28,19 @@ public class AiTaskCancellationService {
     private final io.minio.MinioClient storage;
     private final fruition.shared.util.StorageProperties storageProperties;
     private final fruition.core.usage.service.CreditService credits;
+    private final fruition.core.wiki.repository.WikiWorkspaceVersionRepository wikiVersions;
+
+    /** 취소 복구가 ai 위키를 되돌릴 수 있는 실행 종류. 복구가 끝나면 위키 버전을 올린다(#68). */
+    private static final java.util.Set<String> WIKI_KINDS =
+            java.util.Set.of("document", "post_ingest", "lint", "restore_ingest", "restore_lint");
 
     public AiTaskCancellationService(JdbcTemplate jdbc, PlatformTransactionManager manager,
             PipelineTaskCancellationClient pipeline, WorkspaceAccessGuard access, ObjectMapper mapper,
             QueryRunStore queryRuns, fruition.core.query.service.QueryEventBroker events, io.minio.MinioClient storage, fruition.shared.util.StorageProperties storageProperties,
-            fruition.core.usage.service.CreditService credits) {
+            fruition.core.usage.service.CreditService credits,
+            fruition.core.wiki.repository.WikiWorkspaceVersionRepository wikiVersions) {
         this.credits = credits;
+        this.wikiVersions = wikiVersions;
         this.jdbc = jdbc;
         this.transaction = new TransactionTemplate(manager);
         this.pipeline = pipeline;
@@ -166,6 +173,7 @@ public class AiTaskCancellationService {
                 queryRuns.markCancelled(id);
                 events.cancel(id);
                 jdbc.update("UPDATE ai_task_runs SET status = 'cancelled', error_code = NULL, updated_at = now() WHERE id = ?", id);
+                if (WIKI_KINDS.contains(row.get("kind"))) wikiVersions.bump(workspaceId);
                 if (converting) jdbc.update("DELETE FROM document_convert_queue WHERE document_id = ?", id.substring("convert:".length()));
                 // 취소 전까지 일어난 호출을 수집해 정산하고 남은 예약을 푼다(#78·#79).
                 jdbc.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", id);

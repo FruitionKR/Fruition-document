@@ -57,6 +57,9 @@ class AiTaskRollbackIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_sessions WHERE id = ?", Integer.class, id)).isZero();
         assertThat(redis.opsForList().range("query:events:" + id, 0, -1)).allSatisfy(event -> assertThat(event).contains("query.cancelled"));
         assertThat(cancellation.cancel(id, workspace, "user").get("status")).isEqualTo("cancelled");
+        // 질의 취소는 위키를 바꾸지 않는다.
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM wiki_workspace_versions WHERE workspace_id = ?",
+                Integer.class, workspace)).isZero();
         assertThatThrownBy(() -> cancellation.finish(id))
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
     }
@@ -119,6 +122,26 @@ class AiTaskRollbackIntegrationTest {
                 .containsEntry("status", "rolling_back")
                 .containsEntry("resume_claimed_by", null)
                 .containsEntry("resume_claimed_until", null);
+    }
+
+    @Test
+    void cancelledWikiTaskBumpsWorkspaceWikiVersion() throws Exception {
+        String id = "lint-cancel-" + UUID.randomUUID();
+        String workspace = "ws-" + id;
+        var command = mapper.createObjectNode().put("run_id", id).put("kind", "lint")
+                .put("workspace_id", workspace).put("user_id", "user");
+        jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, command, status) "
+                + "VALUES (?, ?, 'user', 'lint', CAST(? AS jsonb), 'rolling_back')", id, workspace, command.toString());
+        org.mockito.Mockito.when(pipeline.status(id, workspace, "user")).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "cancelled", null));
+
+        cancellation.resume();
+
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, id))
+                .isEqualTo("cancelled");
+        // ai가 lint의 위키 변경을 되돌렸으므로 그래프 ETag가 바뀌어야 한다.
+        assertThat(jdbc.queryForObject("SELECT version FROM wiki_workspace_versions WHERE workspace_id = ?",
+                Long.class, workspace)).isEqualTo(1L);
     }
 
     @Test

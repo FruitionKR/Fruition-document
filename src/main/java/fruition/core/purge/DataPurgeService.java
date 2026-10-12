@@ -79,6 +79,7 @@ public class DataPurgeService {
             new Step("document_assets", "DELETE FROM document_assets WHERE workspace_id = ?", 1),
             new Step("folders", "DELETE FROM folders WHERE workspace_id = ?", 1),
             new Step("wiki_lint_state", "DELETE FROM wiki_lint_state WHERE workspace_id = ?", 1),
+            new Step("wiki_workspace_versions", "DELETE FROM wiki_workspace_versions WHERE workspace_id = ?", 1),
             new Step("notifications", "DELETE FROM notifications WHERE workspace_id = ?", 1));
 
     /**
