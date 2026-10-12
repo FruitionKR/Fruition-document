@@ -94,6 +94,7 @@
 - provider마다 여러 모델을 반환한다(2026-10-10 기준 OpenAI 14개, Gemini 5개, Claude 9개). 순서는 provider별로 묶여 있다. 각 provider의 첫 항목은 기존 기본 모델(`gpt-6-luna`, `gemini-3.5-flash-lite`, `claude-sonnet-5`)이고, 그 뒤로 최신 모델부터 온다. 프론트는 저장된 선택이 없으면 첫 항목을 고르므로 기본 선택이 바뀌지 않는다. 위 예시는 일부만 보여준다.
 - 목록은 `AiModelCatalog`의 정적 화이트리스트다. 실제 호출에서 JSON 응답을 확인한 텍스트 생성 모델만 넣는다. 폐기·종료 예정 모델(`gpt-5-nano`, `o4-mini`, `gemini-3.1-flash-lite` 등, `gpt-5-chat-latest`, `gemini-2.5-*` 등), JSON 모드를 지원하지 않는 모델(`gpt-4`), image·tts·audio·embedding 계열은 넣지 않는다.
 - `app.ai.enabled-providers`에서 비활성화한 provider의 모델은 빠진다. 같은 목록이 질의·Agent 요청과 워크스페이스 모델 설정의 `provider`/`model` 검증에도 쓰인다.
+- 이 목록이 기준이다. Fruition-access에도 같은 목록이 있고, access CI가 이 저장소 `dev`의 목록과 비교해 다르면 실패한다(#45, Fruition-access#8). 목록을 바꿀 때는 이 저장소 PR을 먼저 `dev`에 머지한 뒤 access를 맞춘다.
 - provider/model을 생략했을 때의 기본값은 `openai` / `gpt-6-luna`다.
 
 #### 6. Error response
