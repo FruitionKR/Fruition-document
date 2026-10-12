@@ -1,6 +1,6 @@
 # ADR-0027: AI 사용량 과금 규칙과 단가 관리
 
-- 상태: 결정됨 (구현: [PR #103](https://github.com/FruitionKR/Fruition-document/pull/103), 경보: [Fruition-flatform#76](https://github.com/FruitionKR/Fruition-flatform/pull/76))
+- 상태: 결정됨 (구현: [PR #103](https://github.com/FruitionKR/Fruition-document/pull/103)·[PR #110](https://github.com/FruitionKR/Fruition-document/pull/110), 경보: [Fruition-flatform#76](https://github.com/FruitionKR/Fruition-flatform/pull/76))
 - 관련: [#93](https://github.com/FruitionKR/Fruition-document/issues/93), [#98](https://github.com/FruitionKR/Fruition-document/issues/98), [#99](https://github.com/FruitionKR/Fruition-document/issues/99), [#78](https://github.com/FruitionKR/Fruition-document/issues/78), [ADR-0026](0026-credit-payments.md)
 
 ## 맥락
@@ -28,9 +28,11 @@ document는 ai-svc 사용량 원장(`GET /internal/model-usage/calls`)을 호출
 
 한 호출은 단위 하나로만 계산한다.
 
-1. 단가 행에 `audio_usd_per_minute`가 있고 호출에 `audio_seconds`가 있으면 분당 단가로만 계산한다.
-2. 아니고 `tts_usd_per_mchar`와 글자 수가 있으면 글자 단가로만 계산한다.
+1. 단가 행에 `audio_usd_per_minute`가 있으면 분당 단가로만 계산한다. 호출에 `audio_seconds`가 없으면 토큰으로 넘어가지 않고 `unpriced`로 둔다(#110). 분당 과금 모델은 토큰 단가가 0이라 토큰으로 계산하면 0원 `charged`로 확정되기 때문이며, `unpriced`는 다시 수집·재계산할 때 복구된다.
+2. 아니고 `tts_usd_per_mchar`가 있으면 글자 단가로만 계산한다. 글자 수가 없으면 같은 이유로 `unpriced`다.
 3. 그 밖에는 토큰으로만 계산한다. 토큰 없이 오디오 길이나 글자 수만 있는데 해당 단가가 없으면 `unpriced`다.
+
+사용자 금액은 원가 × 환율 × (1 + 환율 버퍼 `fx_buffer_bp`, #110) × (1 + 마진) × (1 + 부가세)를 milli-KRW로 올림한다.
 
 ai 응답의 TTS 글자 수는 계약대로 `input_characters`를 읽는다.
 
@@ -69,4 +71,4 @@ document는 `[AI 모델 전환 감지] provider=%s requested=%s actual=%s`와 `[
 - 카탈로그와 단가표가 CI로 묶인다. 모델을 추가하려면 단가 마이그레이션도 같이 넣어야 한다.
 - 표현하지 못하는 단가가 남는다: OpenAI 272K 초과 long context, Gemini Pro 200k 초과 구간, Gemini 오디오 입력 단가, Anthropic 1시간 캐시 쓰기·지역 할증, 모달리티별 토큰 단가(`gpt-realtime` 계열). 기본 구간 단가로 계산되거나 시드하지 않는다(PR #103 참고).
 - 기간 정산(`UsageSettlementService`, #59)은 아직 응답 모델 단가와 토큰만으로 계산한다. 같은 규칙으로 맞추는 일은 남아 있다.
-- 마진·부가세·환율 정책은 이 ADR 범위 밖이다. 정책이 없으면 `[AI 환율·정책 없음]` 로그와 함께 `unpriced`가 된다.
+- 마진·부가세·환율·환율 버퍼 값은 이 ADR 범위 밖이다. 정책이 없으면 `[AI 환율·정책 없음]` 로그와 함께 `unpriced`가 된다.
