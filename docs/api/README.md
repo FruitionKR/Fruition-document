@@ -22,7 +22,7 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Wiki](wiki.md) | 7 | Wiki 조회·기여·유지보수 |
 | [Usage](agent.md#본인-모델-사용량-조회) | 1 | 본인 모델별 토큰 사용량 조회 |
 
-기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 109개(`/api/**` 97 + `/internal/**` 12), operation 121개**다.
+기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 115개(`/api/**` 103 + `/internal/**` 12), operation 127개**다.
 위 표의 "API 수"는 각 도메인 문서가 다루는 API 수이고, 충돌할 경우 실행 코드와 생성된 OpenAPI를 우선한다.
 표의 도메인별 API 수 합계는 같은 path의 여러 method를 세는 단위가 섞여 operation 수와 다를 수 있다. 정확한 수는 OpenAPI를 본다.
 
@@ -79,17 +79,19 @@ Wiki 복원(`restore_ingest`·`restore_lint`)은 모델을 부르지 않아 비�
 각 API의 상세 계약 `10. 구현 파일`에 `호출자` / `하위 호출` / `배선 상태` 세 줄을 함께 적는다.
 상세 계약을 두지 않은 축약 항목(Meetings, Usage, 업무 변경 복구 내부 API)은 해당 문서의 배선 표나 문단에 같은 내용을 적는다.
 
-| 구분 | path 수 | 호출자 확인 | 호출자 없음 |
-|---|---:|---:|---:|
-| `/api/**` (프론트엔드 전용 표면) | 86 | 55 | **31** |
-| `/internal/**` (서비스 간 표면) | 11 | 11 | **0** |
-| 합계 | 97 | 66 | **31** |
+| 구분 | path 수 | 호출자 확인 | 호출자 없음 | 미조사 |
+|---|---:|---:|---:|---:|
+| `/api/**` (프론트엔드 전용 표면) | 103 | 55 | **31** | 17 |
+| `/internal/**` (서비스 간 표면) | 12 | 12 | **0** | 0 |
+| 합계 | 115 | 67 | **31** | 17 |
+
+path 수는 `api-specs/openapi.yaml`에서 센 값이다. 호출자 조사는 `/api/**` 86개 시점에 한 것이라, 이후 추가된 17개(path 103 − 86)는 아직 프론트엔드 호출을 확인하지 않았다(미조사).
 
 ### 호출 주체
 
 - `/api/**`는 프론트엔드만 호출한다. ai-svc·access-svc 어느 쪽도 이 서비스의 `/api/**`를 호출하지 않는다
   (ai-svc의 outbound 조립은 `/internal/**`과 access-svc `/internal/authz/**`뿐이고, access-svc의 outbound RestClient는 `DocumentInternalClient` 하나다).
-- `/internal/**` 11개 중 8개는 ai-svc가, 3개(`POST /internal/workspaces/{workspace_id}/initial-note`와 데이터 파기 2개)는 access-svc가 호출한다.
+- `/internal/**` 12개 중 8개는 ai-svc가, 3개(`POST /internal/workspaces/{workspace_id}/initial-note`와 데이터 파기 2개)는 access-svc가 호출하고, 1개(`POST /internal/payments/webhook`)는 결제 대행사(PG)가 호출한다.
   데이터 파기 2개(`POST /internal/purge/workspaces`, `POST /internal/purge/users`)는 access-svc `DataPurgeRequestJob`이 호출하고,
   성공하면 access-svc가 이어서 ai-svc 파기 API를 부른다(document는 ai-svc 파기를 호출하지 않는다).
 - 주의: `/internal/agent/runs`와 `/internal/ai/tasks`는 이 서비스의 경로가 **아니다**. ai-svc가 노출하고 이 서비스가 호출하는 경로다

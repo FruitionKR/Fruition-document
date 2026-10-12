@@ -182,7 +182,7 @@ public class SkillController {
         return ResponseEntity.ok(skillService.update(workspaceId, userId, skillId, request, runId));
     }
 
-    @Operation(operationId = "deleteSkill", summary = "Skill 삭제", description = "개인 Skill은 소유자, 워크스페이스 Skill은 관리자만 삭제할 수 있습니다. 버전은 함께 삭제하고 과거 실행 기록은 보존합니다.")
+    @Operation(operationId = "deleteSkill", summary = "Skill 삭제", description = "개인 Skill은 소유자, 워크스페이스 Skill은 OWNER 또는 `skill.author` 보유자만 삭제할 수 있습니다. 버전은 함께 삭제하고 과거 실행 기록은 보존합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "204", description = "삭제 성공"),
         @ApiResponse(responseCode = "403", description = "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다",

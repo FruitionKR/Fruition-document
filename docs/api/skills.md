@@ -1326,7 +1326,7 @@ curl -X POST "$DOCUMENT/internal/agent/skill-authoring/references/read" \
 ## `DELETE /api/workspaces/{workspace_id}/skills/{skill_id}`
 
 - 인증: Bearer 토큰. Path의 워크스페이스 멤버십을 확인하고 인증된 사용자 ID를 AI 서비스에 전달한다. 요청 본문은 없다.
-- 개인 스킬은 소유자, 워크스페이스 스킬은 OWNER만 삭제할 수 있다.
+- 개인 스킬은 소유자, 워크스페이스 스킬은 OWNER 또는 `skill.author` 보유자만 삭제할 수 있다.
 - 내부 호출: `DELETE /skills/{skill_id}?workspace_id=...&user_id=...`, `X-Agent-Service-Token` 사용.
 - 권한: 대상 Skill이 팀 범위이면 `skill.author` 권한(OWNER는 항상 가능)이 필요하며 없으면 `403 WORKSPACE_PERMISSION_REQUIRED`다. 개인 Skill은 필요 없다. 범위는 Skill 조회로 확인한다.
 - 성공: `204 No Content`. 미인증 `401`, 워크스페이스·스킬이 없거나 삭제 권한이 없으면 `404`, AI 서비스 사용 불가 `503`.

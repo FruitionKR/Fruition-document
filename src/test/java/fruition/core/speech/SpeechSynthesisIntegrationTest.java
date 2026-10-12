@@ -401,9 +401,9 @@ class SpeechSynthesisIntegrationTest {
     @Test
     void visibilityAndStateAreCheckedBeforeCallingAi() throws Exception {
         String other = "user_" + UUID.randomUUID().toString().substring(0, 8);
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + other, "MEMBER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + other, "{\"role\":\"MEMBER\",\"permissions\":[]}");
         String outsider = "user_" + UUID.randomUUID().toString().substring(0, 8);
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + outsider, "NONE");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + outsider, "{\"role\":\"NONE\",\"permissions\":[]}");
 
         assertThat(post(other, messageId).statusCode()).isEqualTo(404);       // 같은 워크스페이스의 다른 사용자 세션
         assertThat(post(outsider, messageId).statusCode()).isEqualTo(404);    // 멤버 아님
