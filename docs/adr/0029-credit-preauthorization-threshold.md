@@ -1,6 +1,6 @@
 # ADR-0029: 크레딧 사전 승인 기준
 
-- 상태: 결정됨, 구현 예정 ([#102](https://github.com/FruitionKR/Fruition-document/issues/102))
+- 상태: 결정됨, 구현 [#122](https://github.com/FruitionKR/Fruition-document/pull/122) (이슈 [#102](https://github.com/FruitionKR/Fruition-document/issues/102)). 구현이 결정을 넓히거나 바꾼 부분은 아래 '구현 노트'에 적는다.
 - 관련: [#79](https://github.com/FruitionKR/Fruition-document/issues/79), [ADR-0026](0026-credit-payments.md), [ADR-0027](0027-ai-usage-billing-and-price-management.md)
 
 ## 맥락
@@ -34,3 +34,17 @@
 - 최저 비용 설정이 실제보다 높으면 A의 혼란이, 낮으면 B의 마이너스 누적이 다시 생긴다. 실제 청구액으로 주기적으로 조정해야 한다.
 - 청구가 0으로 새는 호출([ADR-0027](0027-ai-usage-billing-and-price-management.md)의 `unpriced`·`needs_review`)이 남아 있으면 차단의 의미가 줄어든다. 과금 정확성 작업이 먼저 반영돼야 한다.
 - 남은 일(#102): `CreditService.reserve`·`renew` 구현과 테스트(잔액 0 / 마이너스 / 최저 미만 / 최저 이상 상한 미만 / 동시 요청), 실사용자 환경 `BILLING_ENFORCE=true`, 402 응답 시 프론트 충전 안내, 마이너스 잔액 처리(다음 충전 상계 등) 문서화.
+
+## 구현 노트 (#122, 2026-10)
+
+구현하면서 위 결정과 달라지거나 결정에 없던 것을 정했다.
+
+- **최저 비용 초기값(결정 1):** 종류별 `app.billing.minimum.<kind>`가 없으면 그 종류 예상 상한(`app.billing.estimate.<kind>`, 없으면 `default-estimate`)의 10%를 쓴다. 종류마다 설정값을 따로 두지 않는다. 원장 데이터가 한 달 쌓이면(2026-11 중순) 종류별 실제 청구액의 중앙값으로 조정한다.
+- **강제 환경(결정 4):** Fruition-flatform에는 AWS 환경이 하나뿐이라 운영·개발을 나눠 켤 수 없다. 그 환경에서 `BILLING_ENFORCE=true`로 켜고, 테스트 계정에는 크레딧을 지급(`grant`)한다.
+- **예약을 건너뛰던 경로**
+  - ai가 스스로 만드는 편입 후 품질 평가(post_ingest): 편입 예약에 포함한다. 편입 정산을 post_ingest 결과가 올 때까지(최대 900초, 강제 모드에서만) 미룬다.
+  - Agent 계획 수정·승인: 다시 실행하기 직전에 같은 규칙으로 잔액을 다시 확인한다. ai가 같은 run으로 재실행하므로 AgentRun을 kind `agent_run`으로 등록해 확인 대상이 되게 했다. 부족하면 402 `INSUFFICIENT_CREDIT`이다.
+  - 사용자가 없는(`userId` 비어 있는) 호출은 시스템 작업(`document_deleted`·`document_renamed` 등)만 예약을 건너뛴다.
+- **비동기 작업:** 백그라운드 작업이 크레딧 부족으로 시작하지 못하면 작업을 `INSUFFICIENT_CREDIT` 코드로 실패 처리해 사용자에게 알린다. PDF 변환은 변환 run을 먼저 정산해 예약을 푼 뒤 자동 편입을 시작한다(남은 변환 예약이 편입을 거절시키지 않게).
+- **실패 해제 키:** 예약 해제는 `release:<run>`, 늦게 온 결과는 `:late:<n>`, 전송 실패로 중단한 시도는 `:abort:<n>`로 멱등하게 처리한다.
+- **이후 기능:** 답변 음성(TTS, #118)과 회의 녹음 업로드(#124)도 같은 규칙을 쓴다. 회의 녹음은 업로드 시작 때 예약 없이 먼저 확인하고(`CreditService.checkAdmission`) 업로드 완료 때 예약한다. 큰 파일을 다 올린 뒤에 거절되지 않게 하기 위해서다.
