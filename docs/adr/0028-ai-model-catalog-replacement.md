@@ -29,7 +29,7 @@
 |---|---|
 | `gpt-5-nano`, `gpt-4.1-nano`, `gpt-5.4-nano` | `gpt-6-luna` |
 | `gpt-5-mini`, `o4-mini` | `gpt-5.4-mini` (GPT-6에 Luna와 Sol 사이 등급이 없어 mini 계보의 현행 모델) |
-| `gpt-5`, `o3` | `gpt-6.1-sol` |
+| `gpt-5`, `o3` | `gpt-6-sol` |
 | `gemini-3.1-flash-lite` | `gemini-3.5-flash-lite` |
 | `gemini-3.7-flash` | `gemini-3.8-flash` |
 | `gemini-3.5-flash` | `gemini-3.6-flash` |
