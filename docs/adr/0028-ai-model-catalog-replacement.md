@@ -1,6 +1,6 @@
 # ADR-0028: AI 모델 카탈로그 교체 정책
 
-- 상태: 결정됨 (구현: [PR #100](https://github.com/FruitionKR/Fruition-document/pull/100), [Fruition-access#26](https://github.com/FruitionKR/Fruition-access/pull/26))
+- 상태: 결정됨 (구현: [PR #100](https://github.com/FruitionKR/Fruition-document/pull/100), [PR #126](https://github.com/FruitionKR/Fruition-document/pull/126)(V68 이관 대상 수정), [Fruition-access#26](https://github.com/FruitionKR/Fruition-access/pull/26))
 - 관련: [#86](https://github.com/FruitionKR/Fruition-document/issues/86), [Fruition-access#24](https://github.com/FruitionKR/Fruition-access/issues/24), [Fruition-ai#68](https://github.com/FruitionKR/Fruition-ai/issues/68), [ADR-0027](0027-ai-usage-billing-and-price-management.md)
 
 ## 맥락
