@@ -70,6 +70,6 @@ document는 `[AI 모델 전환 감지] provider=%s requested=%s actual=%s`와 `[
 - 스냅샷 이름 응답이 `unpriced`로 새지 않는다. 단가를 늦게 넣어도 90일 안의 호출은 다음 재계산에서 청구된다.
 - 같은 사용량이 두 번 청구되지 않는다. 대신 분당·글자 과금 모델은 단가 행에 해당 열이 있어야 하며, 없으면 토큰 단가로 계산된다.
 - 카탈로그와 단가표가 CI로 묶인다. 모델을 추가하려면 단가 마이그레이션도 같이 넣어야 한다.
-- 표현하지 못하는 단가가 남는다: OpenAI 272K 초과 long context, Gemini Pro 200k 초과 구간, Gemini 오디오 입력 단가, Anthropic 1시간 캐시 쓰기·지역 할증, 모달리티별 토큰 단가(`gpt-realtime` 계열). 기본 구간 단가로 계산되거나 시드하지 않는다(PR #103 참고). 단 TTS `gpt-realtime-2.1-mini`는 출력이 모두 오디오라 오디오 출력 단가를 output에 넣어 V73이 시드한다(V72 주석의 "과금하지 않는다"는 V73이 바로잡는다).
+- 표현하지 못하는 단가가 남는다: OpenAI 272K 초과 long context, Gemini Pro 200k 초과 구간, Gemini 오디오 입력 단가, Anthropic 1시간 캐시 쓰기·지역 할증, 모달리티별 토큰 단가(`gpt-realtime` 계열). 기본 구간 단가로 계산되거나 시드하지 않는다(PR #103 참고). 단 TTS `gpt-realtime-2.1-mini`는 출력이 모두 오디오라 오디오 출력 단가를 output에 넣어 V73이 시드한다.
 - 기간 정산(`UsageSettlementService`, #59)은 아직 응답 모델 단가와 토큰만으로 계산한다. 같은 규칙으로 맞추는 일은 남아 있다.
 - 마진·부가세·환율·환율 버퍼 값은 이 ADR 범위 밖이다. 정책이 없으면 `[AI 환율·정책 없음]` 로그와 함께 `unpriced`가 된다.
