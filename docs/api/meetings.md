@@ -411,7 +411,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 
 **워크스페이스당 생성은 하나다.** 같은 워크스페이스에서 다른 초안이 `generating`이면(회의가 달라도) 새 요청은 바로 `409 MEETING_NOTES_BUSY`다. 워크스페이스 단위 `pg_advisory_xact_lock`을 쥔 트랜잭션에서 확인과 행 삽입을 해 Pod가 여럿이어도 하나만 통과한다. `failed`(만료·취소 포함)·`ready`·`applied` 초안은 세지 않는다. 같은 `Idempotency-Key` 재시도는 BUSY가 아니라 기존 버전을 돌려준다. 다른 워크스페이스는 서로 영향이 없다.
 
-생성은 비동기다. `202`를 받은 뒤 조회(`GET`)로 `status`가 `ready`나 `failed`가 될 때까지 기다린다. 생성 실패는 HTTP 오류가 아니라 그 버전의 `failed`와 `error_code`(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INVALID`(성공 이벤트의 초안 형식 오류), `INSUFFICIENT_CREDIT`(`app.billing.enforce`에서 크레딧 부족, 명령을 발행하지 않는다))로 알리고, 이전 `ready` 초안은 그대로 쓸 수 있다.
+생성은 비동기다. `202`를 받은 뒤 조회(`GET`)로 `status`가 `ready`나 `failed`가 될 때까지 기다린다. 생성 실패는 HTTP 오류가 아니라 그 버전의 `failed`와 `error_code`(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INPUT_REJECTED`·`MEETING_NOTES_UNAVAILABLE`(ai 실패 이벤트의 코드), `MEETING_NOTES_INVALID`(성공 이벤트의 초안 형식 오류), `INSUFFICIENT_CREDIT`(`app.billing.enforce`에서 크레딧 부족, 명령을 발행하지 않는다))로 알리고, 이전 `ready` 초안은 그대로 쓸 수 있다.
 
 #### Kafka 계약 (`kind=meeting_notes`)
 
@@ -423,7 +423,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
  "segments": [{"id": "s1_a", "text": "..."}]}
 ```
 
-결과(`ai.task.event`): `kind=meeting_notes`, `run_id`, `status`(`succeeded` | `failed`). 성공의 `payload`는 초안(`display_name`, `summary`, `decisions`, `action_items`, `open_questions`)이고, 실패의 `error`는 코드 문자열이다(`INSUFFICIENT_CREDIT`를 포함하면 `INSUFFICIENT_CREDIT`, 그 밖은 `MEETING_NOTES_FAILED`). `request`는 되돌려 보내지 않는다. 결과는 `generating`인 자기 버전 행만 바꾸므로 재전달·늦은 이벤트는 무시된다. 크레딧 예약과 사용량 정산은 다른 AI 작업과 같이 `run_id`로 한다.
+결과(`ai.task.event`): `kind=meeting_notes`, `run_id`, `status`(`succeeded` | `failed`). 성공의 `payload`는 초안(`display_name`, `summary`, `decisions`, `action_items`, `open_questions`)이고, 실패의 `error`는 코드 문자열이다. ai는 `MEETING_NOTES_INPUT_REJECTED`·`MEETING_NOTES_UNAVAILABLE`·`MEETING_NOTES_FAILED`만 보내며, core는 이 셋을 그대로 `error_code`에 남기고 그 밖의 값은 `MEETING_NOTES_FAILED`로 바꾼다(크레딧 부족은 발행 전에 `INSUFFICIENT_CREDIT`로 거른다). `request`는 되돌려 보내지 않는다. 결과는 `generating`인 자기 버전 행만 바꾸므로 재전달·늦은 이벤트는 무시된다. 크레딧 예약과 사용량 정산은 다른 AI 작업과 같이 `run_id`로 한다.
 
 <a id="notes-latest"></a>
 ### `GET .../meetings/{meeting_id}/notes` — 최신 초안
