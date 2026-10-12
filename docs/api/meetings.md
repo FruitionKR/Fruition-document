@@ -405,7 +405,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 | 항목 | 내용 |
 |---|---|
 | 입력 | **Header** — `Idempotency-Key`(필수). 네트워크 재시도는 같은 키(같은 버전 반환, 명령 재발행 없음), 다시 만들기는 새 키<br>**Query** — `allow_partial`(기본 `false`) |
-| 처리 | `completed` 구간을 `position` 순으로 약 1,000자까지 묶어 AI에 보낸다(묶음 ID는 묶인 첫 구간 ID, 근거 ID는 원래 구간 ID들로 되돌려 저장). 새 버전 행을 `generating`으로 만들고(`ai_run_id` 기록) 크레딧 예약·`ai_task_runs` 등록·명령 outbox 저장을 한 트랜잭션으로 한 뒤 바로 끝난다. 결과는 `ai.task.event`(`kind=meeting_notes`)로 받아 `ai_run_id`로 찾은 그 버전 행에만 쓴다 |
+| 처리 | `completed` 구간을 `position` 순으로 약 1,000자까지 묶어 AI에 보낸다(묶음 ID는 묶인 첫 구간 ID, 근거 ID는 원래 구간 ID들로 되돌려 저장). 새 버전 행 `generating` 생성(`ai_run_id` 기록)·크레딧 예약·`ai_task_runs` 등록·명령 outbox 저장을 한 트랜잭션으로 한 뒤 바로 끝난다(중간에 실패하면 모두 롤백하고 명령 없는 `failed` 버전만 남긴다). 결과는 `ai.task.event`(`kind=meeting_notes`)로 받아 `ai_run_id`로 찾은 그 버전 행에만 쓴다 |
 | 출력 | `202` — `MeetingNotesResponse`(`status=generating`). 같은 키 재시도로 이미 끝난 버전을 돌려줄 때만 `200` |
 | 오류 | `409` 같은 워크스페이스에서 다른 회의록 생성 중(`MEETING_NOTES_BUSY`), 받아쓰기 중(`MEETING_LIVE_IN_USE`), 누락·비정상 종료 전사를 `allow_partial` 없이 요청(`MEETING_TRANSCRIPT_INCOMPLETE`)<br>`422` 확정 전사 없음(`MEETING_TRANSCRIPT_EMPTY`) |
 

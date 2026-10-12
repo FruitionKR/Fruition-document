@@ -148,36 +148,60 @@ public class MeetingNotesService {
                 .toList();
         String runId = UUID.randomUUID().toString();
         expireGenerating(workspaceId);
-        // 워크스페이스당 생성은 하나다(팀 회의는 한 사람이 녹음한다). 잠금은 같은 트랜잭션의 insert까지 쥐어 Pod 사이에서도 직렬이다.
-        var inserted = transaction.execute(status -> {
-            notes.lockWorkspace(workspaceId);
-            if (notes.findByRequest(meetingId, requestId).isPresent()) {
-                return Optional.<Integer>empty();  // 같은 요청 ID의 재시도·동시 재시도
-            }
-            if (notes.hasGenerating(workspaceId)) {
-                throw new MeetingException(HttpStatus.CONFLICT, "MEETING_NOTES_BUSY",
-                        "이 워크스페이스에서 다른 회의록을 만드는 중입니다. 끝난 뒤 다시 시도하세요.");
-            }
-            return notes.insertGenerating(meetingId, requestId, partial, json(snapshot), runId);
-        });
+        Optional<Integer> inserted;
+        String failure = null;
+        try {
+            // 모델 설정 조회는 access-svc HTTP 호출이라 잠금·트랜잭션 밖에서 한다.
+            WorkspaceAiModelClient.AiModelSelection model = workspaceAiModelClient.get(workspaceId);
+            var command = new MeetingNotesCommand(runId, "meeting_notes", workspaceId, userId, model.provider(),
+                    model.model(), meetingId, meeting.displayName(), segments);
+            // 워크스페이스당 생성은 하나다(팀 회의는 한 사람이 녹음한다). 잠금은 같은 트랜잭션 끝까지 쥐어 Pod 사이에서도 직렬이다.
+            // generating 행·크레딧 예약·작업 등록·outbox 저장이 한 트랜잭션이라, 중간에 실패하면 명령 없는 generating 행이
+            // 남아 워크스페이스를 막지 않는다.
+            inserted = transaction.execute(status -> {
+                notes.lockWorkspace(workspaceId);
+                if (notes.findByRequest(meetingId, requestId).isPresent()) {
+                    return Optional.<Integer>empty();  // 같은 요청 ID의 재시도·동시 재시도
+                }
+                if (notes.hasGenerating(workspaceId)) {
+                    throw new MeetingException(HttpStatus.CONFLICT, "MEETING_NOTES_BUSY",
+                            "이 워크스페이스에서 다른 회의록을 만드는 중입니다. 끝난 뒤 다시 시도하세요.");
+                }
+                Optional<Integer> version = notes.insertGenerating(meetingId, requestId, partial, json(snapshot), runId);
+                if (version.isPresent()) {
+                    outboxWriter.enqueue(runId, commandTopic, workspaceId, command);
+                }
+                return version;
+            });
+        } catch (MeetingException e) {
+            throw e;
+        } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+            inserted = Optional.empty();
+            failure = "INSUFFICIENT_CREDIT";
+        } catch (RuntimeException e) {
+            log.warn("[회의록 초안 요청 실패] meetingId={} requestId={}", meetingId, requestId, e);
+            inserted = Optional.empty();
+            failure = "MEETING_NOTES_FAILED";
+        }
+        if (failure != null) {
+            // 위 트랜잭션은 모두 롤백됐다. 명령을 발행하지 않은 실패 버전만 남겨 이전 ready 초안은 그대로 쓰게 한다.
+            String errorCode = failure;
+            inserted = transaction.execute(status -> {
+                notes.lockWorkspace(workspaceId);
+                if (notes.findByRequest(meetingId, requestId).isPresent()) {
+                    return Optional.<Integer>empty();
+                }
+                Optional<Integer> version = notes.insertGenerating(meetingId, requestId, partial, json(snapshot), runId);
+                version.ifPresent(v -> notes.markFailed(meetingId, v, errorCode));
+                return version;
+            });
+        }
         if (inserted.isEmpty()) {
             return toResponse(notes.findByRequest(meetingId, requestId).orElseThrow(() ->
                     new MeetingException(HttpStatus.CONFLICT, "MEETING_NOTES_BUSY",
                             "다른 회의록 생성 요청과 겹쳤습니다. 다시 시도해 주세요.")));  // 같은 요청 ID의 재시도·동시 재시도
         }
         int version = inserted.get();
-        try {
-            WorkspaceAiModelClient.AiModelSelection model = workspaceAiModelClient.get(workspaceId);
-            var command = new MeetingNotesCommand(runId, "meeting_notes", workspaceId, userId, model.provider(),
-                    model.model(), meetingId, meeting.displayName(), segments);
-            // 크레딧 예약·작업 등록·outbox 저장이 한 트랜잭션이다. 잔액이 모자라면 모두 롤백되고 이 버전만 failed로 남긴다.
-            transaction.executeWithoutResult(status -> outboxWriter.enqueue(runId, commandTopic, workspaceId, command));
-        } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
-            notes.markFailed(meetingId, version, "INSUFFICIENT_CREDIT");
-        } catch (RuntimeException e) {
-            log.warn("[회의록 초안 요청 실패] meetingId={} version={}", meetingId, version, e);
-            notes.markFailed(meetingId, version, "MEETING_NOTES_FAILED");
-        }
         return toResponse(notes.find(meetingId, version).orElseThrow());
     }
 

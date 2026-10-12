@@ -304,6 +304,44 @@ class MeetingNotesIntegrationTest {
     }
 
     @Test
+    void generate_writesRowReservationAndCommandAtomically() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        String other = meetingWithTranscript(null, "finished");
+        grant();
+        // 크레딧 예약 뒤 outbox 저장에서 실패하게 한다(이 워크스페이스 명령만).
+        jdbc.execute("""
+                CREATE OR REPLACE FUNCTION fail_meeting_notes_outbox() RETURNS trigger AS $$
+                BEGIN
+                  IF NEW.message_key = '%s' THEN RAISE EXCEPTION 'outbox down'; END IF;
+                  RETURN NEW;
+                END $$ LANGUAGE plpgsql""".formatted(workspaceId));
+        jdbc.execute("CREATE TRIGGER fail_meeting_notes_outbox BEFORE INSERT ON ai_command_outbox "
+                + "FOR EACH ROW EXECUTE FUNCTION fail_meeting_notes_outbox()");
+        try {
+            generate(meetingId, "k1", false).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("failed"))
+                    .andExpect(jsonPath("$.error_code").value("MEETING_NOTES_FAILED"));
+        } finally {
+            jdbc.execute("DROP TRIGGER fail_meeting_notes_outbox ON ai_command_outbox");
+            jdbc.execute("DROP FUNCTION fail_meeting_notes_outbox()");
+        }
+
+        String runId = runId(meetingId, 1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE id = ?", Integer.class, runId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE run_id = ?", Integer.class, runId))
+                .isZero();
+        // generating 행이 남지 않아 같은 워크스페이스의 다음 생성이 막히지 않는다.
+        generate(other, "k2", false).andExpect(status().isAccepted());
+        // generating 행·크레딧 예약·outbox 명령은 같은 트랜잭션(xmin)에서 쓴다.
+        String otherRun = runId(other, 1);
+        assertThat(jdbc.queryForList("""
+                SELECT DISTINCT xmin::text FROM meeting_notes WHERE ai_run_id = ?
+                UNION SELECT DISTINCT xmin::text FROM ai_command_outbox WHERE run_id = ?
+                UNION SELECT DISTINCT xmin::text FROM credit_entries WHERE run_id = ?
+                """, String.class, otherRun, otherRun, otherRun)).hasSize(1);
+    }
+
+    @Test
     void oneGenerationPerWorkspace_otherWorkspaceUnaffected() throws Exception {
         String first = meetingWithTranscript(null, "finished");
         String second = meetingWithTranscript(null, "finished");
