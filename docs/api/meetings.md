@@ -406,7 +406,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 |---|---|
 | 입력 | **Header** — `Idempotency-Key`(필수). 네트워크 재시도는 같은 키(같은 버전 반환, 명령 재발행 없음), 다시 만들기는 새 키<br>**Query** — `allow_partial`(기본 `false`) |
 | 처리 | `completed` 구간을 `position` 순으로 약 1,000자까지 묶어 AI에 보낸다(묶음 ID는 묶인 첫 구간 ID, 근거 ID는 원래 구간 ID들로 되돌려 저장). 새 버전 행 `generating` 생성(`ai_run_id` 기록)·크레딧 예약·`ai_task_runs` 등록·명령 outbox 저장을 한 트랜잭션으로 한 뒤 바로 끝난다(중간에 실패하면 모두 롤백하고 명령 없는 `failed` 버전만 남긴다). 결과는 `ai.task.event`(`kind=meeting_notes`)로 받아 `ai_run_id`로 찾은 그 버전 행에만 쓴다 |
-| 출력 | `202` — `MeetingNotesResponse`(`status=generating`). 같은 키 재시도로 이미 끝난 버전을 돌려줄 때만 `200` |
+| 출력 | `202` — `MeetingNotesResponse`(`status=generating`). 돌려주는 버전이 `generating`이 아니면 `200`(같은 키 재시도로 이미 끝난 버전, 또는 크레딧 부족(`INSUFFICIENT_CREDIT`)·저장 실패(`MEETING_NOTES_FAILED`)로 명령 없이 바로 `failed`가 된 첫 요청의 버전) |
 | 오류 | `409` 같은 워크스페이스에서 다른 회의록 생성 중(`MEETING_NOTES_BUSY`), 받아쓰기 중(`MEETING_LIVE_IN_USE`), 누락·비정상 종료 전사를 `allow_partial` 없이 요청(`MEETING_TRANSCRIPT_INCOMPLETE`)<br>`422` 확정 전사 없음(`MEETING_TRANSCRIPT_EMPTY`) |
 
 **워크스페이스당 생성은 하나다.** 같은 워크스페이스에서 다른 초안이 `generating`이면(회의가 달라도) 새 요청은 바로 `409 MEETING_NOTES_BUSY`다. 워크스페이스 단위 `pg_advisory_xact_lock`을 쥔 트랜잭션에서 확인과 행 삽입을 해 Pod가 여럿이어도 하나만 통과한다. `failed`(만료·취소 포함)·`ready`·`applied` 초안은 세지 않는다. 같은 `Idempotency-Key` 재시도는 BUSY가 아니라 기존 버전을 돌려준다. 다른 워크스페이스는 서로 영향이 없다.
