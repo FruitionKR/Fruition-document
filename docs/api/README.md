@@ -61,14 +61,14 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 | `REFERENCE_DOCUMENT_TOO_LARGE` / `dependency_failed` | 편집 대상 참조 문서가 30,000자를 넘어 처리할 수 없습니다. / 앞선 작업이 실패해 이 작업은 건너뛰었습니다. |
 | `SKILL_NOT_FOUND` / `SKILL_DISABLED` / `invalid_llm_selection` | 선택한 Skill을 찾을 수 없습니다. / 비활성화되어 있습니다. / 선택한 모델을 사용할 수 없습니다. 모델을 다시 선택해 주세요. |
 | `agent_result_*` | 결과 형식·요청 불일치·본문 누락 등 Agent 결과를 적용할 수 없는 사유별 문구 |
-| `PIPELINE_UNAVAILABLE` / `PIPELINE_TIMEOUT` / `INSUFFICIENT_CREDIT` | AI 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요. / 질의 대기 시간이 지나 취소를 요청했습니다. / 크레딧 잔액이 부족합니다. 크레딧을 충전한 뒤 다시 시도해 주세요. |
+| `PIPELINE_UNAVAILABLE` / `PIPELINE_TIMEOUT` / `INSUFFICIENT_CREDIT` | AI 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요. / 질의 대기 시간이 지나 취소를 요청했습니다. / 크레딧이 부족해 작업을 시작하지 않았습니다. 크레딧을 충전한 뒤 다시 시도해 주세요. |
 
 ## 공통 오류: `402 INSUFFICIENT_CREDIT`
 
 `app.billing.enforce`(`BILLING_ENFORCE`)가 true인 환경에서 비용이 드는 AI 작업은 시작 전에 가용 잔액(잔액 − 진행 중인 예약)을 확인하고,
 그 작업 종류의 최저 비용(`app.billing.minimum.<kind>`, 없으면 예상 상한의 10%)보다 작으면 작업을 등록하지 않고 `402`로 거절한다.
-본문은 `{"code":"INSUFFICIENT_CREDIT","message":"크레딧이 부족해 작업을 시작하지 않았습니다. …"}`이다(Agent 계획 수정·승인과 실시간 전사 갱신은 "크레딧이 부족해 중단했습니다. …").
-대상: Query(`query/runs`, 동기 `query`), Agent 턴·`revise`·`approve`, 문서 ingest(재처리)·변환(변환 뒤 자동 ingest의 거절은 문서 `failed`, `error_message`는 `INSUFFICIENT_CREDIT` 문구(크레딧 잔액이 부족합니다…)), 음성 합성·전사, Wiki lint·복원, Skill 작성·게시·수정.
+본문은 `{"code":"INSUFFICIENT_CREDIT","message":"크레딧이 부족해 작업을 시작하지 않았습니다. …"}`이다(Agent 계획 수정·승인과 실시간 전사 갱신은 "크레딧이 부족해 중단했습니다. …"). 두 문구 모두 `AiErrorMessages`에만 있다.
+대상: Query(`query/runs`, 동기 `query`), Agent 턴·`revise`·`approve`, 문서 ingest(재처리)·변환(변환 뒤 자동 ingest의 거절은 문서 `failed`, `error_message`는 `INSUFFICIENT_CREDIT` 문구(크레딧이 부족해 작업을 시작하지 않았습니다…)), 음성 합성·전사, Wiki lint·복원, Skill 작성·게시·수정.
 비동기로 처리되는 회의록 초안은 버전이 `failed`/`error_code=INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유, 실시간 받아쓰기는 `insufficient_credit` 오류 후 close `1008`이다.
 최저 비용의 기본값은 그 작업 종류 예상 상한(`app.billing.estimate.<kind>`)의 10%(최소 1)이고 `app.billing.minimum.<kind>`로 덮어쓴다. 예약 금액은 `min(예상 상한, 가용 잔액)`이다. (ADR-0029 구현 노트: 최저 비용 기본값을 상한의 10%로 둔 것은 이 구현의 선택이며, ADR 본문의 "기본 모델 최단 요청 비용"은 운영 데이터로 `minimum`을 채우며 대체한다.)
 잔액 조회는 `GET /api/users/me/credits`, 의미 상세는 [Agent API의 선불 크레딧 절](agent.md#본인-크레딧-잔액-선불)에 있다.

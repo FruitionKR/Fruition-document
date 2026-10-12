@@ -52,6 +52,6 @@ class AiErrorMessagesTest {
     void newAiCodesAndCreditCodeHaveText() {
         assertThat(AiErrorMessages.agent("REFERENCE_DOCUMENT_TOO_LARGE")).contains("30,000자");
         assertThat(AiErrorMessages.agent("dependency_failed")).contains("건너뛰었습니다");
-        assertThat(AiErrorMessages.ingest("INSUFFICIENT_CREDIT")).contains("크레딧 잔액이 부족");
+        assertThat(AiErrorMessages.ingest("INSUFFICIENT_CREDIT")).isEqualTo(AiErrorMessages.INSUFFICIENT_CREDIT);
     }
 }

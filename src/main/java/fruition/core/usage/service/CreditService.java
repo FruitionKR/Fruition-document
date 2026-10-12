@@ -1,6 +1,7 @@
 package fruition.core.usage.service;
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,8 +37,6 @@ import java.util.TreeMap;
 public class CreditService {
 
     private static final Logger log = LoggerFactory.getLogger(CreditService.class);
-    /** 진행 중이던 작업을 이어 가지 못할 때(구간 갱신·Agent 계획 수정·승인)의 거절 문구. */
-    public static final String STOPPED_MESSAGE = "크레딧이 부족해 중단했습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.";
     /** {@code ai_task_runs} 행이 진행 중인 실행이라는 조건. 인자는 오래된 예약 기준 시간이다. */
     private static final String IN_PROGRESS = "t.status IN ('running', 'cancel_requested', 'rolling_back') "
             + "AND t.updated_at > now() - make_interval(hours => ?)";
@@ -77,7 +76,7 @@ public class CreditService {
             if (!jdbc.queryForList("SELECT id FROM credit_entries WHERE idempotency_key = ?", Long.class,
                     "reserve:" + runId).isEmpty()) return;
             long available = ((Number) account.get("balance")).longValue() - ((Number) account.get("reserved")).longValue();
-            long amount = admit(kind, estimate, available, "크레딧이 부족해 작업을 시작하지 않았습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.");
+            long amount = admit(kind, estimate, available, AiErrorMessages.INSUFFICIENT_CREDIT);
             if (append(userId, "reserve", amount, runId, "reserve:" + runId, kind)) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
                         amount, userId);
@@ -94,7 +93,7 @@ public class CreditService {
         var rows = jdbc.queryForList("SELECT balance, reserved FROM credit_accounts WHERE user_id = ?", userId);
         long available = rows.isEmpty() ? 0
                 : ((Number) rows.getFirst().get("balance")).longValue() - ((Number) rows.getFirst().get("reserved")).longValue();
-        admit(kind, estimate(kind), available, "크레딧이 부족해 작업을 시작하지 않았습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.");
+        admit(kind, estimate(kind), available, AiErrorMessages.INSUFFICIENT_CREDIT);
     }
 
     /** 사전 승인으로 거절하는 환경인지({@code app.billing.enforce}). */
@@ -169,7 +168,7 @@ public class CreditService {
             long open = open(runId, userId);
             long othersReserved = ((Number) account.get("reserved")).longValue() - open;
             long amount = admit(kind, estimate, balance - othersReserved,
-                    STOPPED_MESSAGE);
+                    AiErrorMessages.INSUFFICIENT_CREDIT_STOPPED);
             if (open > 0 && append(userId, "release", -open, runId, "release:" + runId + ":" + seq, null)) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved - ?, updated_at = now() WHERE user_id = ?",
                         open, userId);
