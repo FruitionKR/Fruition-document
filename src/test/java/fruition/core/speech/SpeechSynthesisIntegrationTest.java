@@ -155,7 +155,7 @@ class SpeechSynthesisIntegrationTest {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "MEMBER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"MEMBER\",\"permissions\":[]}");
         sessionId = "session_" + suffix;
         sessions.save(new ChatSession(sessionId, workspaceId, userId, "제목"));
         messageId = message("assistant", "completed", "답변입니다[1]. **중요**합니다.");
