@@ -23,6 +23,22 @@ public final class AiErrorMessages {
     private static final String AGENT_DEFAULT = "Agent 처리 중 오류가 발생했습니다.";
     private static final String INGEST_DEFAULT = "위키 편입에 실패했습니다.";
     private static final String LINT_DEFAULT = "위키 정리에 실패했습니다.";
+    private static final String CONVERT_PREFIX = "PDF 변환에 실패했습니다. ";
+    private static final String CONVERT_DEFAULT = "변환 중 오류가 발생했습니다.";
+    private static final String TRANSCRIPTION_DEFAULT = "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.";
+
+    /** 변환에서만 공통 문구 대신 쓰는 문구. */
+    private static final Map<String, String> CONVERT_OVERRIDES = Map.of(
+            "input_rejected", "암호가 걸렸거나 손상되어 변환할 수 없는 PDF입니다.");
+
+    /** 회의 전사에서만 공통 문구 대신 쓰거나 더하는 문구. */
+    private static final Map<String, String> TRANSCRIPTION_OVERRIDES = Map.of(
+            "MEETING_RECORDING_TOO_LONG", "녹음이 3시간을 넘어 전사할 수 없습니다. 나눠서 올려 주세요.",
+            "MEETING_RECORDING_UNREADABLE", "지원하지 않거나 인식할 수 없는 녹음 파일입니다.",
+            "input_rejected", "지원하지 않거나 인식할 수 없는 녹음 파일입니다.",
+            "MEETING_TRANSCRIPT_EMPTY", "인식된 음성이 없습니다.",
+            "MEETING_TRANSCRIPT_TOO_LONG", "전사가 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요.",
+            "deadline_exceeded", "전사 시간이 너무 오래 걸려 중단했습니다. 녹음을 나눠 올려 주세요.");
 
     private static final Map<String, String> MESSAGES = Map.ofEntries(
             // ai 공통 코드
@@ -32,6 +48,7 @@ public final class AiErrorMessages {
             Map.entry("deadline_exceeded", "처리 시간이 초과되어 중단했습니다. 다시 시도해 주세요."),
             Map.entry("cancelled", "처리가 취소되었습니다."),
             Map.entry("interrupted_attempts_exhausted", "처리가 여러 번 중단되어 완료하지 못했습니다. 다시 시도해 주세요."),
+            Map.entry("dependency_failed", "앞선 작업이 실패해 이 작업은 건너뛰었습니다."),
             Map.entry("rollback_child_failed", "변경을 되돌리지 못했습니다. 작업 기록을 확인해 주세요."),
             // Agent
             Map.entry("agent_turn_cancelled", "Agent 작업이 취소되었습니다."),
@@ -41,6 +58,7 @@ public final class AiErrorMessages {
             Map.entry("agent_turn_route_contract_failed", "Agent 처리 결과를 확정하지 못했습니다. 다시 시도해 주세요."),
             Map.entry("SKILL_NOT_FOUND", "선택한 Skill을 찾을 수 없습니다."),
             Map.entry("SKILL_DISABLED", "선택한 Skill이 비활성화되어 있습니다."),
+            Map.entry("REFERENCE_DOCUMENT_TOO_LARGE", "편집 대상 참조 문서가 30,000자를 넘어 처리할 수 없습니다."),
             Map.entry("invalid_llm_selection", "선택한 모델을 사용할 수 없습니다. 모델을 다시 선택해 주세요."),
             Map.entry("agent_result_invalid_request", "Agent 결과의 요청 정보가 올바르지 않습니다."),
             Map.entry("agent_result_invalid_payload", "Agent 결과 형식이 올바르지 않습니다."),
@@ -88,7 +106,24 @@ public final class AiErrorMessages {
         return resolve(code, LINT_DEFAULT);
     }
 
+    /** 변환 실패 문구. 항상 "PDF 변환에 실패했습니다."로 시작한다. */
+    public static String convert(String code) {
+        return CONVERT_PREFIX + resolve(code, CONVERT_DEFAULT, CONVERT_OVERRIDES);
+    }
+
+    public static String transcription(String code) {
+        return resolve(code, TRANSCRIPTION_DEFAULT, TRANSCRIPTION_OVERRIDES);
+    }
+
     private static String resolve(String code, String fallback) {
+        return resolve(code, fallback, Map.of());
+    }
+
+    private static String resolve(String code, String fallback, Map<String, String> overrides) {
+        String override = code == null ? null : overrides.get(code);
+        if (override != null) {
+            return override;
+        }
         if (code == null || code.isBlank() || GENERIC_CODES.contains(code)) {
             return fallback;
         }

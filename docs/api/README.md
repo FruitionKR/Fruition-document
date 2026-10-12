@@ -31,7 +31,7 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 로그에만 남긴다. 사용자에게 나가는 문구는
 `AiErrorMessages`(`fruition/core/aitask/AiErrorMessages.java`) 한 곳에서 코드를 한국어로 바꾼다.
 코드가 목록에 없으면 기능별 기본 문구(질의 "질의 처리 중 오류가 발생했습니다.", Agent "Agent 처리 중 오류가 발생했습니다.",
-위키 편입 "위키 편입에 실패했습니다.", 위키 정리 "위키 정리에 실패했습니다.")로 바꾸고 코드마다 한 번 WARN을 남긴다. 회의록 API(`MEETING_NOTES_*`)는 이 목록을 거치지 않고 코드를 그대로 준다.
+위키 편입 "위키 편입에 실패했습니다.", 위키 정리 "위키 정리에 실패했습니다.", PDF 변환 "PDF 변환에 실패했습니다. …", 회의 녹음 전사 "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.")로 바꾸고 코드마다 한 번 WARN을 남긴다. 회의록 API(`MEETING_NOTES_*`)는 이 목록을 거치지 않고 코드를 그대로 준다.
 
 | 노출 위치 | 코드 | 문구 |
 |---|---|---|
@@ -39,7 +39,7 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 | Agent 채팅 말풍선 `error_message`, Agent·질의 SSE `error` | - | 문구만. SSE에는 `code`도 함께 간다 |
 | 질의 `GET /query/runs/{id}` | `error_code` | `error` |
 | 질의 SSE `query.failed` | `code` | `error` |
-| 문서 `error_message`(목록·상세) | 저장 안 함 | 문구 |
+| 문서 `error_message`(목록·상세), 회의 전사 `error` | 저장 안 함 | 문구 (변환은 `convert`, 전사는 `transcription` 문구) |
 | Wiki 정리 `GET .../wiki/maintenance/runs/{id}` | `error_code` | `error` |
 
 | 코드 | 문구 |
@@ -49,6 +49,7 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 | `input_rejected` | 요청 내용을 처리할 수 없습니다. 입력을 확인해 주세요. |
 | `deadline_exceeded` | 처리 시간이 초과되어 중단했습니다. 다시 시도해 주세요. |
 | `cancelled` | 처리가 취소되었습니다. |
+| `MEETING_RECORDING_*` / `MEETING_TRANSCRIPT_*` 등 | 회의 전사 전용 문구(`docs/api/meetings.md` 표) |
 | `internal_error`, `task_failed`, `agent_turn_failed` | 기능별 기본 문구 |
 | `interrupted_attempts_exhausted` | 처리가 여러 번 중단되어 완료하지 못했습니다. 다시 시도해 주세요. |
 | `rollback_failed`, `rollback_child_failed`, 그 밖의 `rollback_*`(개별 항목 우선, 없으면 접두사) | 변경을 되돌리지 못했습니다. 작업 기록을 확인해 주세요. |
@@ -57,6 +58,7 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 | `mutation_intent_required` | 어떤 변경을 원하시는지 조금 더 구체적으로 알려 주세요. (오류가 아니라 되묻는 문구) |
 | `ready_markdown_migration_unrecoverable` | 이전 편집안을 복구할 수 없어 적용하지 못했습니다. 다시 요청해 주세요. |
 | `markdown_*` | 편집안을 만들지 못했습니다. 다시 시도해 주세요. |
+| `REFERENCE_DOCUMENT_TOO_LARGE` / `dependency_failed` | 편집 대상 참조 문서가 30,000자를 넘어 처리할 수 없습니다. / 앞선 작업이 실패해 이 작업은 건너뛰었습니다. |
 | `SKILL_NOT_FOUND` / `SKILL_DISABLED` / `invalid_llm_selection` | 선택한 Skill을 찾을 수 없습니다. / 비활성화되어 있습니다. / 선택한 모델을 사용할 수 없습니다. 모델을 다시 선택해 주세요. |
 | `agent_result_*` | 결과 형식·요청 불일치·본문 누락 등 Agent 결과를 적용할 수 없는 사유별 문구 |
 | `PIPELINE_UNAVAILABLE` / `PIPELINE_TIMEOUT` / `INSUFFICIENT_CREDIT` | AI 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요. / 질의 대기 시간이 지나 취소를 요청했습니다. / 크레딧 잔액이 부족합니다. 크레딧을 충전한 뒤 다시 시도해 주세요. |
@@ -66,7 +68,7 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 `app.billing.enforce`(`BILLING_ENFORCE`)가 true인 환경에서 비용이 드는 AI 작업은 시작 전에 가용 잔액(잔액 − 진행 중인 예약)을 확인하고,
 그 작업 종류의 최저 비용(`app.billing.minimum.<kind>`, 없으면 예상 상한의 10%)보다 작으면 작업을 등록하지 않고 `402`로 거절한다.
 본문은 `{"code":"INSUFFICIENT_CREDIT","message":"크레딧이 부족해 작업을 시작하지 않았습니다. …"}`이다(Agent 계획 수정·승인과 실시간 전사 갱신은 "크레딧이 부족해 중단했습니다. …").
-대상: Query(`query/runs`, 동기 `query`), Agent 턴·`revise`·`approve`, 문서 ingest(재처리)·변환(변환 뒤 자동 ingest의 거절은 문서 `failed`, 오류 메시지 `INSUFFICIENT_CREDIT: …`), 음성 합성·전사, Wiki lint·복원, Skill 작성·게시·수정.
+대상: Query(`query/runs`, 동기 `query`), Agent 턴·`revise`·`approve`, 문서 ingest(재처리)·변환(변환 뒤 자동 ingest의 거절은 문서 `failed`, `error_message`는 `INSUFFICIENT_CREDIT` 문구(크레딧 잔액이 부족합니다…)), 음성 합성·전사, Wiki lint·복원, Skill 작성·게시·수정.
 비동기로 처리되는 회의록 초안은 버전이 `failed`/`error_code=INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유, 실시간 받아쓰기는 `insufficient_credit` 오류 후 close `1008`이다.
 최저 비용의 기본값은 그 작업 종류 예상 상한(`app.billing.estimate.<kind>`)의 10%(최소 1)이고 `app.billing.minimum.<kind>`로 덮어쓴다. 예약 금액은 `min(예상 상한, 가용 잔액)`이다. (ADR-0029 구현 노트: 최저 비용 기본값을 상한의 10%로 둔 것은 이 구현의 선택이며, ADR 본문의 "기본 모델 최단 요청 비용"은 운영 데이터로 `minimum`을 채우며 대체한다.)
 잔액 조회는 `GET /api/users/me/credits`, 의미 상세는 [Agent API의 선불 크레딧 절](agent.md#본인-크레딧-잔액-선불)에 있다.

@@ -422,10 +422,8 @@ AI가 오디오를 S3에서 읽어 시간 단위로 나눠 전사하고 `ai.task
 | `MEETING_RECORDING_UNREADABLE`, `input_rejected` | 지원하지 않거나 인식할 수 없는 녹음 파일입니다. |
 | `MEETING_TRANSCRIPT_EMPTY`(또는 성공인데 텍스트 없음) | 인식된 음성이 없습니다. |
 | `MEETING_TRANSCRIPT_TOO_LONG`(또는 100,000자 초과) | 전사가 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요. |
-| `provider_rate_limited` | AI 공급사의 요청 한도를 넘었습니다. 잠시 뒤 다시 올려 주세요. |
-| `provider_unavailable` | AI 공급사가 일시적으로 응답하지 않습니다. 잠시 뒤 다시 올려 주세요. |
+| 공통 코드(`provider_rate_limited`, `provider_unavailable`, `cancelled` 등) | `docs/api/README.md`의 공통 문구 |
 | `deadline_exceeded` | 전사 시간이 너무 오래 걸려 중단했습니다. 녹음을 나눠 올려 주세요. |
-| `cancelled` | 전사가 취소되었습니다. |
 | 그 밖(`internal_error` 등) | 녹음 파일을 전사하지 못했습니다. 다시 올려 주세요. |
 
 클라이언트는 조회 API로 상태를 확인한다. 결과 이벤트가 영영 오지 않아도 사용자는 아래 취소로 `transcribing`에서 벗어날 수 있다(자동 시간 초과 전환은 없다).

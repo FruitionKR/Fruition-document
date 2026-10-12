@@ -35,4 +35,23 @@ class AiErrorMessagesTest {
         assertThat(AiErrorMessages.ingest("internal_error")).isEqualTo("위키 편입에 실패했습니다.");
         assertThat(AiErrorMessages.lint("something_new")).isEqualTo("위키 정리에 실패했습니다.");
     }
+
+    @Test
+    void convertAndTranscriptionShareCommonTextsAndKeepOwnDefaults() {
+        assertThat(AiErrorMessages.convert("provider_rate_limited"))
+                .isEqualTo("PDF 변환에 실패했습니다. " + AiErrorMessages.query("provider_rate_limited"));
+        assertThat(AiErrorMessages.convert("input_rejected")).contains("암호가 걸렸거나");
+        assertThat(AiErrorMessages.convert("Traceback secret")).isEqualTo("PDF 변환에 실패했습니다. 변환 중 오류가 발생했습니다.");
+        assertThat(AiErrorMessages.transcription("provider_unavailable")).isEqualTo(AiErrorMessages.query("provider_unavailable"));
+        assertThat(AiErrorMessages.transcription("MEETING_RECORDING_TOO_LONG")).contains("3시간");
+        assertThat(AiErrorMessages.transcription("deadline_exceeded")).contains("녹음을 나눠");
+        assertThat(AiErrorMessages.transcription("internal_error")).isEqualTo("녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.");
+    }
+
+    @Test
+    void newAiCodesAndCreditCodeHaveText() {
+        assertThat(AiErrorMessages.agent("REFERENCE_DOCUMENT_TOO_LARGE")).contains("30,000자");
+        assertThat(AiErrorMessages.agent("dependency_failed")).contains("건너뛰었습니다");
+        assertThat(AiErrorMessages.ingest("INSUFFICIENT_CREDIT")).contains("크레딧 잔액이 부족");
+    }
 }
