@@ -47,7 +47,8 @@ import java.util.stream.Stream;
  *       이후 단가가 바뀌어도 과거 청구가 변하지 않는다.</li>
  *   <li>단가·환율·정책 버전은 호출 {@code started_at}에 적용 중인 행을 고른다.</li>
  *   <li>단가는 실제 응답 모델 → 요청 모델 순으로 찾는다. 단가·환율·정책이 없으면 {@code unpriced}(금액 비움)다.</li>
- *   <li>{@code succeeded}·{@code cancelled}(스트리밍을 중간에 멈췄지만 공급사가 생성한 만큼 사용량이 남은 호출)가 아닌 호출과, 성공했지만 토큰·오디오 길이·TTS 글자 수를 모두 모르는 호출은
+ *   <li>{@code succeeded}·{@code cancelled}(스트리밍을 중간에 멈췄지만 공급사가 생성한 만큼 사용량이 남은 호출)·{@code failed}·{@code abandoned}
+ *       호출은 토큰·오디오 길이·TTS 글자 수가 하나라도 있으면 그 사용량으로 청구한다. 사용량을 모두 모르는 호출은
  *       {@code needs_review}(금액 0)다.</li>
  *   <li>과금 단위(오디오 분·TTS 글자·토큰)는 단가 행이 정하고 하나만 쓴다({@link UsagePricing#callCostUsd}).</li>
  *   <li>{@code unpriced}·{@code needs_review} 행은 매시간 저장된 사용량으로 다시 계산한다({@link #recompute}).</li>
@@ -96,6 +97,8 @@ public class UsageChargeService {
         jdbc.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", runId);
     }
 
+    /** 사용량이 남았으면 청구하는 호출 상태. 실패·중단된 호출도 공급사가 받은 만큼은 청구한다(ADR-0027). */
+    private static final Set<String> BILLABLE_STATUSES = Set.of("succeeded", "cancelled", "failed", "abandoned");
     private static final String AUTONOMOUS_KIND = "agent_run";
     /** post_ingest 종료를 ingest run 기준으로 기록하는 receipt event_id 접두어. */
     private static final String POST_INGEST_DONE = "post_ingest_done:";
@@ -437,7 +440,7 @@ public class UsageChargeService {
      * 사용량으로 청구 상태와 금액을 정한다. 수집과 재계산이 같은 규칙을 쓴다.
      *
      * <ul>
-     *   <li>{@code succeeded}·{@code cancelled}가 아니거나, 입력·출력 토큰·오디오 길이·TTS 글자 수를 모두 모르면 {@code needs_review}(금액 0)다.
+     *   <li>{@code succeeded}·{@code cancelled}·{@code failed}·{@code abandoned}가 아니거나, 입력·출력 토큰·오디오 길이·TTS 글자 수를 모두 모르면 {@code needs_review}(금액 0)다.
      *       공급사가 usage를 주지 않은 호출을 0원으로 확정하지 않는다(#98).</li>
      *   <li>단가는 실제 응답 모델 → 요청 모델 순으로 찾고, 둘 다 없으면 {@code unpriced}다(#99).</li>
      *   <li>단가·환율·정책 버전은 호출 {@code started_at}에 적용 중인 행이다.</li>
@@ -451,7 +454,7 @@ public class UsageChargeService {
         }
         // 멈춘 합성은 영수증에 글자 수가 먼저 들어가므로, 토큰을 받지 못했으면 글자 수만으로 확정하지 않는다.
         boolean cancelledWithoutTokens = "cancelled".equals(callStatus) && input == null && output == null;
-        if (!("succeeded".equals(callStatus) || "cancelled".equals(callStatus)) || cancelledWithoutTokens
+        if (!BILLABLE_STATUSES.contains(callStatus) || cancelledWithoutTokens
                 || (input == null && output == null && audioSeconds == null && ttsCharacters == null)) {
             return new Priced("needs_review", null, routing, null, null, null, 0L, 0L);
         }
@@ -505,7 +508,7 @@ public class UsageChargeService {
      * 최근 90일의 {@code unpriced}·{@code needs_review} 행을 저장된 사용량으로 다시 계산한다(#99). AI 원장을 다시 조회하지
      * 않는다. {@code charged} 행은 건드리지 않는다. 행 잠금(SKIP LOCKED)으로 여러 Pod가 같은 행을 동시에 계산하지 않고,
      * 금액이 확정된 실행은 커밋한 뒤 수집과 같은 경로({@link CreditService#settle})로 정산한다.
-     * {@code succeeded}·{@code cancelled}가 아닌 호출은 규칙상 계속 {@code needs_review}라 대상에서 뺀다.
+     * 청구 대상 상태가 아닌 호출은 규칙상 계속 {@code needs_review}라 대상에서 뺀다.
      */
     @Scheduled(initialDelay = 180_000, fixedDelayString = "${app.usage-charge.recompute-interval-ms:3600000}")
     public void recompute() {
@@ -529,7 +532,7 @@ public class UsageChargeService {
     private Batch recomputeBatch(long after) {
         var rows = jdbc.queryForList("""
                 SELECT * FROM usage_charges WHERE id > ? AND status IN ('unpriced', 'needs_review')
-                    AND call_status IN ('succeeded', 'cancelled') AND started_at >= now() - interval '90 days'
+                    AND call_status IN ('succeeded', 'cancelled', 'failed', 'abandoned') AND started_at >= now() - interval '90 days'
                 ORDER BY id LIMIT ? FOR UPDATE SKIP LOCKED
                 """, after, RECOMPUTE_BATCH);
         Set<String> runIds = new TreeSet<>();

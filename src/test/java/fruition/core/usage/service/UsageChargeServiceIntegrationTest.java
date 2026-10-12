@@ -164,6 +164,22 @@ class UsageChargeServiceIntegrationTest {
     }
 
     @Test
+    void failedAndAbandonedCallsAreChargedOnlyWhenTheyCarryUsage() {
+        versions("2049-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2049-01-01T00:00:00Z", "1");
+        String run = "run-fa-" + UUID.randomUUID();
+        callsByQuery.put("run_id=" + run, String.join(",",
+                call("f1-" + run, run, "ws-1", model, "failed", "2049-02-01T00:00:00Z", 1000, 0, 0, 0, 0),
+                call("f2-" + run, run, "ws-1", model, "failed", "2049-02-01T00:00:01Z", null, null, null, null, null),
+                call("a1-" + run, run, "ws-1", model, "abandoned", "2049-02-01T00:00:02Z", 1000, 0, 0, 0, 0)));
+        charges.collectRun(run);
+
+        assertThat(jdbc.queryForList("SELECT call_id || ':' || status || ':' || charge_krw_milli FROM usage_charges "
+                + "WHERE run_id = ? ORDER BY call_id", String.class, run))
+                .containsExactly("a1-" + run + ":charged:1000", "f1-" + run + ":charged:1000", "f2-" + run + ":needs_review:0");
+    }
+
+    @Test
     void cancelledCallWithoutTokensNeedsReviewEvenWithCharacters() {
         versions("2049-01-01T00:00:00Z", "1000", 0, 0);
         price(model, "2049-01-01T00:00:00Z", "1");

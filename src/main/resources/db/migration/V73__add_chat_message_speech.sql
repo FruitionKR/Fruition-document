@@ -12,7 +12,8 @@ CREATE TABLE chat_message_speech (
 CREATE INDEX idx_chat_message_speech_created_at ON chat_message_speech (created_at);
 CREATE INDEX idx_chat_message_speech_user ON chat_message_speech (user_id);
 
--- 음성 합성 모델 단가. OpenAI 공식 단가 페이지(https://developers.openai.com/api/docs/pricing) 기준
+-- 음성 합성 모델 단가. (V72 주석은 이 모델을 과금하지 않는다고 적었지만, 이 마이그레이션이 단가를 넣으므로 TTS도 과금한다.
+-- 이미 적용된 V72의 체크섬을 바꾸지 않으려고 V72는 고치지 않고 여기에 바로잡는다.) OpenAI 공식 단가 페이지(https://developers.openai.com/api/docs/pricing) 기준
 -- gpt-realtime-2.1-mini는 텍스트 입력 $0.60 / 1M 토큰, 오디오 출력 $20.00 / 1M 토큰이다.
 -- 합성 호출의 출력은 전부 오디오라 ai 원장의 output_tokens를 오디오 출력 토큰으로 보고 output 단가에 $20.00을 넣는다.
 -- 입력(지시문 포함)은 텍스트 토큰이다. 캐시 단가는 0이다.
