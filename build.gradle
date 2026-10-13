@@ -111,6 +111,8 @@ tasks.withType(org.flywaydb.gradle.task.AbstractFlywayTask).configureEach {
 
 tasks.named('test') {
 	useJUnitPlatform()
+	// Testcontainers 통합 테스트의 Spring context가 캐시돼 기본 512MB로는 CI에서 힙이 부족하다.
+	maxHeapSize = '1g'
 	// 운영 기본값을 두지 않는 설정이라 테스트에서만 고정값을 준다.
 	environment('INTERNAL_CALLBACK_TOKEN', 'test-internal-callback')
 	environment('AGENT_INTERNAL_TOKEN', 'test-agent-internal')
