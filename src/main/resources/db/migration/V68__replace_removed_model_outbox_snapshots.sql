@@ -10,8 +10,8 @@ SET payload = jsonb_set(
             WHEN 'gpt-5.4-nano' THEN 'gpt-6-luna'
             WHEN 'gpt-5-mini' THEN 'gpt-5.4-mini'
             WHEN 'o4-mini' THEN 'gpt-5.4-mini'
-            WHEN 'gpt-5' THEN 'gpt-6.1-sol'
-            WHEN 'o3' THEN 'gpt-6.1-sol'
+            WHEN 'gpt-5' THEN 'gpt-6-sol'
+            WHEN 'o3' THEN 'gpt-6-sol'
         END),
         false
     )::text
