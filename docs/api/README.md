@@ -65,7 +65,7 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 
 `app.billing.enforce`(`BILLING_ENFORCE`)가 true인 환경에서 비용이 드는 AI 작업은 시작 전에 가용 잔액(잔액 − 진행 중인 예약)을 확인하고,
 그 작업 종류의 최저 비용(`app.billing.minimum.<kind>`, 없으면 예상 상한의 10%)보다 작으면 작업을 등록하지 않고 `402`로 거절한다.
-본문은 `{"code":"INSUFFICIENT_CREDIT","message":"크레딧이 부족해 작업을 시작하지 않았습니다. …"}`이다(Agent 계획 수정·승인과 실시간 전사 갱신은 "크레딧이 부족해 중단했습니다. …").
+본문은 공통 `ErrorResponse`인 `{"error":{"code":"INSUFFICIENT_CREDIT","message":"크레딧이 부족해 작업을 시작하지 않았습니다. …"}}`이다(Agent 계획 수정·승인과 실시간 전사 갱신은 "크레딧이 부족해 중단했습니다. …").
 대상: Query(`query/runs`, 동기 `query`), Agent 턴·`revise`·`approve`, 문서 ingest(재처리)·변환(변환 뒤 자동 ingest의 거절은 문서 `failed`, 오류 메시지 `INSUFFICIENT_CREDIT: …`), 음성 합성·전사, Wiki lint·복원, Skill 작성·게시·수정.
 비동기로 처리되는 회의록 초안은 버전이 `failed`/`error_code=INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유, 실시간 받아쓰기는 `insufficient_credit` 오류 후 close `1008`이다.
 최저 비용의 기본값은 그 작업 종류 예상 상한(`app.billing.estimate.<kind>`)의 10%(최소 1)이고 `app.billing.minimum.<kind>`로 덮어쓴다. 예약 금액은 `min(예상 상한, 가용 잔액)`이다. (ADR-0029 구현 노트: 최저 비용 기본값을 상한의 10%로 둔 것은 이 구현의 선택이며, ADR 본문의 "기본 모델 최단 요청 비용"은 운영 데이터로 `minimum`을 채우며 대체한다.)
