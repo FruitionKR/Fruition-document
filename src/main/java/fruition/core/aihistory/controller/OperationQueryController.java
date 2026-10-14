@@ -123,7 +123,11 @@ public class OperationQueryController {
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @ApiResponse(responseCode = "404", description = "작업 또는 워크스페이스를 찾을 수 없음",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @ApiResponse(responseCode = "403", description = "실행자에게 문서 편집 권한이 없음(문서 편집 복구, DOCUMENT_WRITE_FORBIDDEN)",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @ApiResponse(responseCode = "409", description = "미리보기 이후 대상이 변경됨",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @ApiResponse(responseCode = "423", description = "다른 사용자가 문서 편집 잠금을 쥠(문서 편집 복구, DOCUMENT_EDIT_LOCKED)",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping("/{operation_id}/restore")

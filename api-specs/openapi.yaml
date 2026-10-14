@@ -773,6 +773,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 되돌릴 수 없는 작업이거나 대상이 없음
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "실행자에게 문서 편집 권한이 없음(문서 편집 복구, DOCUMENT_WRITE_FORBIDDEN)"
         "404":
           content:
             '*/*':
@@ -785,6 +791,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 미리보기 이후 대상이 변경됨
+        "423":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "다른 사용자가 문서 편집 잠금을 쥠(문서 편집 복구, DOCUMENT_EDIT_LOCKED)"
       summary: 이 작업 되돌리기
       tags:
       - AI Operation Logs
@@ -7955,6 +7967,10 @@ components:
           type: string
           description: 이 작업이 대상으로 삼은 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        user_id:
+          type: string
+          description: 작업을 시작한 사용자 ID. 복구는 복구를 실행한 사용자다. 이름은 멤버 목록의 user_id로 찾는다.
+          example: user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
     OperationLogItem:
       type: object
       description: AI 작업 로그 한 건
@@ -7998,6 +8014,10 @@ components:
           type: string
           description: 이 작업이 대상으로 삼은 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        user_id:
+          type: string
+          description: 작업을 시작한 사용자 ID. 복구는 복구를 실행한 사용자다. 이름은 멤버 목록의 user_id로 찾는다.
+          example: user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
     OperationLogListResponse:
       type: object
       description: AI 작업 로그 목록. 변경분(diff)은 담기지 않으므로 상세 조회로 본다.

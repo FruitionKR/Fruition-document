@@ -187,7 +187,7 @@ class IngestRestoreFlowTest {
     private RestoreExecuteService.RestoreCommand queue(String token) {
         var restore = OperationLog.applying("op_restore", WORKSPACE, USER,
                 "doc_monday", INGEST, "{}", MONDAY.plusSeconds(172800));
-        when(lifecycle.startQueued(eq(target), anyString(), anyString(), any()))
+        when(lifecycle.startQueued(eq(target), eq(USER), anyString(), anyString(), any()))
                 .thenReturn(Optional.of(restore));
         var result = execute.execute(WORKSPACE, USER, INGEST, token);
         assertThat(result.status()).isEqualTo("queued");

@@ -47,7 +47,7 @@ class RestoreOperationLifecycleIntegrationTest {
             var task = (java.util.concurrent.Callable<Optional<OperationLog>>) () -> {
                 ready.countDown();
                 start.await();
-                return lifecycle.startQueued(target, "{}", "a".repeat(64), Instant.now());
+                return lifecycle.startQueued(target, "user_2", "{}", "a".repeat(64), Instant.now());
             };
             Future<Optional<OperationLog>> first = executor.submit(task);
             Future<Optional<OperationLog>> second = executor.submit(task);
@@ -82,7 +82,7 @@ class RestoreOperationLifecycleIntegrationTest {
             var task = (java.util.concurrent.Callable<Optional<OperationLog>>) () -> {
                 ready.countDown();
                 start.await();
-                return lifecycle.start(target, "{}", "b".repeat(64), Instant.now());
+                return lifecycle.start(target, "user_2", "{}", "b".repeat(64), Instant.now());
             };
             Future<Optional<OperationLog>> first = executor.submit(task);
             Future<Optional<OperationLog>> second = executor.submit(task);
@@ -102,6 +102,22 @@ class RestoreOperationLifecycleIntegrationTest {
     }
 
     @Test
+    void restoreStoresExecutingUserNotTargetUser() {
+        String targetId = "op_target_" + UUID.randomUUID();
+        OperationLog target = OperationLog.completed(
+                targetId, "ws_" + UUID.randomUUID(), "user_1", OperationType.ingest,
+                null, "ingest", 1, Instant.now());
+        operationLogRepository.save(target);
+
+        OperationLog restore = lifecycle.startQueued(target, "user_2", "{}", "f".repeat(64), Instant.now())
+                .orElseThrow();
+
+        assertThat(restore.getUserId()).isEqualTo("user_2");
+        assertThat(operationLogRepository.findById(targetId)).get()
+                .extracting(OperationLog::getUserId).isEqualTo("user_1");
+    }
+
+    @Test
     void failedClaimAllowsSameTokenRetry() {
         String targetId = "op_target_" + UUID.randomUUID();
         String workspaceId = "ws_" + UUID.randomUUID();
@@ -110,13 +126,13 @@ class RestoreOperationLifecycleIntegrationTest {
                 null, "ingest", 1, Instant.now());
         operationLogRepository.save(target);
 
-        Optional<OperationLog> first = lifecycle.startQueued(target, "{}", "c".repeat(64), Instant.now());
+        Optional<OperationLog> first = lifecycle.startQueued(target, "user_2", "{}", "c".repeat(64), Instant.now());
         assertThat(first).isPresent();
         lifecycle.fail(first.orElseThrow().getOperationId(), "wiki restore failed", Instant.now());
 
         // 실패한 복구는 아무것도 반영하지 못했으므로 같은 미리보기 토큰으로 다시 시도할 수 있어야 한다.
         assertThat(lifecycle.isClaimed(targetId, "c".repeat(64))).isFalse();
-        assertThat(lifecycle.startQueued(target, "{}", "c".repeat(64), Instant.now())).isPresent();
+        assertThat(lifecycle.startQueued(target, "user_2", "{}", "c".repeat(64), Instant.now())).isPresent();
 
         // 실패 기록 자체는 감사용으로 남되, 요약은 워커 오류 원문이 아니라 사용자용 문구다.
         assertThat(operationLogRepository.findById(first.orElseThrow().getOperationId()))
@@ -134,7 +150,7 @@ class RestoreOperationLifecycleIntegrationTest {
                 null, "edit", 1, Instant.now());
         operationLogRepository.save(target);
 
-        Optional<OperationLog> first = lifecycle.start(target, "{}", "e".repeat(64), Instant.now());
+        Optional<OperationLog> first = lifecycle.start(target, "user_2", "{}", "e".repeat(64), Instant.now());
         assertThat(first).isPresent();
         lifecycle.finishDocument(first.orElseThrow().getOperationId(), 1L, 2L, Instant.now());
 
@@ -155,13 +171,13 @@ class RestoreOperationLifecycleIntegrationTest {
                 null, "edit", 1, Instant.now());
         operationLogRepository.save(target);
 
-        Optional<OperationLog> first = lifecycle.start(target, "{}", "d".repeat(64), Instant.now());
+        Optional<OperationLog> first = lifecycle.start(target, "user_2", "{}", "d".repeat(64), Instant.now());
         assertThat(first).isPresent();
         lifecycle.finishDocument(first.orElseThrow().getOperationId(), 1L, 2L, Instant.now());
 
         // 이미 반영된 복구는 중복 실행을 막아야 한다.
         assertThat(lifecycle.isClaimed(targetId, "d".repeat(64))).isTrue();
-        assertThat(lifecycle.start(target, "{}", "d".repeat(64), Instant.now())).isEmpty();
+        assertThat(lifecycle.start(target, "user_2", "{}", "d".repeat(64), Instant.now())).isEmpty();
     }
 
     @Test

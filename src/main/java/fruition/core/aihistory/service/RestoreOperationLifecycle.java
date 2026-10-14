@@ -48,15 +48,16 @@ public class RestoreOperationLifecycle {
     }
 
     /**
-     * 복구 작업을 {@code applying}으로 기록한다. 문서 복구에서는 본문 저장과 같은 트랜잭션에
+     * 복구 작업을 {@code applying}으로 기록한다. {@code userId}는 복구를 실행한 사용자로,
+     * 되돌릴 원본 작업의 사용자와 다를 수 있다. 문서 복구에서는 본문 저장과 같은 트랜잭션에
      * 포함되어 반영 중 실패하면 claim도 함께 롤백된다.
      */
     @Transactional
-    public Optional<OperationLog> start(OperationLog target, String manifestJson,
-                                        String restoreTokenHash, Instant now) {
+    public Optional<OperationLog> start(OperationLog target, String userId,
+                                        String manifestJson, String restoreTokenHash, Instant now) {
         String operationId = "op_" + randomSuffix();
         if (operationLogRepository.insertRestoreIfAbsent(
-                operationId, target.getWorkspaceId(), target.getUserId(),
+                operationId, target.getWorkspaceId(), userId,
                 target.getTargetDocumentId(), target.getOperationId(), manifestJson,
                 restoreTokenHash, now) == 0) {
             return Optional.empty();
@@ -66,11 +67,11 @@ public class RestoreOperationLifecycle {
 
     /** Kafka command outbox와 같은 바깥 트랜잭션에 참여해 queued 복구를 등록한다. */
     @Transactional
-    public Optional<OperationLog> startQueued(OperationLog target, String manifestJson,
-                                               String restoreTokenHash, Instant now) {
+    public Optional<OperationLog> startQueued(OperationLog target, String userId,
+                                               String manifestJson, String restoreTokenHash, Instant now) {
         String operationId = "op_" + randomSuffix();
         if (operationLogRepository.insertRestoreIfAbsent(
-                operationId, target.getWorkspaceId(), target.getUserId(),
+                operationId, target.getWorkspaceId(), userId,
                 target.getTargetDocumentId(), target.getOperationId(), manifestJson,
                 restoreTokenHash, now) == 0) {
             return Optional.empty();
