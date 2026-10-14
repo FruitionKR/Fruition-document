@@ -230,4 +230,12 @@ class AiTaskResultConsumerTest {
         verify(applier).applyConvertBatch(any());
         verifyNoInteractions(queryRunStore, queryEventBroker);
     }
+
+    @Test
+    void meetingTranscriptionEventIsAppliedWithoutQueryProjection() throws Exception {
+        consumer.consume("{\"kind\":\"meeting_transcription\",\"run_id\":\"meeting_transcription:mtg_1:u\",\"status\":\"succeeded\"}");
+
+        verify(applier).applyMeetingTranscription(any());
+        verifyNoInteractions(queryRunStore, queryEventBroker);
+    }
 }

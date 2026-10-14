@@ -27,7 +27,7 @@ class DocumentDirectUploadServiceTest {
         props.setBucket("test-bucket");
         uploads = new DocumentDirectUploadService(storage, multipart, props, access, documents,
                 "test-secret-for-document-upload-ticket-only");
-        when(multipart.start(anyString())).thenReturn("upload-id");
+        when(multipart.start(anyString(), anyString())).thenReturn("upload-id");
     }
     DocumentDirectUploadService.StartResponse start(long size) throws Exception {
         return uploads.start("ws_test", "user_test", new DocumentDirectUploadService.StartRequest("large.pdf", size, null));
@@ -36,7 +36,7 @@ class DocumentDirectUploadServiceTest {
         var response = start(3L * 1024 * 1024 * 1024);
         assertThat(response.part_size()).isEqualTo(64L * 1024 * 1024);
         assertThat(response.part_count()).isEqualTo(48);
-        verify(multipart).start(startsWith("tmp/document-uploads/"));
+        verify(multipart).start(startsWith("tmp/document-uploads/"), eq("application/pdf"));
         verify(access).requireMember("ws_test", "user_test");
     }
     @Test void partUrlsCannotEscapeDeclaredRange() throws Exception {
@@ -56,7 +56,7 @@ class DocumentDirectUploadServiceTest {
         assertThatThrownBy(() -> uploads.start("ws_test", "user_test",
                 new DocumentDirectUploadService.StartRequest("../large.pdf", 5, null)))
                 .isInstanceOf(ResponseStatusException.class);
-        verify(multipart, never()).start(anyString());
+        verify(multipart, never()).start(anyString(), anyString());
     }
     @Test void forgedTicketDoesNotTouchStorage() throws Exception {
         assertThatThrownBy(() -> uploads.complete("ws_test", "user_test", "key",

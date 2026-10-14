@@ -18,7 +18,7 @@ Document는 문서·폴더·채팅·Wiki 공개 API와 AI 요청 중계를 담�
 
 ## 녹음 원본과 파일 전사
 
-녹음 원본은 S3/MinIO에 회의 삭제 전까지 보관하고 5분 presigned 주소로 재생한다. 녹음 파일 회의는 `status='transcribing'`을 대기열로 쓰는 작업자가 `FOR UPDATE SKIP LOCKED`로 한 건씩 선점해 AI 파일 전사를 부르고 약 1,000자 단위 구간으로 저장한다(회의록 AI 1,000구간 한도). 회의 삭제는 행을 잠근 채 원본을 먼저 지우고 DB 행을 지운다.
+녹음 원본은 S3/MinIO에 회의 삭제 전까지 보관하고 5분 presigned 주소로 재생한다. 브라우저는 녹음을 S3에 multipart로 직접 올리고(서명 ticket·presigned 조각 URL, 문서 직접 업로드와 같은 절차, 500 MiB) 서버는 확정만 한다. 녹음 파일 회의는 확정 트랜잭션에서 크레딧을 예약하고 `meeting_transcription` command를 outbox로 Kafka `ai.maintenance.command`(key=`run_id`)에 발행한다. AI가 오디오를 S3에서 읽어 시간 단위로 나눠 전사하고 `ai.task.event`(`kind=meeting_transcription`)로 돌려주면, 회의의 `transcription_run_id`와 같은 run일 때만 약 1,000자 단위 구간으로 저장한다(회의록 AI 1,000구간 한도). 전사 취소는 회의를 닫고 AI run 취소를 요청한다. 회의 삭제는 행을 잠근 채 원본을 먼저 지우고 DB 행을 지운다.
 
 ## 회의록 초안과 저장
 

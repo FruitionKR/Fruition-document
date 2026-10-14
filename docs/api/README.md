@@ -13,7 +13,7 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Agent](agent.md) | 10 | Agent 실행·승인과 내부 Tool 호출 |
 | [Chat](chat.md) | 7 | 채팅 세션·메시지와 Wiki 내보내기 |
 | [Documents](documents/README.md) | 29 | 문서 관리·본문·편집·이력 |
-| [Meetings](meetings.md) | 10 + WS 1 | 회의 생성·조회·삭제, 실시간 받아쓰기 WebSocket, 녹음 원본·파일 전사, 회의록 초안·저장 |
+| [Meetings](meetings.md) | 15 + WS 1 | 회의 생성·조회·삭제, 실시간 받아쓰기 WebSocket, 녹음 원본 직접 업로드·비동기 파일 전사·취소, 회의록 초안·저장 |
 | [Navigation](navigation.md) | 10 | 폴더와 문서 트리 탐색 |
 | [Notifications](notifications.md) | 3 | 앱 안 알림 목록과 읽음 처리 |
 | [Query](query.md) | 4 | 동기·비동기 Query와 SSE |
@@ -78,9 +78,9 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 
 | 구분 | path 수 | 호출자 확인 | 호출자 없음 |
 |---|---:|---:|---:|
-| `/api/**` (프론트엔드 전용 표면) | 82 | 55 | **27** |
+| `/api/**` (프론트엔드 전용 표면) | 86 | 55 | **31** |
 | `/internal/**` (서비스 간 표면) | 11 | 11 | **0** |
-| 합계 | 93 | 66 | **27** |
+| 합계 | 97 | 66 | **31** |
 
 ### 호출 주체
 
@@ -92,13 +92,13 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 - 주의: `/internal/agent/runs`와 `/internal/ai/tasks`는 이 서비스의 경로가 **아니다**. ai-svc가 노출하고 이 서비스가 호출하는 경로다
   (`pipeline/app/modules/agent_run/interfaces/http/routes.py:30`, `pipeline/app/modules/task_cancellation/interfaces/http/routes.py:10`).
 
-### 호출자 없는 27개
+### 호출자 없는 31개
 
-의도된 미사용과 실제 공백을 구분한다. path 기준 집계이므로 한 path의 여러 method는 1개로 센다(9+1+4+4+1+2+1+5 = 27).
+의도된 미사용과 실제 공백을 구분한다. path 기준 집계이므로 한 path의 여러 method는 1개로 센다(13+1+4+4+1+2+1+5 = 31).
 
 | 분류 | API | 판정 |
 |---|---|---|
-| 회의·음성 (9) | `meetings`, `meetings/{id}`, `meetings/{id}/live-tickets`, `meetings/{id}/notes`, `meetings/{id}/notes/{version}/append-preview`, `meetings/{id}/notes/{version}/apply`, `meetings/{id}/recording`, `meetings/{id}/recording-url`, `speech/transcriptions` | **공백** — 서버 기능은 완성되어 있으나 프론트엔드에 화면·호출 지점이 없다 |
+| 회의·음성 (13) | `meetings`, `meetings/{id}`, `meetings/{id}/live-tickets`, `meetings/{id}/notes`, `meetings/{id}/notes/{version}/append-preview`, `meetings/{id}/notes/{version}/apply`, `meetings/{id}/recording/uploads`, `meetings/{id}/recording/uploads/parts`, `meetings/{id}/recording/uploads/abort`, `meetings/{id}/recording/uploads/complete`, `meetings/{id}/transcription/cancel`, `meetings/{id}/recording-url`, `speech/transcriptions` | **공백** — 서버 기능은 완성되어 있으나 프론트엔드에 화면·호출 지점이 없다 |
 | 동기 Query (1) | `chat/sessions/{id}/query` | **의도된 미사용** — 프론트엔드가 비동기 `query/runs` + SSE `GET /api/query/runs/{request_id}/events`를 쓴다. 결함이 아니다 |
 | 삭제 되돌리기 (4) | `documents/trash`, `documents/{id}/restore`, `folders/{id}/restore`, `documents/{id}/versions/{version}` | **공백** — 휴지통·복구 API가 있는데 UI에 되돌리기 경로가 없다 |
 | 탐색 (4) | `navigation`, `navigation/breadcrumb`, `navigation/search`, `folders/{id}/children` | **의도된 미사용** — 프론트엔드는 `GET .../document-tree` 하나로 트리를 통째로 받는다 |

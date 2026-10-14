@@ -25,6 +25,7 @@ import fruition.core.aihistory.service.RestoreOperationLifecycle;
 import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.core.document.service.DocumentService;
 import fruition.core.meeting.MeetingNotesService;
+import fruition.core.meeting.MeetingTranscriptionService;
 import fruition.core.usage.service.UsageChargeService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -61,6 +62,7 @@ public class AiTaskResultApplier {
     private final DocumentService documentService;
     private final UsageChargeService usageCharges;
     private final MeetingNotesService meetingNotesService;
+    private final MeetingTranscriptionService meetingTranscription;
 
     public AiTaskResultApplier(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
                                QueryService queryService,
@@ -74,7 +76,9 @@ public class AiTaskResultApplier {
                                ChatTurnRecorder chatTurnRecorder,
                                ChatEvidenceRecorder chatEvidenceRecorder,
                                UsageChargeService usageCharges,
-                               MeetingNotesService meetingNotesService) {
+                               MeetingNotesService meetingNotesService,
+                               MeetingTranscriptionService meetingTranscription) {
+        this.meetingTranscription = meetingTranscription;
         this.chatTurnRecorder = chatTurnRecorder;
         this.chatEvidenceRecorder = chatEvidenceRecorder;
         this.jdbcTemplate = jdbcTemplate;
@@ -231,6 +235,11 @@ public class AiTaskResultApplier {
      */
     public void applyConvertBatch(JsonNode event) {
         documentService.applyConvertBatch(event);
+    }
+
+    /** 회의 녹음 전사 결과. 회의 매칭·중복 무시·run 정산은 {@link MeetingTranscriptionService}가 한다. */
+    public void applyMeetingTranscription(JsonNode event) {
+        meetingTranscription.apply(event);
     }
 
     /** post_ingest(품질 평가) 종료 이벤트. 결과는 AI에 남아 있어 사용 금액 정산과 ingest 예약 해제만 한다. */

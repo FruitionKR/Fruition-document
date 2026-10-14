@@ -20,9 +20,9 @@ public class MultipartStorage extends MinioAsyncClient {
         super(MinioConfig.asyncClient(properties, iamProvider));
         this.properties = properties;
     }
-    public String start(String key) throws Exception {
+    public String start(String key, String contentType) throws Exception {
         var headers = HashMultimap.<String, String>create();
-        headers.put("Content-Type", "application/pdf");
+        headers.put("Content-Type", contentType);
         return createMultipartUploadAsync(properties.getBucket(), properties.getRegion(), key, headers, null)
                 .get().result().uploadId();
     }

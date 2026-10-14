@@ -6,7 +6,7 @@
 실시간 전사는 document-svc가 AI 실시간 전사 WebSocket에 연결마다 1:1로 중계하고, 확정 문장을 저장한 뒤에만 브라우저에 전달한다.
 모델은 AI가 고정한다. 결정 근거는 [ADR-0023](../adr/0023-meeting-transcripts-and-recordings.md)이다.
 
-- API 수: 11 + WebSocket 1
+- API 수: 15 + WebSocket 1
 
 ## API 목차
 
@@ -16,7 +16,11 @@
 | [`GET /api/workspaces/{workspace_id}/meetings/{meeting_id}`](#summary-get-api-workspaces-workspace-id-meetings-meeting-id) | 회의 상태, 받아쓰기 연결 기록, 발화 순서대로 정렬된 전사 구간을 반환합니다. |
 | [`POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/live-tickets`](#summary-post-api-workspaces-workspace-id-meetings-meeting-id-live-tickets) | 실시간 받아쓰기 WebSocket 접속에 쓰는 60초짜리 일회용 ticket을 발급합니다. |
 | [`DELETE .../meetings/{meeting_id}`](#meeting-delete) | 회의·전사·회의록 초안·녹음 원본을 삭제합니다. |
-| [`PUT .../meetings/{meeting_id}/recording`](#meeting-recording) | 녹음 원본을 올립니다. 녹음 파일 회의는 전사를 시작합니다. |
+| [`POST .../meetings/{meeting_id}/recording/uploads`](#meeting-recording) | 녹음 원본을 S3에 직접 올릴 multipart 업로드를 시작합니다(ticket 발급). |
+| [`POST .../recording/uploads/parts`](#meeting-recording) | 조각별 presigned PUT URL을 발급합니다. |
+| [`POST .../recording/uploads/abort`](#meeting-recording) | 직접 업로드를 중단합니다. |
+| [`POST .../recording/uploads/complete`](#meeting-recording) | 조각을 조립해 원본으로 확정합니다. 녹음 파일 회의는 전사를 시작합니다. |
+| [`POST .../meetings/{meeting_id}/transcription/cancel`](#meeting-transcription-cancel) | 전사 중인 녹음 파일 회의를 취소합니다. |
 | [`GET .../meetings/{meeting_id}/recording-url`](#meeting-recording-url) | 녹음 원본을 재생할 5분짜리 주소를 반환합니다. |
 | [`POST .../meetings/{meeting_id}/notes`](#notes-generate) | 확정 전사로 회의록 초안을 만들어 새 버전으로 보관합니다. 생성은 비동기입니다(`202`, 조회로 대기). |
 | [`GET .../meetings/{meeting_id}/notes`](#notes-latest) | 최신 회의록 초안을 반환합니다. |
@@ -27,7 +31,7 @@
 
 ## 호출 관계(배선)
 
-경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 이 도메인은 **공개 API 10개와 WebSocket 1개 전부 호출자가 없다**.
+경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 이 도메인은 **공개 API 14개와 WebSocket 1개 전부 호출자가 없다**.
 프론트엔드(`/Users/mireutale/coding/git/Fruition-frontend`)의 85개 `apiFetch` 호출 지점과 `fetch`·`new WebSocket` 호출 지점을
 전수 확인했으며 `meetings`·`speech`로 가는 경로가 하나도 없다. ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다.
 
@@ -37,7 +41,8 @@
 | `GET .../meetings/{meeting_id}` | 없음 | 권한 확인 외 없음 | **미배선** |
 | `POST .../meetings/{meeting_id}/live-tickets` | 없음 | 티켓만 발급. 티켓을 쓰는 WebSocket 중계(`MeetingLiveHandler`)가 ai-svc `${SPEECH_LIVE_ENDPOINT}`에 연결한다 | **미배선** |
 | `DELETE .../meetings/{meeting_id}` | 없음 | 객체 저장소(MinIO/S3) 녹음 원본 삭제 | **미배선** |
-| `PUT .../meetings/{meeting_id}/recording` | 없음 | 객체 저장소 쓰기 → `MeetingTranscriptionWorker`가 비동기로 ai-svc `POST ${SPEECH_TRANSCRIPTION_ENDPOINT}` 호출 | **미배선** |
+| `POST .../meetings/{meeting_id}/recording/uploads` (+`/parts`, `/abort`, `/complete`) | 없음 | 브라우저→S3 직접 multipart. `complete`가 원본을 기록하고 Kafka `ai.maintenance.command`(`meeting_transcription`)를 outbox로 발행한다. 결과는 `ai.task.event`로 받는다 | **미배선** |
+| `POST .../meetings/{meeting_id}/transcription/cancel` | 없음 | 회의를 실패로 닫고 AI run 취소 요청(`AiTaskCancellationService`) | **미배선** |
 | `GET .../meetings/{meeting_id}/recording-url` | 없음 | 객체 저장소 presign | **미배선** |
 | `POST .../meetings/{meeting_id}/notes` | 없음 | Kafka `ai.maintenance.command`(`kind=meeting_notes`)로 전달. 결과는 `ai.task.event`로 받는다 | **미배선** |
 | `POST .../meetings/{meeting_id}/notes/cancel` | 없음 | DB 갱신과 `ai_task_runs` `cancel_requested` 표시. 파이프라인 취소 API 호출은 `resume()` 스케줄러가 비동기로 | **미배선** |
@@ -364,19 +369,71 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 
 ## 녹음 원본과 회의 삭제
 
-경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 세 API 모두 workspace 멤버십과 회의를 만든 사람임을 검증한다(아니면 `404`). 원본은 회의가 삭제될 때까지 보관한다. 조회 응답(`MeetingResponse`)에 `has_recording`, `error`(녹음 파일 전사 실패 사유)가 있다.
+경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 모든 API가 workspace 멤버십과 회의를 만든 사람임을 검증한다(아니면 `404`). 원본은 회의가 삭제될 때까지 보관한다. 조회 응답(`MeetingResponse`)에 `has_recording`, `error`(녹음 파일 전사 실패 사유)가 있다.
 
 <a id="meeting-recording"></a>
-### `PUT .../meetings/{meeting_id}/recording` — 녹음 원본 업로드
+### 녹음 원본 직접 업로드 — `POST .../meetings/{meeting_id}/recording/uploads`
 
-| 항목 | 내용 |
+원본은 서버를 거치지 않고 브라우저가 S3에 multipart로 직접 올린다. 문서 직접 업로드(`documents/uploads`)와 같은 절차·이름이며 서명된 ticket(1일, 사용자·워크스페이스·회의에 묶임)을 쓴다. 이전의 `PUT .../recording`(multipart form, 24 MiB)은 없어졌다.
+
+| 단계 | 요청 | 응답 |
+|---|---|---|
+| 1. 시작 | `POST .../recording/uploads` `{"content_type":"audio/mp4","size":1234567}` | `200` `{"ticket":"…","part_size":67108864,"part_count":1}` |
+| 2. 조각 URL | `POST .../recording/uploads/parts` `{"ticket":"…","first_part":1,"count":1}` (count 1–32) | `200` `{"parts":[{"part_number":1,"url":"https://…presigned PUT…"}]}` |
+| 3. 조각 업로드 | 각 `url`에 조각 바이트를 `PUT`(브라우저→S3, URL 15분 유효). 조각은 `part_size`(마지막 조각만 더 작게)로 자른다 | — |
+| 4. 확정 | `POST .../recording/uploads/complete` `{"ticket":"…"}` | 녹음 파일 회의 `202` `MeetingResponse`(`status=transcribing`), 실시간 회의 `200` |
+| (중단) | `POST .../recording/uploads/abort` `{"ticket":"…"}` | `204` |
+
+- `content_type`: `audio/wav`·`audio/mpeg`·`audio/mp4`·`audio/webm`(`;codecs=` 등 파라미터와 `audio/x-wav`·`audio/x-m4a` 허용). `size`: 1 byte–**500 MiB**. 녹음 길이 한도(3시간)는 전사 단계에서 AI가 확인한다.
+- `part_size`는 64 MiB 이상이다. 같은 ticket으로 확정을 다시 불러도(응답 유실) 이미 기록된 원본이면 현재 회의를 돌려준다.
+- 녹음 파일 회의(`source=upload`): `awaiting_upload`·`failed`에서만. 다시 올리면 새 원본으로 바꾸고 이전 원본은 저장소에서 지운다. 겹친 업로드 중 하나만 성공하고 실패한 쪽의 객체는 남지 않는다.
+- 실시간 회의(`source=live`): `open`이고 받아쓰기 연결이 없으며 원본이 없을 때 한 번만. 저장만 하고 `200`(브라우저가 받아쓰기와 함께 녹음한 원본).
+- 확정에서 조립한 객체의 크기가 1 byte 이상, 500 MiB 이하, 시작 때 알린 `size`와 같아야 한다. 아니면 객체를 지우고 거절한다.
+
+| 오류 | 의미 |
 |---|---|
-| 입력 | multipart `file`. `audio/wav`·`audio/mpeg`·`audio/mp4`·`audio/webm`(파라미터·`audio/x-wav`·`audio/x-m4a` 허용), 1 byte–24 MiB |
-| 녹음 파일 회의(`source=upload`) | `awaiting_upload`·`failed`에서만. 저장 후 `202`, `status=transcribing`. 다시 올리면 새 원본으로 바꾸고 이전 원본은 저장소에서 지운다. 겹친 업로드 중 하나만 성공하고 실패한 쪽의 객체는 남지 않는다 |
-| 실시간 회의(`source=live`) | `open`이고 받아쓰기 연결이 없을 때 한 번만. 저장만 하고 `200`(브라우저가 받아쓰기와 함께 녹음한 원본) |
-| 오류 | `409` 허용되지 않는 상태·원본이 이미 있음(`MEETING_RECORDING_NOT_ALLOWED`)·받아쓰기 중(`MEETING_LIVE_IN_USE`), `413`, `415`, `422` 빈 파일, `503` 저장소 실패 |
+| `404` | 회의 없음(다른 사용자 포함, `MEETING_NOT_FOUND`) |
+| `409` | 허용되지 않는 상태·원본이 이미 있음(`MEETING_RECORDING_NOT_ALLOWED`), 받아쓰기 중(`MEETING_LIVE_IN_USE`) |
+| `413` | 500 MiB 초과(`MEETING_RECORDING_TOO_LARGE`) |
+| `415` | 지원하지 않는 형식(`MEETING_RECORDING_UNSUPPORTED`) |
+| `422` | 빈 파일(`MEETING_RECORDING_EMPTY`) |
+| `400` | 올린 크기가 알린 크기와 다름(`MEETING_RECORDING_SIZE_MISMATCH`), ticket이 만료·변조됐거나 조각 크기·순서가 맞지 않음(`MEETING_UPLOAD_REJECTED`) |
+| `403` | 다른 사용자·워크스페이스·회의의 ticket(`MEETING_UPLOAD_REJECTED`) |
+| `402` | 크레딧 부족(`INSUFFICIENT_CREDIT`, `app.billing.enforce`). 시작에서 예약 없이 가용 잔액이 최저 비용 미만이면 ticket 없이 거절한다. 시작 뒤 잔액이 줄어 확정 예약이 거절되면 올린 객체를 지우므로 충전 뒤 다시 올린다 |
+| `503` | 저장소 실패 |
 
-녹음 파일 전사는 작업자가 2초마다 `transcribing` 회의 한 건을 선점해(여러 Pod 동시 처리 없음, 20분 넘은 선점은 다시 잡음) 전용 단일 스레드에서 AI 파일 전사를 deadline 없이 부르고(최대 960초 대기, 다른 예약 작업을 막지 않음), 결과를 문장 부호·줄바꿈으로 나눈 뒤 약 1,000자 단위로 묶은 구간(`s1_seg_0001`…)으로 저장하고 `open`으로 바꾼다. 회의록 AI의 1,000구간 한도에 걸리지 않게 하려는 것이다. 전사가 100,000자를 넘으면 `failed`(녹음을 나눠 올리라는 사유)로 끝난다. 연결 기록 하나(`finished`)가 생겨 `transcript_complete=true`가 된다. 인식된 말이 없거나 실패하면 `failed`와 `error`를 남기며 자동 재시도는 없다. 클라이언트는 조회 API로 상태를 확인한다. 로컬 실측(실제 AI): 27초 m4a가 약 11초에 4문장으로 전사됐다.
+### 전사 (비동기)
+
+`complete`는 같은 트랜잭션에서 회의를 `transcribing`으로 바꾸고, 업로드마다 새 `run_id`(`meeting_transcription:<meeting_id>:<uuid>`, 회의의 `transcription_run_id`에 저장)로 run 등록·크레딧 예약(run당 1건)과 command를 outbox에 넣는다. outbox 발행기가 Kafka `ai.maintenance.command`(`MAINTENANCE_COMMAND_TOPIC`)로 보낸다(key=`run_id`).
+
+```json
+{"run_id":"meeting_transcription:mtg_…:<uuid>","kind":"meeting_transcription","workspace_id":"ws_…","user_id":"…",
+ "meeting_id":"mtg_…","recording_key":"meetings/mtg_…/recording-<uuid>.m4a","content_type":"audio/mp4"}
+```
+
+AI가 오디오를 S3에서 읽어 시간 단위로 나눠 전사하고 `ai.task.event`(`kind=meeting_transcription`, key=`run_id`)로 돌려준다. document는 이벤트의 `run_id`가 회의의 `transcription_run_id`와 같고 회의가 `transcribing`일 때만 반영한다(취소·재업로드·삭제·중복 이벤트는 회의를 바꾸지 않는다).
+
+- 성공(`payload.text`): 문장 부호·줄바꿈으로 나눈 뒤 약 1,000자 단위로 묶은 구간(`s1_seg_0001`…)으로 저장하고 `open`으로 바꾼다. 회의록 AI의 1,000구간 한도에 걸리지 않게 하려는 것이다. 연결 기록 하나(`finished`)가 생겨 `transcript_complete=true`가 된다. run은 완료로 닫아 사용 금액을 정산한다.
+- 실패: 회의를 `failed`로 바꾸고 `error`에 사유를 남긴다. 자동 재시도는 없고 사용자가 다시 올리면 새 `run_id`로 시작한다. run은 실패로 닫아 호출분을 정산한다.
+
+| AI 오류 코드 | `error` 메시지 |
+|---|---|
+| `MEETING_RECORDING_TOO_LONG` | 녹음이 3시간을 넘어 전사할 수 없습니다. 나눠서 올려 주세요. |
+| `MEETING_RECORDING_UNREADABLE`, `input_rejected` | 지원하지 않거나 인식할 수 없는 녹음 파일입니다. |
+| `MEETING_TRANSCRIPT_EMPTY`(또는 성공인데 텍스트 없음) | 인식된 음성이 없습니다. |
+| `MEETING_TRANSCRIPT_TOO_LONG`(또는 100,000자 초과) | 전사가 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요. |
+| `provider_rate_limited` | AI 공급사의 요청 한도를 넘었습니다. 잠시 뒤 다시 올려 주세요. |
+| `provider_unavailable` | AI 공급사가 일시적으로 응답하지 않습니다. 잠시 뒤 다시 올려 주세요. |
+| `deadline_exceeded` | 전사 시간이 너무 오래 걸려 중단했습니다. 녹음을 나눠 올려 주세요. |
+| `cancelled` | 전사가 취소되었습니다. |
+| 그 밖(`internal_error` 등) | 녹음 파일을 전사하지 못했습니다. 다시 올려 주세요. |
+
+클라이언트는 조회 API로 상태를 확인한다. 결과 이벤트가 영영 오지 않아도 사용자는 아래 취소로 `transcribing`에서 벗어날 수 있다(자동 시간 초과 전환은 없다).
+
+<a id="meeting-transcription-cancel"></a>
+### `POST .../meetings/{meeting_id}/transcription/cancel` — 전사 취소
+
+전사 중(`transcribing`)인 회의를 `failed`(`error`: "전사를 취소했습니다. 녹음을 다시 올려 주세요.")로 바꾸고 AI run 취소를 요청한다(`AiTaskCancellationService`, 취소 전까지 쓴 비용만 정산). 응답 `200` `MeetingResponse`. 이후 도착하는 결과 이벤트는 무시한다. 같은 원본으로 다시 올릴 수 있다. 전사 중이 아니면 `409`(`MEETING_NOT_TRANSCRIBING`), 다른 사용자의 회의는 `404`.
 
 <a id="meeting-recording-url"></a>
 ### `GET .../meetings/{meeting_id}/recording-url` — 재생 주소
@@ -392,7 +449,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 
 - 응답 `204`. 회의·연결·전사 구간·회의록 초안과 녹음 원본을 지운다. 이미 저장한 회의록 문서는 일반 문서라 남는다.
 - 원본을 먼저 지우고 DB를 지운다. 원본 삭제가 실패하면 `503`이고 아무것도 지우지 않는다(원본만 남는 상황을 막는다). 저장소 호출 동안 DB 잠금을 잡지 않으며, 읽어 둔 원본 키와 같을 때만 행을 지운다. 그사이 재업로드로 키가 바뀌었으면 `409`(`MEETING_RECORDING_CHANGED`)이고 새 원본은 남는다. 다시 요청하면 지워진다.
-- 전사 중이면 `409`(`MEETING_TRANSCRIBING`). 전사가 끝난(`open` 또는 `failed`) 뒤 다시 요청한다.
+- 전사 중이면 `409`(`MEETING_TRANSCRIBING`). 전사가 끝나거나 [취소](#meeting-transcription-cancel)한(`open` 또는 `failed`) 뒤 다시 요청한다.
 - 받아쓰기 연결 중이면 `409`(`MEETING_LIVE_IN_USE`). 녹음 취소는 WebSocket을 닫은 뒤 이 API를 호출한다(잠금 해제가 늦으면 잠시 뒤 다시 시도).
 
 ## 회의록 초안과 저장

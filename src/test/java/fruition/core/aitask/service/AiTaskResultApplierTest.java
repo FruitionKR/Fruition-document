@@ -73,7 +73,8 @@ class AiTaskResultApplierTest {
         applier = new AiTaskResultApplier(jdbcTemplate, objectMapper, queryService,
                 operationIngestService, lintOperationStarter, wikiMaintenanceService,
                 operationLogRepository, restoreApplier, restoreLifecycle, documentService, chatTurnRecorder,
-                chatEvidenceRecorder, usageCharges, meetingNotesService);
+                chatEvidenceRecorder, usageCharges, meetingNotesService,
+                org.mockito.Mockito.mock(fruition.core.meeting.MeetingTranscriptionService.class));
     }
 
     @Test

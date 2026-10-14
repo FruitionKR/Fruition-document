@@ -16,7 +16,7 @@ API 계약을 의도적으로 바꾸면 `./gradlew test -DupdateOpenApiSnapshot=
 
 `SPEECH_LIVE_ENDPOINT`에 AI 실시간 전사 WebSocket 주소를 설정한다(기본 `ws://localhost:8000/speech/transcriptions/live`). 연결할 때 `INTERNAL_CALLBACK_TOKEN`을 `X-Internal-Token`으로 보낸다. 브라우저 접속 Origin은 `CORS_ALLOWED_ORIGINS`로 검사한다. 배포 경로의 WebSocket 허용·idle timeout은 platform이 관리한다([ADR-0022](https://github.com/FruitionKR/Fruition-flatform/blob/main/docs/adr/0022-realtime-speech-transcription.md)).
 
-녹음 파일 전사는 `SPEECH_TRANSCRIPTION_ENDPOINT`(기본 `http://localhost:8000/speech/transcriptions`, 대기 `MEETING_TRANSCRIPTION_TIMEOUT_SECONDS` 960초, `deadline_seconds`는 보내지 않는다)를 쓴다. 작업자 주기는 `app.meeting.transcription-poll-interval-ms`(기본 2000)다. 회의록 초안은 Kafka 명령(`ai.maintenance.command`)으로 AI에 보내고 결과를 `ai.task.event`로 받는다. 요청은 `202`로 끝나고(결과는 조회로 기다린다), 결과가 없는 `generating`은 `MEETING_NOTES_GENERATION_TIMEOUT_MINUTES`(기본 30분) 뒤 실패로 정리한다.
+녹음 파일 전사는 Kafka `ai.maintenance.command`(`MAINTENANCE_COMMAND_TOPIC`)로 command를 보내고 `ai.task.event`로 결과를 받는다(로컬에서 직접 시험하려면 ai maintenance worker가 떠 있어야 한다). 브라우저는 녹음을 S3(MinIO)에 직접 올리므로 버킷 CORS가 `meetings/*` PUT을 허용해야 한다. `SPEECH_TRANSCRIPTION_ENDPOINT`(기본 `http://localhost:8000/speech/transcriptions`, 대기 `SPEECH_TRANSCRIPTION_TIMEOUT_SECONDS` 150초)는 채팅 음성 입력만 쓴다. 회의록 초안은 Kafka 명령(`ai.maintenance.command`)으로 AI에 보내고 결과를 `ai.task.event`로 받는다. 요청은 `202`로 끝나고(결과는 조회로 기다린다), 결과가 없는 `generating`은 `MEETING_NOTES_GENERATION_TIMEOUT_MINUTES`(기본 30분) 뒤 실패로 정리한다.
 
 ```bash
 ./gradlew test --tests 'fruition.core.meeting.*'

@@ -20,11 +20,12 @@ public class MeetingRepository {
 
     public record Meeting(String id, String workspaceId, String createdBy, String displayName,
                           String documentId, String source, String status, Instant createdAt,
-                          String recordingKey, String recordingContentType, Long recordingBytes, String error) {
+                          String recordingKey, String recordingContentType, Long recordingBytes, String error,
+                          String transcriptionRunId) {
 
         public Meeting(String id, String workspaceId, String createdBy, String displayName,
                        String documentId, String source, String status, Instant createdAt) {
-            this(id, workspaceId, createdBy, displayName, documentId, source, status, createdAt, null, null, null, null);
+            this(id, workspaceId, createdBy, displayName, documentId, source, status, createdAt, null, null, null, null, null);
         }
     }
 
@@ -130,12 +131,12 @@ public class MeetingRepository {
 
     /**
      * 원본을 기록하고 상태를 바꾼다. 행을 잠근 뒤 허용 상태인지(그리고 {@code requireNoRecording}이면 원본이 없는지)
-     * 확인하므로 겹친 요청 중 하나만 성공한다. 실패하면 빈 값, 성공하면 교체 전 원본 키(없으면 null)를 돌려준다.
+     * 확인하므로 겹친 요청 중 하나만 성공한다. {@code transcriptionRunId}는 전사를 시작할 때만 넘기고, 아니면 null이다. 실패하면 빈 값, 성공하면 교체 전 원본 키(없으면 null)를 돌려준다.
      */
     @org.springframework.transaction.annotation.Transactional
     public Optional<RecordingSwap> saveRecording(String id, String key, String contentType, long bytes,
                                                  List<String> allowedStatuses, String nextStatus,
-                                                 boolean requireNoRecording) {
+                                                 boolean requireNoRecording, String transcriptionRunId) {
         List<String[]> current = jdbc.query("SELECT status, recording_key FROM meetings WHERE id = ? FOR UPDATE",
                 (rs, n) -> new String[]{rs.getString(1), rs.getString(2)}, id);
         if (current.isEmpty() || !allowedStatuses.contains(current.get(0)[0])
@@ -144,30 +145,19 @@ public class MeetingRepository {
         }
         jdbc.update("""
                 UPDATE meetings SET recording_key = ?, recording_content_type = ?, recording_bytes = ?,
-                       status = ?, error = NULL, claimed_at = NULL, updated_at = now()
+                       status = ?, error = NULL, transcription_run_id = ?, updated_at = now()
                 WHERE id = ?
-                """, key, contentType, bytes, nextStatus, id);
+                """, key, contentType, bytes, nextStatus, transcriptionRunId, id);
         return Optional.of(new RecordingSwap(current.get(0)[1]));
     }
 
-    /** 대기 중이거나 선점이 오래된 전사 한 건을 잡는다. 여러 Pod가 같은 건을 동시에 잡지 않는다. */
-    public Optional<Meeting> claimTranscription(Instant staleBefore) {
-        return jdbc.query("""
-                UPDATE meetings SET claimed_at = now()
-                WHERE id = (SELECT id FROM meetings
-                            WHERE status = 'transcribing' AND (claimed_at IS NULL OR claimed_at < ?)
-                            ORDER BY updated_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-                RETURNING *
-                """, (rs, n) -> meeting(rs), Timestamp.from(staleBefore)).stream().findFirst();
-    }
-
-    /** 전사 결과를 연결 하나(정상 종료)와 구간들로 저장하고 회의를 연다. 그사이 삭제·재업로드됐으면 저장하지 않는다. */
+    /** 전사 결과를 연결 하나(정상 종료)와 구간들로 저장하고 회의를 연다. 그사이 취소·재업로드로 run이 바뀌었으면 저장하지 않는다. */
     @org.springframework.transaction.annotation.Transactional
-    public boolean completeTranscription(String id, String recordingKey, List<String> sentences) {
+    public boolean completeTranscription(String id, String runId, List<String> sentences) {
         if (jdbc.update("""
-                UPDATE meetings SET status = 'open', error = NULL, claimed_at = NULL, updated_at = now()
-                WHERE id = ? AND status = 'transcribing' AND recording_key = ?
-                """, id, recordingKey) != 1) {
+                UPDATE meetings SET status = 'open', error = NULL, updated_at = now()
+                WHERE id = ? AND status = 'transcribing' AND transcription_run_id = ?
+                """, id, runId) != 1) {
             return false;
         }
         Stream stream = openStream(id);
@@ -180,11 +170,12 @@ public class MeetingRepository {
         return true;
     }
 
-    public void failTranscription(String id, String recordingKey, String error) {
-        jdbc.update("""
-                UPDATE meetings SET status = 'failed', error = ?, claimed_at = NULL, updated_at = now()
-                WHERE id = ? AND status = 'transcribing' AND recording_key = ?
-                """, error, id, recordingKey);
+    /** @return 이 run의 전사 중이던 회의를 실패로 바꿨으면 true */
+    public boolean failTranscription(String id, String runId, String error) {
+        return jdbc.update("""
+                UPDATE meetings SET status = 'failed', error = ?, updated_at = now()
+                WHERE id = ? AND status = 'transcribing' AND transcription_run_id = ?
+                """, error, id, runId) == 1;
     }
 
     /**
@@ -204,6 +195,6 @@ public class MeetingRepository {
                 rs.getString("display_name"), rs.getString("document_id"), rs.getString("source"),
                 rs.getString("status"), rs.getTimestamp("created_at").toInstant(),
                 rs.getString("recording_key"), rs.getString("recording_content_type"),
-                rs.wasNull() ? null : bytes, rs.getString("error"));
+                rs.wasNull() ? null : bytes, rs.getString("error"), rs.getString("transcription_run_id"));
     }
 }
