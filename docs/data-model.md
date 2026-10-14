@@ -57,6 +57,8 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | meeting_notes | document-svc | 회의록 초안 버전과 저장 기록 | PK `(meeting_id, version)`, `(meeting_id, generation_request_id)` UK(생성 재시도), `status`(generating/ready/failed/applied), `segment_snapshot`(AI에 보낸 구간과 묶인 원래 구간 ID), `ai_run_id`(결과 이벤트 매칭, 부분 UNIQUE), `result`(이름·네 배열, AI markdown 제외), `apply_*`(저장 전에 기록하는 대상·본문·기준 revision). 회의 삭제 cascade. V55·V71 |
 | wiki_lint_state | document-svc | workspace별 마지막 lint 성공 시각(needs_lint 판단 기준점) | PK `workspace_id`(access_db 논리 참조), `last_lint_at` |
 
+V74는 core_db에 남아 있던 이전 AI 테이블(`wiki_pages`·`pipeline_runs`·`wiki_embedding_*`·`skills`·`agent_runs`·`checkpoints*` 등 23개)을 제거한다. AI 데이터는 ai_db가 소유하며, `wiki_page_versions`·`wiki_page_contributions`·`wiki_lint_state`·`chat_partial_wiki`는 document가 계속 쓴다.
+
 V34는 `chat_export`에만 `(workspace_id, content_hash, selection_mode)` partial unique index를 추가한다.
 채팅 export는 언제나 선택한 문답만 담은 새 문서라 `selection_mode`는 항상 `partial`이고, 같은 선택을 다시 내보내면
 이 index가 기존 문서를 재사용하게 한다. 세션 전체를 위키에 누적하던 경로를 걷어내면서
