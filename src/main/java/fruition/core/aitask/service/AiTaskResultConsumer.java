@@ -57,6 +57,10 @@ public class AiTaskResultConsumer {
                 applier.applySessionTitle(event);
                 return;
             }
+            if ("convert_batch".equals(kind)) {
+                applier.applyConvertBatch(event);
+                return;
+            }
             if ("ingest".equals(kind)) {
                 applier.applyIngest(event);
                 return;

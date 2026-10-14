@@ -138,8 +138,8 @@ public class AiTaskCancellationService {
             boolean converting = row.get("kind").equals("convert");
             JsonNode command = converting ? mapper.valueToTree(Map.of("run_id", id, "kind", "convert",
                     "workspace_id", workspaceId, "user_id", userId)) : mapper.readTree(row.get("command").toString());
-            if (converting && !jdbc.queryForList("SELECT id FROM document_convert_queue WHERE document_id = ? AND status = 'processing'",
-                    Long.class, id.substring("convert:".length())).isEmpty()) return;
+            // 결과를 기다리는 변환 batch를 먼저 취소한다. 실패하면 아래 catch가 다음 주기에 다시 시도한다.
+            if (converting) cancelConvertBatches(id, workspaceId, userId);
             // DB 취소를 먼저 커밋한다. Python 복구 중 돌아오는 내부 요청과 잠금이 충돌하지 않는다.
             var result = converting ? new PipelineTaskCancellationClient.TaskStatus(id, "cancelled", null)
                     : row.get("status").equals("cancel_requested")
@@ -166,6 +166,7 @@ public class AiTaskCancellationService {
                 queryRuns.markCancelled(id);
                 events.cancel(id);
                 jdbc.update("UPDATE ai_task_runs SET status = 'cancelled', error_code = NULL, updated_at = now() WHERE id = ?", id);
+                if (converting) jdbc.update("DELETE FROM document_convert_queue WHERE document_id = ?", id.substring("convert:".length()));
                 // 취소 전까지 일어난 호출을 수집해 정산하고 남은 예약을 푼다(#78·#79).
                 jdbc.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", id);
             });
@@ -175,6 +176,17 @@ public class AiTaskCancellationService {
             // 연결 장애는 다음 주기에 재시도한다. 복구 확인 전 완료로 표시하지 않는다.
             jdbc.update("UPDATE ai_task_runs SET error_code = 'rollback_retry_pending', updated_at = now() "
                     + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back')", id);
+        }
+    }
+
+    /** 변환 run의 결과 대기 batch를 AI에서 취소한다. parent_run_id로는 취소할 수 없어 batch run_id마다 발행한 command를 보낸다. */
+    private void cancelConvertBatches(String convertRunId, String workspaceId, String userId) throws Exception {
+        var batches = jdbc.queryForList("SELECT b.start_page, b.command::text AS command FROM document_convert_batches b "
+                + "JOIN document_convert_queue q ON q.id = b.queue_id WHERE q.document_id = ? AND b.status = 'dispatched' "
+                + "ORDER BY b.start_page", convertRunId.substring("convert:".length()));
+        for (var batch : batches) {
+            pipeline.cancel(convertRunId + ":" + batch.get("start_page"), workspaceId, userId,
+                    mapper.readTree(batch.get("command").toString()));
         }
     }
 

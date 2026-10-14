@@ -3,7 +3,7 @@
 [서비스 문서](../README.md) / [document-svc](README.md)
 
 사용자용 AI 모델 설정과 AI 작업·변환·ingest Gateway API다. 모델 설정은 access-svc,
-변환은 converter, ingest·Wiki 복구는 Kafka를 통해 각 소유 서비스에 전달한다.
+변환·ingest·Wiki 복구는 Kafka를 통해 각 소유 서비스에 전달한다.
 
 - API 수: 9
 
@@ -981,7 +981,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 
 #### 2. 목적
 
-PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을 편집 가능 placeholder 문서를 즉시 만들어 반환하고, 실제 변환은 백그라운드에서 진행됩니다. worker는 실행 시점의 workspace `ingest_lint` provider/model을 converter에 전달하며 converter는 선택 provider의 API key로 복원합니다. AWS 모드에서는 10페이지 묶음 결과를 placeholder 문서 하나에 이어 붙이고(페이지 주석은 원본 PDF 기준 번호), Markdown이 5MB를 넘을 때만 다음 파트 문서(`origin=convert_part`)를 만듭니다. 변환이 끝나면 문서마다 최종 버전을 한 번 기록하고 AI 큐에 한 번 등록합니다([ADR-0024](../adr/0024-converted-pdf-single-document.md)). 변환 결과는 저장 전에 거릅니다. 원시 HTML 중 서식 태그(`<u>`, `<span>` 등)는 태그만 지우고 글자를 남기며, 줄·칸을 나누던 태그(`<br>`, `<td>` 등)는 공백으로, 실행·삽입 태그(`<script>`, `<img>` 등)는 지우고, 그 밖의 태그는 글자로 보이게 escape합니다. HTML 주석은 남깁니다. 외부 주소(scheme이 있거나 `//`·`/\`로 시작)의 이미지는 `외부 이미지(host)` 글자로 바꿉니다. 링크는 사용자가 올린 원문 내용이라 http·https·mailto·상대 경로를 남기고, 그 밖의 주소(`javascript:` 등)는 링크를 빼고 글자만 남깁니다. 코드 블록과 인라인 코드는 바꾸지 않습니다. 변환 이미지는 첨부 이미지와 같은 상한(10MB, 가로·세로 16,384px)을 넘으면 저장하지 않고 `(이미지가 너무 커서 생략됨)` 문구로 바꿉니다.
+PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을 편집 가능 placeholder 문서를 즉시 만들어 반환하고, 실제 변환은 백그라운드에서 진행됩니다. 요청 트랜잭션이 첫 batch(0쪽부터 `CONVERT_PAGES_PER_BATCH`쪽, 기본 10) command를 Kafka `ai.convert.command`에 발행하고(요청 시점의 workspace `ingest_lint` provider/model 포함), converter worker가 돌려준 결과 이벤트(`ai.task.event` `kind=convert_batch`)로 진행합니다. 첫 결과로 전체 쪽수를 알면 한 문서에 batch를 최대 `CONVERT_MAX_IN_FLIGHT`개(기본 3)까지 동시에 열고, 쪽 순서가 이어진 결과부터 병합합니다(순서가 뒤바뀐 결과는 앞 쪽이 채워질 때까지 기다림). 이벤트 계약은 [AI PDF 변환 command](https://github.com/FruitionKR/Fruition-ai/blob/main/docs/api/tasks.md#pdf-변환-command)와 [AI ADR 0034](https://github.com/FruitionKR/Fruition-ai/blob/main/docs/adr/0034-async-pdf-conversion.md)를 따르며 AWS·로컬 경로가 같습니다. 결과를 placeholder 문서 하나에 이어 붙이고(페이지 주석은 원본 PDF 기준 번호), Markdown이 5MB를 넘을 때만 다음 파트 문서(`origin=convert_part`)를 만듭니다. 변환이 끝나면 문서마다 최종 버전을 한 번 기록하고 AI 큐에 한 번 등록합니다([ADR-0024](../adr/0024-converted-pdf-single-document.md)). 변환 결과는 저장 전에 거릅니다. 원시 HTML 중 서식 태그(`<u>`, `<span>` 등)는 태그만 지우고 글자를 남기며, 줄·칸을 나누던 태그(`<br>`, `<td>` 등)는 공백으로, 실행·삽입 태그(`<script>`, `<img>` 등)는 지우고, 그 밖의 태그는 글자로 보이게 escape합니다. HTML 주석은 남깁니다. 외부 주소(scheme이 있거나 `//`·`/\`로 시작)의 이미지는 `외부 이미지(host)` 글자로 바꿉니다. 링크는 사용자가 올린 원문 내용이라 http·https·mailto·상대 경로를 남기고, 그 밖의 주소(`javascript:` 등)는 링크를 빼고 글자만 남깁니다. 코드 블록과 인라인 코드는 바꾸지 않습니다. 변환 이미지는 첨부 이미지와 같은 상한(10MB, 가로·세로 16,384px)을 넘으면 저장하지 않고 `(이미지가 너무 커서 생략됨)` 문구로 바꿉니다.
+
+변환 batch가 실패하면 placeholder 문서는 `failed`가 되고 `error_message`는 `PDF 변환에 실패했습니다: ` 뒤에 AI 실패 코드별 문구를 붙입니다(`provider_rate_limited` 요청 한도 초과, `provider_unavailable` 공급사 일시 장애, `input_rejected` 암호·손상 PDF, `deadline_exceeded` 시간 초과, `cancelled`, 그 밖은 일반 오류 문구). 예외 원문은 싣지 않습니다. AI가 batch를 절반으로 나눠 다시 시도한 뒤의 실패이므로 문서 단위 재시도는 없고, 변환 run을 닫아 크레딧 예약을 풉니다. 나머지 결과 대기 batch는 batch `run_id`마다 AI 취소 API로 취소합니다. 사용자 취소·placeholder 삭제도 결과 대기 batch를 모두 취소합니다. 취소·삭제·종료된 변환의 늦은 결과 이벤트와 같은 batch의 중복 이벤트는 무시합니다.
 
 #### 3. Auth 필요 여부
 
@@ -1082,8 +1084,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: convertMarkdown`)
 - 호출자: 프론트엔드 — `src/entities/document/api/document.ts:97`(`convertDocumentToMarkdown`)
-- 하위 호출: 동기 구간에서는 없음(`202` 반환). 커밋 후 비동기로 converter-svc `POST /convert`·`POST /convert-source-batch`(`ConverterClient`, `${CONVERTER_ENDPOINT}`, 인증 헤더 없음·NetworkPolicy 격리)와 access-svc `WorkspaceAiModelClient`를 호출한다
-- 사용량 귀속(#91): converter의 공급사 호출(selective repair)을 변환 요청 때 만든 실행 `convert:<placeholder 문서 ID>`에 귀속한다. run_id는 `X-Request-Id` 헤더로, `workspace_id`·`user_id`(placeholder 문서의 워크스페이스·요청자)는 `/convert` Form 필드와 `/convert-source-batch` JSON 본문 필드로 보낸다. 새 실행을 만들지 않으므로 크레딧 예약은 변환 요청 때 한 번이다. 헤더로 받는 converter 변경(FruitionKR/Fruition-ai)과 함께 배포한다.
+- 하위 호출: access-svc `WorkspaceAiModelClient`로 provider/model을 읽고 Kafka `ai.convert.command`에 첫 batch command를 outbox로 발행한다(`202` 반환). 이후 batch 발행·결과 병합은 `ai.task.event` `convert_batch` 소비가 맡고, 취소는 AI `POST /internal/ai/tasks/{run_id}/cancel`을 batch `run_id`마다 호출한다. converter HTTP 호출은 없다([ADR 0034](https://github.com/FruitionKR/Fruition-ai/blob/main/docs/adr/0034-async-pdf-conversion.md))
+- 사용량 귀속(#91): converter의 공급사 호출(selective repair)을 변환 요청 때 만든 실행 `convert:<placeholder 문서 ID>`에 귀속한다. AI는 command의 `parent_run_id`(`convert:<placeholder 문서 ID>`)를 사용량 `run_id`로, command의 `workspace_id`·`user_id`를 귀속 대상으로 쓴다. batch 발행은 `ai_task_runs` 행도 크레딧 예약도 만들지 않으므로(outbox에만 저장) 예약은 변환 요청 때 한 번이다. 변환 run은 마지막 batch를 병합한 직후 정산하고 닫는다. AI의 `ai.convert.command` worker 배포와 함께 배포한다.
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-convert-markdown)
