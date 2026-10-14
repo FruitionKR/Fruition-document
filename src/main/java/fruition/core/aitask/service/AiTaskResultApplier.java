@@ -23,6 +23,7 @@ import fruition.core.aihistory.service.RestoreExecuteService;
 import fruition.core.aihistory.service.RestoreOperationLifecycle;
 import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.core.document.service.DocumentService;
+import fruition.core.meeting.MeetingNotesService;
 import fruition.core.usage.service.UsageChargeService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -58,6 +59,7 @@ public class AiTaskResultApplier {
     private final RestoreOperationLifecycle restoreLifecycle;
     private final DocumentService documentService;
     private final UsageChargeService usageCharges;
+    private final MeetingNotesService meetingNotesService;
 
     public AiTaskResultApplier(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
                                QueryService queryService,
@@ -70,7 +72,8 @@ public class AiTaskResultApplier {
                                DocumentService documentService,
                                ChatTurnRecorder chatTurnRecorder,
                                ChatEvidenceRecorder chatEvidenceRecorder,
-                               UsageChargeService usageCharges) {
+                               UsageChargeService usageCharges,
+                               MeetingNotesService meetingNotesService) {
         this.chatTurnRecorder = chatTurnRecorder;
         this.chatEvidenceRecorder = chatEvidenceRecorder;
         this.jdbcTemplate = jdbcTemplate;
@@ -84,6 +87,7 @@ public class AiTaskResultApplier {
         this.restoreLifecycle = restoreLifecycle;
         this.documentService = documentService;
         this.usageCharges = usageCharges;
+        this.meetingNotesService = meetingNotesService;
     }
 
     @Transactional
@@ -152,6 +156,15 @@ public class AiTaskResultApplier {
                                 page.contributionKey(), page.contentHash(), false))
                         .toList(), java.util.List.of()));
         wikiMaintenanceService.markLintSucceeded(workspaceId);
+    }
+
+    /** 회의록 초안 결과. 같은 트랜잭션에서 run을 닫고 행을 반영한다. 닫힌 run의 재전달은 무시한다. */
+    @Transactional
+    public void applyMeetingNotes(JsonNode event) {
+        String runId = text(event, "run_id");
+        if (!beginResult(runId)) return;
+        boolean succeeded = "succeeded".equals(text(event, "status"));
+        meetingNotesService.applyResult(runId, succeeded, event.path("payload"), event.path("error").asText(null));
     }
 
     @Transactional

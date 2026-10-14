@@ -6,7 +6,7 @@
 실시간 전사는 document-svc가 AI 실시간 전사 WebSocket에 연결마다 1:1로 중계하고, 확정 문장을 저장한 뒤에만 브라우저에 전달한다.
 모델은 AI가 고정한다. 결정 근거는 [ADR-0023](../adr/0023-meeting-transcripts-and-recordings.md)이다.
 
-- API 수: 10 + WebSocket 1
+- API 수: 11 + WebSocket 1
 
 ## API 목차
 
@@ -20,6 +20,7 @@
 | [`GET .../meetings/{meeting_id}/recording-url`](#meeting-recording-url) | 녹음 원본을 재생할 5분짜리 주소를 반환합니다. |
 | [`POST .../meetings/{meeting_id}/notes`](#notes-generate) | 확정 전사로 회의록 초안을 만들어 새 버전으로 보관합니다. 생성은 비동기입니다(`202`, 조회로 대기). |
 | [`GET .../meetings/{meeting_id}/notes`](#notes-latest) | 최신 회의록 초안을 반환합니다. |
+| [`POST .../meetings/{meeting_id}/notes/cancel`](#notes-cancel) | 만들고 있는 회의록 초안을 취소하고 ai 작업 취소를 요청합니다. |
 | [`POST .../meetings/{meeting_id}/notes/{version}/append-preview`](#notes-append-preview) | 기존 문서 끝에 회의록을 붙인 전체 결과와 base_revision을 반환합니다. |
 | [`POST .../meetings/{meeting_id}/notes/{version}/apply`](#notes-apply) | 회의록을 새 문서로 만들거나 기존 문서 끝에 추가합니다. |
 | [`WS /api/meetings/{meeting_id}/live?ticket=`](#ws-api-meetings-meeting-id-live) | 실시간 받아쓰기. 오디오를 보내고 전사 이벤트를 받습니다. |
@@ -38,9 +39,10 @@
 | `DELETE .../meetings/{meeting_id}` | 없음 | 객체 저장소(MinIO/S3) 녹음 원본 삭제 | **미배선** |
 | `PUT .../meetings/{meeting_id}/recording` | 없음 | 객체 저장소 쓰기 → `MeetingTranscriptionWorker`가 비동기로 ai-svc `POST ${SPEECH_TRANSCRIPTION_ENDPOINT}` 호출 | **미배선** |
 | `GET .../meetings/{meeting_id}/recording-url` | 없음 | 객체 저장소 presign | **미배선** |
-| `POST .../meetings/{meeting_id}/notes` | 없음 | ai-svc `POST ${MEETING_NOTES_ENDPOINT}` (`MeetingNotesClient`) | **미배선** |
+| `POST .../meetings/{meeting_id}/notes` | 없음 | Kafka `ai.maintenance.command`(`kind=meeting_notes`)로 전달. 결과는 `ai.task.event`로 받는다 | **미배선** |
+| `POST .../meetings/{meeting_id}/notes/cancel` | 없음 | DB 갱신과 `ai_task_runs` `cancel_requested` 표시. 파이프라인 취소 API 호출은 `resume()` 스케줄러가 비동기로 | **미배선** |
 | `GET .../meetings/{meeting_id}/notes` | 없음 | 권한 확인 외 없음(DB 조회로 보이나 서비스 계층을 한 줄씩 확인하지는 않았다) | **미배선** |
-| `POST .../meetings/{meeting_id}/notes/{version}/append-preview` | 없음 | ai-svc `POST ${MEETING_NOTES_ENDPOINT}` (`MeetingNotesClient`) | **미배선** |
+| `POST .../meetings/{meeting_id}/notes/{version}/append-preview` | 없음 | 문서 본문 읽기(DB). AI 호출 없음 | **미배선** |
 | `POST .../meetings/{meeting_id}/notes/{version}/apply` | 없음 | 문서 본문 쓰기(DB·객체 저장소). ai-svc 호출 여부는 미확인 | **미배선** |
 | `WS /api/meetings/{meeting_id}/live?ticket=` | 없음 | ai-svc WebSocket `${SPEECH_LIVE_ENDPOINT}` 1:1 중계(`MeetingLiveHandler`, `X-Internal-Token`) | **미배선** |
 
@@ -395,19 +397,33 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 
 ## 회의록 초안과 저장
 
-경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 네 API 모두 `Authorization: Bearer <access_token>`, workspace 멤버십, 회의를 만든 사람임을 검증한다(아니면 `404`). 초안은 AI 회의록 API(모델 고정)로 만들고 document가 버전별로 보관한다.
+경로 앞부분 `...`은 `/api/workspaces/{workspace_id}`다. 다섯 API 모두 `Authorization: Bearer <access_token>`, workspace 멤버십, 회의를 만든 사람임을 검증한다(아니면 `404`). 초안은 AI 비동기 작업(Kafka, 워크스페이스에서 고른 모델)으로 만들고 document가 버전별로 보관한다.
 
 <a id="notes-generate"></a>
 ### `POST .../meetings/{meeting_id}/notes` — 초안 생성
 
 | 항목 | 내용 |
 |---|---|
-| 입력 | **Header** — `Idempotency-Key`(필수). 네트워크 재시도는 같은 키(같은 버전 반환, AI 재호출 없음), 다시 만들기는 새 키<br>**Query** — `allow_partial`(기본 `false`) |
-| 처리 | `completed` 구간을 `position` 순으로 약 1,000자까지 묶어 AI에 보낸다(묶음 ID는 묶인 첫 구간 ID, 근거 ID는 원래 구간 ID들로 되돌려 저장). 새 버전 행을 `generating`으로 만든 뒤 **요청 스레드·트랜잭션 밖에서** AI를 호출하고, 결과는 그 버전 행에만 쓴다 |
-| 출력 | `202` — `MeetingNotesResponse`(`status=generating`). 같은 키 재시도로 이미 끝난 버전을 돌려줄 때만 `200` |
-| 오류 | `409` 받아쓰기 중(`MEETING_LIVE_IN_USE`), 누락·비정상 종료 전사를 `allow_partial` 없이 요청(`MEETING_TRANSCRIPT_INCOMPLETE`)<br>`422` 확정 전사 없음(`MEETING_TRANSCRIPT_EMPTY`) |
+| 입력 | **Header** — `Idempotency-Key`(필수). 네트워크 재시도는 같은 키(같은 버전 반환, 명령 재발행 없음), 다시 만들기는 새 키<br>**Query** — `allow_partial`(기본 `false`) |
+| 처리 | `completed` 구간을 `position` 순으로 약 1,000자까지 묶어 AI에 보낸다(묶음 ID는 묶인 첫 구간 ID, 근거 ID는 원래 구간 ID들로 되돌려 저장). 새 버전 행 `generating` 생성(`ai_run_id` 기록)·크레딧 예약·`ai_task_runs` 등록·명령 outbox 저장을 한 트랜잭션으로 한 뒤 바로 끝난다(중간에 실패하면 모두 롤백하고 명령 없는 `failed` 버전만 남긴다). 결과는 `ai.task.event`(`kind=meeting_notes`)로 받아 `ai_run_id`로 찾은 그 버전 행에만 쓴다 |
+| 출력 | `202` — `MeetingNotesResponse`(`status=generating`). 돌려주는 버전이 `generating`이 아니면 `200`(같은 키 재시도로 이미 끝난 버전, 또는 크레딧 부족(`INSUFFICIENT_CREDIT`)·저장 실패(`MEETING_NOTES_FAILED`)로 명령 없이 바로 `failed`가 된 첫 요청의 버전) |
+| 오류 | `409` 같은 워크스페이스에서 다른 회의록 생성 중(`MEETING_NOTES_BUSY`), 받아쓰기 중(`MEETING_LIVE_IN_USE`), 누락·비정상 종료 전사를 `allow_partial` 없이 요청(`MEETING_TRANSCRIPT_INCOMPLETE`)<br>`422` 확정 전사 없음(`MEETING_TRANSCRIPT_EMPTY`) |
 
-생성은 비동기다. `202`를 받은 뒤 조회(`GET`)로 `status`가 `ready`나 `failed`가 될 때까지 기다린다. 생성 실패는 HTTP 오류가 아니라 그 버전의 `failed`와 `error_code`(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INVALID`, `MEETING_NOTES_INPUT_REJECTED`, `MEETING_NOTES_UNAVAILABLE`, 동시 생성 한도 초과는 `MEETING_NOTES_BUSY`, 크레딧 부족(`app.billing.enforce`)은 `INSUFFICIENT_CREDIT`)로 알리고, 이전 `ready` 초안은 그대로 쓸 수 있다.
+**워크스페이스당 생성은 하나다.** 같은 워크스페이스에서 다른 초안이 `generating`이면(회의가 달라도) 새 요청은 바로 `409 MEETING_NOTES_BUSY`다. 워크스페이스 단위 `pg_advisory_xact_lock`을 쥔 트랜잭션에서 확인과 행 삽입을 해 Pod가 여럿이어도 하나만 통과한다. `failed`(만료·취소 포함)·`ready`·`applied` 초안은 세지 않는다. 같은 `Idempotency-Key` 재시도는 BUSY가 아니라 기존 버전을 돌려준다. 다른 워크스페이스는 서로 영향이 없다.
+
+생성은 비동기다. `202`를 받은 뒤 조회(`GET`)로 `status`가 `ready`나 `failed`가 될 때까지 기다린다. 생성 실패는 HTTP 오류가 아니라 그 버전의 `failed`와 `error_code`(`MEETING_NOTES_FAILED`, `MEETING_NOTES_INPUT_REJECTED`·`MEETING_NOTES_UNAVAILABLE`(ai 실패 이벤트의 코드), `MEETING_NOTES_INVALID`(성공 이벤트의 초안 형식 오류), `INSUFFICIENT_CREDIT`(`app.billing.enforce`에서 크레딧 부족, 명령을 발행하지 않는다))로 알리고, 이전 `ready` 초안은 그대로 쓸 수 있다.
+
+#### Kafka 계약 (`kind=meeting_notes`)
+
+명령(`ai.maintenance.command`, transactional outbox, 키 `workspace_id`):
+
+```json
+{"run_id": "<uuid>", "kind": "meeting_notes", "workspace_id": "ws_...", "user_id": "usr_...",
+ "provider": "gemini", "model": "gemini-3.5-flash-lite", "meeting_id": "mtg_...", "display_name": "출시 회의",
+ "segments": [{"id": "s1_a", "text": "..."}]}
+```
+
+결과(`ai.task.event`): `kind=meeting_notes`, `run_id`, `status`(`succeeded` | `failed`). 성공의 `payload`는 초안(`display_name`, `summary`, `decisions`, `action_items`, `open_questions`)이고, 실패의 `error`는 코드 문자열이다. ai는 `MEETING_NOTES_INPUT_REJECTED`·`MEETING_NOTES_UNAVAILABLE`·`MEETING_NOTES_FAILED`만 보내며, core는 이 셋을 그대로 `error_code`에 남기고 그 밖의 값은 `MEETING_NOTES_FAILED`로 바꾼다(크레딧 부족은 발행 전에 `INSUFFICIENT_CREDIT`로 거른다). `request`는 되돌려 보내지 않는다. 결과는 `generating`인 자기 버전 행만 바꾸므로 재전달·늦은 이벤트는 무시된다. 크레딧 예약과 사용량 정산은 다른 AI 작업과 같이 `run_id`로 한다.
 
 <a id="notes-latest"></a>
 ### `GET .../meetings/{meeting_id}/notes` — 최신 초안
@@ -432,9 +448,19 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 
 - `status`: `generating` · `ready` · `failed` · `applied`. `partial`은 `allow_partial`로 만든 초안이다.
 - `markdown`은 document가 네 배열로 다시 만든 본문이다(`# 이름` → `## 요약` · `## 결정 사항` · `## 할 일` · `## 미결 사항`, 빈 항목은 `- 확인된 내용 없음`). AI 응답의 `markdown`은 항목마다 근거 ID를 붙이므로 쓰지 않는다. 근거는 `source_segment_ids`로만 준다.
-- 최신 버전이 `failed`면 `last_ready_version`에 마지막 성공 버전을 준다. 5분 넘게 `generating`인 버전은 `failed`(`MEETING_NOTES_TIMEOUT`)로 바뀐다.
+- 최신 버전이 `failed`면 `last_ready_version`에 마지막 성공 버전을 준다. `app.speech.meeting-notes-generation-timeout-minutes`(기본 30분) 넘게 `generating`인 버전은 `failed`(`MEETING_NOTES_TIMEOUT`)로 바뀐다. 이때 ai 작업 취소도 요청한다. 요청 스레드에서 ai를 호출하지 않고 같은 트랜잭션에서 `ai_task_runs`를 `cancel_requested`로만 바꾸며(`AiTaskCancellationService.requestCancel`, 멤버십·소유자 확인 없음), 기존 `resume()` 스케줄러가 파이프라인 취소·롤백·`cancelled` 전이·사용량 정산 큐 등록을 이어서 한다. 정리는 같은 워크스페이스의 조회·생성 요청(BUSY 확인 전)과, 1분마다 도는 `MeetingNotesService.sweepExpired`(모든 워크스페이스)가 한다. 아무도 조회하지 않아도 만료된다. 그 뒤 늦게 온 결과 이벤트는 반영하지 않는다.
 - 저장 후 `applied`: `{"mode":"append","document_id":"doc_...","applied_at":"..."}`.
 - 초안이 없으면 `404`(`MEETING_NOTES_NOT_FOUND`).
+
+<a id="notes-cancel"></a>
+### `POST .../meetings/{meeting_id}/notes/cancel` — 초안 생성 취소
+
+| 항목 | 내용 |
+|---|---|
+| 입력 | 없음 |
+| 처리 | 회의를 만든 사람만 호출한다(아니면 `404`). `generating`인 초안을 `failed`(`error_code=MEETING_NOTES_CANCELLED`)로 바꾸고 ai 작업 취소를 요청한다. 워크스페이스의 생성 자리가 바로 풀리고, 늦게 온 결과 이벤트는 반영하지 않는다 |
+| 출력 | `200` — 취소된 버전의 `MeetingNotesResponse`(`status=failed`) |
+| 오류 | `404` 회의 없음·남의 회의<br>`409` 만드는 초안이 없음(`MEETING_NOTES_NOT_GENERATING`) — 반복 호출은 첫 호출만 `200`이다 |
 
 <a id="notes-append-preview"></a>
 ### `POST .../meetings/{meeting_id}/notes/{version}/append-preview` — 기존 문서 끝 추가 미리보기

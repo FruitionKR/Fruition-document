@@ -77,6 +77,15 @@ public class AiTaskCancellationService {
         return status(id, workspaceId, userId);
     }
 
+    /**
+     * 시스템이 자기 작업(만료·취소한 회의록 등)의 취소를 요청한다. 소유자·멤버십을 보지 않고 상태만 바꾸며,
+     * 파이프라인 호출은 하지 않는다. {@link #resume()}이 이어서 진행한다. 호출자 트랜잭션 안에서 쓸 수 있다.
+     */
+    public void requestCancel(String id) {
+        jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
+                + "WHERE id = ? AND status NOT IN ('cancelled', 'rolling_back')", id);
+    }
+
     public java.util.Optional<Map<String, Object>> findStatus(String id, String workspaceId, String userId) {
         var rows = jdbc.queryForList("SELECT id, status, error_code FROM ai_task_runs WHERE id = ? AND workspace_id = ? AND user_id = ?",
                 id, workspaceId, userId);

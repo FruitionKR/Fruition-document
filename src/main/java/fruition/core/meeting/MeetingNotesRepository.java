@@ -17,7 +17,8 @@ public class MeetingNotesRepository {
     public record Note(String meetingId, int version, String generationRequestId, String status, boolean partial,
                        String result, String errorCode, String applyRequestId, String applyMode,
                        String applyDocumentId, Long applyBaseRevision, String applyDisplayName, UUID applyFolderId,
-                       String applyMarkdown, Instant appliedAt, Instant updatedAt) {}
+                       String applyMarkdown, Instant appliedAt, Instant updatedAt, String aiRunId,
+                       String segmentSnapshot) {}
 
     private final JdbcTemplate jdbc;
 
@@ -29,15 +30,16 @@ public class MeetingNotesRepository {
      * 같은 생성 요청 ID가 이미 있거나, 다른 요청과 같은 버전 번호를 동시에 잡으면 빈 값을 돌려준다.
      * 호출자는 요청 ID로 다시 조회해 재시도인지 동시 생성인지 구분한다.
      */
-    public Optional<Integer> insertGenerating(String meetingId, String requestId, boolean partial, String snapshotJson) {
+    public Optional<Integer> insertGenerating(String meetingId, String requestId, boolean partial, String snapshotJson,
+                                          String aiRunId) {
         return jdbc.queryForList("""
                 INSERT INTO meeting_notes (meeting_id, version, generation_request_id, status, partial, segment_snapshot,
-                                           created_at, updated_at)
-                SELECT ?, COALESCE(MAX(version), 0) + 1, ?, 'generating', ?, ?::jsonb, now(), now()
+                                           ai_run_id, created_at, updated_at)
+                SELECT ?, COALESCE(MAX(version), 0) + 1, ?, 'generating', ?, ?::jsonb, ?, now(), now()
                 FROM meeting_notes WHERE meeting_id = ?
                 ON CONFLICT DO NOTHING
                 RETURNING version
-                """, Integer.class, meetingId, requestId, partial, snapshotJson, meetingId).stream().findFirst();
+                """, Integer.class, meetingId, requestId, partial, snapshotJson, aiRunId, meetingId).stream().findFirst();
     }
 
     public void markReady(String meetingId, int version, String resultJson) {
@@ -54,12 +56,37 @@ public class MeetingNotesRepository {
                 """, errorCode, meetingId, version);
     }
 
-    /** 인스턴스가 AI 응답 전에 종료되면 generating이 남는다. 오래된 것은 실패로 정리한다. */
-    public void expireGenerating(String meetingId, Instant before) {
-        jdbc.update("""
-                UPDATE meeting_notes SET status = 'failed', error_code = 'MEETING_NOTES_TIMEOUT', updated_at = now()
-                WHERE meeting_id = ? AND status = 'generating' AND updated_at < ?
-                """, meetingId, java.sql.Timestamp.from(before));
+    /** 한 워크스페이스의 회의록 생성을 직렬화한다. 같은 트랜잭션에서 busy 확인과 insertGenerating을 하는 호출자가 쥔다. */
+    public void lockWorkspace(String workspaceId) {
+        jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", Object.class,
+                "meeting-notes-generation:" + workspaceId);
+    }
+
+    public boolean hasGenerating(String workspaceId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (SELECT 1 FROM meeting_notes n JOIN meetings m ON m.id = n.meeting_id
+                               WHERE m.workspace_id = ? AND n.status = 'generating')
+                """, Boolean.class, workspaceId));
+    }
+
+    /** AI 결과 이벤트가 끝내 오지 않으면 generating이 남는다. 오래된 것은 실패로 정리하고 ai run ID를 돌려준다. workspaceId가 null이면 전체. */
+    public List<String> expireGenerating(String workspaceId, Instant before) {
+        return jdbc.query("""
+                UPDATE meeting_notes n SET status = 'failed', error_code = 'MEETING_NOTES_TIMEOUT', updated_at = now()
+                FROM meetings m
+                WHERE m.id = n.meeting_id AND (?::text IS NULL OR m.workspace_id = ?) AND n.status = 'generating' AND n.updated_at < ?
+                RETURNING n.ai_run_id
+                """, (rs, i) -> rs.getString(1), workspaceId, workspaceId, java.sql.Timestamp.from(before))
+                .stream().filter(java.util.Objects::nonNull).toList();
+    }
+
+    /** 사용자가 취소한 generating 초안을 실패로 바꾼다. 없으면 빈 값. */
+    public Optional<Integer> cancelGenerating(String meetingId) {
+        return jdbc.queryForList("""
+                UPDATE meeting_notes SET status = 'failed', error_code = 'MEETING_NOTES_CANCELLED', updated_at = now()
+                WHERE meeting_id = ? AND status = 'generating'
+                RETURNING version
+                """, Integer.class, meetingId).stream().findFirst();
     }
 
     /** 저장 전에 대상·본문을 남긴다. 다른 요청이 먼저 잡았으면 false. */
@@ -101,6 +128,11 @@ public class MeetingNotesRepository {
                 (rs, n) -> note(rs), meetingId, requestId).stream().findFirst();
     }
 
+    public Optional<Note> findByRun(String aiRunId) {
+        return jdbc.query("SELECT * FROM meeting_notes WHERE ai_run_id = ?", (rs, n) -> note(rs), aiRunId)
+                .stream().findFirst();
+    }
+
     public Optional<Note> latest(String meetingId) {
         return jdbc.query("SELECT * FROM meeting_notes WHERE meeting_id = ? ORDER BY version DESC LIMIT 1",
                 (rs, n) -> note(rs), meetingId).stream().findFirst();
@@ -121,6 +153,6 @@ public class MeetingNotesRepository {
                 rs.getString("apply_request_id"), rs.getString("apply_mode"), rs.getString("apply_document_id"), base,
                 rs.getString("apply_display_name"), rs.getObject("apply_folder_id", UUID.class),
                 rs.getString("apply_markdown"), applied == null ? null : applied.toInstant(),
-                rs.getTimestamp("updated_at").toInstant());
+                rs.getTimestamp("updated_at").toInstant(), rs.getString("ai_run_id"), rs.getString("segment_snapshot"));
     }
 }
