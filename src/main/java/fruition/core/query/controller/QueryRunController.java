@@ -1,6 +1,6 @@
 package fruition.core.query.controller;
 
-import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.chat.service.ChatSessionService;
 import fruition.core.query.domain.QueryRun;
 import fruition.core.query.dto.QueryRunStatusResponse;
 import fruition.core.query.exception.QueryRunNotFoundException;
@@ -34,14 +34,14 @@ public class QueryRunController {
 
     private final QueryRunStore queryRunStore;
     private final QueryEventBroker queryEventBroker;
-    private final WorkspaceAccessGuard workspaceAccessGuard;
+    private final ChatSessionService chatSessionService;
 
     public QueryRunController(QueryRunStore queryRunStore,
                                QueryEventBroker queryEventBroker,
-                               WorkspaceAccessGuard workspaceAccessGuard) {
+                               ChatSessionService chatSessionService) {
         this.queryRunStore = queryRunStore;
         this.queryEventBroker = queryEventBroker;
-        this.workspaceAccessGuard = workspaceAccessGuard;
+        this.chatSessionService = chatSessionService;
     }
 
     @Operation(summary = "질의 진행 이벤트 구독", description = "비동기 질의의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다.")
@@ -83,10 +83,10 @@ public class QueryRunController {
                 .orElseThrow(() -> new QueryRunNotFoundException(requestId));
     }
 
-    /** run이 속한 워크스페이스의 멤버만 조회·구독할 수 있다. */
+    /** 채팅 세션은 개인 자산이므로 run이 속한 세션의 주인만 조회·구독할 수 있다. 남의 run은 404로 숨긴다. */
     private QueryRun requireOwnedRun(String requestId, String userId) {
         QueryRun run = requireRun(requestId);
-        workspaceAccessGuard.requireMember(run.workspaceId(), userId);
+        chatSessionService.verifyOwnedSession(run.workspaceId(), userId, run.sessionId());
         return run;
     }
 

@@ -446,7 +446,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 | 목적 | 비동기 질의의 현재 상태와 완료 결과 또는 오류 정보를 반환합니다. |
 | 입력 | **Path** — `requestId`: `string` |
 | 출력 | `200` 상태 조회 성공 — `QueryRunStatusResponse` |
-| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다. |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>run이 속한 채팅 세션의 주인만 호출할 수 있다(남의 run은 `404`). 세션을 지우면 주인도 `404`를 받는다. |
 | 주요 오류 | `404` 질의 실행 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
 
 <details>
@@ -736,7 +736,7 @@ curl -X GET "$DOCUMENT/api/query/runs/<value>" \
 | 목적 | 비동기 질의의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. |
 | 입력 | **Path** — `requestId`: `string` |
 | 출력 | `200` SSE 구독 시작 — `string` |
-| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다. |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>run이 속한 채팅 세션의 주인만 호출할 수 있다(남의 run은 `404`). 세션을 지우면 주인도 `404`를 받는다. |
 | 주요 오류 | `404` 질의 실행 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
 
 <details>
