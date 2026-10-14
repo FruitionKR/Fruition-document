@@ -22,4 +22,7 @@ public interface WikiPageVersionRepository extends JpaRepository<WikiPageVersion
 
     Optional<WikiPageVersion> findTopByIdPageIdOrderByIdRevisionDesc(String pageId);
 
+    /** 사람 수정의 재전송 판정. 같은 write ID는 같은 작업 ID가 되므로 그 작업이 만든 버전을 찾는다. */
+    Optional<WikiPageVersion> findFirstByIdPageIdAndOperationId(String pageId, String operationId);
+
 }

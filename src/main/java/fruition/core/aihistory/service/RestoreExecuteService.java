@@ -270,6 +270,8 @@ public class RestoreExecuteService {
             @com.fasterxml.jackson.annotation.JsonProperty("keep_contributions") List<Kept> keepContributions
     ) {
         static RebuildPage from(PageRestorePlan page) {
+            // 사람 수정(wiki_edit) 기여는 원문 문서가 없어 document_id가 null이다(ai `RestoreContributionIn.document_id: str | None`).
+            // ai 재조립은 이 값을 쓰지 않는다(ai ADR 0031).
             return new RebuildPage(page.pageId(), page.keepContributions().stream()
                     .map(value -> new Kept(value.operationId(), value.documentId())).toList());
         }

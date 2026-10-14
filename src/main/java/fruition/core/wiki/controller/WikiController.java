@@ -3,6 +3,9 @@ package fruition.core.wiki.controller;
 import fruition.shared.util.ErrorResponse;
 import fruition.core.wiki.service.WikiService;
 import fruition.core.wiki.dto.WikiGraphResponse;
+import fruition.core.wiki.dto.WikiPageContentSaveRequest;
+import fruition.core.wiki.dto.WikiPageContentSaveResponse;
+import fruition.core.wiki.service.WikiPageEditService;
 import fruition.core.wiki.dto.WikiPageDetailResponse;
 import fruition.core.wiki.dto.WikiPageDiffResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -16,6 +19,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,13 +28,15 @@ import org.springframework.web.context.request.WebRequest;
 
 @RestController
 @RequestMapping("/api/workspaces/{workspace_id}/wiki")
-@Tag(name = "Wiki", description = "Wiki 그래프 및 페이지 조회 API")
+@Tag(name = "Wiki", description = "Wiki 그래프·페이지 조회와 페이지 본문 수정 API")
 public class WikiController {
 
     private final WikiService wikiService;
+    private final WikiPageEditService wikiPageEditService;
 
-    public WikiController(WikiService wikiService) {
+    public WikiController(WikiService wikiService, WikiPageEditService wikiPageEditService) {
         this.wikiService = wikiService;
+        this.wikiPageEditService = wikiPageEditService;
     }
 
     @Operation(summary = "Wiki 그래프 조회", description = "모든 Wiki 노드(pages)와 엣지(links)를 반환합니다. 중앙 그래프 렌더링과 답변 후 하이라이트에 사용됩니다. "
@@ -71,6 +78,36 @@ public class WikiController {
             @Parameter(description = "Wiki 페이지 ID", example = "wp_abc123")
             @PathVariable("wiki_page_id") String wikiPageId) {
         return ResponseEntity.ok(wikiService.findById(workspaceId, userId, wikiPageId));
+    }
+
+    @Operation(operationId = "saveWikiPageContent", summary = "Wiki 페이지 본문 수정",
+        description = "사람이 고친 본문을 저장합니다. base_revision이 현재 revision과 같을 때만 반영하고 revision을 하나 올립니다. "
+            + "같은 revision_write_id 재시도는 처음 결과를 돌려줍니다. 본문이 같으면 revision을 올리지 않습니다. "
+            + "OWNER 또는 wiki.ingest 권한이 있는 멤버만 고칠 수 있습니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "저장 성공 또는 같은 본문 no-op·같은 write ID 재시도",
+            content = @Content(schema = @Schema(implementation = WikiPageContentSaveResponse.class))),
+        @ApiResponse(responseCode = "400", description = "잘못된 Markdown, base_revision 또는 revision_write_id",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "wiki.ingest 권한 없음(WORKSPACE_PERMISSION_REQUIRED)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "404", description = "워크스페이스 멤버가 아니거나 페이지를 찾을 수 없음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "409", description = "revision 충돌(WIKI_PAGE_VERSION_CONFLICT, error.current_revision에 현재 revision) 또는 revision_write_id 재사용 충돌",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "413", description = "Markdown 5MB 초과",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "503", description = "AI 서비스 저장 실패(WIKI_PAGE_PIPELINE_UNAVAILABLE). 같은 revision_write_id로 다시 시도",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PutMapping("/pages/{wiki_page_id}/content")
+    public WikiPageContentSaveResponse saveContent(
+            @PathVariable("workspace_id") String workspaceId,
+            @AuthenticationPrincipal String userId,
+            @Parameter(description = "Wiki 페이지 ID", example = "wp_abc123")
+            @PathVariable("wiki_page_id") String wikiPageId,
+            @RequestBody WikiPageContentSaveRequest request) {
+        return wikiPageEditService.save(workspaceId, userId, wikiPageId, request);
     }
 
     @Operation(summary = "Wiki 페이지 변경분 조회",
