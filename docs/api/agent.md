@@ -120,7 +120,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 | 입력 | **Path** — `workspace_id`: `string`, `run_id`: `string`<br>**Body** — `AgentRunApproveRequest` |
 | 출력 | `200` 성공 — `JsonNode` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | 공통 오류 계약 적용 |
+| 주요 오류 | 공통 오류 계약 적용<br>`402` 크레딧 부족(`app.billing.enforce`) — 계획을 다시 돌리기 전에 가용 잔액을 확인한다. `INSUFFICIENT_CREDIT` — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -390,7 +390,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | 입력 | **Path** — `workspace_id`: `string`, `run_id`: `string`<br>**Body** — `AgentRunReviseRequest` |
 | 출력 | `200` 성공 — `JsonNode` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | 공통 오류 계약 적용 |
+| 주요 오류 | 공통 오류 계약 적용<br>`402` 크레딧 부족(`app.billing.enforce`) — 계획을 다시 돌리기 전에 가용 잔액을 확인한다. `INSUFFICIENT_CREDIT` — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -485,7 +485,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `AgentTurnRequest` |
 | 출력 | `202` Agent 실행이 대기열에 등록됨 — `AgentTurnResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 충돌 — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`409` 문서 version 충돌 — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -617,6 +617,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 요청 | `ErrorResponse` |
+| `402` | 크레딧 부족(`app.billing.enforce`, `INSUFFICIENT_CREDIT`) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 문서 version 충돌 | `ErrorResponse` |
 | `423` | 다른 사용자가 문서를 편집 중 | `ErrorResponse` |
@@ -1220,11 +1221,16 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 ```
 
 - 원장 `credit_entries`는 추가만 한다. 부호: `purchase`·`grant` +, `charge`·`refund`(결제 환불로 회수) −, `adjust` ±(잔액), `reserve` +, `release` −(예약). 계정 잔액 = 예약을 뺀 원장 합계, 예약 = `reserve`·`release` 합계이며 `scripts/sql/credit-balance-check.sql`로 점검한다.
-- 사전 승인: AI 요청 전에 계정 행을 `FOR UPDATE`로 잠그고 kind별 예상 상한(`app.billing.estimate.<kind>`, 없으면 `app.billing.default-estimate-krw-milli`)을 `reserve`로 기록한다. 비동기 작업은 `AiCommandOutboxWriter.begin`·`reserve`(outbox 저장과 같은 트랜잭션), 동기 호출(Skill·회의록 초안·녹음 파일 전사·음성 전사)은 `AiTaskCancellationService.register`, 실시간 전사는 연결 시작에서 예약한다. 같은 실행은 한 번만 예약하고, 사용자가 없는 시스템 작업은 예약하지 않는다.
-- `app.billing.enforce`(기본 false): true면 가용 잔액이 상한보다 작거나 잔액이 음수일 때 AI 요청 전에 `402 INSUFFICIENT_CREDIT`("크레딧 잔액이 부족합니다. 크레딧을 충전한 뒤 다시 시도해 주세요.")로 거절하고 작업 등록도 롤백한다. 비동기 회의록 초안은 `failed`/`INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유, 실시간 전사는 `insufficient_credit` 오류 후 close `1008`로 알린다. false면 거절하지 않고 예약·정산만 기록한다(무료 크레딧 정책 전 배포용).
+- 사전 승인: AI 요청 전에 계정 행을 `FOR UPDATE`로 잠그고 가용 잔액(잔액 − 진행 중인 예약)을 확인한 뒤 `reserve`로 기록한다. 예약 금액은 kind별 예상 상한(`app.billing.estimate.<kind>`, 없으면 `app.billing.default-estimate-krw-milli`)이되 enforce에서는 가용 잔액을 넘지 않는다(아래). 비동기 작업은 `AiCommandOutboxWriter.begin`·`reserve`(outbox 저장과 같은 트랜잭션), 동기 호출(Skill·회의록 초안·녹음 파일 전사·음성 전사)은 `AiTaskCancellationService.register`, 실시간 전사는 연결 시작에서 예약한다. 같은 실행은 한 번만 예약한다. 사용자가 없는 시스템 정리 command(`document_deleted`)는 `user_id`가 없어 예약 경로에 들어오지 않는다. 사용자 없는 AI 요청이 예약 경로에 오면 enforce에서는 예약하지 않고 오류로 거절한다(enforce가 꺼져 있으면 예전처럼 건너뛴다).
+- `app.billing.enforce`(기본 false, 환경변수 `BILLING_ENFORCE`)가 true일 때만 거절한다(ADR-0029). 가용 잔액이 그 kind의 **최저 비용**보다 작으면 AI 요청 전에 `402 INSUFFICIENT_CREDIT`("크레딧이 부족해 작업을 시작하지 않았습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.")로 거절하고 작업 등록도 롤백한다. 통과하면 `min(예상 상한, 가용 잔액)`을 예약한다. 가용 잔액이 0이거나 음수이면(마이너스 잔액 포함) 항상 거절이다. 최저 비용은 `app.billing.minimum.<kind>`(milli-KRW)이고 설정이 없으면 그 kind 예상 상한의 10%(최소 1)다. 비동기 회의록 초안은 `failed`/`INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유(같은 문구), 실시간 전사는 `insufficient_credit` 오류 후 close `1008`로 알린다. false면 거절하지 않고 상한 전체를 예약·정산만 기록한다(실사용자 환경에서만 true로 켠다).
+- 거절 대상 진입점: Query(`query/runs`·동기 query), Agent 턴, Agent 계획 수정(`revise`)·승인(`approve`), 문서 ingest(수동 재처리·변환 뒤 자동 ingest), 변환(`convert`), lint, `restore_*`, Skill 작성·게시·수정, 회의록 초안, 회의 녹음 파일 전사, 음성 전사, 실시간 전사 시작·구간 갱신.
+- Agent 계획 수정·승인(`revise`·`approve`): path의 `run_id`는 ai-svc가 턴 처리 뒤 새로 만든 AgentRun id(uuid)이며 처음 요청의 turn id(`agent_…`)와 다르다. enforce에서 전달 전에 이 id를 `agent_run` 실행으로 `ai_task_runs`에 등록하고(`app.billing.estimate.agent_run`) 처음 요청과 같은 규칙으로 가용 잔액을 확인해 예약한다. 이미 등록된 AgentRun은 구간 갱신(`renew`)과 같은 규칙으로 예약을 바꾼다. 전달 전에 먼저 AgentRun을 조회해 호출자의 것인지 확인한다(404면 등록하지 않아 남의 id를 선점하지 못한다). 이미 끝난 상태면 예약하지 않고 전달해 ai-svc가 거절하게 한다. 부족하면 ai-svc에 전달하지 않고 `402 INSUFFICIENT_CREDIT`(처음이든 이어 가는 호출이든 "크레딧이 부족해 중단했습니다. …")로 응답한다. ai-svc가 전달을 거절(409·404·503)하면 이번 시도의 예약만 푼다(키 `release:{run_id}:abort:{n}`). 실행은 닫지 않고 `running`으로 두어 다음 승인·수정이 구간 갱신으로 가용 잔액을 다시 확인하며, 종료 해제 키 `release:{run_id}`는 진짜 종료 정산용으로 남는다. 같은 AgentRun에 동시 요청이 겹쳐 한쪽이 실패하면 그 순간 열린 예약을 함께 풀 수 있다(다음 시도가 다시 확인). 승인 대기가 `app.billing.stale-reservation-hours`를 넘겨 정리 작업이 예약을 풀었더라도, 이어 가는 승인·수정이 실행의 `updated_at`을 갱신해 다시 진행 중으로 만들고 새로 예약하며 그 예약은 종료 정산이 푼다(정산의 해제 키가 이미 쓰였으면 `release:{run_id}:late:{n}`). 종료 신호는 이 서비스가 AgentRun 상태를 돌려줄 때(`GET runs/{run_id}`, `approve`·`revise`·`reject`·`cancel` 응답)의 상태(`completed`·`partial_failed`·`failed`·`conflicted`·`rejected`·`cancelled`·`rollback_failed`)뿐이며, 그때 실행을 닫아 수집·정산 대기열에 넣는다. 사용자가 상태를 더 조회하지 않으면 종료를 알 수 없어 하루 단위 대사와 `app.billing.stale-reservation-hours`(기본 48시간) 정리가 정산한다. AgentRun의 사용량은 ai-svc 원장에 AgentRun id를 run_id로 남는다(agent_worker). 처음 계획 생성 호출은 승인·수정 전이라 이 예약에 포함되지 않고 대사가 차감한다. enforce가 꺼져 있으면 등록·예약을 하지 않는다.
+- 변환(PDF) 뒤 자동 ingest: 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 푼다(변환 상한이 ingest의 가용 잔액을 줄이지 않게 한다). 자동 ingest가 크레딧 부족으로 거절되면 변환은 성공으로 두고 재시도하지 않으며 해당 문서를 `failed`로 하고 오류 메시지를 `INSUFFICIENT_CREDIT: …`로 남긴다.
+- post_ingest(ingest 뒤 ai-svc가 `ai.maintenance.command`로 따로 돌리는 품질 평가): 성공한 ingest 결과(`ai.task.event` `ingest`)를 받으면 그 run의 사용 금액 수집·정산을 `app.billing.post-ingest-hold-seconds`(기본 900초) 뒤로 미뤄 ingest 예약이 post_ingest가 끝날 때까지 남는다. post_ingest 종료 이벤트(`ai.task.event` `post_ingest`, `request` 없음)가 오면 그 command의 호출을 바로 수집·차감하고, 이벤트 최상위의 `ingest_run_id`가 가리키는 같은 사용자·워크스페이스의 ingest 정산을 앞당긴다. 이벤트가 오지 않거나 `ingest_run_id`가 없는 이전 ai-svc 이벤트면 보류 시간이 상한이다. ingest 결과 이벤트는 post_ingest를 돌릴지(manifest의 `post_ingest`)를 알려 주지 않아 성공한 ingest는 모두 보류하며, post_ingest가 없는 ingest는 보류 시간까지 예약이 남는다. post_ingest 종료 이벤트가 ingest 결과보다 먼저 오면 `ai_task_result_receipts`에 `post_ingest_done:{ingest_run_id}`를 남겨 두고, 뒤늦게 온 ingest 결과는 보류하지 않고 바로 정산한다. 보류는 enforce가 켜져 있을 때만 하며 꺼져 있으면 ingest 결과를 받는 즉시 예전처럼 정산한다. post_ingest 호출은 별도 예약 없이 실제 사용 금액으로 차감한다.
 - 정산: 사용 금액 수집(위 절)이 실행의 호출을 가져오면 그 실행의 청구 합계를 `charge`로 차감하고 남은 예약을 `release`한다. 실행이 아직 진행 중(`running`·`cancel_requested`·`rolling_back`)이면 차감만 하고 예약은 둔다. 차감 키는 `charge:{run_id}:{user_id}:{누적 청구액}`, 해제 키는 `release:{run_id}`라 같은 실행을 여러 번 정산해도 같은 금액은 한 번만 반영되고, 대사가 늦게 채운 호출은 늘어난 만큼만 더 차감한다. 취소된 실행도 취소 확정 시 수집 대기열에 넣어 정산한다. `needs_review` 호출은 현재 0원이다. 재계산으로 나중에 `charged`가 된 호출도 같은 정산 경로로 늘어난 만큼 차감한다.
+- 마이너스 잔액(#102): 별도 한도·회수·상각 절차는 없다. 정산은 예약을 넘는 실제 금액(상한을 넘은 사용, 처음 Agent 계획 생성·post_ingest처럼 예약 밖 호출, enforce가 꺼진 환경)과 결제 환불 회수를 그대로 차감해 잔액이 음수가 될 수 있다. enforce에서는 가용 잔액이 최저 비용보다 작으므로 새 작업 시작은 402, 진행 중인 실행의 구간 갱신·Agent 승인/수정은 402 또는 close `1008`로 거절되고, 이미 받은 호출은 종료 정산이 끝까지 차감한다. 이후 충전(`purchase`)·지급(`grant`)·조정(`adjust`)이 음수부터 메운다. 환불은 가용 잔액까지만 하므로 음수면 환불할 것이 없어 409다. enforce가 꺼져 있으면 음수여도 거절하지 않는다.
 - 종료 신호가 없는 실행의 예약은 `app.billing.stale-reservation-hours`(기본 48시간)가 지나면 정리 작업이 그때까지의 청구로 정산하고 푼다. 진행 중인 실행은 건너뛰되, `ai_task_runs.updated_at`이 그 시간보다 오래된 실행(프로세스 종료로 남은 `running` 등)은 끝난 것으로 본다.
-- 실시간 전사는 연결 시작 시 `meeting_live` 상한을 예약하고, `app.billing.live-renew-seconds`(기본 60초)마다 그때까지의 호출을 수집해 차감한 뒤 남은 예약을 풀고 다음 구간 상한을 다시 예약한다(키 `release:{run_id}:{구간}`·`reserve:{run_id}:{구간}`). enforce에서 차감 뒤 가용 잔액이 상한보다 작으면 아무것도 반영하지 않고 `insufficient_credit` 오류 후 close `1008`로 연결을 닫으며, 연결 종료 정산이 사용량을 차감하고 예약을 푼다. 확정 구간은 남아 충전 뒤 새 ticket으로 이어서 녹음한다.
+- 실시간 전사는 연결 시작 시 `meeting_live` 상한을 예약하고, `app.billing.live-renew-seconds`(기본 60초)마다 그때까지의 호출을 수집해 차감한 뒤 남은 예약을 풀고 다음 구간 상한을 다시 예약한다(키 `release:{run_id}:{구간}`·`reserve:{run_id}:{구간}`). enforce에서 차감 뒤 가용 잔액이 `meeting_live`의 최저 비용(`app.billing.minimum.meeting_live`, 없으면 상한의 10%)보다 작으면 아무것도 반영하지 않고 `insufficient_credit` 오류 후 close `1008`로 연결을 닫으며, 연결 종료 정산이 사용량을 차감하고 예약을 푼다. 확정 구간은 남아 충전 뒤 새 ticket으로 이어서 녹음한다.
 - 수동 지급·조정은 `scripts/sql/credit-grant-adjust.sql`(`grant` 또는 `adjust`, `adjust`는 사유 필수)로 한다.
 - 보관: 탈퇴·워크스페이스 삭제 파기 대상에서 `credit_accounts`·`credit_entries`·`usage_charges`·`credit_orders`·`payment_events`는 제외한다(전자상거래법상 대금 결제 기록 5년 보관).
 - 진입점: `src/main/java/fruition/core/usage/controller/UsageChargeController.java`, `src/main/java/fruition/core/usage/service/CreditService.java`

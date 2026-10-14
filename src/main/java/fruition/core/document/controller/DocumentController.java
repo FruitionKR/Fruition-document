@@ -440,6 +440,8 @@ public class DocumentController {
         summary = "PDF Markdown 변환",
         description = "PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을 편집 가능 placeholder 문서를 즉시 만들어 반환하고, 실제 변환은 백그라운드에서 진행됩니다.")
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "202", description = "변환 요청 접수 및 placeholder 문서 생성",
             content = @Content(schema = @Schema(implementation = DocumentUploadResponse.class))),
         @ApiResponse(responseCode = "400", description = "PDF 원본 문서가 아니거나 잘못된 Idempotency-Key",
@@ -467,6 +469,8 @@ public class DocumentController {
         summary = "문서 재ingest",
         description = "Markdown 문서를 Wiki 파이프라인에 넣습니다. 일반 문서는 최신 편집본을 원본으로 승격하고, 채팅 문서는 저장된 문답과 출처 블록을 그대로 사용합니다.")
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "202", description = "재처리 큐 등록됨",
             content = @Content(schema = @Schema(implementation = DocumentIngestResponse.class))),
         @ApiResponse(responseCode = "400", description = "편집 가능한 Markdown 문서가 아님",

@@ -56,6 +56,15 @@ public class AiCommandOutboxWriter {
         close(runId, "completed");
     }
 
+    /**
+     * 실행을 끝내면서 같은 트랜잭션에서 예약도 바로 푼다. 이어서 새 작업(변환 뒤 자동 ingest)을 시작할 때 이 실행의 예약이
+     * 가용 잔액을 줄여 그 작업을 거절하게 만들지 않는다. 끝난 실행의 사용 금액은 수집 대기열이 이어서 차감한다.
+     */
+    public void completeAndSettle(String runId) {
+        close(runId, "completed");
+        credits.settle(runId);
+    }
+
     /** 다시 시도하지 않을 실패로 실행을 닫는다. 실패 전까지의 공급사 호출도 수집·정산한다. */
     public void fail(String runId) {
         close(runId, "failed");

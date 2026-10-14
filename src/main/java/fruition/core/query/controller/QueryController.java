@@ -51,6 +51,8 @@ public class QueryController {
                       "응답에는 답변, 관련 Wiki 페이지, 원본 출처, 그래프 하이라이트 경로가 포함됩니다."
     )
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "200", description = "질의 성공",
             content = @Content(schema = @Schema(implementation = QueryResponse.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 요청 (질문이 비어 있는 경우)",
@@ -87,6 +89,8 @@ public class QueryController {
         description = "질의를 비동기 run으로 시작합니다. 진행 상황은 GET /api/query/runs/{request_id}/events(SSE)로 구독합니다."
     )
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "202", description = "run 시작됨",
             content = @Content(schema = @Schema(implementation = QueryRunCreateResponse.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 요청 (질문이 비어 있는 경우)",

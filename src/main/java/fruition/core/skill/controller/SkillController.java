@@ -39,6 +39,8 @@ public class SkillController {
 
     @Operation(summary = "Skill 초안 작성", description = "자연어 요구를 바탕으로 저장 전 Skill 초안을 생성합니다.")
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "200", description = "초안 작성 성공",
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
         @ApiResponse(responseCode = "400", description = "AI가 거절한 요청. code: SKILL_INTENT_AMBIGUOUS(작업을 특정할 수 없음), "
@@ -72,6 +74,8 @@ public class SkillController {
 
     @Operation(summary = "Skill 게시", description = "작성된 Skill 정의를 검토 후 게시합니다.")
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "200", description = "게시 성공",
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의",
@@ -145,6 +149,8 @@ public class SkillController {
 
     @Operation(summary = "Skill 수정", description = "Skill의 정의를 수정합니다.")
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "200", description = "수정 성공",
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의",

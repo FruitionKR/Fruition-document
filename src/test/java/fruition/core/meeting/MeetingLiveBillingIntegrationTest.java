@@ -100,9 +100,9 @@ class MeetingLiveBillingIntegrationTest {
         String runId = jdbc.queryForObject("SELECT id FROM ai_task_runs WHERE user_id = ? AND kind = 'meeting_live'",
                 String.class, userId);
 
-        // 첫 구간 사용량이 들어오면 다음 구간 정산이 차감하고, 남은 잔액이 다음 구간 상한보다 작아 연결을 닫는다.
+        // 첫 구간 사용량이 들어오면 다음 구간 정산이 차감하고, 남은 잔액(50,000)이 최저 비용(상한의 10%인 100,000)보다 작아 연결을 닫는다.
         jdbc.update("INSERT INTO usage_charges (call_id, user_id, run_id, call_status, status, charge_krw_milli, "
-                + "cost_usd_micro, started_at) VALUES (?, ?, ?, 'succeeded', 'charged', 600000, 0, now())",
+                + "cost_usd_micro, started_at) VALUES (?, ?, ?, 'succeeded', 'charged', 1450000, 0, now())",
                 "c-" + UUID.randomUUID(), userId, runId);
 
         JsonNode error = browser.untilType("error");
@@ -117,7 +117,7 @@ class MeetingLiveBillingIntegrationTest {
             Thread.sleep(100);
         }
         assertThat(credits.credits(userId).reservedKrwMilli()).isZero();
-        assertThat(credits.credits(userId).balanceKrwMilli()).isEqualTo(ESTIMATE + 500_000 - 600_000);
+        assertThat(credits.credits(userId).balanceKrwMilli()).isEqualTo(ESTIMATE + 500_000 - 1_450_000);
         assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, runId))
                 .isEqualTo("completed");
     }

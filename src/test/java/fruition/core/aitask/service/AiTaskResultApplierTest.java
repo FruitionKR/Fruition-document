@@ -596,6 +596,46 @@ class AiTaskResultApplierTest {
         return root.toString();
     }
 
+    @Test
+    void succeededIngestDefersUsageSettlementUntilPostIngestAndFailedIngestSettlesNow() throws Exception {
+        when(jdbcTemplate.update(contains("ai_task_result_receipts"), anyString(), anyString())).thenReturn(1);
+
+        applier.applyIngest(objectMapper.readTree(ingestEvent("ingest-ok", "succeeded")));
+        applier.applyIngest(objectMapper.readTree(ingestEvent("ingest-bad", "failed")));
+
+        verify(usageCharges).enqueueAfterPostIngest("ingest-ok");
+        verify(usageCharges, never()).enqueue("ingest-ok");
+        verify(usageCharges).enqueue("ingest-bad");
+        verify(usageCharges, never()).enqueueAfterPostIngest("ingest-bad");
+    }
+
+    @Test
+    void postIngestEventReleasesIngestHoldAndIgnoresEventsWithoutOwner() throws Exception {
+        applier.applyPostIngest(objectMapper.readTree("""
+                {"run_id":"post-1","ingest_run_id":"ingest-1","kind":"post_ingest","status":"succeeded","workspace_id":"ws-1","user_id":"user-1"}
+                """));
+        applier.applyPostIngest(objectMapper.readTree("""
+                {"run_id":"post-2","kind":"post_ingest","status":"failed","workspace_id":null,"user_id":"user-1"}
+                """));
+
+        applier.applyPostIngest(objectMapper.readTree("""
+                {"run_id":"post-3","kind":"post_ingest","status":"succeeded","workspace_id":"ws-1","user_id":"user-1"}
+                """));
+
+        verify(usageCharges).releasePostIngestHold("post-1", "ingest-1", "ws-1", "user-1");
+        // 이전 ai-svc는 ingest_run_id가 없다. 앞당기지 않고 시간 상한에 맡긴다.
+        verify(usageCharges).releasePostIngestHold("post-3", null, "ws-1", "user-1");
+        verify(usageCharges, never()).releasePostIngestHold(eq("post-2"), any(), anyString(), anyString());
+    }
+
+    private String ingestEvent(String runId, String status) {
+        return """
+                {"event_id":"ingest:%s:%s","run_id":"%s","kind":"ingest","status":"%s",
+                 "request":{"document_id":"doc-1","operation_id":"op-1"},
+                 "payload":{"operation_id":"op-1","status":"%s","changed_pages":[]}}
+                """.formatted(runId, status, runId, status, status);
+    }
+
     private String event(String eventId, String status, String answer, String error) {
         var root = objectMapper.createObjectNode();
         root.put("event_id", eventId);

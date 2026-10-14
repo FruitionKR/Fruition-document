@@ -49,6 +49,8 @@ public class WikiMaintenanceController {
 
     @Operation(summary = "Wiki 정합성 검사", description = "워크스페이스 Wiki 정합성 검사 실행을 비동기 대기열에 등록합니다.")
     @ApiResponses({
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "202", description = "Wiki 정합성 검사 실행이 대기열에 등록됨",
             content = @Content(schema = @Schema(implementation = WikiLintResponseSchema.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 검사 옵션",

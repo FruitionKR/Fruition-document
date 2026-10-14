@@ -88,7 +88,8 @@ public class AiTaskCancellationService {
     }
 
     public java.util.Optional<Map<String, Object>> findStatus(String id, String workspaceId, String userId) {
-        var rows = jdbc.queryForList("SELECT id, status, error_code FROM ai_task_runs WHERE id = ? AND workspace_id = ? AND user_id = ?",
+        var rows = jdbc.queryForList("SELECT id, status, error_code FROM ai_task_runs WHERE id = ? AND workspace_id = ? AND user_id = ? "
+                + "AND kind <> 'agent_run'",
                 id, workspaceId, userId);
         return rows.stream().findFirst();
     }

@@ -492,6 +492,34 @@ class DocumentServiceConvertTest {
     }
 
     @Test
+    @DisplayName("변환 뒤 자동 ingest가 크레딧 부족으로 거절돼도 변환은 성공이고 재시도하지 않으며 문서에 INSUFFICIENT_CREDIT을 남긴다")
+    void autoIngestRejectedForCreditKeepsConversionAndRecordsInsufficientCredit() throws Exception {
+        enableAutoIngest(true);
+        var parent = placeholderDocument();
+        var source = sourcePdf();
+        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        queue.checkpoint(10, 20);
+        var states = new java.util.HashMap<String, DocumentEditState>();
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), "<!-- page 10 -->\n\n# first pages\n", "hash", 2));
+        stubBatchConvert(parent, source, queue, states);
+        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any(), any()))
+                .thenReturn(new ConverterClient.Batch(11, 20, 20, "<!-- page 1 -->\n\n# next pages\n", false, true, null));
+        org.mockito.Mockito.doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("부족"))
+                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+
+        documentService.doConvert(7L, parent.getId(), source.getId());
+
+        assertThat(queue.getAttempts()).isZero();
+        assertThat(queue.getCompletedPages()).isEqualTo(20);
+        assertThat(parent.getStatus()).isEqualTo(fruition.core.document.domain.DocumentStatus.failed);
+        assertThat(parent.getErrorMessage()).startsWith("INSUFFICIENT_CREDIT").doesNotContain("PDF 변환에 실패했습니다");
+        // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 풀었다.
+        var order = org.mockito.Mockito.inOrder(taskWriter, ingestCommandOutbox);
+        order.verify(taskWriter).completeAndSettle("convert:" + parent.getId());
+        order.verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+    }
+
+    @Test
     @DisplayName("상한을 넘는 한 묶음은 앞 조각을 이어 붙인 뒤의 본문 기준으로 다음 조각의 파트 전환을 판단한다")
     void oversizedBatchUsesAppendedContentForNextPiece() throws Exception {
         var parent = placeholderDocument();

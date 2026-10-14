@@ -215,4 +215,11 @@ class AiTaskResultConsumerTest {
 
         assertThat(MDC.get("flowId")).isNull();
     }
+
+    @Test
+    void consumeRoutesPostIngestEventToApplier() throws Exception {
+        consumer.consume("{\"kind\":\"post_ingest\",\"run_id\":\"post-1\",\"status\":\"succeeded\"}");
+
+        verify(applier).applyPostIngest(org.mockito.ArgumentMatchers.any());
+    }
 }
