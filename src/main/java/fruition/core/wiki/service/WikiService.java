@@ -14,6 +14,7 @@ import fruition.core.wiki.repository.WikiPageVersionRepository;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
 import fruition.core.wiki.dto.*;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
+import fruition.core.wiki.repository.WikiWorkspaceVersionRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,23 +37,36 @@ public class WikiService {
     private final WikiPageVersionRepository versionRepository;
     private final MarkdownDiffService markdownDiffService;
     private final WikiObjectReader wikiObjectReader;
+    private final WikiWorkspaceVersionRepository wikiVersions;
 
     public WikiService(DocumentRepository documentRepository,
                        WorkspaceAccessGuard workspaceAccessGuard,
                        PipelineWikiStateRequester pipelineWikiStateRequester,
                        WikiPageVersionRepository versionRepository,
                        MarkdownDiffService markdownDiffService,
-                       WikiObjectReader wikiObjectReader) {
+                       WikiObjectReader wikiObjectReader,
+                       WikiWorkspaceVersionRepository wikiVersions) {
         this.documentRepository = documentRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.pipelineWikiStateRequester = pipelineWikiStateRequester;
         this.versionRepository = versionRepository;
         this.markdownDiffService = markdownDiffService;
         this.wikiObjectReader = wikiObjectReader;
+        this.wikiVersions = wikiVersions;
     }
 
     private void verifyWorkspaceOwnership(String workspaceId, String userId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
+    }
+
+    /**
+     * 그래프 ETag의 기준인 워크스페이스 위키 버전(#68). 멤버가 아니면 404다.
+     * 호출자는 이 값을 그래프보다 <b>먼저</b> 읽어야 한다. ai는 위키를 바꾼 뒤 결과를 보내므로,
+     * 먼저 읽은 버전에 대응하는 그래프는 그보다 오래될 수 없다.
+     */
+    public long graphVersion(String workspaceId, String userId) {
+        verifyWorkspaceOwnership(workspaceId, userId);
+        return wikiVersions.current(workspaceId);
     }
 
     public WikiGraphResponse findGraph(String workspaceId, String userId) {
