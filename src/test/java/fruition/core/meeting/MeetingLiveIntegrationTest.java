@@ -85,6 +85,8 @@ class MeetingLiveIntegrationTest {
         assertThat(events).extracting(e -> e.path("type").asText())
                 .containsSubsequence("committed", "committed", "completed", "completed", "finished");
         assertThat(first.closeStatus()).isEqualTo(CloseStatus.NORMAL);
+        // 브라우저가 닫힘을 받은 뒤에야 서버의 연결 종료 처리가 잠금을 푼다. 풀린 뒤 새 ticket을 받는다.
+        awaitLiveReleased(meetingId);
 
         FakeAi.mode = "normal";
         Browser second = connect(meetingId);
