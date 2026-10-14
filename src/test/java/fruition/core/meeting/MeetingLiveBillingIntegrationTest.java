@@ -90,7 +90,7 @@ class MeetingLiveBillingIntegrationTest {
 
     @Test
     void liveTranscriptionIsChargedPerIntervalAndClosedWhenCreditRunsOut() throws Exception {
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"OWNER\",\"permissions\":[]}");
         MeetingLiveIntegrationTest.FakeAi.mode = "normal";
         credits.post(userId, "grant", ESTIMATE + 500_000, "grant:" + UUID.randomUUID(), "테스트");
         String meetingId = createMeeting();

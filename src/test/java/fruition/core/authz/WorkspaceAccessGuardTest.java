@@ -26,7 +26,7 @@ class WorkspaceAccessGuardTest {
 
     private static final String WS = "ws_1";
     private static final String USER = "user_1";
-    private static final String KEY = "authz:role:ws_1:user_1";
+    private static final String KEY = "authz:role:v2:ws_1:user_1";
     private static final String ROLE_URL = "http://access/internal/authz/workspaces/ws_1/users/user_1";
 
     // Redis를 in-memory Map으로 흉내 낸다(값·TTL 기록).
@@ -58,7 +58,7 @@ class WorkspaceAccessGuardTest {
 
     @Test
     void requireMember_redisHitOwner_passesWithoutInternalApiCall() {
-        redisData.put(KEY, "OWNER");
+        redisData.put(KEY, "{\"role\":\"OWNER\",\"permissions\":[]}");
 
         assertThatCode(() -> guard.requireMember(WS, USER)).doesNotThrowAnyException();
         server.verify(); // 내부 API 호출이 없어야 한다
@@ -66,7 +66,7 @@ class WorkspaceAccessGuardTest {
 
     @Test
     void requireMember_redisHitNone_failsClosedWithoutInternalApiCall() {
-        redisData.put(KEY, "NONE");
+        redisData.put(KEY, "{\"role\":\"NONE\",\"permissions\":[]}");
 
         assertThatThrownBy(() -> guard.requireMember(WS, USER))
                 .isInstanceOf(WorkspaceNotFoundException.class);
@@ -81,7 +81,7 @@ class WorkspaceAccessGuardTest {
         assertThatCode(() -> guard.requireMember(WS, USER)).doesNotThrowAnyException();
 
         server.verify();
-        assertThat(redisData).containsEntry(KEY, "MEMBER");
+        assertThat(redisData).containsEntry(KEY, "{\"role\":\"MEMBER\",\"permissions\":[]}");
         assertThat(redisTtls.get(KEY)).isEqualTo(Duration.ofSeconds(300));
     }
 
@@ -92,7 +92,7 @@ class WorkspaceAccessGuardTest {
 
         assertThatThrownBy(() -> guard.requireMember(WS, USER))
                 .isInstanceOf(WorkspaceNotFoundException.class);
-        assertThat(redisData).containsEntry(KEY, "NONE");
+        assertThat(redisData).containsEntry(KEY, "{\"role\":\"NONE\",\"permissions\":[]}");
     }
 
     @Test
@@ -106,10 +106,107 @@ class WorkspaceAccessGuardTest {
 
     @Test
     void isOwner_distinguishesOwnerFromMember() {
-        redisData.put(KEY, "OWNER");
+        redisData.put(KEY, "{\"role\":\"OWNER\",\"permissions\":[]}");
         assertThat(guard.isOwner(WS, USER)).isTrue();
 
-        redisData.put(KEY, "MEMBER");
+        redisData.put(KEY, "{\"role\":\"MEMBER\",\"permissions\":[]}");
         assertThat(guard.isOwner(WS, USER)).isFalse();
+    }
+
+    @Test
+    void hasPermission_memberWithGrantedItem_fromApi_cachesJsonWithPermissionsAndReadsOnce() {
+        server.expect(requestTo(ROLE_URL)).andRespond(withSuccess(
+                "{\"role\":\"MEMBER\",\"permissions\":[\"wiki.ingest\"]}", MediaType.APPLICATION_JSON));
+
+        assertThat(guard.hasPermission(WS, USER, "wiki.ingest")).isTrue();
+        // 두 번째는 캐시에서 읽는다(내부 API 호출은 한 번만 기대했다).
+        assertThat(guard.hasPermission(WS, USER, "wiki.lint")).isFalse();
+
+        server.verify();
+        assertThat(redisData).containsEntry(KEY, "{\"role\":\"MEMBER\",\"permissions\":[\"wiki.ingest\"]}");
+        assertThat(redisTtls.get(KEY)).isEqualTo(Duration.ofSeconds(300));
+    }
+
+    @Test
+    void requirePermission_roleAndPermissionsComeFromOneFetch() {
+        server.expect(org.springframework.test.web.client.ExpectedCount.once(), requestTo(ROLE_URL)).andRespond(withSuccess(
+                "{\"role\":\"MEMBER\",\"permissions\":[\"skill.author\"]}", MediaType.APPLICATION_JSON));
+
+        assertThatCode(() -> guard.requirePermission(WS, USER, "skill.author")).doesNotThrowAnyException();
+        assertThat(guard.getRole(WS, USER)).isEqualTo("MEMBER");
+
+        server.verify();
+    }
+
+    @Test
+    void cachedJsonValue_isParsed() {
+        redisData.put(KEY, "{\"role\":\"MEMBER\",\"permissions\":[\"wiki.restore\"]}");
+
+        assertThat(guard.getRole(WS, USER)).isEqualTo("MEMBER");
+        assertThat(guard.hasPermission(WS, USER, "wiki.restore")).isTrue();
+        assertThat(guard.hasPermission(WS, USER, "wiki.ingest")).isFalse();
+        server.verify();
+    }
+
+    @Test
+    void invalidCachedValues_areTreatedAsMissAndOverwrittenFromApi() {
+        for (String bad : new String[]{"MEMBER", "not json", "{}", "{\"role\":null}", "{\"role\":\"ADMIN\"}"}) {
+            redisData.put(KEY, bad);
+            server.reset();
+            server.expect(requestTo(ROLE_URL)).andRespond(withSuccess(
+                    "{\"role\":\"MEMBER\",\"permissions\":[\"wiki.lint\"]}", MediaType.APPLICATION_JSON));
+
+            assertThat(guard.hasPermission(WS, USER, "wiki.lint")).as(bad).isTrue();
+
+            server.verify();
+            assertThat(redisData).containsEntry(KEY, "{\"role\":\"MEMBER\",\"permissions\":[\"wiki.lint\"]}");
+        }
+    }
+
+    @Test
+    void invalidApiResponse_failsClosedWithoutCaching() {
+        for (String bad : new String[]{"{}", "{\"role\":\"ADMIN\"}"}) {
+            server.reset();
+            server.expect(requestTo(ROLE_URL)).andRespond(withSuccess(bad, MediaType.APPLICATION_JSON));
+
+            assertThatThrownBy(() -> guard.requireMember(WS, USER))
+                    .isInstanceOf(WorkspaceNotFoundException.class);
+            assertThat(redisData).doesNotContainKey(KEY);
+        }
+    }
+
+    @Test
+    void apiResponseWithoutPermissionsField_isTreatedAsEmpty() {
+        server.expect(requestTo(ROLE_URL))
+                .andRespond(withSuccess("{\"role\":\"MEMBER\"}", MediaType.APPLICATION_JSON));
+
+        assertThat(guard.hasPermission(WS, USER, "wiki.ingest")).isFalse();
+    }
+
+    @Test
+    void owner_hasEveryPermissionImplicitly() {
+        redisData.put(KEY, "{\"role\":\"OWNER\",\"permissions\":[]}");
+
+        assertThat(guard.hasPermission(WS, USER, "wiki.ingest")).isTrue();
+        assertThat(guard.hasPermission(WS, USER, "document.convert")).isTrue();
+        assertThatCode(() -> guard.requirePermission(WS, USER, "skill.author")).doesNotThrowAnyException();
+    }
+
+    @Test
+    void none_hasNoPermission_andRequirePermissionIs404NotFound() {
+        redisData.put(KEY, "{\"role\":\"NONE\",\"permissions\":[\"wiki.ingest\"]}");
+
+        assertThat(guard.hasPermission(WS, USER, "wiki.ingest")).isFalse();
+        assertThatThrownBy(() -> guard.requirePermission(WS, USER, "wiki.ingest"))
+                .isInstanceOf(WorkspaceNotFoundException.class);
+    }
+
+    @Test
+    void requirePermission_memberWithoutItem_throws403ExceptionNamingTheItem() {
+        redisData.put(KEY, "{\"role\":\"MEMBER\",\"permissions\":[]}");
+
+        assertThatThrownBy(() -> guard.requirePermission(WS, USER, "wiki.ingest"))
+                .isInstanceOf(WorkspacePermissionRequiredException.class)
+                .hasMessage("이 작업에는 'wiki.ingest' 권한이 필요합니다. 워크스페이스 OWNER에게 요청하세요.");
     }
 }

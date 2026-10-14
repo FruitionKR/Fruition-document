@@ -45,6 +45,8 @@ public class SkillController {
                 + "SKILL_INTENT_UNSUPPORTED(지원하지 않는 작업), SKILL_INSTRUCTION_INVALID(지침 길이·이름 형식·참조 문서 오류), "
                 + "SKILL_REQUEST_REJECTED(그 밖의 거절)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "워크스페이스 또는 참조 문서를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Skill 이름 또는 버전 충돌",
@@ -73,6 +75,8 @@ public class SkillController {
         @ApiResponse(responseCode = "200", description = "게시 성공",
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "워크스페이스 또는 참조 문서를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -145,6 +149,8 @@ public class SkillController {
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Skill 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Skill 이름 또는 버전 충돌",
@@ -173,6 +179,8 @@ public class SkillController {
     @Operation(operationId = "deleteSkill", summary = "Skill 삭제", description = "개인 Skill은 소유자, 워크스페이스 Skill은 관리자만 삭제할 수 있습니다. 버전은 함께 삭제하고 과거 실행 기록은 보존합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "204", description = "삭제 성공"),
+        @ApiResponse(responseCode = "403", description = "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Skill이 없거나 삭제 권한이 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "503", description = "llmPipeline 사용 불가",
@@ -191,6 +199,8 @@ public class SkillController {
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "활성화 성공",
             content = @Content(schema = @Schema(implementation = SkillResponseSchema.class))),
+        @ApiResponse(responseCode = "403", description = "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다. 활성 상태는 워크스페이스 전체에 적용된다",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Skill 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Skill 요청 충돌",
@@ -213,6 +223,8 @@ public class SkillController {
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "비활성화 성공",
             content = @Content(schema = @Schema(implementation = SkillResponseSchema.class))),
+        @ApiResponse(responseCode = "403", description = "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다. 활성 상태는 워크스페이스 전체에 적용된다",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Skill 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Skill 요청 충돌",

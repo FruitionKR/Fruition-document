@@ -97,6 +97,8 @@ public class OperationQueryController {
                     + "문서 편집 복구는 canonical 편집 revision을 확인하며, 응답의 preview_token은 복구 실행에 그대로 전달해야 합니다.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "계산 성공"),
+            @ApiResponse(responseCode = "403", description = "위키 작업(ingest·lint)인데 실행자도 OWNER도 아니고 wiki.restore 권한이 없음(WORKSPACE_PERMISSION_REQUIRED)",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @ApiResponse(responseCode = "404", description = "작업 또는 워크스페이스를 찾을 수 없음",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
@@ -123,7 +125,7 @@ public class OperationQueryController {
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @ApiResponse(responseCode = "404", description = "작업 또는 워크스페이스를 찾을 수 없음",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-            @ApiResponse(responseCode = "403", description = "실행자에게 문서 편집 권한이 없음(문서 편집 복구, DOCUMENT_WRITE_FORBIDDEN)",
+            @ApiResponse(responseCode = "403", description = "실행자에게 문서 편집 권한이 없음(문서 편집 복구, DOCUMENT_WRITE_FORBIDDEN), 또는 위키 작업(ingest·lint)인데 작업 실행자도 OWNER도 아니고 wiki.restore 권한이 없음(WORKSPACE_PERMISSION_REQUIRED)",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
             @ApiResponse(responseCode = "409", description = "미리보기 이후 대상이 변경됨",
                     content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

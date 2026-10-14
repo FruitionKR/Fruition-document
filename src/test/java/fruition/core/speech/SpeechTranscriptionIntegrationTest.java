@@ -88,7 +88,7 @@ class SpeechTranscriptionIntegrationTest {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "MEMBER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"MEMBER\",\"permissions\":[]}");
         aiStatus = 200;
         aiBody = "{\"text\":\"검색 인덱싱은 어떻게 동작해?\"}";
         lastBody.set(null);
@@ -133,7 +133,7 @@ class SpeechTranscriptionIntegrationTest {
     @Test
     void nonMember_isRejectedBeforeCallingAi() throws Exception {
         String outsider = "user_" + UUID.randomUUID().toString().substring(0, 8);
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + outsider, "NONE");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + outsider, "{\"role\":\"NONE\",\"permissions\":[]}");
         mockMvc.perform(post(url())
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(outsider, outsider + "@example.com"))
                         .contentType("audio/webm").content(new byte[]{1}))

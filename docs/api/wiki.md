@@ -615,7 +615,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `WikiLintRequest` |
 | 출력 | `202` Wiki 정합성 검사 실행이 대기열에 등록됨 — `WikiLintResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 검사 옵션 — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 검사 옵션 — `ErrorResponse`<br>`403` `wiki.lint` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -669,6 +669,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 검사 옵션 | `ErrorResponse` |
+| `403` | `wiki.lint` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능). `dry_run`도 같다 | `ErrorResponse` |
 | `404` | 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `503` | llmPipeline 사용 불가 | `ErrorResponse` |
 
@@ -696,6 +697,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 모든 검사 요청(`dry_run` 포함)에 `wiki.lint` 권한(OWNER는 항상 가능)이 필요하다. 실행 결과·상태 조회는 멤버면 가능하다.
 
 #### 9. 예시 요청/응답
 

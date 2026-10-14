@@ -88,7 +88,7 @@ public class DocumentController {
 
     @Operation(
         summary = "문서 업로드",
-        description = "PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태와 처리 큐를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다.")
+        description = "PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_on_upload가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "201", description = "업로드 성공",
             content = @Content(schema = @Schema(implementation = DocumentUploadResponse.class))),
@@ -444,6 +444,8 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = DocumentUploadResponse.class))),
         @ApiResponse(responseCode = "400", description = "PDF 원본 문서가 아니거나 잘못된 Idempotency-Key",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "남이 올린 PDF인데 document.convert 권한이 없음(WORKSPACE_PERMISSION_REQUIRED). 업로더 본인과 OWNER는 항상 가능",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Idempotency-Key 충돌",
@@ -469,7 +471,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = DocumentIngestResponse.class))),
         @ApiResponse(responseCode = "400", description = "편집 가능한 Markdown 문서가 아님",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "403", description = "문서 소유자가 아님",
+        @ApiResponse(responseCode = "403", description = "wiki.ingest 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능) 또는 문서 편집 권한 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

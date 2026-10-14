@@ -29,8 +29,8 @@ class AiTaskRollbackIntegrationTest {
     void cancellationWaitsForPythonThenRestoresCoreAndRejectsWrongActor() throws Exception {
         String id = "cancel-" + UUID.randomUUID();
         String workspace = "ws-" + id;
-        redis.opsForValue().set("authz:role:" + workspace + ":user", "OWNER");
-        redis.opsForValue().set("authz:role:" + workspace + ":other", "MEMBER");
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":user", "{\"role\":\"OWNER\",\"permissions\":[]}");
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":other", "{\"role\":\"MEMBER\",\"permissions\":[]}");
         var command = mapper.createObjectNode().put("run_id", id).put("kind", "query")
                 .put("workspace_id", workspace).put("user_id", "user");
         cancellation.register(command);
@@ -61,6 +61,33 @@ class AiTaskRollbackIntegrationTest {
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
     }
 
+
+    @Test
+    void ownerCanCancelAndReadAnotherMembersTaskButOtherMembersCannot() throws Exception {
+        String id = "owner-cancel-" + UUID.randomUUID();
+        String workspace = "ws-" + id;
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":boss", "{\"role\":\"OWNER\",\"permissions\":[]}");
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":member", "{\"role\":\"MEMBER\",\"permissions\":[]}");
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":peer", "{\"role\":\"MEMBER\",\"permissions\":[\"wiki.restore\"]}");
+        var command = mapper.createObjectNode().put("run_id", id).put("kind", "query")
+                .put("workspace_id", workspace).put("user_id", "member");
+        cancellation.register(command);
+        // ai에는 OWNER가 아니라 작업 행의 요청자(member)가 그대로 전달된다.
+        org.mockito.Mockito.when(pipeline.cancel(id, workspace, "member", command)).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "rolling_back", null));
+        org.mockito.Mockito.when(pipeline.status(id, workspace, "member")).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "rolling_back", null));
+
+        assertThat(cancellation.status(id, workspace, "boss").get("status")).isEqualTo("running");
+        assertThat(cancellation.status(id, workspace, "member").get("status")).isEqualTo("running");
+        assertThatThrownBy(() -> cancellation.status(id, workspace, "peer"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        assertThatThrownBy(() -> cancellation.cancel(id, workspace, "peer"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+
+        assertThat(cancellation.cancel(id, workspace, "boss").get("status")).isEqualTo("rolling_back");
+        org.mockito.Mockito.verify(pipeline).cancel(id, workspace, "member", command);
+    }
 
     @Test
     void anotherPodSkipsRunWhileOneIsAdvancingAndCallbacksDoNotBlock() throws Exception {

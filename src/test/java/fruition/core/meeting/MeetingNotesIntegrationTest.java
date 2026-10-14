@@ -67,7 +67,7 @@ class MeetingNotesIntegrationTest {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"OWNER\",\"permissions\":[]}");
         when(workspaceAiModelClient.get(workspaceId))
                 .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
     }
@@ -218,7 +218,7 @@ class MeetingNotesIntegrationTest {
                 .andExpect(jsonPath("$.error.code").value("MEETING_NOTES_OUTDATED"));
 
         String other = "user_" + UUID.randomUUID().toString().substring(0, 8);
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + other, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + other, "{\"role\":\"OWNER\",\"permissions\":[]}");
         mockMvc.perform(get(notesUrl(meetingId))
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(other, other + "@x.com")))
                 .andExpect(status().isNotFound());

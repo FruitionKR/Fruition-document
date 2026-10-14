@@ -120,7 +120,7 @@ class MeetingRecordingIntegrationTest {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"OWNER\",\"permissions\":[]}");
         aiStatus = 200;
         aiText = DEFAULT_TEXT;
     }
@@ -199,7 +199,7 @@ class MeetingRecordingIntegrationTest {
         String key = jdbc.queryForObject("SELECT recording_key FROM meetings WHERE id = ?", String.class, meetingId);
 
         String other = "user_" + UUID.randomUUID().toString().substring(0, 8);
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + other, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + other, "{\"role\":\"OWNER\",\"permissions\":[]}");
         mockMvc.perform(delete(base() + "/" + meetingId)
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(other, other + "@x.com")))
                 .andExpect(status().isNotFound());

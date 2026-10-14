@@ -45,6 +45,17 @@ class CoreExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("권한 항목이 없으면 403 WORKSPACE_PERMISSION_REQUIRED로 항목 이름을 알려 준다")
+    void workspacePermissionRequiredMapsTo403() {
+        var response = handler.handleWorkspacePermissionRequired(
+                new fruition.core.authz.WorkspacePermissionRequiredException("wiki.ingest"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(403);
+        assertThat(response.getBody().error().code()).isEqualTo("WORKSPACE_PERMISSION_REQUIRED");
+        assertThat(response.getBody().error().message()).contains("'wiki.ingest'");
+    }
+
+    @Test
     @DisplayName("pipeline 응답을 중계하면 우리 code를 로그에 적지 않는다")
     void relayedPipelineResponseIsNotLoggedWithOurCode() {
         var response = handler.handlePipelineWikiPage(
