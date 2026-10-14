@@ -66,6 +66,7 @@ public class CreditService {
      * 작은 쪽을 예약한다. 사용자가 없는 요청은 enforce에서 거절한다(시스템 정리 작업은 사용자 없는 command라 여기까지 오지 않는다).
      */
     public void reserve(String runId, String userId, String kind) {
+        if (isFree(kind)) return;
         if (userId == null || userId.isBlank()) {
             if (enforce) throw new IllegalArgumentException("AI 요청에 사용자가 없어 크레딧을 예약할 수 없습니다: runId=" + runId);
             return;
@@ -89,11 +90,19 @@ public class CreditService {
      * {@link #reserve}와 같은 규칙이며 enforce가 꺼져 있으면 항상 통과한다. 잔액은 바뀔 수 있어 실제 예약은 따로 한다.
      */
     public void checkAdmission(String userId, String kind) {
-        if (!enforce) return;
+        if (!enforce || isFree(kind)) return;
         var rows = jdbc.queryForList("SELECT balance, reserved FROM credit_accounts WHERE user_id = ?", userId);
         long available = rows.isEmpty() ? 0
                 : ((Number) rows.getFirst().get("balance")).longValue() - ((Number) rows.getFirst().get("reserved")).longValue();
         admit(kind, estimate(kind), available, AiErrorMessages.INSUFFICIENT_CREDIT);
+    }
+
+    /**
+     * 모델을 부르지 않아 비용이 없는 작업(복원: 자체 호스팅 임베딩만 쓰고 원장에 호출이 남지 않는다)은 예약도 사전 승인도 하지 않는다.
+     * 실행 추적({@code ai_task_runs})은 그대로 남는다.
+     */
+    private static boolean isFree(String kind) {
+        return kind != null && kind.startsWith("restore_");
     }
 
     /** 사전 승인으로 거절하는 환경인지({@code app.billing.enforce}). */

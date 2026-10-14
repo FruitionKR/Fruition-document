@@ -49,3 +49,6 @@
 - **비동기 작업:** 백그라운드 작업이 크레딧 부족으로 시작하지 못하면 작업을 `INSUFFICIENT_CREDIT` 코드로 실패 처리해 사용자에게 알린다. PDF 변환은 변환 run을 먼저 정산해 예약을 푼 뒤 자동 편입을 시작한다(남은 변환 예약이 편입을 거절시키지 않게).
 - **실패 해제 키:** 예약 해제는 `release:<run>`, 늦게 온 결과는 `:late:<n>`, 전송 실패로 중단한 시도는 `:abort:<n>`로 멱등하게 처리한다.
 - **이후 기능:** 답변 음성(TTS, #118)과 회의 녹음 업로드(#124)도 같은 규칙을 쓴다. 회의 녹음은 업로드 시작 때 예약 없이 먼저 확인하고(`CreditService.checkAdmission`) 업로드 완료 때 예약한다. 큰 파일을 다 올린 뒤에 거절되지 않게 하기 위해서다.
+- **복원은 예약하지 않는다:** `restore_ingest`·`restore_lint`는 모델을 부르지 않고(자체 호스팅 임베딩, 사용량 원장에 호출이 남지 않는다) 비용이 0이다. `CreditService.reserve`·`checkAdmission`이 이 종류를 건너뛰므로 강제 모드에서 잔액이 0이어도 시작한다. 실행 추적(`ai_task_runs`)은 그대로 남긴다.
+- **실패·중단 호출도 받은 사용량은 청구한다:** `UsageChargeService`가 `failed`·`abandoned` 호출도 토큰·오디오 길이·글자 수가 있으면 청구한다(ADR-0027). 사용량이 없으면 0원이고 `needs_review`로 남는다. 예약 정산 금액이 그만큼 늘 수 있다.
+- **운영 배선:** Fruition-flatform이 `BILLING_ENFORCE=false`를 명시해 배선한다(Fruition-flatform PR #83). 켜려면 먼저 테스트 계정에 크레딧을 지급(`grant`)해야 한다.

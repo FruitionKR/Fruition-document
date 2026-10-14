@@ -36,13 +36,13 @@ document는 ai-svc 사용량 원장(`GET /internal/model-usage/calls`)을 호출
 
 ai 응답의 TTS 글자 수는 계약대로 `input_characters`를 읽는다.
 
-### 3. 사용량을 모르는 성공 호출은 `needs_review` (#98)
+### 3. 사용량을 모르는 호출은 `needs_review`, 사용량이 남은 실패·중단 호출은 청구한다 (#98)
 
-`succeeded`인데 입력·출력 토큰, 오디오 길이, 글자 수가 모두 NULL이면 0원 `charged`로 확정하지 않고 `needs_review`로 둔다.
+호출 상태가 `succeeded`·`cancelled`·`failed`·`abandoned`이고 입력·출력 토큰, 오디오 길이, 글자 수 중 하나라도 있으면 그 사용량으로 청구한다. 공급사가 받아 처리한 만큼은 호출이 실패했거나 중단됐어도 비용이 나가기 때문이다(결정: 받은 사용량은 청구한다). 사용량이 모두 NULL이면 0원 `charged`로 확정하지 않고 `needs_review`(금액 0)로 둔다. 멈춘·실패한 합성(`cancelled`·`failed`·`abandoned`)은 토큰을 받지 못했으면 글자 수만으로 확정하지 않는다(글자 수는 공급사에 보내기 전에 적는 값이다).
 
 ### 4. `unpriced`·`needs_review`는 매시간 다시 계산한다 (#99)
 
-`UsageChargeService.recompute`가 매시간(`USAGE_CHARGE_RECOMPUTE_INTERVAL_MS`) 최근 90일의 `succeeded` 호출 중 `unpriced`·`needs_review` 행을 `usage_charges`에 저장된 값으로 다시 계산한다. ai 원장은 다시 조회하지 않는다. 500행씩 `FOR UPDATE SKIP LOCKED`로 잠가 여러 replica가 같은 행을 중복 처리하지 않는다. `charged` 행은 건드리지 않는다. 새로 `charged`가 된 실행은 수집과 같은 `CreditService.settle` 경로로 정산한다. 90일은 단가 누락을 발견하고 고칠 시간으로 충분하면서, 오래된 호출을 뒤늦게 청구해 사용자를 놀라게 하지 않는 경계다.
+`UsageChargeService.recompute`가 매시간(`USAGE_CHARGE_RECOMPUTE_INTERVAL_MS`) 최근 90일의 청구 대상 상태(`succeeded`·`cancelled`·`failed`·`abandoned`) 호출 중 `unpriced`·`needs_review` 행을 `usage_charges`에 저장된 값으로 다시 계산한다. ai 원장은 다시 조회하지 않는다. 500행씩 `FOR UPDATE SKIP LOCKED`로 잠가 여러 replica가 같은 행을 중복 처리하지 않는다. `charged` 행은 건드리지 않는다. 새로 `charged`가 된 실행은 수집과 같은 `CreditService.settle` 경로로 정산한다. 90일은 단가 누락을 발견하고 고칠 시간으로 충분하면서, 오래된 호출을 뒤늦게 청구해 사용자를 놀라게 하지 않는 경계다.
 
 ### 5. 단가는 코드로 관리한다
 
@@ -62,6 +62,7 @@ document는 `[AI 모델 전환 감지] provider=%s requested=%s actual=%s`와 `[
 - **운영자가 단가를 수동 입력한다(기존 방식):** 카탈로그 변경과 단가 입력이 따로 움직여 누락을 알 수 없다. 이번 감사에서도 새 기본 모델의 단가 행이 있는지 배포 전에 손으로 확인해야 했다(#86).
 - **공급사 가격 페이지를 스크래핑해 자동 반영한다:** 페이지 구조가 바뀌면 조용히 틀린 값이 들어간다. 프로모션 단가, long context 구간, 모달리티별 단가처럼 표에 주석으로 붙는 조건을 기계가 해석하기 어렵다. 과금 금액을 사람 검토 없이 바꾸는 것도 위험하다.
 - **LiteLLM 단가표를 원천으로 삼는다:** 커뮤니티가 관리하는 데이터라 반영이 늦거나 틀릴 수 있고, 우리 계약 단가(배치·지역 할증 등)와 다를 수 있다. 원천은 공급사 공식 가격표로 두고, LiteLLM은 차이를 찾는 비교 대상으로만 쓴다.
+- **실패·중단 호출은 청구하지 않는다(기존 동작):** 사용자는 결과를 못 받았는데 공급사 비용은 서비스가 떠안는다. 토큰이 이미 기록된 호출은 비용이 확실하므로 청구한다. 반대로 사용량이 없는 실패는 금액을 알 수 없어 `needs_review`로 남긴다.
 - **0원 `charged`를 허용하고 나중에 수동 정정한다(#98 기존 동작):** `charged`는 재계산 대상이 아니라 정정 경로가 없다. 금액을 모르면 확정하지 않는 쪽이 안전하다.
 
 ## 결과
@@ -69,6 +70,6 @@ document는 `[AI 모델 전환 감지] provider=%s requested=%s actual=%s`와 `[
 - 스냅샷 이름 응답이 `unpriced`로 새지 않는다. 단가를 늦게 넣어도 90일 안의 호출은 다음 재계산에서 청구된다.
 - 같은 사용량이 두 번 청구되지 않는다. 대신 분당·글자 과금 모델은 단가 행에 해당 열이 있어야 하며, 없으면 토큰 단가로 계산된다.
 - 카탈로그와 단가표가 CI로 묶인다. 모델을 추가하려면 단가 마이그레이션도 같이 넣어야 한다.
-- 표현하지 못하는 단가가 남는다: OpenAI 272K 초과 long context, Gemini Pro 200k 초과 구간, Gemini 오디오 입력 단가, Anthropic 1시간 캐시 쓰기·지역 할증, 모달리티별 토큰 단가(`gpt-realtime` 계열). 기본 구간 단가로 계산되거나 시드하지 않는다(PR #103 참고).
+- 표현하지 못하는 단가가 남는다: OpenAI 272K 초과 long context, Gemini Pro 200k 초과 구간, Gemini 오디오 입력 단가, Anthropic 1시간 캐시 쓰기·지역 할증, 모달리티별 토큰 단가(`gpt-realtime` 계열). 기본 구간 단가로 계산되거나 시드하지 않는다(PR #103 참고). 단 TTS `gpt-realtime-2.1-mini`는 출력이 모두 오디오라 오디오 출력 단가를 output에 넣어 V73이 시드한다.
 - 기간 정산(`UsageSettlementService`, #59)은 아직 응답 모델 단가와 토큰만으로 계산한다. 같은 규칙으로 맞추는 일은 남아 있다.
 - 마진·부가세·환율·환율 버퍼 값은 이 ADR 범위 밖이다. 정책이 없으면 `[AI 환율·정책 없음]` 로그와 함께 `unpriced`가 된다.

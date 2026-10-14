@@ -306,13 +306,28 @@ class CreditServiceIntegrationTest {
     }
 
     @Test
-    void workEntryPointsRejectBeforeRegisteringAnyRun() {
+    void restoreStartsWithoutReservationEvenWhenEnforcedWithZeroBalance() {
         CreditService credits = credits(true);
-        // 모든 outbox 작업(query·agent·ingest·convert·lint·restore_*)은 begin·reserve를, skill 작업은 register를 거친다.
         var writer = new fruition.core.document.repository.AiCommandOutboxWriter(outboxRepository, mapper, jdbc,
                 entityManager, credits);
         var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
-        for (String kind : List.of("query", "agent", "document", "convert", "lint", "restore_ingest")) {
+        for (String kind : List.of("restore_ingest", "restore_lint")) {
+            String runId = "run-" + UUID.randomUUID();
+            transaction.executeWithoutResult(tx -> writer.begin(runId, "ws-1", user, kind));
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE id = ?", Integer.class, runId)).isEqualTo(1);
+        }
+        credits.checkAdmission(user, "restore_ingest");
+        assertThat(credits.credits(user).entries()).isEmpty();
+    }
+
+    @Test
+    void workEntryPointsRejectBeforeRegisteringAnyRun() {
+        CreditService credits = credits(true);
+        // 모든 outbox 작업(query·agent·ingest·convert·lint)은 begin·reserve를, skill 작업은 register를 거친다.
+        var writer = new fruition.core.document.repository.AiCommandOutboxWriter(outboxRepository, mapper, jdbc,
+                entityManager, credits);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
+        for (String kind : List.of("query", "agent", "document", "convert", "lint")) {
             assertThatThrownBy(() -> transaction.executeWithoutResult(tx ->
                     writer.begin("run-" + UUID.randomUUID(), "ws-1", user, kind)))
                     .isInstanceOf(CreditService.InsufficientCreditException.class);
