@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import fruition.core.aitask.AiErrorMessages;
 import fruition.core.aitask.service.AiTaskCancellationService;
 import fruition.shared.http.PipelineClientFactory;
 import org.slf4j.Logger;
@@ -123,7 +124,7 @@ public class UsageChargeService {
             runs.register(mapper.createObjectNode().put("run_id", runId).put("kind", AUTONOMOUS_KIND)
                     .put("workspace_id", workspaceId).put("user_id", userId));
         } catch (CreditService.InsufficientCreditException e) {
-            throw new CreditService.InsufficientCreditException(CreditService.STOPPED_MESSAGE);
+            throw new CreditService.InsufficientCreditException(AiErrorMessages.INSUFFICIENT_CREDIT_STOPPED);
         }
     }
 

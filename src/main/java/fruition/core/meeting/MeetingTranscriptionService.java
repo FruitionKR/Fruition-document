@@ -2,6 +2,7 @@ package fruition.core.meeting;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.aitask.AiErrorMessages;
 import fruition.core.aitask.service.AiTaskCancellationService;
 import fruition.core.document.repository.AiCommandOutboxWriter;
 import org.slf4j.Logger;
@@ -86,7 +87,7 @@ public class MeetingTranscriptionService {
 
         boolean applied = error == null
                 ? repository.completeTranscription(meetingId, runId, segments(text))
-                : repository.failTranscription(meetingId, runId, failureMessage(error));
+                : repository.failTranscription(meetingId, runId, AiErrorMessages.transcription(error));
         if (!applied) log.info("[회의 전사 이벤트 무시] meetingId={} reason=meeting_changed", meetingId);
         // 반영 여부와 무관하게 닫는다. 이미 닫힌 run이면 아무것도 하지 않는다.
         if (error == null && applied) outbox.complete(runId);
@@ -107,21 +108,6 @@ public class MeetingTranscriptionService {
         }
         cancellation.cancel(runId, workspaceId, userId);
         return meetingService.get(workspaceId, userId, meetingId);
-    }
-
-    /** AI가 준 오류 코드로만 문구를 만든다. 예외 원문은 싣지 않는다. */
-    static String failureMessage(String code) {
-        return switch (code == null ? "" : code) {
-            case "MEETING_RECORDING_TOO_LONG" -> "녹음이 3시간을 넘어 전사할 수 없습니다. 나눠서 올려 주세요.";
-            case "MEETING_RECORDING_UNREADABLE", "input_rejected" -> "지원하지 않거나 인식할 수 없는 녹음 파일입니다.";
-            case "MEETING_TRANSCRIPT_EMPTY" -> "인식된 음성이 없습니다.";
-            case "MEETING_TRANSCRIPT_TOO_LONG" -> "전사가 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요.";
-            case "provider_rate_limited" -> "AI 공급사의 요청 한도를 넘었습니다. 잠시 뒤 다시 올려 주세요.";
-            case "provider_unavailable" -> "AI 공급사가 일시적으로 응답하지 않습니다. 잠시 뒤 다시 올려 주세요.";
-            case "deadline_exceeded" -> "전사 시간이 너무 오래 걸려 중단했습니다. 녹음을 나눠 올려 주세요.";
-            case "cancelled" -> "전사가 취소되었습니다.";
-            default -> "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.";
-        };
     }
 
     /**

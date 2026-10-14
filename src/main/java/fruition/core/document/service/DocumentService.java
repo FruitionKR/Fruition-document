@@ -1204,24 +1204,13 @@ public class DocumentService {
         var toCancel = convertBatchStore.findDispatched(queue.getId()).stream()
                 .filter(batch -> batch.startPage() != failedStartPage).toList();
         if (placeholder.getPipelineRunId() == null || placeholder.getPipelineRunId().startsWith("convert:")) {
-            placeholder.markProcessingFailed("PDF 변환에 실패했습니다: " + convertFailureMessage(code), Instant.now());
+            placeholder.markProcessingFailed(AiErrorMessages.convert(code), Instant.now());
         }
         // 다시 시도하지 않으므로 실행을 닫아 크레딧 예약을 푼다. AI가 batch를 나눠 다시 시도한 뒤의 실패라 문서 단위 재시도는 없다.
         taskWriter.fail("convert:" + placeholder.getId());
         convertQueueRepository.delete(queue);
         log.warn("[문서 변환 실패 반영] documentId={} code={}", placeholder.getId(), code);
         return new ConvertOutcome(placeholder, false, toCancel);
-    }
-
-    private static String convertFailureMessage(String code) {
-        return switch (code == null ? "" : code) {
-            case "provider_rate_limited" -> "AI 공급사의 요청 한도를 넘었습니다. 잠시 뒤 다시 시도해 주세요.";
-            case "provider_unavailable" -> "AI 공급사가 일시적으로 응답하지 않습니다. 잠시 뒤 다시 시도해 주세요.";
-            case "input_rejected" -> "암호가 걸렸거나 손상되어 변환할 수 없는 PDF입니다.";
-            case "deadline_exceeded" -> "변환 시간이 너무 오래 걸려 중단했습니다.";
-            case "cancelled" -> "변환이 취소되었습니다.";
-            default -> "변환 중 오류가 발생했습니다.";
-        };
     }
 
     /** 변환이 끝난 문서와 상한을 넘어 생긴 파트를 각각 한 번씩 AI 큐로 보낸다. */
@@ -1302,7 +1291,7 @@ public class DocumentService {
         transactionTemplate.execute(status -> {
             documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
                     .filter(value -> value.getDeletedAt() == null)
-                    .ifPresent(doc -> doc.markProcessingFailed("INSUFFICIENT_CREDIT: " + e.getMessage(), now));
+                    .ifPresent(doc -> doc.markProcessingFailed(AiErrorMessages.query("INSUFFICIENT_CREDIT"), now));
             return null;
         });
         log.warn("[변환 뒤 자동 ingest 거절] documentId={} reason=INSUFFICIENT_CREDIT", part.getId());

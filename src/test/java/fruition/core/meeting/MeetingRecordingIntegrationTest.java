@@ -218,8 +218,8 @@ class MeetingRecordingIntegrationTest {
                 "MEETING_RECORDING_UNREADABLE", "인식할 수 없는 녹음 파일",
                 "MEETING_TRANSCRIPT_EMPTY", "인식된 음성이 없습니다.",
                 "MEETING_TRANSCRIPT_TOO_LONG", "100,000자",
-                "provider_rate_limited", "요청 한도",
-                "provider_unavailable", "일시적으로 응답하지",
+                "provider_rate_limited", "요청이 많아",
+                "provider_unavailable", "일시적인 문제",
                 "deadline_exceeded", "너무 오래",
                 "cancelled", "취소",
                 "internal_error", "전사하지 못했습니다");

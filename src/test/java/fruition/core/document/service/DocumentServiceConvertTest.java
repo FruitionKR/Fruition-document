@@ -727,7 +727,7 @@ class DocumentServiceConvertTest {
 
         assertThat(queue.getCompletedPages()).isEqualTo(20);
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
-        assertThat(parent.getErrorMessage()).startsWith("INSUFFICIENT_CREDIT").doesNotContain("PDF 변환에 실패했습니다");
+        assertThat(parent.getErrorMessage()).contains("크레딧이 부족해 작업을 시작하지 않았습니다").doesNotContain("INSUFFICIENT_CREDIT", "PDF 변환에 실패했습니다");
         // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 풀었다.
         var order = org.mockito.Mockito.inOrder(taskWriter, ingestCommandOutbox);
         order.verify(taskWriter).completeAndSettle("convert:" + parent.getId());
