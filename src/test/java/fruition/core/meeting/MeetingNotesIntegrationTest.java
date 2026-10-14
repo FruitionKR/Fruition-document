@@ -410,7 +410,7 @@ class MeetingNotesIntegrationTest {
         generate(meetingId, "k1", false).andExpect(status().isAccepted());
 
         String other = "user_" + UUID.randomUUID().toString().substring(0, 8);
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + other, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + other, "{\"role\":\"OWNER\",\"permissions\":[]}");
         mockMvc.perform(post(notesUrl(meetingId) + "/cancel")
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(other, other + "@x.com")))
                 .andExpect(status().isNotFound());
