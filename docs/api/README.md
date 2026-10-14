@@ -67,7 +67,7 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 
 `app.billing.enforce`(`BILLING_ENFORCE`)가 true인 환경에서 비용이 드는 AI 작업은 시작 전에 가용 잔액(잔액 − 진행 중인 예약)을 확인하고,
 그 작업 종류의 최저 비용(`app.billing.minimum.<kind>`, 없으면 예상 상한의 10%)보다 작으면 작업을 등록하지 않고 `402`로 거절한다.
-본문은 `{"code":"INSUFFICIENT_CREDIT","message":"크레딧이 부족해 작업을 시작하지 않았습니다. …"}`이다(Agent 계획 수정·승인과 실시간 전사 갱신은 "크레딧이 부족해 중단했습니다. …"). 두 문구 모두 `AiErrorMessages`에만 있다.
+본문은 공통 `ErrorResponse`인 `{"error":{"code":"INSUFFICIENT_CREDIT","message":"크레딧이 부족해 작업을 시작하지 않았습니다. …"}}`이다(Agent 계획 수정·승인과 실시간 전사 갱신은 "크레딧이 부족해 중단했습니다. …"). 두 문구 모두 `AiErrorMessages`에만 있다.
 대상: Query(`query/runs`, 동기 `query`), Agent 턴·`revise`·`approve`, 문서 ingest(재처리)·변환(변환 뒤 자동 ingest의 거절은 문서 `failed`, `error_message`는 `INSUFFICIENT_CREDIT` 문구(크레딧이 부족해 작업을 시작하지 않았습니다…)), 음성 합성·전사, Wiki lint, Skill 작성·게시·수정.
 Wiki 복원(`restore_ingest`·`restore_lint`)은 모델을 부르지 않아 비용이 없으므로 예약·사전 승인 없이 항상 시작한다.
 비동기로 처리되는 회의록 초안은 버전이 `failed`/`error_code=INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유, 실시간 받아쓰기는 `insufficient_credit` 오류 후 close `1008`이다.

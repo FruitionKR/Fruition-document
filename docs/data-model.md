@@ -57,6 +57,7 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | meeting_streams | document-svc | 받아쓰기 연결 한 번 | `(meeting_id, stream_order)` UK, `end_reason`(finished/interrupted/failed, NULL=진행 중). 회의 삭제 cascade. V54 |
 | meeting_segments | document-svc | 확정 전사 구간 | PK `(meeting_id, id)`, `(meeting_id, position)` UK. `id`=`s{stream_order}_{AI 구간 ID}`, `position`은 AI `committed` 순서, `text` NULL=확정 전(끊겼으면 누락). V54 |
 | meeting_notes | document-svc | 회의록 초안 버전과 저장 기록 | PK `(meeting_id, version)`, `(meeting_id, generation_request_id)` UK(생성 재시도), `status`(generating/ready/failed/applied), `segment_snapshot`(AI에 보낸 구간과 묶인 원래 구간 ID), `ai_run_id`(결과 이벤트 매칭, 부분 UNIQUE), `result`(이름·네 배열, AI markdown 제외), `apply_*`(저장 전에 기록하는 대상·본문·기준 revision). 회의 삭제 cascade. V55·V71 |
+| wiki_workspace_versions | document-svc | 워크스페이스 위키 버전(#68). `wiki/graph` ETag 기준 | PK `workspace_id`(access_db 논리 참조), `version`(행이 없으면 0), `updated_at`. 위키를 바꾸는 결과 반영(편입·post_ingest·lint·복구·문서 삭제 정리·이름 변경), 위키 작업 취소 완료 때 1씩 올린다. 워크스페이스 파기 때 지운다 |
 | wiki_lint_state | document-svc | workspace별 마지막 lint 성공 시각(needs_lint 판단 기준점) | PK `workspace_id`(access_db 논리 참조), `last_lint_at` |
 
 V74는 core_db에 남아 있던 이전 AI 테이블(`wiki_pages`·`pipeline_runs`·`wiki_embedding_*`·`skills`·`agent_runs`·`checkpoints*` 등 23개)을 제거한다. AI 데이터는 ai_db가 소유하며, `wiki_page_versions`·`wiki_page_contributions`·`wiki_lint_state`·`chat_partial_wiki`는 document가 계속 쓴다.
