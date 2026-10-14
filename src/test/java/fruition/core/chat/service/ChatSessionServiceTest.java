@@ -35,12 +35,13 @@ class ChatSessionServiceTest {
 
     @Mock ChatSessionRepository chatSessionRepository;
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
+    @Mock fruition.core.speech.SpeechAudioStore speechAudioStore;
 
     ChatSessionService chatSessionService;
 
     @BeforeEach
     void setUp() {
-        chatSessionService = new ChatSessionService(chatSessionRepository, workspaceAccessGuard);
+        chatSessionService = new ChatSessionService(chatSessionRepository, workspaceAccessGuard, speechAudioStore);
     }
 
     private void stubOwnedWorkspace() {

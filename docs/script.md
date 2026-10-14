@@ -28,6 +28,8 @@ API 계약을 의도적으로 바꾸면 `./gradlew test -DupdateOpenApiSnapshot=
 
 `SPEECH_TRANSCRIPTION_ENDPOINT`에 AI 파일 전사 주소를 설정한다(기본 `http://localhost:8000/speech/transcriptions`). `INTERNAL_CALLBACK_TOKEN`을 AI와 동일하게 주입한다. 채팅은 AI에 `deadline_seconds=100`(ALB 유휴 120초 안)을 보내고, 응답 대기는 `SPEECH_TRANSCRIPTION_TIMEOUT_SECONDS`(기본 150초, 100초보다 길게)다.
 
+답변 음성 듣기는 `SPEECH_SYNTHESIS_ENDPOINT`(기본 `http://localhost:8000/speech/synthesis`)의 NDJSON 스트림을 중계한다. 청크 사이 대기 제한은 `SPEECH_SYNTHESIS_READ_TIMEOUT_SECONDS`(기본 30초)이고 전체 시간 제한은 없다. 크레딧 예약 상한은 `BILLING_ESTIMATE_SPEECH_SYNTHESIS`(기본 500000 milli-KRW)다. 중계는 서블릿 스레드 하나를 합성이 끝날 때까지 점유하므로 로드밸런서 idle timeout은 청크 간격보다 길어야 한다.
+
 ```bash
 ./gradlew test --tests 'fruition.core.speech.*'
 ```

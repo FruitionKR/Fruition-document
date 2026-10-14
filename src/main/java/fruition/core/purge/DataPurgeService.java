@@ -117,12 +117,16 @@ public class DataPurgeService {
                 String.class, workspaceId, workspaceId));
         keys.addAll(recordingKeys("workspace_id", workspaceId));
         // ponytail: 목록을 읽은 뒤 행을 지우기 전에 새로 올라온 asset 객체는 남는다. 휴지통·탈퇴로 쓰지 않는 워크스페이스라 창이 작다.
+        // 답변 음성(assets/{workspace}/speech/)도 이 접두사 아래라 함께 지워진다. 행은 chat_sessions CASCADE로 사라진다.
         keys.addAll(listKeys("assets/" + workspaceId + "/"));
         return purge("workspace", workspaceId, keys, WORKSPACE_STEPS);
     }
 
     public PurgeResult purgeUser(String userId) {
-        return purge("user", userId, recordingKeys("created_by", userId), USER_STEPS);
+        // 답변 음성 행은 chat_sessions 삭제 때 CASCADE로 사라지므로 객체 키를 먼저 읽는다.
+        List<String> keys = new ArrayList<>(recordingKeys("created_by", userId));
+        keys.addAll(jdbc.queryForList("SELECT object_key FROM chat_message_speech WHERE user_id = ?", String.class, userId));
+        return purge("user", userId, keys, USER_STEPS);
     }
 
     private PurgeResult purge(String scope, String id, List<String> keys, List<Step> steps) {

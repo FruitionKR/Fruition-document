@@ -28,7 +28,7 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | ai_task_runs·ai_task_changes | document-svc | 공개 AI 작업 상태·업무 행의 변경 전후 값·복구 완료 기록 | run ID와 actor, trigger로 같은 트랜잭션에 기록. `status`는 `running`/`completed`/`failed`(동기 AI 호출 실패·변환 재시도 소진)/취소 상태이며 종료하면 사용 금액 수집 대기열에 넣는다; V47. V58 `resume_claimed_by`·`resume_claimed_until`: 취소 진행을 한 Pod만 하도록 선점(3분 lease) |
 | ai_task_result_receipts | document-svc | `ai.task.event` 멱등 반영 영수증 | `event_id` PK, `run_id`, `task_kind` |
 | agent_apply_projections | document-svc | Markdown Agent 적용 예약·결과 projection | `run_id` PK, `apply_operation_id` UK, `base_version`, V33 `apply_revision_write_id`, V35 `ready_markdown`, queued→ready/failed→consumed. V36은 기존 ready를 backfill하고 복구 불가 건을 `failed`로 전환 |
-| ai_model_prices | document-svc | AI 모델 단가 이력(USD / 1M tokens) | PK `(provider, model, effective_from)`, 단가 변경은 새 행 추가; V59. V65 `audio_usd_per_minute`·`tts_usd_per_mchar`(NULL이면 그 사용량은 단가 없음). V70 `AiModelCatalog` 전 모델 공식 단가 시드(`effective_from` 2026-01-01, Gemini 3.6·3.8 Flash 인상분 2027-01-01). V72 음성 전사 `gpt-transcribe`·`gpt-live-transcribe` 분당 단가(TTS `gpt-realtime-2.1-mini`는 넣지 않는다. 그 모델을 호출하는 변경이 단가를 함께 넣는다) |
+| ai_model_prices | document-svc | AI 모델 단가 이력(USD / 1M tokens) | PK `(provider, model, effective_from)`, 단가 변경은 새 행 추가; V59. V65 `audio_usd_per_minute`·`tts_usd_per_mchar`(NULL이면 그 사용량은 단가 없음). V70 `AiModelCatalog` 전 모델 공식 단가 시드(`effective_from` 2026-01-01, Gemini 3.6·3.8 Flash 인상분 2027-01-01). V72 음성 전사 `gpt-transcribe`·`gpt-live-transcribe` 분당 단가(TTS `gpt-realtime-2.1-mini`는 넣지 않는다. 그 모델을 호출하는 변경이 단가를 함께 넣는다). V73 TTS `gpt-realtime-2.1-mini` 토큰 단가(입력 $0.60, 출력은 전부 오디오라 $20.00 / 1M 토큰) |
 | ai_usage_settlements | document-svc | 마감한 AI 사용량 정산 | `result` jsonb에 계산 결과 고정, `(workspace_id, from_at)` 인덱스; V59 |
 | fx_rates | document-svc | USD→KRW 환율 이력 | PK `effective_from`, `krw_per_usd > 0`. 수정하지 않고 새 행 추가; V65. `FxRateService`가 평일 11:30(KST)과 기동 시 한국수출입은행 USD 매매기준율을 가져온 시각(초 단위, 소급 없음)을 `effective_from`으로 넣는다(직전과 같은 값이면 넣지 않음, advisory lock으로 여러 Pod 직렬화). V72 초기 행 1,339.20원(마이그레이션 시각 적용, 2026-10-08 시장평균환율) |
 | pricing_policies | document-svc | 마진·부가세율·환율 버퍼 이력 | PK `effective_from`, `margin_bp`·`vat_bp`·`fx_buffer_bp`(basis point, ≥ 0). 수정하지 않고 새 행 추가; V65. V72 `fx_buffer_bp`(기본 200 = 2%, 적용 환율 = `krw_per_usd` × (1 + 버퍼))와 시드 행(마진 5000 잠정, 부가세 1000, 버퍼 200, `effective_from`은 마이그레이션 시각이라 그 전 호출은 소급 청구하지 않음) |
@@ -45,6 +45,7 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | chat_messages | document-svc | 질의응답 메시지 | `pair_id`로 user·assistant 쌍 식별, user·assistant 모두 `ai_provider`·`ai_model`·`web_search_enabled` snapshot |
 | agent_route_outcomes (view) | document-svc | Agent route 운영 평가 후보 | 기존 적용 projection과 채팅을 연결하며 편집 적용은 `accepted`, 실행 실패는 `technical_failure`, 나머지는 `unlabeled`로 노출 |
 | chat_message_references | document-svc | 답변 근거 source block 스니펫 | chat_messages 1:N, `source_block_ids` |
+| chat_message_speech | document-svc | 끝까지 합성된 답변 음성(WAV) 저장 기록 | PK `message_id`(chat_messages FK, 삭제 CASCADE), `workspace_id`·`user_id`, `object_key`, `byte_size`, `created_at`(30일 뒤 정리). 객체는 `assets/{workspace_id}/speech/{message_id}.wav`. V73 |
 | chat_message_related_pages | document-svc | 답변 관련 Wiki 페이지 목록 | chat_messages 1:N, `relevance_score`·`depth` |
 | chat_partial_wiki | document-svc | 채팅 export 문답↔페이지 멤버십 | `UNIQUE(pair_id, wiki_page_id)` |
 | document_assets | document-svc | 문서 첨부 이미지 metadata(바이너리는 MinIO) | `storage_key` UK, `content_hash`(ETag), `unreferenced_since`(정리 후보 판정). workspace_id·uploaded_by는 access_db 논리 참조(물리 FK 없음) |
@@ -63,6 +64,7 @@ V34는 `chat_export`에만 `(workspace_id, content_hash, selection_mode)` partia
 (코드 매핑만 제거했고 컬럼은 남아 있다).
 
 회의 실시간 받아쓰기는 Redis에 두 키를 둔다. `speech:ticket:{ticket}`은 WebSocket 접속용 일회용 ticket(사용자·workspace·회의, 60초, 접속 시 `GETDEL`)이고, `speech:live:{meeting_id}`는 회의당 연결 1개를 보장하는 잠금(90초 TTL, 연결 중 30초마다 연장)이다. 녹음 원본은 기존 버킷의 `meetings/{meeting_id}/recording-{uuid}.{ext}`(업로드마다 새 키)에 두고 회의 삭제 전까지 보관한다. 재업로드로 교체된 이전 원본과 상태 변경에 실패한 업로드 객체는 바로 지우며, 회의 삭제 시 원본을 먼저 지운다. 잠금이 없는데 `meeting_streams.end_reason`이 NULL인 연결은 기록 전에 인스턴스가 종료된 것으로 보고 조회 시 `interrupted`로 반환한다.
+답변 음성(`chat_message_speech`)은 기존 버킷의 `assets/{workspace_id}/speech/{message_id}.wav`에 둔다. document 서비스 역할이 이미 읽기·쓰기·삭제할 수 있는 `assets/*` 아래라 권한을 더하지 않았고, 워크스페이스 파기는 `assets/{workspace_id}/` 목록 삭제로 함께 지운다. 세션 삭제와 사용자 파기는 객체를 먼저 지운 뒤 행을 CASCADE로 지우고, 30일이 지난 음성은 정리 작업(`SpeechAudioStore.cleanupExpired`, 1시간 주기)이 객체와 행을 지운다. V73은 `gpt-realtime-2.1-mini` 단가(텍스트 입력 $0.60, 출력 전부 오디오 $20.00 / 1M 토큰)도 넣는다.
 V43은 `documents.pipeline_input_blocks`를 추가한다. 채팅 export는 문답 단위 블록(JSON 배열, `block_id =
 session_id:pair_id`)을 여기에 보존하고, 완료 후처리가 이 값을 읽어 문답↔페이지 멤버십을 기록한다. 일반 문서
 Ingest 경로는 이 필드를 쓰지 않고 block ID를 새로 부여하므로, 파이프라인이 돌려준 값은 provenance로 쓰지 않는다.

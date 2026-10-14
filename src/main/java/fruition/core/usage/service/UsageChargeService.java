@@ -46,7 +46,7 @@ import java.util.stream.Stream;
  *       이후 단가가 바뀌어도 과거 청구가 변하지 않는다.</li>
  *   <li>단가·환율·정책 버전은 호출 {@code started_at}에 적용 중인 행을 고른다.</li>
  *   <li>단가는 실제 응답 모델 → 요청 모델 순으로 찾는다. 단가·환율·정책이 없으면 {@code unpriced}(금액 비움)다.</li>
- *   <li>{@code succeeded}가 아닌 호출과, 성공했지만 토큰·오디오 길이·TTS 글자 수를 모두 모르는 호출은
+ *   <li>{@code succeeded}·{@code cancelled}(스트리밍을 중간에 멈췄지만 공급사가 생성한 만큼 사용량이 남은 호출)가 아닌 호출과, 성공했지만 토큰·오디오 길이·TTS 글자 수를 모두 모르는 호출은
  *       {@code needs_review}(금액 0)다.</li>
  *   <li>과금 단위(오디오 분·TTS 글자·토큰)는 단가 행이 정하고 하나만 쓴다({@link UsagePricing#callCostUsd}).</li>
  *   <li>{@code unpriced}·{@code needs_review} 행은 매시간 저장된 사용량으로 다시 계산한다({@link #recompute}).</li>
@@ -156,7 +156,12 @@ public class UsageChargeService {
                     log.warn("[사용 금액 수집 포기] runId={} attempts={} 종료 시각 대사가 채운다. error={}", runId, attempts, e.toString());
                     jdbc.update("DELETE FROM usage_collect_queue WHERE run_id = ?", runId);
                 } else {
-                    log.warn("[사용 금액 수집 실패] runId={} attempts={} error={}", runId, attempts, e.toString());
+                    // 아직 끝나지 않은 호출을 기다리는 재시도는 정상 지연이다(답변 음성 정지 직후 등). 장애와 구분한다.
+                    if (e instanceof IllegalStateException) {
+                        log.info("[사용 금액 수집 대기] runId={} attempts={} reason={}", runId, attempts, e.getMessage());
+                    } else {
+                        log.warn("[사용 금액 수집 실패] runId={} attempts={} error={}", runId, attempts, e.toString());
+                    }
                     jdbc.update("UPDATE usage_collect_queue SET available_at = now() + make_interval(mins => ?) "
                             + "WHERE run_id = ?", attempts * attempts, runId);
                 }
@@ -167,7 +172,15 @@ public class UsageChargeService {
 
     /** 실행 하나의 호출을 가져와 청구 행을 만들고 크레딧을 정산한다. 호출이 없어도 끝난 실행의 예약은 푼다. */
     public void collectRun(String runId) {
-        Set<String> runIds = recordAll(fetch(Map.of("run_id", runId)));
+        JsonNode calls = fetch(Map.of("run_id", runId));
+        Set<String> runIds = recordAll(calls);
+        // 연결이 끊겨 끝난 합성처럼 ai가 원장 행을 늦게 마감하는 경우가 있다. 아직 started인 호출이 있으면 정산하지 않고
+        // 실패로 던져 수집 대기열의 재시도(백오프)가 다시 가져오게 한다. 대사까지 기다리지 않는다.
+        for (JsonNode call : calls) {
+            if ("started".equals(call.path("status").asText())) {
+                throw new IllegalStateException("아직 끝나지 않은 호출이 있습니다. runId=" + runId);
+            }
+        }
         runIds.remove(runId);
         credits.settle(runId);
         settleQuietly(runIds);
@@ -328,7 +341,7 @@ public class UsageChargeService {
      * 사용량으로 청구 상태와 금액을 정한다. 수집과 재계산이 같은 규칙을 쓴다.
      *
      * <ul>
-     *   <li>{@code succeeded}가 아니거나, 입력·출력 토큰·오디오 길이·TTS 글자 수를 모두 모르면 {@code needs_review}(금액 0)다.
+     *   <li>{@code succeeded}·{@code cancelled}가 아니거나, 입력·출력 토큰·오디오 길이·TTS 글자 수를 모두 모르면 {@code needs_review}(금액 0)다.
      *       공급사가 usage를 주지 않은 호출을 0원으로 확정하지 않는다(#98).</li>
      *   <li>단가는 실제 응답 모델 → 요청 모델 순으로 찾고, 둘 다 없으면 {@code unpriced}다(#99).</li>
      *   <li>단가·환율·정책 버전은 호출 {@code started_at}에 적용 중인 행이다.</li>
@@ -340,7 +353,9 @@ public class UsageChargeService {
         if ("routed".equals(routing) && firstToday("routed|" + provider + "|" + requestedModel + "|" + model)) {
             log.warn("[AI 모델 전환 감지] provider={} requested={} actual={}", provider, requestedModel, model);
         }
-        if (!"succeeded".equals(callStatus)
+        // 멈춘 합성은 영수증에 글자 수가 먼저 들어가므로, 토큰을 받지 못했으면 글자 수만으로 확정하지 않는다.
+        boolean cancelledWithoutTokens = "cancelled".equals(callStatus) && input == null && output == null;
+        if (!("succeeded".equals(callStatus) || "cancelled".equals(callStatus)) || cancelledWithoutTokens
                 || (input == null && output == null && audioSeconds == null && ttsCharacters == null)) {
             return new Priced("needs_review", null, routing, null, null, null, 0L, 0L);
         }
@@ -394,7 +409,7 @@ public class UsageChargeService {
      * 최근 90일의 {@code unpriced}·{@code needs_review} 행을 저장된 사용량으로 다시 계산한다(#99). AI 원장을 다시 조회하지
      * 않는다. {@code charged} 행은 건드리지 않는다. 행 잠금(SKIP LOCKED)으로 여러 Pod가 같은 행을 동시에 계산하지 않고,
      * 금액이 확정된 실행은 커밋한 뒤 수집과 같은 경로({@link CreditService#settle})로 정산한다.
-     * {@code succeeded}가 아닌 호출은 규칙상 계속 {@code needs_review}라 대상에서 뺀다.
+     * {@code succeeded}·{@code cancelled}가 아닌 호출은 규칙상 계속 {@code needs_review}라 대상에서 뺀다.
      */
     @Scheduled(initialDelay = 180_000, fixedDelayString = "${app.usage-charge.recompute-interval-ms:3600000}")
     public void recompute() {
@@ -418,7 +433,7 @@ public class UsageChargeService {
     private Batch recomputeBatch(long after) {
         var rows = jdbc.queryForList("""
                 SELECT * FROM usage_charges WHERE id > ? AND status IN ('unpriced', 'needs_review')
-                    AND call_status = 'succeeded' AND started_at >= now() - interval '90 days'
+                    AND call_status IN ('succeeded', 'cancelled') AND started_at >= now() - interval '90 days'
                 ORDER BY id LIMIT ? FOR UPDATE SKIP LOCKED
                 """, after, RECOMPUTE_BATCH);
         Set<String> runIds = new TreeSet<>();

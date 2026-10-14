@@ -129,9 +129,7 @@ class UsageChargeServiceIntegrationTest {
                 "2042-02-01T00:00:00Z", 1_000_000, 0, 0, 0, 0);
         String unknown = call("c-" + UUID.randomUUID(), "run-b", "ws-1", model, "unknown",
                 "2042-02-01T00:00:00Z", null, null, null, null, null);
-        String running = call("c-" + UUID.randomUUID(), "run-b", "ws-1", model, "started",
-                "2042-02-01T00:00:00Z", null, null, null, null, null);
-        callsByQuery.put("run_id=run-b", String.join(",", unpriced, unknown, running));
+        callsByQuery.put("run_id=run-b", String.join(",", unpriced, unknown));
 
         charges.collectRun("run-b");
 
@@ -144,6 +142,38 @@ class UsageChargeServiceIntegrationTest {
 
         assertThat(jdbc.queryForList("SELECT status || ':' || charge_krw_milli FROM usage_charges WHERE user_id = ? "
                 + "ORDER BY status", String.class, user)).containsExactly("charged:1000000", "needs_review:0");
+    }
+
+    @Test
+    void cancelledCallWithUsageIsChargedAndStartedCallMakesCollectionRetry() {
+        versions("2049-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2049-01-01T00:00:00Z", "1");
+        String id = "c-" + UUID.randomUUID();
+        // 연결이 끊겨 ai가 아직 원장 행을 마감하지 못한 상태: 수집은 실패해 대기열 재시도에 맡긴다.
+        callsByQuery.put("run_id=run-cancel", call(id, "run-cancel", "ws-1", model, "started", "2049-02-01T00:00:00Z",
+                null, null, null, null, null));
+        assertThatThrownBy(() -> charges.collectRun("run-cancel")).isInstanceOf(IllegalStateException.class);
+
+        // 마감 후 cancelled + usage: 생성된 만큼 과금한다.
+        callsByQuery.put("run_id=run-cancel", call(id, "run-cancel", "ws-1", model, "cancelled", "2049-02-01T00:00:00Z",
+                1000, 0, 0, 0, 0));
+        charges.collectRun("run-cancel");
+
+        assertThat(jdbc.queryForList("SELECT status || ':' || charge_krw_milli || ':' || call_status FROM usage_charges "
+                + "WHERE user_id = ?", String.class, user)).containsExactly("charged:1000:cancelled");
+    }
+
+    @Test
+    void cancelledCallWithoutTokensNeedsReviewEvenWithCharacters() {
+        versions("2049-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2049-01-01T00:00:00Z", "1");
+        // 정지한 합성에서 response.done을 못 받으면 글자 수만 있고 토큰은 null이다.
+        callsByQuery.put("run_id=run-cancel-nt", call("c-" + UUID.randomUUID(), "run-cancel-nt", "ws-1", model, "cancelled",
+                "2049-02-01T00:00:00Z", null, null, null, null, null).replace("\"input_characters\":null", "\"input_characters\":120"));
+        charges.collectRun("run-cancel-nt");
+
+        assertThat(jdbc.queryForList("SELECT status || ':' || charge_krw_milli FROM usage_charges WHERE user_id = ?",
+                String.class, user)).containsExactly("needs_review:0");
     }
 
     @Test
