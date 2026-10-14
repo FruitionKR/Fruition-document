@@ -40,7 +40,8 @@ class InternalPurgeIntegrationTest {
     @Test
     void workspacePurgeRemovesRowsAndObjectsAndCanBeRepeated() throws Exception {
         String workspace = "ws_" + UUID.randomUUID();
-        String other = "ws_" + UUID.randomUUID();
+        // 지우는 id가 남길 id의 접두사여도 남의 기록을 지우지 않아야 한다.
+        String other = workspace + "-2";
         String user = "user_" + UUID.randomUUID();
         Seeded purged = seedWorkspace(workspace, user);
         Seeded kept = seedWorkspace(other, user);
@@ -60,6 +61,10 @@ class InternalPurgeIntegrationTest {
                 Integer.class, purged.pageId())).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM document_content_versions WHERE document_id = ?",
                 Integer.class, purged.documentId())).isZero();
+        assertThat(outboxCount("workspace_id", workspace)).isZero();
+        assertThat(outboxCount("workspace_id", other)).isEqualTo(2);
+        assertThat(idempotencyCount(workspace)).isZero();
+        assertThat(idempotencyCount(other)).isEqualTo(2);
         for (String key : purged.objectKeys()) {
             assertThatThrownBy(() -> stat(key)).as(key).isNotNull();
         }
@@ -80,6 +85,8 @@ class InternalPurgeIntegrationTest {
         String staying = "user_" + UUID.randomUUID();
         Seeded leaver = seedWorkspace(workspace, leaving);
         insertChatSession(workspace, staying);
+        insertOutbox("{\"kind\":\"query\",\"user_id\":\"" + leaving + "\"}");
+        insertOutbox("{\"kind\":\"query\",\"user_id\":\"" + staying + "\"}");
 
         mockMvc.perform(post("/internal/purge/users").header("X-Internal-Token", token)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -92,6 +99,8 @@ class InternalPurgeIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_sessions WHERE user_id = ?", Integer.class, leaving)).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_sessions WHERE user_id = ?", Integer.class, staying)).isOne();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE user_id = ?", Integer.class, leaving)).isZero();
+        assertThat(outboxCount("user_id", leaving)).isZero();
+        assertThat(outboxCount("user_id", staying)).isOne();
         assertThat(count("meetings", workspace)).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM notifications WHERE recipient_user_id = ?",
                 Integer.class, leaving)).isZero();
@@ -174,6 +183,12 @@ class InternalPurgeIntegrationTest {
                 runId, workspace, user);
         jdbc.update("INSERT INTO ai_task_changes(run_id, table_name, row_key) VALUES (?, 'documents', '{}'::jsonb)", runId);
         insertChatSession(workspace, user);
+        // 실행 기록이 있는 command와, 실행 기록 없이 나가는 command(document_deleted)를 함께 넣는다.
+        insertOutbox(runId, "{\"kind\":\"query\",\"workspace_id\":\"" + workspace + "\",\"user_id\":\"" + user + "\"}");
+        insertOutbox("{\"kind\":\"document_deleted\",\"workspace_id\":\"" + workspace
+                + "\",\"document_id\":\"" + documentId + "\"}");
+        insertIdempotency(user, "POST:/api/workspaces/" + workspace + "/documents", "upload:" + workspace, null);
+        insertIdempotency(user, "POST:/internal/agent/tools/execute/rename_document", "rename:" + workspace, documentId);
         UUID notificationId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO notifications(id, workspace_id, recipient_user_id, audience, type, payload)
@@ -196,6 +211,36 @@ class InternalPurgeIntegrationTest {
     private void insertChatSession(String workspace, String user) {
         jdbc.update("INSERT INTO chat_sessions(id, created_at, user_id, workspace_id) VALUES (?, now(), ?, ?)",
                 "chat_" + UUID.randomUUID(), user, workspace);
+    }
+
+    private void insertOutbox(String payload) {
+        insertOutbox("run_" + UUID.randomUUID(), payload);
+    }
+
+    private void insertOutbox(String runId, String payload) {
+        jdbc.update("""
+                INSERT INTO ai_command_outbox(id, run_id, topic, message_key, payload, created_at)
+                VALUES (?, ?, 'ai.task.command', ?, ?, now())
+                """, UUID.randomUUID().toString(), runId, runId, payload);
+    }
+
+    private void insertIdempotency(String user, String scope, String key, String resourceId) {
+        jdbc.update("""
+                INSERT INTO idempotency_records(id, user_id, endpoint_scope, idempotency_key, request_hash, status,
+                    response_status, resource_id, response_body, created_at, expires_at)
+                VALUES (?, ?, ?, ?, 'hash', 'COMPLETED', 201, ?, '{"filename":"a.pdf"}'::jsonb, now(),
+                        now() + interval '1 day')
+                """, UUID.randomUUID(), user, scope, key, resourceId);
+    }
+
+    private int outboxCount(String field, String value) {
+        return jdbc.queryForObject("SELECT count(*) FROM ai_command_outbox WHERE payload::jsonb->>? = ?",
+                Integer.class, field, value);
+    }
+
+    private int idempotencyCount(String workspace) {
+        return jdbc.queryForObject("SELECT count(*) FROM idempotency_records WHERE idempotency_key IN (?, ?)",
+                Integer.class, "upload:" + workspace, "rename:" + workspace);
     }
 
     private int count(String table, String workspace) {

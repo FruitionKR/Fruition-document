@@ -1543,16 +1543,26 @@ curl -X POST "$DOCUMENT/internal/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/
 #### 1. 지우는 대상
 
 - 행: 문서(본문·버전·잠금·편집 기록·asset 참조), 이미지 asset, 폴더, 채팅 세션과 메시지, 회의(전사·회의록 초안 포함),
-  AI 작업 로그와 변경 내역, 위키 기여·버전 기록, AI 실행 기록, 문서 편집 outbox, Wiki lint 상태, 앱 안 알림(읽음 기록 포함).
+  AI 작업 로그와 변경 내역, 위키 기여·버전 기록, AI 실행 기록, 아직 발행하지 않은 AI command(`ai_command_outbox`),
+  문서 편집 outbox, 멱등 응답 기록, Wiki lint 상태, 앱 안 알림(읽음 기록 포함).
   문서·폴더 권한 설정과 편집 충돌은 문서·폴더 FK CASCADE로 함께 지워진다
+- 미발행 AI command는 payload의 `workspace_id`로 찾는다. `document_deleted`처럼 실행 기록 없이 나가는 command도 있어서다.
+  남겨 두면 파기 뒤에 ai-svc로 발행돼 지운 범위의 AI 데이터가 다시 만들어진다
+- 멱등 응답 기록은 `endpoint_scope`의 워크스페이스 경로(`METHOD:/api/workspaces/{workspace_id}/...`)를 경로 조각 단위로 정확히 비교해 찾는다.
+  agent 문서 이름 바꾸기(`POST:/internal/agent/tools/execute/rename_document`)는 scope에 워크스페이스가 없어 `resource_id`(문서 id)로 찾는다
 - 객체: 문서 원본·추출본, 회의 녹음 원본, `assets/{workspace_id}/` 아래 이미지 전부
 - 남기는 것: AI 사용 정산(`ai_usage_settlements`)과 단가표(`ai_model_prices`), 호출별 청구(`usage_charges`), 크레딧(`credit_accounts`·`credit_entries`), 결제(`credit_orders`·`payment_events`). 대금 결제 기록 보관 대상(5년)이다
-- AI pipeline이 가진 위키·스킬·에이전트 기록은 아직 지우지 않는다(AI 쪽 파기 API 필요)
+- AI pipeline이 가진 위키·스킬·에이전트 기록은 이 API가 지우지 않는다. access-svc `DataPurgeRequestJob`이 이 API가 성공한 **뒤에**
+  ai-svc `POST /internal/ai/purge/workspaces`를 이어서 호출한다(FruitionKR/Fruition-access#29). document는 ai-svc를 호출하지 않는다
 
 #### 2. 처리 순서
 
 워크스페이스마다 객체를 먼저 지우고 행을 한 트랜잭션에서 지운다. 객체 키는 행에서 읽으므로 객체 삭제가 실패하면 행을 남기고
 `503`을 돌려준다. 다시 호출하면 같은 키를 읽어 이어서 지운다. 여러 워크스페이스 중 일부만 끝난 뒤 실패해도 다시 호출하면 된다.
+
+미발행 AI command와 실행 기록을 같은 트랜잭션에서 지우므로, 이 API가 끝난 뒤에는 그 범위의 새 command가 ai-svc로 나가지 않는다.
+그래서 access-svc는 이 API가 성공한 뒤에 ai-svc 파기를 부른다. 이미 Kafka로 나간 command는 ai-svc가 파기 범위(`ai_purged_scopes`)로
+거절하고, 그 결과 이벤트나 파기 직전에 실행 중이던 작업의 결과는 실행 기록이 없으므로 document가 경고 로그만 남기고 건너뛴다(#88).
 
 #### 3. Request / Response
 
@@ -1574,9 +1584,8 @@ curl -X POST "$DOCUMENT/internal/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/
 - 진입점: `src/main/java/fruition/core/purge/InternalPurgeController.java`
 - 처리: `src/main/java/fruition/core/purge/DataPurgeService.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: purgeWorkspaces`)
-- 호출자: 없음(access-svc 워크스페이스 영구 삭제·회원 탈퇴에서 붙일 예정)
+- 호출자: access-svc `DataPurgeRequestJob`(워크스페이스 영구 삭제). 성공하면 이어서 ai-svc 파기를 호출한다
 - 하위 호출: 객체 저장소(MinIO/S3) 목록 조회·삭제
-- 배선 상태: 호출자 없음
 
 [↑ 요약으로 돌아가기](#summary-post-internal-purge-workspaces)
 
@@ -1602,7 +1611,9 @@ curl -X POST "$DOCUMENT/internal/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/
 #### 1. 지우는 대상
 
 - 지운다: 본인 채팅 세션과 메시지, 본인이 만든 회의와 녹음 원본, 본인 AI 실행 기록(질문 원문과 변경 전후 값을 담는다),
-  에이전트 적용 기록, 멱등 응답 기록, 본인에게 온 알림과 본인의 알림 읽음 기록
+  에이전트 적용 기록, 멱등 응답 기록, 본인에게 온 알림과 본인의 알림 읽음 기록,
+  payload의 `user_id`가 본인인 미발행 AI command(`ai_command_outbox`, 실행 기록이 없는 command 포함)
+- AI pipeline 쪽 개인 데이터는 access-svc가 이 API 성공 뒤 ai-svc `POST /internal/ai/purge/users`로 지운다
 - 남긴다: 멤버가 함께 보는 문서(회의록으로 저장한 문서 포함)와 AI 작업 로그. 이용약관 초안 제8조④에 따라 워크스페이스에 남고 OWNER가 관리한다
 - 혼자 쓰던 워크스페이스는 이 API가 아니라 `POST /internal/purge/workspaces`로 지운다
 
@@ -1618,9 +1629,8 @@ curl -X POST "$DOCUMENT/internal/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/
 
 - 진입점: `src/main/java/fruition/core/purge/InternalPurgeController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: purgeUser`)
-- 호출자: 없음(access-svc 회원 탈퇴에서 붙일 예정)
+- 호출자: access-svc `DataPurgeRequestJob`(회원 탈퇴). 성공하면 이어서 ai-svc 파기를 호출한다
 - 하위 호출: 객체 저장소(MinIO/S3) 삭제
-- 배선 상태: 호출자 없음
 
 [↑ 요약으로 돌아가기](#summary-post-internal-purge-users)
 
