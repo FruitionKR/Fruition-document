@@ -77,7 +77,6 @@ class AgentToolServiceTest {
     @Mock DocumentEditStateInitializer editStateInitializer;
     @Mock IdempotencyService idempotencyService;
     @Mock TransactionTemplate transactionTemplate;
-    @Mock fruition.core.aitask.service.AiTaskCancellationService taskCancellationClient;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private AgentToolService service;
@@ -97,7 +96,7 @@ class AgentToolServiceTest {
                 editStateRepository,
                 editStateInitializer,
                 idempotencyService,
-                transactionTemplate, taskCancellationClient,
+                transactionTemplate,
                 new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate));
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
         org.mockito.Mockito.lenient().when(transactionTemplate.getTransactionManager()).thenReturn(transactionManager);

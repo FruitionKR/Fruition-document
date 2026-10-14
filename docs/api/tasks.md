@@ -74,7 +74,7 @@ Authorization: Bearer <access-token>
 - Python: `app/modules/task_cancellation/`, `app/modules/agent_run/application/rollback_agent_run.py`
 - 기계 판독 계약: `api-specs/openapi.yaml`, `AI/pipeline/api-specs/openapi.yaml`
 - 호출자: 프론트엔드 — `src/entities/wiki/api/wiki.ts:40`(취소), `:49`(상태 조회) (`cancelQueryRun`)
-- 하위 호출: ai-svc `POST ${AGENT_STATUS_ENDPOINT 호스트}/internal/ai/tasks/{id}/cancel`·`/rollback-backend`·`GET /{id}`·`POST /documents/{id}/cancel` (`PipelineTaskCancellationClient`), 되돌리기 중 객체 저장소 `removeObject`
+- 하위 호출: ai-svc `POST ${AGENT_STATUS_ENDPOINT 호스트}/internal/ai/tasks/{id}/cancel`·`/rollback-backend`·`GET /{id}` (`PipelineTaskCancellationClient`), 되돌리기 중 객체 저장소 `removeObject`
 - 배선 상태: 배선됨
 
 ## 업무 변경 복구 내부 API

@@ -126,7 +126,7 @@ public class PipelineSkillRequester {
         if (skillId != null) command.put("skill_id", skillId);
         cancellation.register(command);
         try {
-            JsonNode result = post("/tasks", command);
+            JsonNode result = post("/tasks", command, runId);
             cancellation.finish(runId);
             return result;
         } catch (RuntimeException e) {
@@ -149,14 +149,25 @@ public class PipelineSkillRequester {
     }
 
     private JsonNode post(String path, Object body) {
+        return post(path, body, null);
+    }
+
+    /** runId가 있으면 타임아웃 시 AI에 해당 작업의 취소(journal 복구)를 요청한다. AI도 55초에 자체 중단한다(ai ADR 0032). */
+    private JsonNode post(String path, Object body, String runId) {
         try {
             return requireBody(restClient.post().uri(endpoint + path).contentType(MediaType.APPLICATION_JSON)
                     .body(body).retrieve().body(JsonNode.class));
         } catch (ResourceAccessException exception) {
+            if (runId != null) cancelOnTimeout(runId, body);
             throw unavailable("Skill 파이프라인 응답 시간이 초과되었습니다.");
         } catch (RestClientResponseException exception) {
             throw translate(exception);
         }
+    }
+
+    private void cancelOnTimeout(String runId, Object command) {
+        JsonNode node = (JsonNode) command;
+        cancellation.cancel(runId, node.path("workspace_id").asText(), node.path("user_id").asText());
     }
 
     private JsonNode requireBody(JsonNode response) {

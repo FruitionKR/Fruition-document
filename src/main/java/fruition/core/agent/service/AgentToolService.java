@@ -1,7 +1,6 @@
 package fruition.core.agent.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import fruition.core.aitask.service.AiTaskCancellationService;
 import fruition.core.document.dto.DocumentLifecycleRequest;
 import fruition.core.agent.dto.AgentToolExecuteRequest;
 import fruition.core.agent.dto.AgentToolReadRequest;
@@ -78,7 +77,6 @@ public class AgentToolService {
     private final DocumentEditStateInitializer editStateInitializer;
     private final IdempotencyService idempotencyService;
     private final TransactionTemplate transactionTemplate;
-    private final AiTaskCancellationService taskCancellationClient;
     private final DocumentAccessPolicy documentAccessPolicy;
 
     public AgentToolService(
@@ -95,7 +93,6 @@ public class AgentToolService {
             DocumentEditStateInitializer editStateInitializer,
             IdempotencyService idempotencyService,
             TransactionTemplate transactionTemplate,
-            AiTaskCancellationService taskCancellationClient,
             DocumentAccessPolicy documentAccessPolicy) {
         this.authorizationClient = authorizationClient;
         this.artifactClient = artifactClient;
@@ -110,7 +107,6 @@ public class AgentToolService {
         this.editStateInitializer = editStateInitializer;
         this.idempotencyService = idempotencyService;
         this.transactionTemplate = transactionTemplate;
-        this.taskCancellationClient = taskCancellationClient;
         this.documentAccessPolicy = documentAccessPolicy;
     }
 
@@ -187,14 +183,10 @@ public class AgentToolService {
         long baseVersion = positiveLong(request.arguments(), "base_version");
         if (document.getDeletedAt() == null && document.getCurrentVersion() != baseVersion)
             throw new ResponseStatusException(HttpStatus.CONFLICT, "문서가 변경되어 취소 삭제할 수 없습니다.");
-        // 파생 작업과 늦은 결과를 먼저 차단·복구한다. 삭제 이벤트가 복구할 데이터를 먼저 지우지 않게 한다.
-        if (document.getDeletedAt() == null
-                && !taskCancellationClient.cancelDocumentTasks(documentId, request.workspaceId(), request.userId())) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "문서 파생 작업을 복구하고 있습니다.");
-        }
+        // 일반 삭제와 같다. 파생 데이터 정리는 document_deleted 명령으로 비동기 처리한다(ai ADR 0032).
         var deleted = documentService.delete(request.workspaceId(), request.userId(), documentId,
                 request.idempotencyKey(), new DocumentLifecycleRequest(positiveLong(request.arguments(), "base_version")));
-        return Map.of("id", deleted.id(), "current_version", deleted.currentVersion(), "cleanup_complete", true);
+        return Map.of("id", deleted.id(), "current_version", deleted.currentVersion());
     }
 
     private Object createDocument(AgentToolExecuteRequest request) {
