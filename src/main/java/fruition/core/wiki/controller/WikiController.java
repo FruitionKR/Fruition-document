@@ -7,8 +7,6 @@ import fruition.core.wiki.service.WikiService;
 import fruition.core.wiki.dto.WikiGraphResponse;
 import fruition.core.wiki.dto.WikiPageDetailResponse;
 import fruition.core.wiki.dto.WikiPageDiffResponse;
-import fruition.core.wiki.dto.WikiPageRenameRequest;
-import fruition.core.wiki.dto.WikiPageRenameResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -20,9 +18,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.util.DigestUtils;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -77,27 +73,6 @@ public class WikiController {
             @Parameter(description = "Wiki 페이지 ID", example = "wp_abc123")
             @PathVariable("wiki_page_id") String wikiPageId) {
         return ResponseEntity.ok(wikiService.findById(workspaceId, userId, wikiPageId));
-    }
-
-    @Operation(summary = "Wiki 페이지 이름 변경", description = "Wiki 페이지 제목을 변경합니다. update_slug=true이면 slug도 재생성하며 중복 여부를 검증합니다.")
-    @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "이름 변경 성공",
-            content = @Content(schema = @Schema(implementation = WikiPageRenameResponse.class))),
-        @ApiResponse(responseCode = "400", description = "유효하지 않은 제목",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "404", description = "페이지를 찾을 수 없음",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "slug 충돌",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
-    })
-    @PatchMapping("/pages/{wiki_page_id}/rename")
-    public ResponseEntity<WikiPageRenameResponse> rename(
-            @PathVariable("workspace_id") String workspaceId,
-            @AuthenticationPrincipal String userId,
-            @Parameter(description = "Wiki 페이지 ID", example = "wp_abc123")
-            @PathVariable("wiki_page_id") String wikiPageId,
-            @RequestBody WikiPageRenameRequest request) {
-        return ResponseEntity.ok(wikiService.rename(workspaceId, userId, wikiPageId, request));
     }
 
     @Operation(summary = "Wiki 페이지 변경분 조회",

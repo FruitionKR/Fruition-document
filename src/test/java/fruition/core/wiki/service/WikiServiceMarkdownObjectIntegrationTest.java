@@ -5,7 +5,6 @@ import fruition.core.aihistory.service.WikiObjectReader;
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.service.MarkdownDiffService;
-import fruition.core.wiki.repository.PipelineWikiPageRequester;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.wiki.repository.WikiPageVersionRepository;
 import fruition.shared.util.MinioConfig;
@@ -47,7 +46,7 @@ class WikiServiceMarkdownObjectIntegrationTest {
             var stateRequester = mock(PipelineWikiStateRequester.class);
             var versionRepository = mock(WikiPageVersionRepository.class);
             var service = new WikiService(mock(DocumentRepository.class), mock(WorkspaceAccessGuard.class),
-                    mock(PipelineWikiPageRequester.class), stateRequester, versionRepository,
+                    stateRequester, versionRepository,
                     mock(MarkdownDiffService.class), new WikiObjectReader(storage, props));
             when(stateRequester.page("ws_1", "wp_1")).thenReturn(Optional.of(WikiServiceTest.page(
                     "", "s3://wiki-markdown-test/wiki/ws_1/pages/wp_1/ops/op_0.md")));

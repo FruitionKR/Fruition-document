@@ -1425,7 +1425,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docu
 #### 10. 구현 파일
 
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
-- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: rename_2`)
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: rename_1`)
 - 호출자: 프론트엔드 — `src/entities/document/api/document.ts:171`(`renameDocument`)
 - 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
 - 배선 상태: 배선됨

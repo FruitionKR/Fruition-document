@@ -2,10 +2,10 @@
 
 [서비스 문서](../README.md) / [document-svc](README.md)
 
-Wiki 그래프·페이지·기여·유지보수 Gateway API다. 조회·페이지 수정은 ai-svc 내부 HTTP,
+Wiki 그래프·페이지·기여·유지보수 Gateway API다. 조회는 ai-svc 내부 HTTP,
 lint·복구는 Kafka `ai.maintenance.command`로 전달한다.
 
-- API 수: 8
+- API 수: 7
 
 ## API 목차
 
@@ -14,7 +14,6 @@ lint·복구는 Kafka `ai.maintenance.command`로 전달한다.
 | [`GET /api/workspaces/{workspace_id}/wiki/graph`](#summary-get-api-workspaces-workspace-id-wiki-graph) | 모든 Wiki 노드(pages)와 엣지(links)를 반환합니다. 중앙 그래프 렌더링과 답변 후 하이라이트에 사용됩니다. |
 | [`GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}`](#summary-get-api-workspaces-workspace-id-wiki-pages-wiki-page-id) | 특정 Wiki 페이지의 상세 정보를 반환합니다. source_documents와 related_pages를 포함합니다. |
 | [`GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/diff`](#summary-get-api-workspaces-workspace-id-wiki-pages-wiki-page-id-diff) | 두 revision 사이의 diff를 반환합니다. 저장된 본문을 읽어 요청 시점에 계산하며, 사용자가 펼칠 때만 호출됩니다. |
-| [`PATCH /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/rename`](#summary-patch-api-workspaces-workspace-id-wiki-pages-wiki-page-id-rename) | Wiki 페이지 제목을 변경합니다. update_slug=true이면 slug도 재생성하며 중복 여부를 검증합니다. |
 | [`POST /api/workspaces/{workspace_id}/wiki/maintenance/lint`](#summary-post-api-workspaces-workspace-id-wiki-maintenance-lint) | 워크스페이스 Wiki 정합성 검사 실행을 비동기 대기열에 등록합니다. |
 | [`GET /api/workspaces/{workspace_id}/wiki/maintenance/runs/{run_id}`](#summary-get-api-workspaces-workspace-id-wiki-maintenance-runs-run-id) | 실행 중이거나 완료된 Wiki 정합성 검사 결과를 반환합니다. |
 | [`GET /api/workspaces/{workspace_id}/wiki/maintenance/status`](#summary-get-api-workspaces-workspace-id-wiki-maintenance-status) | 워크스페이스 Wiki 유지보수 작업의 현재 상태를 반환합니다. |
@@ -472,137 +471,6 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
 - 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-wiki-pages-wiki-page-id-diff)
-
-</details>
-
-<a id="summary-patch-api-workspaces-workspace-id-wiki-pages-wiki-page-id-rename"></a>
-### `PATCH /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/rename`
-
-| 항목 | 내용 |
-|---|---|
-| 목적 | Wiki 페이지 제목을 변경합니다. update_slug=true이면 slug도 재생성하며 중복 여부를 검증합니다. |
-| 입력 | **Path** — `workspace_id`: `string`, `wiki_page_id`: `string`<br>**Body** — `WikiPageRenameRequest` |
-| 출력 | `200` 이름 변경 성공 — `WikiPageRenameResponse` |
-| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 유효하지 않은 제목 — `ErrorResponse`<br>`404` 페이지를 찾을 수 없음 — `ErrorResponse`<br>`409` slug 충돌 — `ErrorResponse` |
-
-<details>
-<summary>상세 계약 보기</summary>
-
-<a id="detail-patch-api-workspaces-workspace-id-wiki-pages-wiki-page-id-rename"></a>
-### `PATCH /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/rename` 상세
-
-#### 1. Method + Path
-
-`PATCH /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}/rename`
-
-#### 2. 목적
-
-Wiki 페이지 제목을 변경합니다. update_slug=true이면 slug도 재생성하며 중복 여부를 검증합니다.
-
-#### 3. Auth 필요 여부
-
-- 필요
-- `Authorization: Bearer <access_token>`을 검증한다.
-
-#### 4. Request body
-
-| 위치 | 이름 | 타입 | 필수 | 설명 |
-|---|---|---|---|---|
-| path | `workspace_id` | `string` | 예 | - |
-| path | `wiki_page_id` | `string` | 예 | Wiki 페이지 ID |
-
-- Content-Type: `application/json` (`WikiPageRenameRequest`)
-
-```json
-{
-  "title": "검색 인덱싱",
-  "update_slug": false
-}
-```
-
-#### 5. Response body
-
-- HTTP `200`: 이름 변경 성공
-- Content-Type: `*/*` (`WikiPageRenameResponse`)
-
-```json
-{
-  "id": "string",
-  "page_type": "Concept",
-  "previous_slug": "indexing",
-  "previous_title": "인덱싱",
-  "slug": "search-indexing",
-  "slug_updated": false,
-  "title": "검색 인덱싱",
-  "updated_at": "2026-08-13T04:25:24.371948Z"
-}
-```
-
-#### 6. Error response
-
-| HTTP 상태 | 설명 | 응답 스키마 |
-|---|---|---|
-| `400` | 유효하지 않은 제목 | `ErrorResponse` |
-| `404` | 페이지를 찾을 수 없음 | `ErrorResponse` |
-| `409` | slug 충돌 | `ErrorResponse` |
-
-```json
-{
-  "error": {
-    "code": "INVALID_REQUEST",
-    "details": [
-      {
-        "field": "email",
-        "reason": "email은 필수입니다."
-      }
-    ],
-    "message": "요청 형식이 올바르지 않습니다."
-  }
-}
-```
-
-#### 7. Pagination / filtering
-
-- 페이지네이션: 지원하지 않음
-- 필터링: 지원하지 않음
-
-#### 8. 권한 규칙
-
-- 인증된 사용자만 호출할 수 있다.
-- path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
-
-#### 9. 예시 요청/응답
-
-```bash
-curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/pages/<value>/rename" \
-  -H 'Authorization: Bearer <access_token>' \
-  -H 'Content-Type: application/json' \
-  --data '{"title":"검색 인덱싱","update_slug":false}'
-```
-
-```json
-{
-  "id": "string",
-  "page_type": "Concept",
-  "previous_slug": "indexing",
-  "previous_title": "인덱싱",
-  "slug": "search-indexing",
-  "slug_updated": false,
-  "title": "검색 인덱싱",
-  "updated_at": "2026-08-13T04:25:24.371948Z"
-}
-```
-
-#### 10. 구현 파일
-
-- 진입점: `src/main/java/fruition/core/wiki/controller/WikiController.java`
-- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: rename`)
-- 호출자: 없음 — 프론트엔드 `apiFetch` 호출 지점에 이 경로가 없고, ai-svc·access-svc도 이 서비스의 `/api/**`를 호출하지 않는다
-- 하위 호출: ai-svc `PATCH ${WIKI_PAGE_ENDPOINT}/{wikiPageId}/rename` (`PipelineWikiPageRequester`)
-- 배선 상태: **미배선 — 호출자 없음**
-
-[↑ 요약으로 돌아가기](#summary-patch-api-workspaces-workspace-id-wiki-pages-wiki-page-id-rename)
 
 </details>
 
