@@ -66,7 +66,7 @@ class MeetingLiveIntegrationTest {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"OWNER\",\"permissions\":[]}");
         FakeAi.mode = "normal";
     }
 
@@ -85,6 +85,8 @@ class MeetingLiveIntegrationTest {
         assertThat(events).extracting(e -> e.path("type").asText())
                 .containsSubsequence("committed", "committed", "completed", "completed", "finished");
         assertThat(first.closeStatus()).isEqualTo(CloseStatus.NORMAL);
+        // 브라우저가 닫힘을 받은 뒤에야 서버의 연결 종료 처리가 잠금을 푼다. 풀린 뒤 새 ticket을 받는다.
+        awaitLiveReleased(meetingId);
 
         FakeAi.mode = "normal";
         Browser second = connect(meetingId);
@@ -101,6 +103,9 @@ class MeetingLiveIntegrationTest {
         assertThat(meeting.path("streams")).extracting(s -> s.path("end_reason").asText())
                 .containsExactly("finished", "interrupted");
         assertThat(meeting.path("transcript_complete").asBoolean()).isFalse();
+        // 사용량 귀속 run_id는 연결 주소 쿼리가 아니라 X-Request-Id 헤더로 보낸다(#87).
+        assertThat(FakeAi.lastRequestId).startsWith("meeting_live:");
+        assertThat(FakeAi.lastQuery).doesNotContain("run_id");
     }
 
     @Test
@@ -177,7 +182,7 @@ class MeetingLiveIntegrationTest {
     void otherUserCannotSeeMeetingAndDocumentMustBeOwned() throws Exception {
         String meetingId = createMeeting();
         String other = "user_" + UUID.randomUUID().toString().substring(0, 8);
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + other, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + other, "{\"role\":\"OWNER\",\"permissions\":[]}");
 
         mockMvc.perform(get(base() + "/" + meetingId)
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(other, other + "@example.com")))
@@ -212,6 +217,31 @@ class MeetingLiveIntegrationTest {
         assertThat(meeting.path("status").asText()).isEqualTo("open");
         assertThat(jdbc.queryForObject("SELECT count(*) FROM meeting_segments WHERE meeting_id = ?",
                 Integer.class, meetingId)).isEqualTo(MeetingLiveHandler.MAX_SEGMENTS);
+    }
+
+    @Test
+    void charsLimit_countsBundledTextIncludingSeparators() {
+        // 499자 구간 199개는 둘씩 묶여(구분 공백 1자) 99,400자다. 600자를 더하면 정확히 100,000자로 허용된다.
+        var segments = new java.util.ArrayList<MeetingRepository.Segment>();
+        for (int i = 0; i < 199; i++) {
+            segments.add(new MeetingRepository.Segment("s" + i, i, "가".repeat(499)));
+        }
+        assertThat(MeetingLiveHandler.bundledChars(segments)).isEqualTo(99_400);
+        segments.add(new MeetingRepository.Segment("last", 199, "가".repeat(600)));
+        assertThat(MeetingLiveHandler.bundledChars(segments)).isEqualTo(100_000);
+        // 601자는 원문 합계(99,902)로는 한도 안이지만 묶음 글자로는 100,001자라 거절한다.
+        segments.set(199, new MeetingRepository.Segment("last", 199, "가".repeat(601)));
+        assertThat(MeetingLiveHandler.bundledChars(segments)).isEqualTo(100_001);
+    }
+
+    @Test
+    void charsAtLimit_refusesConnection() throws Exception {
+        String meetingId = createMeeting();
+        jdbc.update("INSERT INTO meeting_streams (id, meeting_id, stream_order, end_reason, started_at) VALUES (?, ?, 0, 'finished', now())",
+                "seed_" + meetingId, meetingId);
+        jdbc.update("INSERT INTO meeting_segments (meeting_id, id, stream_id, position, text, created_at) VALUES (?, 's0_u1', ?, 1, ?, now())",
+                meetingId, "seed_" + meetingId, "가".repeat(100_000));
+        assertThat(connect(meetingId).untilType("error").path("code").asText()).isEqualTo("transcript_limit");
     }
 
     // ---------- helpers
@@ -337,6 +367,8 @@ class MeetingLiveIntegrationTest {
     /** ai-svc 실시간 전사 계약을 흉내 낸다. mode로 완료 순서·중복·충돌·개수 불일치를 만든다. */
     static final class FakeAi extends AbstractWebSocketHandler {
         static volatile String mode = "normal";
+        static volatile String lastRequestId;
+        static volatile String lastQuery;
 
         /** 연결마다 ai-svc 구간 번호가 1부터 다시 시작한다. */
         private static final class State {
@@ -347,6 +379,8 @@ class MeetingLiveIntegrationTest {
         @Override
         public void afterConnectionEstablished(WebSocketSession session) throws Exception {
             assertThat(session.getHandshakeHeaders().getFirst("X-Internal-Token")).isEqualTo("test-internal-callback");
+            lastRequestId = session.getHandshakeHeaders().getFirst("X-Request-Id");
+            lastQuery = session.getUri() == null ? null : session.getUri().getRawQuery();
             session.getAttributes().put("state", new State());
             session.setBinaryMessageSizeLimit(64 * 1024);  // 실제 ai-svc도 1초 frame(48,000 bytes)을 받는다
             send(session, "{\"type\":\"ready\",\"sample_rate\":24000}");

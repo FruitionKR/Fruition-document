@@ -41,7 +41,7 @@ public record AgentTurnRequest(
                 allowableValues = {"openai", "gemini", "claude"}, example = "openai")
         String provider,
 
-        @Schema(description = "모델명. provider와 짝을 이뤄야 한다.", example = "gpt-5-nano")
+        @Schema(description = "모델명. provider와 짝을 이뤄야 한다.", example = "gpt-6-luna")
         String model,
 
         @JsonProperty("allow_web_search")

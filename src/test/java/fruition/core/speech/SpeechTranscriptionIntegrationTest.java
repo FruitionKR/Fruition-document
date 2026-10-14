@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.autoconfigure.web.servlet.MockMvcPrint;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -28,7 +29,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /** 채팅 음성 입력이 ai-svc 파일 전사 계약대로 중계되는지 가짜 ai-svc HTTP 서버로 확인한다. */
 @SpringBootTest
-@AutoConfigureMockMvc
+// 24MiB 초과 본문을 보내는 테스트가 있어, 실패 시 요청 본문을 문자열로 출력하면 테스트 JVM 힙을 다 쓴다.
+@AutoConfigureMockMvc(print = MockMvcPrint.NONE)
 @Import(TestcontainersConfiguration.class)
 class SpeechTranscriptionIntegrationTest {
 
@@ -39,6 +41,7 @@ class SpeechTranscriptionIntegrationTest {
     static final AtomicReference<String> lastQuery = new AtomicReference<>();
     static final AtomicReference<String> lastContentType = new AtomicReference<>();
     static final AtomicReference<String> lastToken = new AtomicReference<>();
+    static final AtomicReference<String> lastRequestId = new AtomicReference<>();
     static final AtomicReference<byte[]> lastBody = new AtomicReference<>();
 
     static {
@@ -51,6 +54,7 @@ class SpeechTranscriptionIntegrationTest {
             lastQuery.set(exchange.getRequestURI().getRawQuery());
             lastContentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
             lastToken.set(exchange.getRequestHeaders().getFirst("X-Internal-Token"));
+            lastRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
             lastBody.set(exchange.getRequestBody().readAllBytes());
             byte[] body = aiBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -84,7 +88,7 @@ class SpeechTranscriptionIntegrationTest {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "MEMBER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"MEMBER\",\"permissions\":[]}");
         aiStatus = 200;
         aiBody = "{\"text\":\"검색 인덱싱은 어떻게 동작해?\"}";
         lastBody.set(null);
@@ -101,9 +105,9 @@ class SpeechTranscriptionIntegrationTest {
         assertThat(lastBody.get()).isEqualTo(audio);
         assertThat(lastContentType.get()).isEqualTo("audio/webm");  // codecs 파라미터는 떼고 넘긴다
         assertThat(lastToken.get()).isEqualTo("test-internal-callback");
-        // AI가 사용량을 남기도록 실행 ID를 함께 보낸다(#78).
-        assertThat(lastQuery.get()).startsWith("workspace_id=" + workspaceId + "&user_id=" + userId
-                + "&run_id=speech_transcription%3A");
+        // AI가 사용량을 남기도록 실행 ID를 X-Request-Id 헤더로 보낸다. 쿼리에 넣으면 버려진다(#87).
+        assertThat(lastQuery.get()).isEqualTo("workspace_id=" + workspaceId + "&user_id=" + userId + "&deadline_seconds=100");
+        assertThat(lastRequestId.get()).startsWith("speech_transcription:");
     }
 
     @Test
@@ -129,7 +133,7 @@ class SpeechTranscriptionIntegrationTest {
     @Test
     void nonMember_isRejectedBeforeCallingAi() throws Exception {
         String outsider = "user_" + UUID.randomUUID().toString().substring(0, 8);
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + outsider, "NONE");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + outsider, "{\"role\":\"NONE\",\"permissions\":[]}");
         mockMvc.perform(post(url())
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(outsider, outsider + "@example.com"))
                         .contentType("audio/webm").content(new byte[]{1}))

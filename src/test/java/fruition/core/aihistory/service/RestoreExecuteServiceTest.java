@@ -85,7 +85,7 @@ class RestoreExecuteServiceTest {
         when(tokenSigner.matches(TOKEN, TARGET, Map.of("wp_S_A", List.of(contribution))))
                 .thenReturn(true);
         when(validator.requireApplicable(target, plan)).thenReturn(page);
-        when(lifecycle.startQueued(eq(target), anyString(), anyString(), any())).thenReturn(Optional.of(restore));
+        when(lifecycle.startQueued(eq(target), eq(USER), anyString(), anyString(), any())).thenReturn(Optional.of(restore));
 
         var response = service.execute(WORKSPACE, USER, TARGET, TOKEN);
 
@@ -115,7 +115,7 @@ class RestoreExecuteServiceTest {
         assertThatThrownBy(() -> service.execute(WORKSPACE, USER, TARGET, TOKEN))
                 .isInstanceOf(RestorePreviewStaleException.class);
 
-        verify(lifecycle, never()).startQueued(any(), anyString(), anyString(), any());
+        verify(lifecycle, never()).startQueued(any(), any(), anyString(), anyString(), any());
         verify(outboxWriter, never()).enqueue(any(), any(), any(), any());
     }
 
@@ -129,7 +129,7 @@ class RestoreExecuteServiceTest {
         when(planner.plan(any(), any(), any())).thenReturn(new RestorePlan(List.of(page)));
         when(tokenSigner.matches(TOKEN, TARGET, Map.of())).thenReturn(true);
         when(validator.requireApplicable(target, new RestorePlan(List.of(page)))).thenReturn(page);
-        when(lifecycle.startQueued(eq(target), anyString(), anyString(), any()))
+        when(lifecycle.startQueued(eq(target), eq(USER), anyString(), anyString(), any()))
                 .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.execute(WORKSPACE, USER, TARGET, TOKEN))
@@ -154,14 +154,14 @@ class RestoreExecuteServiceTest {
         when(tokenSigner.matches(TOKEN, TARGET, contributions)).thenReturn(true, false);
         when(validator.requireApplicable(target, plan)).thenReturn(page);
         when(lifecycle.isClaimed(eq(TARGET), anyString())).thenReturn(false, true);
-        when(lifecycle.startQueued(eq(target), anyString(), anyString(), any()))
+        when(lifecycle.startQueued(eq(target), eq(USER), anyString(), anyString(), any()))
                 .thenReturn(Optional.of(restore));
 
         service.execute(WORKSPACE, USER, TARGET, TOKEN);
 
         assertThatThrownBy(() -> service.execute(WORKSPACE, USER, TARGET, TOKEN))
                 .isInstanceOf(InvalidRestoreRequestException.class);
-        verify(lifecycle).startQueued(eq(target), anyString(), anyString(), any());
+        verify(lifecycle).startQueued(eq(target), eq(USER), anyString(), anyString(), any());
         verify(outboxWriter).enqueue(any(), any(), any(), any());
     }
 
@@ -174,18 +174,36 @@ class RestoreExecuteServiceTest {
         when(previewService.loadOperation(WORKSPACE, USER, TARGET)).thenReturn(target);
         when(documentPlanner.plan(target)).thenReturn(plan);
         when(tokenSigner.matches(TOKEN, TARGET, plan)).thenReturn(true);
-        when(lifecycle.start(eq(target), anyString(), anyString(), any())).thenReturn(Optional.of(restore));
+        when(lifecycle.start(eq(target), eq(USER), anyString(), anyString(), any())).thenReturn(Optional.of(restore));
         when(documentApplier.apply(restore, plan)).thenReturn(7L);
 
         var response = service.execute(WORKSPACE, USER, TARGET, TOKEN);
 
         assertThat(response.status()).isEqualTo("succeeded");
         ArgumentCaptor<String> tokenHash = ArgumentCaptor.forClass(String.class);
-        verify(lifecycle).start(eq(target), anyString(), tokenHash.capture(), any());
+        verify(lifecycle).start(eq(target), eq(USER), anyString(), tokenHash.capture(), any());
         assertThat(tokenHash.getValue())
                 .isEqualTo("d131c306d498cf8aa66cbd07b847aa433734eec63cd70b609063b572e9aac140");
         verify(lifecycle).finishDocument(eq("op_restore"), eq(5L), eq(7L), any());
         verify(outboxWriter, never()).enqueue(any(), any(), any(), any());
+    }
+
+    @Test
+    void restore_recordsExecutingUserNotTargetUser() {
+        OperationLog target = target(OperationType.document_edit);
+        DocumentRestorePlan plan = new DocumentRestorePlan("doc_A", 6, 5);
+        OperationLog restore = OperationLog.applying(
+                "op_restore", WORKSPACE, "user_2", "doc_A", TARGET, "{}", T);
+        when(previewService.loadOperation(WORKSPACE, "user_2", TARGET)).thenReturn(target);
+        when(documentPlanner.plan(target)).thenReturn(plan);
+        when(tokenSigner.matches(TOKEN, TARGET, plan)).thenReturn(true);
+        when(lifecycle.start(eq(target), eq("user_2"), anyString(), anyString(), any()))
+                .thenReturn(Optional.of(restore));
+        when(documentApplier.apply(restore, plan)).thenReturn(7L);
+
+        service.execute(WORKSPACE, "user_2", TARGET, TOKEN);
+
+        verify(lifecycle).start(eq(target), eq("user_2"), anyString(), anyString(), any());
     }
 
     @Test
@@ -197,7 +215,7 @@ class RestoreExecuteServiceTest {
         when(previewService.loadOperation(WORKSPACE, USER, TARGET)).thenReturn(target);
         when(documentPlanner.plan(target)).thenReturn(plan);
         when(tokenSigner.matches(TOKEN, TARGET, plan)).thenReturn(true);
-        when(lifecycle.start(eq(target), anyString(), anyString(), any())).thenReturn(Optional.of(restore));
+        when(lifecycle.start(eq(target), eq(USER), anyString(), anyString(), any())).thenReturn(Optional.of(restore));
         when(documentApplier.apply(restore, plan))
                 .thenThrow(new DocumentVersionConflictException("동시 편집"));
 
@@ -219,7 +237,7 @@ class RestoreExecuteServiceTest {
         when(previewService.loadOperation(WORKSPACE, USER, TARGET)).thenReturn(target);
         when(documentPlanner.plan(target)).thenReturn(plan);
         when(tokenSigner.matches(TOKEN, TARGET, plan)).thenReturn(true);
-        when(lifecycle.start(eq(target), anyString(), anyString(), any()))
+        when(lifecycle.start(eq(target), eq(USER), anyString(), anyString(), any()))
                 .thenReturn(Optional.of(firstRestore), Optional.of(secondRestore));
         when(documentApplier.apply(firstRestore, plan))
                 .thenThrow(new IllegalStateException(new org.springframework.dao.DuplicateKeyException("retry")));
@@ -229,7 +247,7 @@ class RestoreExecuteServiceTest {
 
         assertThat(response.operationId()).isEqualTo("op_restore_2");
         verify(lifecycle, org.mockito.Mockito.times(2))
-                .start(eq(target), anyString(), anyString(), any());
+                .start(eq(target), eq(USER), anyString(), anyString(), any());
         verify(documentApplier, org.mockito.Mockito.times(2)).apply(any(), eq(plan));
         verify(lifecycle).finishDocument(eq("op_restore_2"), eq(5L), eq(7L), any());
     }
@@ -243,14 +261,14 @@ class RestoreExecuteServiceTest {
         when(previewService.loadOperation(WORKSPACE, USER, TARGET)).thenReturn(target);
         when(documentPlanner.plan(target)).thenReturn(plan);
         when(tokenSigner.matches(TOKEN, TARGET, plan)).thenReturn(true);
-        when(lifecycle.start(eq(target), anyString(), anyString(), any())).thenReturn(Optional.of(restore));
+        when(lifecycle.start(eq(target), eq(USER), anyString(), anyString(), any())).thenReturn(Optional.of(restore));
         when(documentApplier.apply(restore, plan)).thenThrow(new IllegalStateException("not transient"));
 
         assertThatThrownBy(() -> service.execute(WORKSPACE, USER, TARGET, TOKEN))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("not transient");
 
-        verify(lifecycle).start(eq(target), anyString(), anyString(), any());
+        verify(lifecycle).start(eq(target), eq(USER), anyString(), anyString(), any());
         verify(documentApplier).apply(restore, plan);
         verify(lifecycle, never()).finishDocument(anyString(), anyLong(), anyLong(), any());
     }
@@ -262,7 +280,7 @@ class RestoreExecuteServiceTest {
         when(previewService.loadOperation(WORKSPACE, USER, TARGET)).thenReturn(target);
         when(documentPlanner.plan(target)).thenReturn(plan);
         when(tokenSigner.matches(TOKEN, TARGET, plan)).thenReturn(true);
-        when(lifecycle.start(eq(target), anyString(), anyString(), any()))
+        when(lifecycle.start(eq(target), eq(USER), anyString(), anyString(), any()))
                 .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.execute(WORKSPACE, USER, TARGET, TOKEN))
@@ -283,7 +301,7 @@ class RestoreExecuteServiceTest {
         when(documentPlanner.plan(target)).thenReturn(plan);
         when(tokenSigner.matches(TOKEN, TARGET, plan)).thenReturn(true, false);
         when(lifecycle.isClaimed(eq(TARGET), anyString())).thenReturn(false, true);
-        when(lifecycle.start(eq(target), anyString(), anyString(), any()))
+        when(lifecycle.start(eq(target), eq(USER), anyString(), anyString(), any()))
                 .thenReturn(Optional.of(restore));
         when(documentApplier.apply(restore, plan)).thenReturn(7L);
 
@@ -292,7 +310,7 @@ class RestoreExecuteServiceTest {
         assertThatThrownBy(() -> service.execute(WORKSPACE, USER, TARGET, TOKEN))
                 .isInstanceOf(InvalidRestoreRequestException.class);
         verify(documentApplier).apply(restore, plan);
-        verify(lifecycle).start(eq(target), anyString(), anyString(), any());
+        verify(lifecycle).start(eq(target), eq(USER), anyString(), anyString(), any());
         verify(lifecycle).finishDocument(eq("op_restore"), eq(5L), eq(7L), any());
     }
 
@@ -310,5 +328,15 @@ class RestoreExecuteServiceTest {
     private OperationLog target(OperationType type) {
         return OperationLog.completed(TARGET, WORKSPACE, USER, type,
                 "doc_A", "요약", 1, T);
+    }
+
+    @Test
+    void rebuildPage_sendsNullDocumentIdForManualContribution() {
+        RestoreExecuteService.RebuildPage page = RestoreExecuteService.RebuildPage.from(PageRestorePlan.rebuild(
+                "wp_1", List.of(new PageRestorePlan.Kept("op_ingest", "doc_1", "k1"),
+                        new PageRestorePlan.Kept("op_manual", null, "k2"))));
+
+        assertThat(page.keepContributions()).extracting(RestoreExecuteService.Kept::documentId)
+                .containsExactly("doc_1", null);
     }
 }

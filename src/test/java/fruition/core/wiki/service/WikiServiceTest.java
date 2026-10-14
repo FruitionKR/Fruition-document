@@ -9,10 +9,7 @@ import fruition.core.wiki.domain.WikiPageVersion;
 import fruition.core.wiki.dto.WikiGraphNode;
 import fruition.core.wiki.dto.WikiGraphResponse;
 import fruition.core.wiki.dto.WikiPageDetailResponse;
-import fruition.core.wiki.dto.WikiPageRenameRequest;
-import fruition.core.wiki.dto.WikiPageRenameResponse;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
-import fruition.core.wiki.repository.PipelineWikiPageRequester;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.wiki.repository.WikiPageVersionRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,7 +33,6 @@ class WikiServiceTest {
 
     @Mock DocumentRepository documentRepository;
     @Mock WorkspaceAccessGuard workspaceAccessGuard;
-    @Mock PipelineWikiPageRequester pageRequester;
     @Mock PipelineWikiStateRequester stateRequester;
     @Mock WikiPageVersionRepository versionRepository;
     @Mock MarkdownDiffService markdownDiffService;
@@ -45,8 +41,9 @@ class WikiServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new WikiService(documentRepository, workspaceAccessGuard, pageRequester,
-                stateRequester, versionRepository, markdownDiffService, wikiObjectReader);
+        service = new WikiService(documentRepository, workspaceAccessGuard,
+                stateRequester, versionRepository, markdownDiffService, wikiObjectReader,
+                org.mockito.Mockito.mock(fruition.core.wiki.repository.WikiWorkspaceVersionRepository.class));
     }
 
     @Test
@@ -132,15 +129,5 @@ class WikiServiceTest {
     private static WikiPageVersion version(long revision, String markdown) {
         return new WikiPageVersion("wp_1", revision, 1, markdown, "wiki/ws_1/pages/wp_1/ops/op_" + revision + ".md",
                 "sha256:x", "op_" + revision, null, Instant.parse("2026-08-10T00:00:00Z"));
-    }
-
-    @Test
-    void renameDelegates() {
-        var request = new WikiPageRenameRequest("새 제목", true);
-        var expected = new WikiPageRenameResponse("wp_1", "concept", "새 제목", "이전 제목",
-                "new", "old", true, Instant.parse("2026-08-10T00:00:00Z"));
-        when(pageRequester.rename("ws_1", "user_1", "wp_1", request)).thenReturn(expected);
-
-        assertThat(service.rename("ws_1", "user_1", "wp_1", request)).isEqualTo(expected);
     }
 }

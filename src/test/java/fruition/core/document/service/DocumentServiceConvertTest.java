@@ -7,12 +7,12 @@ import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.domain.DocumentStatus;
 import fruition.core.document.dto.DocumentUploadResponse;
-import fruition.core.document.exception.DocumentConvertException;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.InvalidDocumentConvertRequestException;
 import fruition.core.document.repository.PostgresDocumentEditSaveResult;
 import fruition.core.document.repository.PostgresDocumentEditStore;
-import fruition.core.document.repository.ConverterClient;
+import fruition.core.document.repository.ConvertCommandOutbox;
+import fruition.core.document.repository.DocumentConvertBatchStore;
 import fruition.core.document.repository.DocumentConvertQueueRepository;
 import fruition.core.document.repository.DocumentContentVersionRepository;
 import fruition.core.document.repository.DocumentEditStateRepository;
@@ -84,7 +84,7 @@ class DocumentServiceConvertTest {
     @Mock DocumentWikiRetirement documentWikiRetirement;
     @Mock PipelineWikiStateRequester pipelineWikiStateRequester;
     @Mock DocumentConvertQueueRepository convertQueueRepository;
-    @Mock ConverterClient converterClient;
+    @Mock fruition.core.aitask.repository.PipelineTaskCancellationClient pipelineCancellation;
     @Mock TransactionTemplate transactionTemplate;
     @Mock DocumentEditStateInitializer editStateInitializer;
     @Mock DocumentEditStateRepository editStateRepository;
@@ -100,11 +100,14 @@ class DocumentServiceConvertTest {
     @Mock fruition.core.aihistory.service.IngestOperationStarter ingestOperationStarter;
     @Mock fruition.core.aihistory.service.AgentApplyOperationStore applyOperationStore;
     @Mock WorkspaceAiModelClient workspaceAiModelClient;
+    @Mock fruition.core.authz.WorkspaceSettingsClient workspaceSettingsClient;
 
     DocumentService documentService;
 
     private final fruition.core.document.repository.AiCommandOutboxWriter taskWriter =
             org.mockito.Mockito.mock(fruition.core.document.repository.AiCommandOutboxWriter.class);
+    private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    private final FakeBatchStore batchStore = new FakeBatchStore();
 
     @BeforeEach
     void setUp() {
@@ -115,7 +118,8 @@ class DocumentServiceConvertTest {
         documentService = new DocumentService(documentRepository, folderRepository,
                 workspaceAccessGuard, minioClient, storageProps,
                 ingestCommandOutbox, pipelineWikiStateRequester,
-                convertQueueRepository, converterClient, transactionTemplate,
+                convertQueueRepository, batchStore,
+                new ConvertCommandOutbox(taskWriter, mapper, "ai.convert.command"), pipelineCancellation, transactionTemplate,
                 editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository, accessPolicy),
                 postgresDocumentEditStore,
                 contentVersionRepository, markdownDiffService,
@@ -126,8 +130,8 @@ class DocumentServiceConvertTest {
                 applyOperationStore,
                 operationRecorder,
                 ingestOperationStarter,
-                workspaceAiModelClient, taskWriter, documentWikiRetirement, accessPolicy,
-                java.time.Duration.ofDays(30));
+                workspaceAiModelClient, workspaceSettingsClient, taskWriter, documentWikiRetirement, accessPolicy,
+                java.time.Duration.ofDays(30), 10, 3);
         // 변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.
         lenient().when(storageProps.getBucket()).thenReturn("fruition-storage");
         // 단위 테스트에서는 transactionTemplate이 콜백을 그대로 실행하게 한다.
@@ -142,9 +146,14 @@ class DocumentServiceConvertTest {
         lenient().doCallRealMethod().when(idempotencyService).validateKey(any());
         lenient().doCallRealMethod().when(idempotencyService).requestHash(any(String[].class));
         lenient().when(idempotencyService.currentExecutionId()).thenReturn(Optional.empty());
+        lenient().when(convertQueueRepository.save(any())).thenAnswer(inv -> {
+            DocumentConvertQueue saved = inv.getArgument(0);
+            org.springframework.test.util.ReflectionTestUtils.setField(saved, "id", 7L);
+            return saved;
+        });
         lenient().when(workspaceAiModelClient.get(WORKSPACE_ID))
                 .thenReturn(new WorkspaceAiModelClient.AiModelSelection(
-                        "gemini", "gemini-3.1-flash-lite"));
+                        "gemini", "gemini-3.5-flash-lite"));
     }
 
     private Document sourcePdf() {
@@ -159,6 +168,75 @@ class DocumentServiceConvertTest {
     private static String sha256(String value) throws Exception {
         return HexFormat.of().formatHex(
                 MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    /** 워크스페이스 자동 편입 설정과 요청자의 wiki.ingest 권한을 stub한다. */
+    private void enableAutoIngest(boolean permission) {
+        when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(permission);
+    }
+
+    @Test
+    @DisplayName("변환 완료 시 설정이 꺼져 있으면(조회 실패 포함) 편입하지 않고 문서는 completed로 남는다")
+    void batchConvert_settingOff_doesNotIngest() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
+
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
+
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
+    }
+
+    @Test
+    @DisplayName("변환 완료 시 설정이 켜져 있어도 요청자에게 wiki.ingest가 없으면(변환 도중 회수 포함) 편입하지 않는다")
+    void batchConvert_withoutPermission_doesNotIngest() throws Exception {
+        enableAutoIngest(false);
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
+
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
+
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
+    }
+
+
+    @Test
+    @DisplayName("남이 올린 PDF 변환은 document.convert 권한(또는 OWNER)이 있어야 하고, 없으면 WorkspacePermissionRequiredException")
+    void convertToMarkdown_otherUsersPdf_requiresConvertPermission() {
+        stubOwnedWorkspace();
+        Document othersPdf = new Document(SOURCE_DOCUMENT_ID, WORKSPACE_ID, "user_other", "보고서.pdf",
+                "application/pdf", 1234L, "sources/documents/" + SOURCE_DOCUMENT_ID + "/original", "pdf-hash");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(othersPdf));
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "document.convert")).thenReturn(false);
+
+        assertThatThrownBy(() -> documentService.convertToMarkdown(
+                WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key"))
+                .isInstanceOf(fruition.core.authz.WorkspacePermissionRequiredException.class)
+                .hasMessageContaining("document.convert");
+        verify(documentRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("남이 올린 PDF라도 document.convert 권한자(OWNER 포함)는 변환을 요청할 수 있다")
+    void convertToMarkdown_otherUsersPdf_withPermission_allowed() {
+        stubOwnedWorkspace();
+        Document othersPdf = new Document(SOURCE_DOCUMENT_ID, WORKSPACE_ID, "user_other", "보고서.pdf",
+                "application/pdf", 1234L, "sources/documents/" + SOURCE_DOCUMENT_ID + "/original", "pdf-hash");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(othersPdf));
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "document.convert")).thenReturn(true);
+        when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.EDITABLE)).thenReturn(0L);
+
+        DocumentUploadResponse response = documentService.convertToMarkdown(
+                WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key");
+
+        assertThat(response.status()).isEqualTo(DocumentStatus.processing);
+        verify(convertQueueRepository).save(any());
     }
 
     @Test
@@ -194,7 +272,7 @@ class DocumentServiceConvertTest {
         verify(convertQueueRepository).save(savedQueue.capture());
         assertThat(savedQueue.getValue().getDocumentId()).isEqualTo(placeholder.getId());
         assertThat(savedQueue.getValue().getSourceDocumentId()).isEqualTo(SOURCE_DOCUMENT_ID);
-        assertThat(savedQueue.getValue().getStatus()).isEqualTo("pending");
+        assertThat(savedQueue.getValue().getStatus()).isEqualTo("processing");
 
         verify(idempotencyService).save(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
@@ -270,80 +348,403 @@ class DocumentServiceConvertTest {
                 .isInstanceOf(IdempotencyConflictException.class);
     }
 
-    /** 변환 재시작·묶음 저장 테스트용 stub. 편집 상태는 문서 ID별 map으로 흉내 낸다. */
-    private java.util.Map<String, Document> stubBatchConvert(Document parent, Document source, DocumentConvertQueue queue,
-                                                            java.util.Map<String, DocumentEditState> states) throws Exception {
-        var rows = new java.util.LinkedHashMap<String, Document>();
-        rows.put(parent.getId(), parent); rows.put(source.getId(), source);
-        when(storageProps.getCredentialsMode()).thenReturn("aws");
-        when(convertQueueRepository.findById(7L)).thenReturn(Optional.of(queue));
-        when(documentRepository.findByIdInActiveWorkspace(parent.getId())).thenReturn(Optional.of(parent));
-        when(documentRepository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(rows.get(inv.getArgument(0))));
-        lenient().when(documentRepository.save(any())).thenAnswer(inv -> { Document doc = inv.getArgument(0); rows.put(doc.getId(), doc); return doc; });
-        when(documentRepository.findByIdAndWorkspaceIdForUpdate(anyString(), eq(WORKSPACE_ID)))
+    private static final String PLACEHOLDER_MARKDOWN = "PDF 변환 중...\n";
+
+    /** 메모리 batch 저장소. 운영 저장소와 같은 규칙(이미 결과가 온 batch의 중복 거절)을 따른다. */
+    static class FakeBatchStore extends DocumentConvertBatchStore {
+        final java.util.TreeMap<Integer, Batch> rows = new java.util.TreeMap<>();
+
+        FakeBatchStore() { super(null); }
+
+        @Override public void insertDispatched(long queueId, int startPage, int pageCount, String command) {
+            rows.put(startPage, new Batch(queueId, startPage, pageCount, command, DISPATCHED, null, null));
+        }
+        @Override public Optional<Batch> find(long queueId, int startPage) { return Optional.ofNullable(rows.get(startPage)); }
+        @Override public boolean markReady(long queueId, int startPage, int pageEnd, String resultKey) {
+            var row = rows.get(startPage);
+            if (row == null || !DISPATCHED.equals(row.status())) return false;
+            rows.put(startPage, new Batch(queueId, startPage, row.pageCount(), row.command(), READY, pageEnd, resultKey));
+            return true;
+        }
+        @Override public void delete(long queueId, int startPage) { rows.remove(startPage); }
+        @Override public int count(long queueId) { return rows.size(); }
+        @Override public java.util.List<Batch> findDispatched(long queueId) {
+            return rows.values().stream().filter(row -> DISPATCHED.equals(row.status())).toList();
+        }
+        @Override public java.util.List<Batch> findDispatchedByDocument(String documentId) { return findDispatched(0); }
+    }
+
+    private Document parent;
+    private DocumentConvertQueue queue;
+    private java.util.Map<String, DocumentEditState> states;
+    private java.util.Map<String, Document> rows;
+
+    /** 변환 중인 문서 하나의 상태를 메모리로 흉내 낸다. 편집 상태는 문서 ID별 map이다. */
+    private void startScenario(String initialMarkdown) {
+        parent = placeholderDocument();
+        var source = sourcePdf();
+        queue = new DocumentConvertQueue(parent.getId(), source.getId());
+        org.springframework.test.util.ReflectionTestUtils.setField(queue, "id", 7L);
+        batchStore.rows.clear();
+        states = new java.util.HashMap<>();
+        states.put(parent.getId(), new DocumentEditState(parent.getId(), initialMarkdown, "hash", 1));
+        rows = new java.util.LinkedHashMap<>();
+        rows.put(parent.getId(), parent);
+        rows.put(source.getId(), source);
+        lenient().when(convertQueueRepository.findByDocumentIdForUpdate(parent.getId())).thenReturn(Optional.of(queue));
+        lenient().when(documentRepository.findByIdInActiveWorkspace(parent.getId())).thenReturn(Optional.of(parent));
+        lenient().when(documentRepository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(rows.get(inv.getArgument(0))));
+        // 시나리오를 다시 시작해도 이전 stub의 answer를 호출하지 않도록 doAnswer로 덮어쓴다.
+        lenient().doAnswer(inv -> { Document doc = inv.getArgument(0); rows.put(doc.getId(), doc); return doc; })
+                .when(documentRepository).save(any());
+        lenient().when(documentRepository.findByIdAndWorkspaceIdForUpdate(anyString(), eq(WORKSPACE_ID)))
                 .thenAnswer(inv -> Optional.ofNullable(rows.get(inv.getArgument(0))));
-        when(documentRepository.findConvertedParts(WORKSPACE_ID, parent.getId())).thenAnswer(inv -> rows.values().stream()
+        lenient().when(documentRepository.findConvertedParts(WORKSPACE_ID, parent.getId())).thenAnswer(inv -> rows.values().stream()
                 .filter(doc -> "convert_part".equals(doc.getOrigin())).toList());
-        when(editStateRepository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(states.get(inv.<String>getArgument(0))));
-        lenient().when(editStateRepository.save(any())).thenAnswer(inv -> {
-            DocumentEditState state = inv.getArgument(0); states.put(state.getDocumentId(), state); return state; });
-        lenient().when(postgresDocumentEditStore.save(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyString(), any()))
-                .thenAnswer(inv -> {
+        lenient().when(editStateRepository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(states.get(inv.<String>getArgument(0))));
+        lenient().doAnswer(inv -> {
+            DocumentEditState state = inv.getArgument(0); states.put(state.getDocumentId(), state); return state; })
+                .when(editStateRepository).save(any());
+        lenient().doAnswer(inv -> {
                     long base = inv.<Long>getArgument(4);
                     states.put(inv.getArgument(1), new DocumentEditState(inv.getArgument(1), inv.getArgument(2),
                             inv.getArgument(3), base + 1));
                     return new fruition.core.document.repository.PostgresDocumentEditSaveResult(
                             base, "", "", base + 1, inv.getArgument(3), Instant.now(), inv.getArgument(6), true, false);
-                });
-        when(minioClient.getPresignedObjectUrl(any())).thenReturn("https://storage.example.test/signed");
-        return rows;
+                }).when(postgresDocumentEditStore).save(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyString(), any());
+    }
+
+    /** 이미 발행해 결과를 기다리는 batch를 만든다(발행 때 outbox에 넣은 command와 같은 모양). */
+    private void seedDispatched(int... startPages) {
+        for (int startPage : startPages) {
+            batchStore.insertDispatched(7, startPage, 10, "{\"run_id\":\"convert:doc_placeholder:" + startPage
+                    + "\",\"parent_run_id\":\"convert:doc_placeholder\",\"kind\":\"convert_batch\",\"workspace_id\":\""
+                    + WORKSPACE_ID + "\",\"user_id\":\"" + USER_ID + "\",\"document_id\":\"doc_placeholder\","
+                    + "\"source_key\":\"sources/documents/doc_source_pdf/original\",\"start_page\":" + startPage
+                    + ",\"page_count\":10,\"provider\":\"gemini\",\"model\":\"gemini-3.5-flash-lite\"}");
+            queue.dispatchedUpTo(Math.max(queue.getNextStartPage(), startPage + 10));
+        }
+    }
+
+    private static String resultKey(int startPage) {
+        return "tmp/convert/" + WORKSPACE_ID + "/doc_placeholder/" + startPage + ".md";
+    }
+
+    /** converter worker가 storage에 쓴 batch 결과를 흉내 낸다. */
+    private void stubResult(int startPage, String markdown) throws Exception {
+        String key = resultKey(startPage);
+        lenient().when(minioClient.getObject(org.mockito.ArgumentMatchers.argThat(
+                (io.minio.GetObjectArgs args) -> args != null && key.equals(args.object()))))
+                .thenAnswer(inv -> new GetObjectResponse(Headers.of(), "fruition-storage", "us-east-1", key,
+                        new ByteArrayInputStream(markdown.getBytes(StandardCharsets.UTF_8))));
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode succeeded(int startPage, int pageEnd, int total) throws Exception {
+        return mapper.readTree("{\"run_id\":\"convert:doc_placeholder:" + startPage + "\",\"kind\":\"convert_batch\","
+                + "\"status\":\"succeeded\",\"payload\":{\"document_id\":\"doc_placeholder\",\"page_start\":" + (startPage + 1)
+                + ",\"page_end\":" + pageEnd + ",\"total_pages\":" + total + ",\"result_key\":\"" + resultKey(startPage) + "\"}}");
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode failedEvent(int startPage, String error) throws Exception {
+        return mapper.readTree("{\"run_id\":\"convert:doc_placeholder:" + startPage + "\",\"kind\":\"convert_batch\","
+                + "\"status\":\"failed\",\"error\":\"" + error + "\"}");
+    }
+
+    private java.util.List<String> dispatchedRunIds() {
+        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> runId = ArgumentCaptor.forClass(String.class);
+        verify(taskWriter, org.mockito.Mockito.atLeast(0)).enqueueJoined(runId.capture(), eq("ai.convert.command"), anyString(), payload.capture());
+        return runId.getAllValues();
     }
 
     @Test
-    @DisplayName("재시작한 페이지 묶음은 원본 문서에 이어 붙고, 문서 하나만 AI 큐에 한 번 등록된다")
-    void largePdfResumesAtCompletedPagesAndAppendsToSingleDocument() throws Exception {
-        var parent = placeholderDocument();
-        var source = sourcePdf();
-        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
-        queue.checkpoint(10, 20);
-        var states = new java.util.HashMap<String, DocumentEditState>();
-        states.put(parent.getId(), new DocumentEditState(parent.getId(), "<!-- page 10 -->\n\n# first pages\n", "hash", 2));
-        var rows = stubBatchConvert(parent, source, queue, states);
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
-                .thenReturn(new ConverterClient.Batch(11, 20, 20, "<!-- page 1 -->\n\n# next pages\n", false, true, null));
+    @DisplayName("변환 요청은 첫 batch command 하나를 계약 필드 그대로 발행하고 Kafka key는 run_id이며 batch마다 예약하지 않는다")
+    void requestPublishesFirstBatchCommand() throws Exception {
+        stubOwnedWorkspace();
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(sourcePdf()));
 
-        documentService.doConvert(7L, parent.getId(), source.getId());
+        DocumentUploadResponse response = documentService.convertToMarkdown(
+                WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key");
+
+        String placeholderId = response.id();
+        String runId = "convert:" + placeholderId + ":0";
+        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
+        verify(taskWriter, times(1)).enqueueJoined(eq(runId), eq("ai.convert.command"), eq(runId), payload.capture());
+        var command = mapper.readTree(payload.getValue());
+        assertThat(mapper.convertValue(command, java.util.Map.class)).isEqualTo(java.util.Map.ofEntries(
+                java.util.Map.entry("run_id", runId),
+                java.util.Map.entry("parent_run_id", "convert:" + placeholderId),
+                java.util.Map.entry("kind", "convert_batch"),
+                java.util.Map.entry("workspace_id", WORKSPACE_ID),
+                java.util.Map.entry("user_id", USER_ID),
+                java.util.Map.entry("document_id", placeholderId),
+                java.util.Map.entry("source_key", "sources/documents/" + SOURCE_DOCUMENT_ID + "/original"),
+                java.util.Map.entry("start_page", 0),
+                java.util.Map.entry("page_count", 10),
+                java.util.Map.entry("provider", "gemini"),
+                java.util.Map.entry("model", "gemini-3.5-flash-lite")));
+        assertThat(batchStore.rows.get(0).command()).isEqualTo(payload.getValue());
+        // 예약은 변환 run 하나만 한다. batch는 run 등록·예약을 만드는 enqueue/begin/reserve를 거치지 않는다.
+        verify(taskWriter, times(1)).begin(eq("convert:" + placeholderId), eq(WORKSPACE_ID), eq(USER_ID), eq("convert"));
+        verify(taskWriter, never()).reserve(anyString(), anyString(), anyString(), anyString());
+        verify(taskWriter, never()).enqueue(anyString(), anyString(), anyString(), any());
+        assertThat(queue0().getNextStartPage()).isEqualTo(10);
+    }
+
+    private DocumentConvertQueue queue0() {
+        ArgumentCaptor<DocumentConvertQueue> saved = ArgumentCaptor.forClass(DocumentConvertQueue.class);
+        verify(convertQueueRepository).save(saved.capture());
+        return saved.getValue();
+    }
+
+    @Test
+    @DisplayName("첫 결과로 전체 쪽수를 알면 batch를 최대 3개까지 더 발행하고 전체 쪽수 이상은 발행하지 않는다")
+    void firstResultDispatchesUpToThreeMore() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# p1\n");
+
+        documentService.applyConvertBatch(succeeded(0, 10, 100));
+
+        assertThat(queue.getCompletedPages()).isEqualTo(10);
+        assertThat(queue.getTotalPages()).isEqualTo(100);
+        assertThat(batchStore.rows.keySet()).containsExactly(10, 20, 30);
+        assertThat(dispatchedRunIds()).containsExactly(
+                "convert:doc_placeholder:10", "convert:doc_placeholder:20", "convert:doc_placeholder:30");
+        assertThat(queue.getNextStartPage()).isEqualTo(40);
+        // 첫 결과의 provider·model·source_key를 이어받고 batch마다 예약하지 않는다.
+        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
+        verify(taskWriter, times(3)).enqueueJoined(anyString(), anyString(), anyString(), payload.capture());
+        var second = mapper.readTree(payload.getAllValues().getFirst());
+        assertThat(second.path("start_page").asInt()).isEqualTo(10);
+        assertThat(second.path("source_key").asText()).isEqualTo("sources/documents/" + SOURCE_DOCUMENT_ID + "/original");
+        assertThat(second.path("model").asText()).isEqualTo("gemini-3.5-flash-lite");
+        verify(taskWriter, never()).begin(anyString(), anyString(), anyString(), anyString());
+        verify(taskWriter, never()).reserve(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("전체 쪽수가 적으면 남은 쪽까지만 발행한다")
+    void dispatchStopsAtTotalPages() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# p1\n");
+
+        documentService.applyConvertBatch(succeeded(0, 10, 25));
+
+        assertThat(batchStore.rows.keySet()).containsExactly(10, 20);
+        assertThat(queue.getNextStartPage()).isEqualTo(30);
+    }
+
+    @Test
+    @DisplayName("순서가 뒤바뀐 결과는 앞 쪽이 채워질 때까지 병합하지 않고, 채워지면 쪽 순서대로 한 번에 병합한 뒤 이어서 발행한다")
+    void outOfOrderResultsMergeOnlyWhenContiguous() throws Exception {
+        startScenario("<!-- page 10 -->\n\n# first pages\n");
+        queue.checkpoint(10, 100);
+        seedDispatched(10, 20, 30);
+        stubResult(10, "<!-- page 1 -->\n\n# second\n");
+        stubResult(20, "<!-- page 1 -->\n\n# third\n");
+
+        documentService.applyConvertBatch(succeeded(20, 30, 100));
+
+        assertThat(queue.getCompletedPages()).isEqualTo(10);
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 10 -->\n\n# first pages\n");
+        assertThat(batchStore.rows.keySet()).containsExactly(10, 20, 30);
+        verify(taskWriter, never()).enqueueJoined(anyString(), anyString(), anyString(), anyString());
+        verify(minioClient, never()).getObject(any());
+
+        documentService.applyConvertBatch(succeeded(10, 20, 100));
+
+        assertThat(queue.getCompletedPages()).isEqualTo(30);
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo(
+                "<!-- page 10 -->\n\n# first pages\n\n<!-- page 11 -->\n\n# second\n\n<!-- page 21 -->\n\n# third\n");
+        var order = org.mockito.Mockito.inOrder(postgresDocumentEditStore);
+        order.verify(postgresDocumentEditStore).save(eq(WORKSPACE_ID), eq(parent.getId()), anyString(), anyString(),
+                eq(1L), eq("convert:7:20:0"), eq(USER_ID), any());
+        order.verify(postgresDocumentEditStore).save(eq(WORKSPACE_ID), eq(parent.getId()), anyString(), anyString(),
+                eq(2L), eq("convert:7:30:0"), eq(USER_ID), any());
+        // 병합한 batch는 지우고 비어 가는 만큼 다음 batch를 발행한다.
+        assertThat(batchStore.rows.keySet()).containsExactly(30, 40, 50);
+        assertThat(dispatchedRunIds()).containsExactly("convert:doc_placeholder:40", "convert:doc_placeholder:50");
+    }
+
+    @Test
+    @DisplayName("순서가 뒤바뀌어 도착해도 최종 문서는 순서대로 도착한 경우와 같고 파트 분할도 같다")
+    void outOfOrderFinalDocumentEqualsSequential() throws Exception {
+        int sixtyPercent = DocumentEditingRules.MAX_MARKDOWN_BYTES / 3 * 6 / 10;
+        java.util.Map<Integer, String> batches = java.util.Map.of(
+                10, "<!-- page 1 -->\n\n" + "가".repeat(sixtyPercent) + "\n",
+                20, "<!-- page 1 -->\n\n" + "나".repeat(sixtyPercent) + "\n",
+                30, "<!-- page 1 -->\n\n" + "다".repeat(sixtyPercent) + "\n");
+
+        var sequential = runMerge(batches, new int[] {10, 20, 30});
+        var reversed = runMerge(batches, new int[] {30, 20, 10});
+
+        assertThat(sequential).hasSize(3);
+        assertThat(reversed).isEqualTo(sequential);
+    }
+
+    /** 결과를 주어진 순서로 전달하고 문서(파트 포함)별 최종 본문을 문서 ID 순서로 돌려준다. */
+    private java.util.List<String> runMerge(java.util.Map<Integer, String> batches, int[] arrival) throws Exception {
+        startScenario("<!-- page 10 -->\n\n# first pages\n");
+        queue.checkpoint(10, 100);
+        seedDispatched(10, 20, 30);
+        for (var batch : batches.entrySet()) stubResult(batch.getKey(), batch.getValue());
+        for (int startPage : arrival) documentService.applyConvertBatch(succeeded(startPage, startPage + 10, 100));
+        assertThat(queue.getCompletedPages()).isEqualTo(40);
+        return states.entrySet().stream().sorted(java.util.Map.Entry.comparingByKey())
+                .map(entry -> entry.getKey().equals(parent.getId()) ? "parent:" + entry.getValue().getMarkdown()
+                        : "part:" + entry.getValue().getMarkdown()).toList();
+    }
+
+    @Test
+    @DisplayName("같은 batch 이벤트가 다시 와도 한 번만 반영한다")
+    void duplicateEventIsIgnored() throws Exception {
+        startScenario("<!-- page 10 -->\n\n# first pages\n");
+        queue.checkpoint(10, 100);
+        seedDispatched(10, 20, 30);
+        stubResult(10, "<!-- page 1 -->\n\n# second\n");
+        stubResult(20, "<!-- page 1 -->\n\n# third\n");
+
+        // 순서 대기 중인 결과의 재전달
+        documentService.applyConvertBatch(succeeded(20, 30, 100));
+        documentService.applyConvertBatch(succeeded(20, 30, 100));
+        documentService.applyConvertBatch(succeeded(10, 20, 100));
+        // 이미 병합한 batch의 재전달
+        documentService.applyConvertBatch(succeeded(10, 20, 100));
+        documentService.applyConvertBatch(succeeded(20, 30, 100));
+
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo(
+                "<!-- page 10 -->\n\n# first pages\n\n<!-- page 11 -->\n\n# second\n\n<!-- page 21 -->\n\n# third\n");
+        verify(postgresDocumentEditStore, times(2)).save(anyString(), anyString(), anyString(), anyString(),
+                anyLong(), anyString(), anyString(), any());
+        assertThat(dispatchedRunIds()).containsExactly("convert:doc_placeholder:40", "convert:doc_placeholder:50");
+    }
+
+    @Test
+    @DisplayName("실행이 더는 진행 중이 아니거나 placeholder가 사라졌으면 결과를 읽지도 반영하지도 않는다")
+    void eventAfterCancelOrDeleteIsIgnored() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# p1\n");
+
+        when(taskWriter.join("convert:doc_placeholder")).thenReturn(false);
+        documentService.applyConvertBatch(succeeded(0, 10, 100));
+        assertThat(batchStore.rows.get(0).status()).isEqualTo(DocumentConvertBatchStore.DISPATCHED);
+
+        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder")).thenReturn(Optional.empty());
+        documentService.applyConvertBatch(succeeded(0, 10, 100));
+        documentService.applyConvertBatch(failedEvent(0, "internal_error"));
+
+        verify(minioClient, never()).getObject(any());
+        verify(taskWriter, never()).fail(anyString());
+        verify(taskWriter, never()).enqueueJoined(anyString(), anyString(), anyString(), anyString());
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.processing);
+        assertThat(queue.getCompletedPages()).isZero();
+    }
+
+    @Test
+    @DisplayName("batch가 실패하면 오류 코드의 문구로 placeholder를 실패시키고 실행을 닫고 나머지 batch를 각자의 command로 취소한다")
+    void failedEventFailsDocumentAndCancelsOtherBatches() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        queue.checkpoint(10, 100);
+        seedDispatched(10, 20, 30);
+
+        documentService.applyConvertBatch(failedEvent(20, "input_rejected"));
+
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
+        assertThat(parent.getErrorMessage()).contains("암호").doesNotContain("input_rejected");
+        verify(taskWriter).fail("convert:doc_placeholder");
+        verify(convertQueueRepository).delete(queue);
+        ArgumentCaptor<String> cancelled = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<com.fasterxml.jackson.databind.JsonNode> commands =
+                ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
+        verify(pipelineCancellation, times(2)).cancel(cancelled.capture(), eq(WORKSPACE_ID), eq(USER_ID), commands.capture());
+        assertThat(cancelled.getAllValues()).containsExactly("convert:doc_placeholder:10", "convert:doc_placeholder:30");
+        assertThat(commands.getAllValues().stream().map(command -> command.path("run_id").asText()))
+                .containsExactly("convert:doc_placeholder:10", "convert:doc_placeholder:30");
+        verify(taskWriter, never()).completeAndSettle(anyString());
+    }
+
+    @Test
+    @DisplayName("알 수 없는 오류 코드나 예외 원문은 사용자 문구에 그대로 싣지 않는다")
+    void failureMessageNeverEchoesRawError() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+
+        documentService.applyConvertBatch(failedEvent(0, "Traceback secret_internal_detail"));
+
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
+        assertThat(parent.getErrorMessage()).startsWith("PDF 변환에 실패했습니다").doesNotContain("secret_internal_detail");
+    }
+
+    @Test
+    @DisplayName("결과 쪽 범위나 key가 발행한 batch와 맞지 않으면 병합하지 않고 변환을 실패시킨다")
+    void mismatchedResultFailsConversion() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# p1\n");
+
+        // 10쪽을 요청했는데 5쪽만 오고 끝도 아니다.
+        documentService.applyConvertBatch(succeeded(0, 5, 100));
+
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
+        verify(minioClient, never()).getObject(any());
+        verify(taskWriter).fail("convert:doc_placeholder");
+    }
+
+    @Test
+    @DisplayName("마지막 결과를 병합하면 문서를 completed로 바꾸고 정산한 뒤에 자동 ingest를 시작하며 대기열 행을 지운다")
+    void completionSettlesBeforeAutoIngest() throws Exception {
+        enableAutoIngest(true);
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
+
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
+
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 1 -->\n\n# 본문\n");
+        verify(convertQueueRepository).delete(queue);
+        var order = org.mockito.Mockito.inOrder(taskWriter, ingestCommandOutbox);
+        order.verify(taskWriter).completeAndSettle("convert:doc_placeholder");
+        order.verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+        verify(taskWriter, never()).enqueueJoined(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("변환 뒤 자동 ingest가 크레딧 부족으로 거절돼도 변환은 성공이고 문서에 INSUFFICIENT_CREDIT을 남긴다")
+    void autoIngestRejectedForCreditKeepsConversionAndRecordsInsufficientCredit() throws Exception {
+        enableAutoIngest(true);
+        startScenario("<!-- page 10 -->\n\n# first pages\n");
+        queue.checkpoint(10, 20);
+        seedDispatched(10);
+        stubResult(10, "<!-- page 1 -->\n\n# next pages\n");
+        org.mockito.Mockito.doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("부족"))
+                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+
+        documentService.applyConvertBatch(succeeded(10, 20, 20));
 
         assertThat(queue.getCompletedPages()).isEqualTo(20);
-        assertThat(queue.getAttempts()).isZero();
-        assertThat(rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).count()).isZero();
-        assertThat(states.get(parent.getId()).getMarkdown())
-                .isEqualTo("<!-- page 10 -->\n\n# first pages\n\n<!-- page 11 -->\n\n# next pages\n");
-        verify(postgresDocumentEditStore).save(eq(WORKSPACE_ID), eq(parent.getId()), anyString(), anyString(),
-                eq(2L), eq("convert:7:20:0"), eq(USER_ID), any());
-        verify(contentVersionRepository).insertIfAbsent(eq(parent.getId()), eq(3L), anyString(), anyString(), eq(USER_ID), any());
-        verify(minioClient, never()).getObject(any());
-        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
+        assertThat(parent.getErrorMessage()).contains("크레딧이 부족해 작업을 시작하지 않았습니다").doesNotContain("INSUFFICIENT_CREDIT", "PDF 변환에 실패했습니다");
+        // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 풀었다.
+        var order = org.mockito.Mockito.inOrder(taskWriter, ingestCommandOutbox);
+        order.verify(taskWriter).completeAndSettle("convert:" + parent.getId());
+        order.verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
     }
 
     @Test
     @DisplayName("상한을 넘는 한 묶음은 앞 조각을 이어 붙인 뒤의 본문 기준으로 다음 조각의 파트 전환을 판단한다")
     void oversizedBatchUsesAppendedContentForNextPiece() throws Exception {
-        var parent = placeholderDocument();
-        var source = sourcePdf();
-        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
-        queue.checkpoint(10, 20);
-        var states = new java.util.HashMap<String, DocumentEditState>();
         int mib = 1024 * 1024;
-        String existing = "<!-- page 10 -->\n\n" + "가".repeat(mib / 3);
-        states.put(parent.getId(), new DocumentEditState(parent.getId(), existing, "hash", 2));
+        startScenario("<!-- page 10 -->\n\n" + "가".repeat(mib / 3));
+        queue.checkpoint(10, 100);
+        seedDispatched(10);
         // 11쪽(약 3.5MiB) + 12쪽(약 2MiB): 함께는 상한을 넘어 두 조각이 된다.
-        String batchMarkdown = "<!-- page 1 -->\n\n" + "나".repeat(mib * 7 / 6) + "\n\n<!-- page 2 -->\n\n" + "다".repeat(mib * 2 / 3) + "\n";
-        var rows = stubBatchConvert(parent, source, queue, states);
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
-                .thenReturn(new ConverterClient.Batch(11, 20, 20, batchMarkdown, false, true, null));
+        stubResult(10, "<!-- page 1 -->\n\n" + "나".repeat(mib * 7 / 6) + "\n\n<!-- page 2 -->\n\n" + "다".repeat(mib * 2 / 3) + "\n");
 
-        documentService.doConvert(7L, parent.getId(), source.getId());
+        documentService.applyConvertBatch(succeeded(10, 20, 100));
 
         var parts = rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).toList();
         assertThat(parts).hasSize(1);
@@ -372,21 +773,16 @@ class DocumentServiceConvertTest {
     @Test
     @DisplayName("변환 중 삭제된 파트의 ID는 다시 쓰지 않고 다음 번호로 새 파트를 만든다")
     void deletedPartIdIsNotReused() throws Exception {
-        var parent = placeholderDocument();
-        var source = sourcePdf();
-        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
-        queue.checkpoint(10, 20);
-        var states = new java.util.HashMap<String, DocumentEditState>();
         String nearlyFull = "<!-- page 10 -->\n\n" + "가".repeat((DocumentEditingRules.MAX_MARKDOWN_BYTES - 100) / 3);
-        states.put(parent.getId(), new DocumentEditState(parent.getId(), nearlyFull, "hash", 2));
-        var rows = stubBatchConvert(parent, source, queue, states);
+        startScenario(nearlyFull);
+        queue.checkpoint(10, 100);
+        seedDispatched(10);
         String deletedPartId = "doc_" + java.util.UUID.nameUUIDFromBytes((parent.getId() + ":part:1")
                 .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
         when(documentRepository.existsById(anyString())).thenAnswer(inv -> deletedPartId.equals(inv.getArgument(0)));
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
-                .thenReturn(new ConverterClient.Batch(11, 20, 20, "<!-- page 1 -->\n\n" + "나".repeat(100) + "\n", false, true, null));
+        stubResult(10, "<!-- page 1 -->\n\n" + "나".repeat(100) + "\n");
 
-        documentService.doConvert(7L, parent.getId(), source.getId());
+        documentService.applyConvertBatch(succeeded(10, 20, 100));
 
         var parts = rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).toList();
         assertThat(parts).hasSize(1);
@@ -397,16 +793,12 @@ class DocumentServiceConvertTest {
     @Test
     @DisplayName("첫 페이지 묶음은 변환 중 placeholder를 대체한다")
     void firstBatchReplacesPlaceholder() throws Exception {
-        var parent = placeholderDocument();
-        var source = sourcePdf();
-        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
-        var states = new java.util.HashMap<String, DocumentEditState>();
-        states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
-        stubBatchConvert(parent, source, queue, states);
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any()))
-                .thenReturn(new ConverterClient.Batch(1, 3, 3, "<!-- page 1 -->\n\n# 본문\n", true, true, null));
+        enableAutoIngest(true);
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
 
-        documentService.doConvert(7L, parent.getId(), source.getId());
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
 
         assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 1 -->\n\n# 본문\n");
         verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
@@ -415,17 +807,11 @@ class DocumentServiceConvertTest {
     @Test
     @DisplayName("페이지 묶음 변환 결과의 원시 HTML과 위험한 링크를 걷어내고 페이지 주석은 남긴다")
     void batchConvertSanitizesMarkdown() throws Exception {
-        var parent = placeholderDocument();
-        var source = sourcePdf();
-        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
-        var states = new java.util.HashMap<String, DocumentEditState>();
-        states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
-        stubBatchConvert(parent, source, queue, states);
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any()))
-                .thenReturn(new ConverterClient.Batch(1, 3, 3,
-                        "<!-- page 1 -->\n\n<u>임시명세서</u> [보기](javascript:alert(1))\n", true, true, null));
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n<u>임시명세서</u> [보기](javascript:alert(1))\n");
 
-        documentService.doConvert(7L, parent.getId(), source.getId());
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
 
         assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 1 -->\n\n임시명세서 보기\n");
     }
@@ -433,18 +819,12 @@ class DocumentServiceConvertTest {
     @Test
     @DisplayName("크기 상한을 넘는 변환 이미지는 저장하지 않고 생략 문구로 바꾼다")
     void oversizedConvertedImageIsReplacedWithNotice() throws Exception {
-        var parent = placeholderDocument();
-        var source = sourcePdf();
-        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
-        var states = new java.util.HashMap<String, DocumentEditState>();
-        states.put(parent.getId(), new DocumentEditState(parent.getId(), "PDF 변환 중...\n", "hash", 1));
-        stubBatchConvert(parent, source, queue, states);
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
         String png = java.util.Base64.getEncoder().encodeToString(pngHeader(20_000, 10));
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(0), any()))
-                .thenReturn(new ConverterClient.Batch(1, 1, 1,
-                        "앞\n\n![figure](data:image/png;base64," + png + ")\n\n뒤\n", true, true, null));
+        stubResult(0, "앞\n\n![figure](data:image/png;base64," + png + ")\n\n뒤\n");
 
-        documentService.doConvert(7L, parent.getId(), source.getId());
+        documentService.applyConvertBatch(succeeded(0, 1, 1));
 
         assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("앞\n\n(이미지가 너무 커서 생략됨)\n\n뒤\n");
         verify(assetRepository, never()).save(any());
@@ -464,18 +844,14 @@ class DocumentServiceConvertTest {
     @Test
     @DisplayName("이어 붙인 본문이 편집 상한을 넘으면 다음 파트 문서로 넘어가고 파트마다 AI 큐에 등록된다")
     void batchOverEditLimitStartsNextPart() throws Exception {
-        var parent = placeholderDocument();
-        var source = sourcePdf();
-        var queue = new DocumentConvertQueue(parent.getId(), source.getId());
-        queue.checkpoint(10, 20);
-        var states = new java.util.HashMap<String, DocumentEditState>();
+        enableAutoIngest(true);
         String nearlyFull = "<!-- page 10 -->\n\n" + "가".repeat((DocumentEditingRules.MAX_MARKDOWN_BYTES - 100) / 3);
-        states.put(parent.getId(), new DocumentEditState(parent.getId(), nearlyFull, "hash", 2));
-        var rows = stubBatchConvert(parent, source, queue, states);
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
-                .thenReturn(new ConverterClient.Batch(11, 20, 20, "<!-- page 1 -->\n\n" + "나".repeat(100) + "\n", false, true, null));
+        startScenario(nearlyFull);
+        queue.checkpoint(10, 20);
+        seedDispatched(10);
+        stubResult(10, "<!-- page 1 -->\n\n" + "나".repeat(100) + "\n");
 
-        documentService.doConvert(7L, parent.getId(), source.getId());
+        documentService.applyConvertBatch(succeeded(10, 20, 20));
 
         var parts = rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).toList();
         assertThat(parts).hasSize(1);
@@ -485,184 +861,60 @@ class DocumentServiceConvertTest {
     }
 
     @Test
-    void failedBatchKeepsCheckpointForRetry() throws Exception {
-        var parent = placeholderDocument();
-        var queue = new DocumentConvertQueue(parent.getId(), SOURCE_DOCUMENT_ID);
-        queue.checkpoint(10, 20);
-        when(storageProps.getCredentialsMode()).thenReturn("aws");
-        when(convertQueueRepository.findById(7L)).thenReturn(Optional.of(queue));
-        when(documentRepository.findByIdInActiveWorkspace(parent.getId())).thenReturn(Optional.of(parent));
-        when(documentRepository.findById(SOURCE_DOCUMENT_ID)).thenReturn(Optional.of(sourcePdf()));
-        when(minioClient.getPresignedObjectUrl(any())).thenReturn("https://storage.example.test/signed");
-        when(converterClient.convertSourceBatch(anyString(), anyLong(), anyString(), anyString(), eq(10), any()))
-                .thenThrow(new DocumentConvertException("temporary failure"));
-        documentService.doConvert(7L, parent.getId(), SOURCE_DOCUMENT_ID);
-        assertThat(queue.getCompletedPages()).isEqualTo(10);
-        assertThat(queue.getStatus()).isEqualTo("pending");
-        assertThat(queue.getAttempts()).isEqualTo(1);
-        verify(taskWriter, never()).complete(anyString());
+    @DisplayName("변환 결과 object가 없으면 변환을 실패시키고 실행을 닫는다")
+    void missingResultObjectFailsConversion() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        lenient().when(minioClient.getObject(any())).thenThrow(new io.minio.errors.ErrorResponseException(
+                new io.minio.messages.ErrorResponse(), null, null));
+
+        documentService.applyConvertBatch(succeeded(0, 10, 100));
+
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
+        verify(taskWriter).fail("convert:doc_placeholder");
     }
 
     @Test
-    @DisplayName("변환 성공 시 edit store에 convert write_id로 저장하고 문서를 completed로 반영한다")
-    void doConvert_success_appliesMarkdownAndCompletes() throws Exception {
-        Document placeholder = placeholderDocument();
-        Document source = sourcePdf();
-        byte[] pdfBytes = "%PDF-1.4".getBytes(StandardCharsets.US_ASCII);
-        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder"))
-                .thenReturn(Optional.of(placeholder));
-        when(documentRepository.findById(SOURCE_DOCUMENT_ID)).thenReturn(Optional.of(source));
-        when(storageProps.getBucket()).thenReturn("fruition-storage");
-        when(minioClient.getObject(any())).thenReturn(new GetObjectResponse(
-                Headers.of(), "fruition-storage", "us-east-1",
-                source.getSourceUri(), new ByteArrayInputStream(pdfBytes)));
-        when(converterClient.convertPdf(
-                eq("보고서.pdf"), eq(pdfBytes), eq("gemini"), eq("gemini-3.1-flash-lite"), any(java.util.function.BooleanSupplier.class)))
-                .thenReturn("# 변환된 <u>본문</u>\n");  // 저장 전에 원시 HTML을 걷어낸다
-        when(postgresDocumentEditStore.save(
-                anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
-                anyString(), any()))
-                .thenAnswer(invocation -> {
-                    String documentId = invocation.getArgument(1);
-                    long baseRevision = invocation.getArgument(4);
-                    DocumentEditState base = new DocumentEditState(documentId, "", "", baseRevision);
-                    return new PostgresDocumentEditSaveResult(
-                            invocation.getArgument(4),
-                            base.getMarkdown(),
-                            base.getContentHash(),
-                            invocation.<Long>getArgument(4) + 1,
-                            invocation.getArgument(3),
-                            Instant.now(),
-                            invocation.getArgument(6),
-                            true, false);
-                });
+    @DisplayName("placeholder를 삭제하면 결과를 기다리는 모든 batch를 각자의 command로 취소하고 변환 run을 닫는다")
+    void deletingPlaceholderCancelsAllInFlightBatches() throws Exception {
+        stubOwnedWorkspace();
+        startScenario(PLACEHOLDER_MARKDOWN);
+        queue.checkpoint(10, 100);
+        seedDispatched(10, 20, 30);
+        when(convertQueueRepository.findByDocumentId(parent.getId())).thenReturn(Optional.of(queue));
+        when(documentRepository.softDeleteIfVersionMatches(
+                eq(parent.getId()), eq(WORKSPACE_ID), eq(1L), eq(USER_ID), any(), any())).thenReturn(1);
 
-        documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
+        documentService.delete(WORKSPACE_ID, USER_ID, parent.getId(), "delete-key",
+                new fruition.core.document.dto.DocumentLifecycleRequest(1L));
 
-        verify(postgresDocumentEditStore).save(
-                eq(WORKSPACE_ID), eq("doc_placeholder"), eq("# 변환된 본문\n"), anyString(),
-                eq(1L), eq("convert:7"), eq(USER_ID), isNull());
-        // base(1)와 result(2) 두 버전이 read model로 projection된다.
-        verify(contentVersionRepository).insertIfAbsent(
-                eq("doc_placeholder"), eq(1L), anyString(), anyString(), eq(USER_ID), any());
-        verify(contentVersionRepository).insertIfAbsent(
-                eq("doc_placeholder"), eq(2L), eq("# 변환된 본문\n"), anyString(), eq(USER_ID), any());
-        // 묶음 경로와 같이 본문이 가리키는 asset 참조를 맞춘다. 그래야 문서 삭제 후 변환 이미지가 정리된다.
-        verify(assetReferenceSynchronizer).synchronize(eq("doc_placeholder"), eq(WORKSPACE_ID), any());
-        assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.completed);
-        assertThat(placeholder.getProcessedAt()).isNotNull();
-        assertThat(placeholder.getByteSize())
-                .isEqualTo("# 변환된 본문\n".getBytes(StandardCharsets.UTF_8).length);
+        ArgumentCaptor<String> cancelled = ArgumentCaptor.forClass(String.class);
+        verify(pipelineCancellation, times(3)).cancel(cancelled.capture(), eq(WORKSPACE_ID), eq(USER_ID), any());
+        assertThat(cancelled.getAllValues()).containsExactly(
+                "convert:doc_placeholder:10", "convert:doc_placeholder:20", "convert:doc_placeholder:30");
+        verify(taskWriter).fail("convert:doc_placeholder");
+        verify(convertQueueRepository).delete(queue);
     }
 
     @Test
-    @DisplayName("단일 변환 경로도 해상도 상한을 넘는 data: 이미지를 저장하지 않고 생략 문구로 바꾼다")
-    void doConvert_singlePath_replacesOversizedImage() throws Exception {
-        Document placeholder = placeholderDocument();
-        Document source = sourcePdf();
-        byte[] pdfBytes = "%PDF-1.4".getBytes(StandardCharsets.US_ASCII);
-        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder"))
-                .thenReturn(Optional.of(placeholder));
-        when(documentRepository.findById(SOURCE_DOCUMENT_ID)).thenReturn(Optional.of(source));
-        when(storageProps.getBucket()).thenReturn("fruition-storage");
-        when(minioClient.getObject(any())).thenReturn(new GetObjectResponse(
-                Headers.of(), "fruition-storage", "us-east-1",
-                source.getSourceUri(), new ByteArrayInputStream(pdfBytes)));
-        String png = java.util.Base64.getEncoder().encodeToString(pngHeader(20_000, 10));
-        when(converterClient.convertPdf(anyString(), any(), anyString(), anyString(),
-                any(java.util.function.BooleanSupplier.class)))
-                .thenReturn("앞\n\n![figure](data:image/png;base64," + png + ")\n\n뒤\n");
-        when(postgresDocumentEditStore.save(
-                anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
-                anyString(), any()))
-                .thenAnswer(invocation -> new PostgresDocumentEditSaveResult(
-                        1L, "", "", 2L, invocation.getArgument(3), Instant.now(),
-                        invocation.getArgument(6), true, false));
+    @DisplayName("ingest 실패 코드는 카탈로그 문구로, 알 수 없는 원문은 기본 문구로 저장한다")
+    void applyPipelineResult_failureStoresCatalogMessage() {
+        Document known = placeholderDocument();
+        known.markPipelineStarted("run-1", Instant.now());
+        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder")).thenReturn(Optional.of(known));
 
-        documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
+        documentService.applyPipelineResult("doc_placeholder", "run-1", "failed", "provider_rate_limited");
 
-        verify(postgresDocumentEditStore).save(
-                eq(WORKSPACE_ID), eq("doc_placeholder"), eq("앞\n\n(이미지가 너무 커서 생략됨)\n\n뒤\n"),
-                anyString(), eq(1L), eq("convert:7"), eq(USER_ID), isNull());
-        verify(assetRepository, never()).save(any());
-    }
+        assertThat(known.getStatus()).isEqualTo(DocumentStatus.failed);
+        assertThat(known.getErrorMessage()).contains("요청이 많아").doesNotContain("provider_rate_limited");
 
-    @Test
-    @DisplayName("변환 replay는 완료 metadata와 version projection을 다시 쓰지 않는다")
-    void doConvert_replayDoesNotRewriteMetadata() throws Exception {
-        Document placeholder = placeholderDocument();
-        Document source = sourcePdf();
-        byte[] pdfBytes = "%PDF-1.4".getBytes(StandardCharsets.US_ASCII);
-        String markdown = "# 변환된 본문\n";
-        String hash = DocumentEditingRules.markdown(markdown).contentHash();
-        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder")).thenReturn(Optional.of(placeholder));
-        when(documentRepository.findById(SOURCE_DOCUMENT_ID)).thenReturn(Optional.of(source));
-        when(storageProps.getBucket()).thenReturn("fruition-storage");
-        when(minioClient.getObject(any())).thenAnswer(invocation -> new GetObjectResponse(
-                Headers.of(), "fruition-storage", "us-east-1", source.getSourceUri(),
-                new ByteArrayInputStream(pdfBytes)));
-        when(converterClient.convertPdf(
-                eq("보고서.pdf"), eq(pdfBytes), eq("gemini"), eq("gemini-3.1-flash-lite"), any(java.util.function.BooleanSupplier.class)))
-                .thenReturn(markdown);
-        Instant updatedAt = Instant.parse("2026-08-14T00:00:00Z");
-        PostgresDocumentEditSaveResult first = new PostgresDocumentEditSaveResult(
-                1, "", "", 2, hash, updatedAt, USER_ID, true, false);
-        PostgresDocumentEditSaveResult replay = new PostgresDocumentEditSaveResult(
-                1, null, null, 2, hash, updatedAt, USER_ID, true, true);
-        AtomicInteger saveCalls = new AtomicInteger();
-        when(postgresDocumentEditStore.save(
-                anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
-                anyString(), any())).thenAnswer(invocation ->
-                saveCalls.getAndIncrement() == 0 ? first : replay);
+        Document raw = placeholderDocument();
+        raw.markPipelineStarted("run-2", Instant.now());
+        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder")).thenReturn(Optional.of(raw));
 
-        documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
-        DocumentMetadata completed = metadata(placeholder);
-        verify(contentVersionRepository, times(2)).insertIfAbsent(
-                eq("doc_placeholder"), anyLong(), anyString(), anyString(), eq(USER_ID), any());
+        documentService.applyPipelineResult("doc_placeholder", "run-2", "failed", "ValueError: secret detail");
 
-        documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
-
-        assertThat(metadata(placeholder)).isEqualTo(completed);
-        verify(contentVersionRepository, times(2)).insertIfAbsent(
-                eq("doc_placeholder"), anyLong(), anyString(), anyString(), eq(USER_ID), any());
-    }
-
-    @Test
-    @DisplayName("변환기 호출이 실패하면 placeholder 문서를 failed로 반영하고 원인을 남긴다")
-    void doConvert_converterFailure_marksFailed() throws Exception {
-        Document placeholder = placeholderDocument();
-        Document source = sourcePdf();
-        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder"))
-                .thenReturn(Optional.of(placeholder));
-        when(documentRepository.findById(SOURCE_DOCUMENT_ID)).thenReturn(Optional.of(source));
-        when(storageProps.getBucket()).thenReturn("fruition-storage");
-        when(minioClient.getObject(any())).thenReturn(new GetObjectResponse(
-                Headers.of(), "fruition-storage", "us-east-1",
-                source.getSourceUri(), new ByteArrayInputStream(new byte[]{1})));
-        when(converterClient.convertPdf(anyString(), any(), anyString(), anyString(), any(java.util.function.BooleanSupplier.class)))
-                .thenThrow(new DocumentConvertException("변환기 호출이 실패했습니다. status=422"));
-
-        documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
-
-        assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.failed);
-        assertThat(placeholder.getErrorMessage()).contains("status=422");
-        verify(postgresDocumentEditStore, never()).save(
-                anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
-                anyString(), any());
-    }
-
-    @Test
-    @DisplayName("원본 문서가 사라졌으면 placeholder 문서를 failed로 반영한다")
-    void doConvert_missingSource_marksFailed() {
-        Document placeholder = placeholderDocument();
-        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder"))
-                .thenReturn(Optional.of(placeholder));
-        when(documentRepository.findById(SOURCE_DOCUMENT_ID)).thenReturn(Optional.empty());
-
-        documentService.doConvert(7L, "doc_placeholder", SOURCE_DOCUMENT_ID);
-
-        assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.failed);
-        assertThat(placeholder.getErrorMessage()).contains(SOURCE_DOCUMENT_ID);
+        assertThat(raw.getErrorMessage()).isEqualTo("위키 편입에 실패했습니다.");
     }
 
     private Document placeholderDocument() {

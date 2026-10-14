@@ -120,7 +120,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 | 입력 | **Path** — `workspace_id`: `string`, `run_id`: `string`<br>**Body** — `AgentRunApproveRequest` |
 | 출력 | `200` 성공 — `JsonNode` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | 공통 오류 계약 적용 |
+| 주요 오류 | 공통 오류 계약 적용<br>`402` 크레딧 부족(`app.billing.enforce`) — 계획을 다시 돌리기 전에 가용 잔액을 확인한다. `INSUFFICIENT_CREDIT` — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -390,7 +390,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | 입력 | **Path** — `workspace_id`: `string`, `run_id`: `string`<br>**Body** — `AgentRunReviseRequest` |
 | 출력 | `200` 성공 — `JsonNode` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | 공통 오류 계약 적용 |
+| 주요 오류 | 공통 오류 계약 적용<br>`402` 크레딧 부족(`app.billing.enforce`) — 계획을 다시 돌리기 전에 가용 잔액을 확인한다. `INSUFFICIENT_CREDIT` — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -485,7 +485,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `AgentTurnRequest` |
 | 출력 | `202` Agent 실행이 대기열에 등록됨 — `AgentTurnResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 충돌 — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`409` 문서 version 충돌 — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -574,7 +574,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
   },
   "allow_web_search": false,
   "message": "이 문단을 표로 정리해줘",
-  "model": "gpt-5-nano",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "session_id": "session_0ff8564ea24047cd8144d3f48badfe3f",
   "skill_draft_excluded_literals": [
@@ -596,12 +596,15 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 - HTTP `202`: Agent 실행이 대기열에 등록됨
 - Content-Type: `*/*` (`AgentTurnResponse`)
 
+- **실패 표시:** `error`는 실패 코드(예: `provider_unavailable`)이며 사용자에게 그대로 보여주면 안 된다. 클라이언트는 `error_message`(한국어 문구)를 표시해야 한다. 코드와 문구 목록은 [API 목차](README.md#ai-실패-코드와-사용자-문구)를 따른다.
+
 ```json
 {
   "apply_operation_id": "string",
   "baseVersion": 3,
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
+  "error_message": "string",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -614,6 +617,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 요청 | `ErrorResponse` |
+| `402` | 크레딧 부족(`app.billing.enforce`, `INSUFFICIENT_CREDIT`) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 문서 version 충돌 | `ErrorResponse` |
 | `423` | 다른 사용자가 문서를 편집 중 | `ErrorResponse` |
@@ -649,7 +653,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/turn" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"session_id":"session_0ff8564ea24047cd8144d3f48badfe3f","documentId":"doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83","baseVersion":3,"message":"이 문단을 표로 정리해줘","conversationContext":{"selected_pair_ids":["pair_01"],"referenceContext":{}},"editorSnapshot":{"markdown":"# 회의록\n\n정리할 문단","target":{"endLine":3,"startLine":3,"type":"selection"}},"provider":"openai","model":"gpt-5-nano"}'
+  --data '{"session_id":"session_0ff8564ea24047cd8144d3f48badfe3f","documentId":"doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83","baseVersion":3,"message":"이 문단을 표로 정리해줘","conversationContext":{"selected_pair_ids":["pair_01"],"referenceContext":{}},"editorSnapshot":{"markdown":"# 회의록\n\n정리할 문단","target":{"endLine":3,"startLine":3,"type":"selection"}},"provider":"openai","model":"gpt-6-luna"}'
 ```
 
 ```json
@@ -658,6 +662,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
   "baseVersion": 3,
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
+  "error_message": "string",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -721,12 +726,15 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 - HTTP `200`: 결과 조회 성공
 - Content-Type: `*/*` (`AgentTurnResponse`)
 
+- **실패 표시:** `error`는 실패 코드(예: `provider_unavailable`)이며 사용자에게 그대로 보여주면 안 된다. 클라이언트는 `error_message`(한국어 문구)를 표시해야 한다. 코드와 문구 목록은 [API 목차](README.md#ai-실패-코드와-사용자-문구)를 따른다.
+
 ```json
 {
   "apply_operation_id": "string",
   "baseVersion": 3,
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
+  "error_message": "string",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -780,6 +788,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
   "baseVersion": 3,
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
+  "error_message": "string",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -1153,7 +1162,7 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
   "currency": "USD", "total_usd": 3.000000, "price_missing": false,
   "users": [{
     "user_id": "user_1", "amount_usd": 3.000000, "price_missing": false,
-    "models": [{"provider": "openai", "model": "gpt-5-nano", "calls": 12, "unknown_usage_calls": 0,
+    "models": [{"provider": "openai", "model": "gpt-6-luna", "calls": 12, "unknown_usage_calls": 0,
       "unfinished_calls": 0, "input_tokens": 2000000, "cached_input_tokens": 0, "cache_creation_tokens": 0,
       "output_tokens": 0, "reasoning_tokens": 0, "amount_usd": 3.000000, "price_missing": false}]
   }],
@@ -1173,21 +1182,26 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 {
   "user_id": "user_1", "from_at": "2026-09-01T00:00:00Z", "to_at": "2026-10-01T00:00:00Z",
   "currency": "KRW", "charge_krw_milli": 3334, "unpriced_calls": 0, "needs_review_calls": 1,
-  "models": [{"provider": "openai", "model": "gpt-5-nano", "calls": 2, "input_tokens": 1000,
+  "models": [{"provider": "openai", "model": "gpt-6-luna", "calls": 2, "input_tokens": 1000,
     "cached_input_tokens": 400, "cache_creation_tokens": 100, "output_tokens": 500, "reasoning_tokens": 300,
     "audio_seconds": 0, "tts_characters": 0, "charge_krw_milli": 3334, "unpriced_calls": 0, "needs_review_calls": 1}]
 }
 ```
 
-- 단가: `ai_model_prices`(실제 응답 모델별 토큰 USD / 1M, 오디오 USD / 분, TTS USD / 1M 글자), 환율 `fx_rates`(USD→KRW 고정), 정책 `pricing_policies`(마진·부가세 basis point). 모두 수정하지 않고 `effective_from`이 다른 새 행을 넣으며, 호출 `started_at`에 적용 중인 행을 고른다. 이슈 #78의 단위별 단가 행 대신 정산(#59)이 쓰는 `ai_model_prices`에 오디오·TTS 열을 더해 두 계산이 같은 단가표를 쓴다.
-- 원가: (입력 − 캐시 읽기 − 캐시 생성) × 입력 단가 + 캐시 읽기 × 캐시 읽기 단가 + 캐시 생성 × 캐시 생성 단가 + 출력 × 출력 단가 + 오디오·TTS. 입력은 캐시를 포함한 합계이고 reasoning은 출력에 포함돼 따로 과금하지 않는다(`UsagePricing`, 정산과 같은 식). `cost_usd_micro`는 micro-USD로 올림한다.
-- 사용자 금액: 원가 × 환율 × (1 + 마진) × (1 + 부가세)를 milli-KRW로 올림한다. 올림 전 원가로 한 번에 계산한다.
-- 상태: `charged` 금액 확정. `unpriced` 단가·환율·정책이 없어 금액을 비워 두고 합계에서 뺀다(0원으로 넘기지 않음, 경고 로그). `needs_review` 토큰을 모르는 호출(`unknown`·`failed`·`abandoned`)로 0원이며 경고 로그를 남긴다. AI에서 아직 `started`인 호출은 청구 행을 만들지 않는다.
-- 같은 호출(AI 원장 `id` = `call_id` UNIQUE)은 여러 번 수집해도 한 행이다. `charged` 행은 다시 계산하지 않아 단가가 바뀌어도 이전 청구가 변하지 않는다. `unpriced`·`needs_review` 행은 다시 수집하면 그때 단가로 갱신된다.
+- 단가: `ai_model_prices`(모델별 토큰 USD / 1M, 오디오 USD / 분, TTS USD / 1M 글자), 환율 `fx_rates`(USD→KRW, `FxRateService`가 평일 갱신), 정책 `pricing_policies`(마진·부가세·환율 버퍼 `fx_buffer_bp` basis point). 모두 수정하지 않고 `effective_from`이 다른 새 행을 넣으며, 호출 `started_at`에 적용 중인 행을 고른다. 이슈 #78의 단위별 단가 행 대신 정산(#59)이 쓰는 `ai_model_prices`에 오디오·TTS 열을 더해 두 계산이 같은 단가표를 쓴다.
+- 단가 조회 순서(#99): 실제 응답 모델(`model`)과 정확히 같은 행 → 요청 모델(`requested_model`) 행 → 없으면 `unpriced`. 단가를 찾은 이름은 `usage_charges.price_model`에 남긴다. OpenAI 응답 모델은 `gpt-5-nano-2025-08-07` 같은 스냅샷 이름이라 대개 요청 모델 단가로 계산된다.
+- 모델 전환 분류(`usage_charges.model_routing`): 응답 모델이 요청 모델과 같으면 `same`, 요청 모델 뒤에 스냅샷·버전 접미사(`-YYYY-MM-DD`, `-YYYYMMDD`, `-NNN`, `-latest`)만 붙었으면 `snapshot`, 그 밖은 공급사가 다른 모델로 보낸 `routed`다. `routed`면 `[AI 모델 전환 감지] provider=… requested=… actual=…`, 단가를 끝내 못 찾으면 `[AI 단가 미등록] provider=… model=… requested=…`를 WARN으로 남긴다. 같은 조합은 프로세스·UTC 날짜마다 한 번만 남긴다. 운영 알람(CloudWatch metric filter)이 이 접두사를 쓰므로 바꾸지 않는다.
+- 단가 시드: V70이 `AiModelCatalog`의 모든 모델에 공급사 공식 단가를 `effective_from = 2026-01-01T00:00:00Z`로 넣는다(`ON CONFLICT DO NOTHING`). 조회는 `started_at` 이전 행 중 가장 늦은 행이라 운영자가 더 늦은 시각으로 넣은 행이 그 뒤 호출에 우선한다. 카탈로그 모델마다 지금 적용 중인 단가가 있는지 `AiModelCatalogPriceIntegrationTest`가 확인한다. 공급사 단가·폐기 일정 변화는 주간 워크플로(`.github/workflows/ai-price-drift.yml`, `scripts/ai_price_drift.py`)가 LiteLLM 단가표·공급사 폐기 페이지와 비교해 이슈 `chore: AI 모델 단가·폐기 일정 주간 점검 결과`로 알린다.
+- 원가(단가 행이 정한 과금 단위, #93): 단위는 하나만 쓰고 더하지 않는다. ai는 전사·TTS에 토큰과 `audio_seconds`·`input_characters`를 함께 남기므로 더하면 이중 청구가 된다. ① 단가 행에 `audio_usd_per_minute`가 있으면 분당 단가로만 계산한다(분당 과금 모델은 토큰 단가 열이 NOT NULL이라 0이므로 토큰으로 계산하면 0원이 된다). 이때 `audio_seconds`가 없으면 0원으로 확정하지 않고 `unpriced`로 둔다. ② 아니면 `tts_usd_per_mchar`가 있으면 글자 단가로만 계산하고, 글자 수가 없으면 같은 이유로 `unpriced`다. 사용량이 없어 생긴 `unpriced`는 자동으로 복구되지 않는다. 재계산은 `usage_charges`에 저장된 사용량을 다시 쓰고, 이미 수집한 호출을 다시 수집하는 일은 사실상 없으며, AI 원장에도 그 값이 없기 때문이다. 이런 호출은 `[AI 단가 미등록]` 경고(단가 행이 있어도 사용량이 없어 계산하지 못하면 같은 접두사로 남는다)를 보고 운영자가 확인한다. ③ 그 밖은 토큰으로만 계산한다: (입력 − 캐시 읽기 − 캐시 생성) × 입력 단가 + 캐시 읽기 × 캐시 읽기 단가 + 캐시 생성 × 캐시 생성 단가 + 출력 × 출력 단가. 토큰이 없는데 오디오 길이·글자 수만 있고 그 단가가 없으면 `unpriced`다. 입력은 캐시를 포함한 합계이고 reasoning은 출력에 포함돼 따로 과금하지 않는다(`UsagePricing`, 정산과 같은 식). `cost_usd_micro`는 micro-USD로 올림한다.
+- 사용자 금액: 원가 × 환율 × (1 + 환율 버퍼) × (1 + 마진) × (1 + 부가세)를 milli-KRW로 올림한다. 올림 전 원가로 한 번에 계산한다.
+- 상태: `charged` 금액 확정. `unpriced` 단가·환율·정책이 없어 금액을 비워 두고 합계에서 뺀다(0원으로 넘기지 않음, 경고 로그). `needs_review` 0원이며 경고 로그를 남긴다. 대상은 `succeeded`·`cancelled`(스트림을 중간에 멈췄지만 usage가 남은 호출)·`failed`·`abandoned`(실패·중단했지만 공급사가 받은 사용량이 남은 호출, ADR-0027)가 아닌 호출(`unknown` 등)과, 청구 대상 상태지만 입력·출력 토큰·`audio_seconds`·`input_characters`를 모두 모르는 호출(공급사가 usage를 주지 않음, #98), 그리고 토큰 없이 글자 수만 있는 `cancelled`·`failed`·`abandoned` 합성 호출(글자 수는 요청 전에 적히므로 받은 사용량이 아님)이다. AI에서 아직 `started`인 호출은 청구 행을 만들지 않으며, 실행 단위 수집(`collectRun`)은 이를 만나면 정산하지 않고 실패로 처리해 수집 대기열 재시도(1·4·9…분 백오프)가 다시 가져온다. 그동안 크레딧 예약은 유지된다. ai가 1시간 넘게 `started`인 호출을 `abandoned`로 닫으므로 늦어도 약 1.5시간 안에 정산된다.
+- 같은 호출(AI 원장 `id` = `call_id` UNIQUE)은 여러 번 수집해도 한 행이다. `charged` 행은 다시 계산하지 않아 단가가 바뀌어도 이전 청구가 변하지 않는다. `unpriced`·`needs_review` 행은 다시 수집하거나 재계산 작업이 갱신한다.
+- 재계산(#99): 매시간(`app.usage-charge.recompute-interval-ms`, 기본 1시간) 최근 90일의 `succeeded`·`cancelled`·`failed`·`abandoned` 호출 중 `unpriced`·`needs_review` 행을 AI 원장을 다시 조회하지 않고 `usage_charges`에 저장된 사용량으로 같은 규칙에 따라 다시 계산한다. `charged` 행은 건드리지 않는다. 500행씩 `FOR UPDATE SKIP LOCKED`로 잠가 여러 Pod가 같은 행을 동시에 계산하지 않는다. 새로 `charged`가 된 행의 실행은 커밋 뒤 수집과 같은 크레딧 정산(`CreditService.settle`)으로 차감한다. V69 이전 행은 `requested_model`이 없어 응답 모델 단가로만 찾는다.
 - 수집: 비동기 실행은 결과 반영(`beginResult`)과 같은 트랜잭션에, PDF 변환은 완료(`AiCommandOutboxWriter.complete`)나 재시도 소진 실패와 같은 트랜잭션에, 동기 호출은 호출이 끝난 뒤(실패 포함) run_id를 `usage_collect_queue`에 넣는다. 실패한 동기 호출과 재시도를 다 쓴 변환은 `ai_task_runs.status`를 `failed`로 닫는다. worker가 `FOR UPDATE SKIP LOCKED`로 하나씩 선점해 AI `GET ${MODEL_USAGE_CALLS_ENDPOINT}?run_id=`(`X-Internal-Token`)로 가져온다. 실패하면 시도 횟수의 제곱(분)만큼 늦춰 최대 10번 재시도한다. 대사 작업이 하루 주기로 커서(`usage_reconcile_cursor`)부터 1시간 전까지를 하루치씩 `?finished_from=&finished_to=`로 다시 조회해 빠진 호출(늦게 커밋됨·취소된 실행·수집 포기)을 채운다. 대사 트랜잭션에는 청구 행 기록과 커서 갱신만 두고, 크레딧 정산은 커밋한 뒤 실행별로 한다. 값을 해석할 수 없는 호출 1건(시각 형식 오류 등)은 오류 로그를 남기고 건너뛴다.
 - 청구 사용자: 실행을 예약한 사용자(`ai_task_runs.user_id`)다. 실행 행이 없을 때만 AI 원장의 `user_id`를 쓰므로, AI가 사용자를 몰라 `unattributed`로 남긴 호출도 실행자에게 청구된다.
-- 동기 AI 호출의 run_id: 실행 ID가 없는 회의록 초안·녹음 파일 전사·음성 전사·Wiki 스키마 미리보기·초안은 호출마다 `ai_task_runs`에 실행(`kind:uuid`)을 등록하고 `run_id`·`user_id`를 추가 필드로 보낸다(본문 JSON 또는 query). Skill은 기존 run_id를 쓴다.
-- AI 응답 계약(FruitionKR/Fruition-ai#60): `{"calls": [{"id", "run_id", "workspace_id", "user_id", "kind", "provider", "requested_model", "model", "status", "input_tokens", "cached_input_tokens", "cache_creation_tokens", "output_tokens", "reasoning_tokens", "audio_seconds", "tts_characters", "started_at", "finished_at"}]}`. 응답 모델이 없으면 `requested_model`을 남긴다.
+- 동기 AI 호출의 run_id: 실행 ID가 없는 회의록 초안·녹음 파일 전사·음성 전사·실시간 전사는 호출마다 `ai_task_runs`에 실행(`kind:uuid`)을 등록하고, ai-svc 계약대로 **`X-Request-Id` 헤더**로 run_id를 보낸다. `workspace_id`·`user_id`는 기존처럼 본문 또는 query로 보낸다. run_id를 본문·query에 넣으면 ai-svc가 버리거나(`unattributed`로 기록) 정의되지 않은 필드로 보고 422로 거부한다. Skill은 기존 run_id를 쓴다.
+- 회의록 초안(`POST /meeting-notes/preview`) 요청 본문에는 워크스페이스에 설정된 AI 모델(`WorkspaceAiModelClient.get(workspaceId)`)의 `provider`·`model` 문자열을 항상 넣는다. ai-svc는 둘이 없으면 422로 거부한다.
+- AI 응답 계약(FruitionKR/Fruition-ai#60): `{"calls": [{"id", "run_id", "workspace_id", "user_id", "kind", "provider", "requested_model", "model", "status", "input_tokens", "cached_input_tokens", "cache_creation_tokens", "output_tokens", "reasoning_tokens", "audio_seconds", "input_characters", "started_at", "finished_at"}]}`. 응답 모델이 없으면 `model`에 `requested_model`을 남기고, `requested_model`은 따로 저장한다. AI의 `input_characters`(TTS 입력 문자 수)는 `usage_charges.tts_characters`에 저장한다.
 - 대사: `scripts/sql/usage-cost-monthly.sql`로 월별 공급사·모델 원가 합계를 공급사 청구서와 비교한다.
 - 진입점: `src/main/java/fruition/core/usage/controller/UsageChargeController.java`, `src/main/java/fruition/core/usage/service/UsageChargeService.java`
 
@@ -1207,11 +1221,16 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 ```
 
 - 원장 `credit_entries`는 추가만 한다. 부호: `purchase`·`grant` +, `charge`·`refund`(결제 환불로 회수) −, `adjust` ±(잔액), `reserve` +, `release` −(예약). 계정 잔액 = 예약을 뺀 원장 합계, 예약 = `reserve`·`release` 합계이며 `scripts/sql/credit-balance-check.sql`로 점검한다.
-- 사전 승인: AI 요청 전에 계정 행을 `FOR UPDATE`로 잠그고 kind별 예상 상한(`app.billing.estimate.<kind>`, 없으면 `app.billing.default-estimate-krw-milli`)을 `reserve`로 기록한다. 비동기 작업은 `AiCommandOutboxWriter.begin`·`reserve`(outbox 저장과 같은 트랜잭션), 동기 호출(Skill·회의록 초안·녹음 파일 전사·음성 전사·Wiki 스키마)은 `AiTaskCancellationService.register`, 실시간 전사는 연결 시작에서 예약한다. 같은 실행은 한 번만 예약하고, 사용자가 없는 시스템 작업은 예약하지 않는다.
-- `app.billing.enforce`(기본 false): true면 가용 잔액이 상한보다 작거나 잔액이 음수일 때 AI 요청 전에 `402 INSUFFICIENT_CREDIT`("크레딧 잔액이 부족합니다. 크레딧을 충전한 뒤 다시 시도해 주세요.")로 거절하고 작업 등록도 롤백한다. 비동기 회의록 초안은 `failed`/`INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유, 실시간 전사는 `insufficient_credit` 오류 후 close `1008`로 알린다. false면 거절하지 않고 예약·정산만 기록한다(무료 크레딧 정책 전 배포용).
-- 정산: 사용 금액 수집(위 절)이 실행의 호출을 가져오면 그 실행의 청구 합계를 `charge`로 차감하고 남은 예약을 `release`한다. 실행이 아직 진행 중(`running`·`cancel_requested`·`rolling_back`)이면 차감만 하고 예약은 둔다. 차감 키는 `charge:{run_id}:{user_id}:{누적 청구액}`, 해제 키는 `release:{run_id}`라 같은 실행을 여러 번 정산해도 같은 금액은 한 번만 반영되고, 대사가 늦게 채운 호출은 늘어난 만큼만 더 차감한다. 취소된 실행도 취소 확정 시 수집 대기열에 넣어 정산한다. 토큰을 모르는 호출(`needs_review`)은 현재 0원이다.
+- 사전 승인: AI 요청 전에 계정 행을 `FOR UPDATE`로 잠그고 가용 잔액(잔액 − 진행 중인 예약)을 확인한 뒤 `reserve`로 기록한다. 예약 금액은 kind별 예상 상한(`app.billing.estimate.<kind>`, 없으면 `app.billing.default-estimate-krw-milli`)이되 enforce에서는 가용 잔액을 넘지 않는다(아래). 비동기 작업은 `AiCommandOutboxWriter.begin`·`reserve`(outbox 저장과 같은 트랜잭션), 동기 호출(Skill·회의록 초안·녹음 파일 전사·음성 전사)은 `AiTaskCancellationService.register`, 실시간 전사는 연결 시작에서 예약한다. 같은 실행은 한 번만 예약한다. 사용자가 없는 시스템 정리 command(`document_deleted`)는 `user_id`가 없어 예약 경로에 들어오지 않는다. 사용자 없는 AI 요청이 예약 경로에 오면 enforce에서는 예약하지 않고 오류로 거절한다(enforce가 꺼져 있으면 예전처럼 건너뛴다).
+- `app.billing.enforce`(기본 false, 환경변수 `BILLING_ENFORCE`)가 true일 때만 거절한다(ADR-0029). 가용 잔액이 그 kind의 **최저 비용**보다 작으면 AI 요청 전에 `402 INSUFFICIENT_CREDIT`("크레딧이 부족해 작업을 시작하지 않았습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.")로 거절하고 작업 등록도 롤백한다. 통과하면 `min(예상 상한, 가용 잔액)`을 예약한다. 가용 잔액이 0이거나 음수이면(마이너스 잔액 포함) 항상 거절이다. 최저 비용은 `app.billing.minimum.<kind>`(milli-KRW)이고 설정이 없으면 그 kind 예상 상한의 10%(최소 1)다. 비동기 회의록 초안은 `failed`/`INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유(같은 문구), 실시간 전사는 `insufficient_credit` 오류 후 close `1008`로 알린다. false면 거절하지 않고 상한 전체를 예약·정산만 기록한다(실사용자 환경에서만 true로 켠다).
+- 거절 대상 진입점: Query(`query/runs`·동기 query), Agent 턴, Agent 계획 수정(`revise`)·승인(`approve`), 문서 ingest(수동 재처리·변환 뒤 자동 ingest), 변환(`convert`), lint, `restore_*`, Skill 작성·게시·수정, 회의록 초안, 회의 녹음 파일 전사, 음성 전사, 실시간 전사 시작·구간 갱신.
+- Agent 계획 수정·승인(`revise`·`approve`): path의 `run_id`는 ai-svc가 턴 처리 뒤 새로 만든 AgentRun id(uuid)이며 처음 요청의 turn id(`agent_…`)와 다르다. enforce에서 전달 전에 이 id를 `agent_run` 실행으로 `ai_task_runs`에 등록하고(`app.billing.estimate.agent_run`) 처음 요청과 같은 규칙으로 가용 잔액을 확인해 예약한다. 이미 등록된 AgentRun은 구간 갱신(`renew`)과 같은 규칙으로 예약을 바꾼다. 전달 전에 먼저 AgentRun을 조회해 호출자의 것인지 확인한다(404면 등록하지 않아 남의 id를 선점하지 못한다). 이미 끝난 상태면 예약하지 않고 전달해 ai-svc가 거절하게 한다. 부족하면 ai-svc에 전달하지 않고 `402 INSUFFICIENT_CREDIT`(처음이든 이어 가는 호출이든 "크레딧이 부족해 중단했습니다. …")로 응답한다. ai-svc가 전달을 거절(409·404·503)하면 이번 시도의 예약만 푼다(키 `release:{run_id}:abort:{n}`). 실행은 닫지 않고 `running`으로 두어 다음 승인·수정이 구간 갱신으로 가용 잔액을 다시 확인하며, 종료 해제 키 `release:{run_id}`는 진짜 종료 정산용으로 남는다. 같은 AgentRun에 동시 요청이 겹쳐 한쪽이 실패하면 그 순간 열린 예약을 함께 풀 수 있다(다음 시도가 다시 확인). 승인 대기가 `app.billing.stale-reservation-hours`를 넘겨 정리 작업이 예약을 풀었더라도, 이어 가는 승인·수정이 실행의 `updated_at`을 갱신해 다시 진행 중으로 만들고 새로 예약하며 그 예약은 종료 정산이 푼다(정산의 해제 키가 이미 쓰였으면 `release:{run_id}:late:{n}`). 종료 신호는 이 서비스가 AgentRun 상태를 돌려줄 때(`GET runs/{run_id}`, `approve`·`revise`·`reject`·`cancel` 응답)의 상태(`completed`·`partial_failed`·`failed`·`conflicted`·`rejected`·`cancelled`·`rollback_failed`)뿐이며, 그때 실행을 닫아 수집·정산 대기열에 넣는다. 사용자가 상태를 더 조회하지 않으면 종료를 알 수 없어 하루 단위 대사와 `app.billing.stale-reservation-hours`(기본 48시간) 정리가 정산한다. AgentRun의 사용량은 ai-svc 원장에 AgentRun id를 run_id로 남는다(agent_worker). 처음 계획 생성 호출은 승인·수정 전이라 이 예약에 포함되지 않고 대사가 차감한다. enforce가 꺼져 있으면 등록·예약을 하지 않는다.
+- 변환(PDF) 뒤 자동 ingest: 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 푼다(변환 상한이 ingest의 가용 잔액을 줄이지 않게 한다). 자동 ingest가 크레딧 부족으로 거절되면 변환은 성공으로 두고 재시도하지 않으며 해당 문서를 `failed`로 하고 오류 메시지를 `INSUFFICIENT_CREDIT` 문구("크레딧이 부족해 작업을 시작하지 않았습니다. …")로 남긴다.
+- post_ingest(ingest 뒤 ai-svc가 `ai.maintenance.command`로 따로 돌리는 품질 평가): 성공한 ingest 결과(`ai.task.event` `ingest`)를 받으면 그 run의 사용 금액 수집·정산을 `app.billing.post-ingest-hold-seconds`(기본 900초) 뒤로 미뤄 ingest 예약이 post_ingest가 끝날 때까지 남는다. post_ingest 종료 이벤트(`ai.task.event` `post_ingest`, `request` 없음)가 오면 그 command의 호출을 바로 수집·차감하고, 이벤트 최상위의 `ingest_run_id`가 가리키는 같은 사용자·워크스페이스의 ingest 정산을 앞당긴다. 이벤트가 오지 않거나 `ingest_run_id`가 없는 이전 ai-svc 이벤트면 보류 시간이 상한이다. ingest 결과 이벤트의 최상위 불리언 `post_ingest_dispatched`가 `false`(ai가 post_ingest command를 발행하지 않음)면 기다릴 결과가 없어 보류 없이 바로 정산한다. `true`이거나 필드가 없는 이전 ai-svc 이벤트면 성공한 ingest를 보류한다(필드 없음은 배포 순서 때문에 예전 동작을 유지하는 기본값이다). post_ingest 종료 이벤트가 ingest 결과보다 먼저 오면 `ai_task_result_receipts`에 `post_ingest_done:{ingest_run_id}`를 남겨 두고, 뒤늦게 온 ingest 결과는 보류하지 않고 바로 정산한다. 보류는 enforce가 켜져 있을 때만 하며 꺼져 있으면 ingest 결과를 받는 즉시 예전처럼 정산한다. post_ingest 호출은 별도 예약 없이 실제 사용 금액으로 차감한다.
+- 정산: 사용 금액 수집(위 절)이 실행의 호출을 가져오면 그 실행의 청구 합계를 `charge`로 차감하고 남은 예약을 `release`한다. 실행이 아직 진행 중(`running`·`cancel_requested`·`rolling_back`)이면 차감만 하고 예약은 둔다. 차감 키는 `charge:{run_id}:{user_id}:{누적 청구액}`, 해제 키는 `release:{run_id}`라 같은 실행을 여러 번 정산해도 같은 금액은 한 번만 반영되고, 대사가 늦게 채운 호출은 늘어난 만큼만 더 차감한다. 취소된 실행도 취소 확정 시 수집 대기열에 넣어 정산한다. `needs_review` 호출은 현재 0원이다. 재계산으로 나중에 `charged`가 된 호출도 같은 정산 경로로 늘어난 만큼 차감한다.
+- 마이너스 잔액(#102): 별도 한도·회수·상각 절차는 없다. 정산은 예약을 넘는 실제 금액(상한을 넘은 사용, 처음 Agent 계획 생성·post_ingest처럼 예약 밖 호출, enforce가 꺼진 환경)과 결제 환불 회수를 그대로 차감해 잔액이 음수가 될 수 있다. enforce에서는 가용 잔액이 최저 비용보다 작으므로 새 작업 시작은 402, 진행 중인 실행의 구간 갱신·Agent 승인/수정은 402 또는 close `1008`로 거절되고, 이미 받은 호출은 종료 정산이 끝까지 차감한다. 이후 충전(`purchase`)·지급(`grant`)·조정(`adjust`)이 음수부터 메운다. 환불은 가용 잔액까지만 하므로 음수면 환불할 것이 없어 409다. enforce가 꺼져 있으면 음수여도 거절하지 않는다.
 - 종료 신호가 없는 실행의 예약은 `app.billing.stale-reservation-hours`(기본 48시간)가 지나면 정리 작업이 그때까지의 청구로 정산하고 푼다. 진행 중인 실행은 건너뛰되, `ai_task_runs.updated_at`이 그 시간보다 오래된 실행(프로세스 종료로 남은 `running` 등)은 끝난 것으로 본다.
-- 실시간 전사는 연결 시작 시 `meeting_live` 상한을 예약하고, `app.billing.live-renew-seconds`(기본 60초)마다 그때까지의 호출을 수집해 차감한 뒤 남은 예약을 풀고 다음 구간 상한을 다시 예약한다(키 `release:{run_id}:{구간}`·`reserve:{run_id}:{구간}`). enforce에서 차감 뒤 가용 잔액이 상한보다 작으면 아무것도 반영하지 않고 `insufficient_credit` 오류 후 close `1008`로 연결을 닫으며, 연결 종료 정산이 사용량을 차감하고 예약을 푼다. 확정 구간은 남아 충전 뒤 새 ticket으로 이어서 녹음한다.
+- 실시간 전사는 연결 시작 시 `meeting_live` 상한을 예약하고, `app.billing.live-renew-seconds`(기본 60초)마다 그때까지의 호출을 수집해 차감한 뒤 남은 예약을 풀고 다음 구간 상한을 다시 예약한다(키 `release:{run_id}:{구간}`·`reserve:{run_id}:{구간}`). enforce에서 차감 뒤 가용 잔액이 `meeting_live`의 최저 비용(`app.billing.minimum.meeting_live`, 없으면 상한의 10%)보다 작으면 아무것도 반영하지 않고 `insufficient_credit` 오류 후 close `1008`로 연결을 닫으며, 연결 종료 정산이 사용량을 차감하고 예약을 푼다. 확정 구간은 남아 충전 뒤 새 ticket으로 이어서 녹음한다.
 - 수동 지급·조정은 `scripts/sql/credit-grant-adjust.sql`(`grant` 또는 `adjust`, `adjust`는 사유 필수)로 한다.
 - 보관: 탈퇴·워크스페이스 삭제 파기 대상에서 `credit_accounts`·`credit_entries`·`usage_charges`·`credit_orders`·`payment_events`는 제외한다(전자상거래법상 대금 결제 기록 5년 보관).
 - 진입점: `src/main/java/fruition/core/usage/controller/UsageChargeController.java`, `src/main/java/fruition/core/usage/service/CreditService.java`

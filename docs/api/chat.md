@@ -362,7 +362,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat
 #### 10. 구현 파일
 
 - 진입점: `src/main/java/fruition/core/chat/controller/ChatSessionController.java`
-- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: rename_3`)
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: rename_2`)
 - 호출자: 프론트엔드 — `src/entities/chat/api/chat.ts` 세션 이름 변경 경로
 - 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
 - 배선 상태: 배선됨
@@ -531,7 +531,7 @@ Agent turn이 만든 메시지는 `run_id`와 `action`이 함께 온다. 질의 
       "created_at": "2026-08-13T04:25:24.371948Z",
       "error_message": "string",
       "id": "string",
-      "model": "gpt-5-nano",
+      "model": "gpt-6-luna",
       "pair_id": "string",
       "partial_wiki_page_ids": [
         "string"
@@ -614,7 +614,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/s
       "created_at": "2026-08-13T04:25:24.371948Z",
       "error_message": "string",
       "id": "string",
-      "model": "gpt-5-nano",
+      "model": "gpt-6-luna",
       "pair_id": "string",
       "partial_wiki_page_ids": [
         "string"

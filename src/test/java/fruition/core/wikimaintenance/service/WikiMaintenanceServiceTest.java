@@ -60,7 +60,26 @@ class WikiMaintenanceServiceTest {
                 runStatusRequester, lintStateRepository, wikiStateRequester, objectMapper,
                 "ai.maintenance.command", workspaceAiModelClient);
         org.mockito.Mockito.lenient().when(workspaceAiModelClient.get("ws_1"))
-                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"));
+                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"));
+    }
+
+    @Test
+    void lint_withoutWikiLintPermission_isForbiddenEvenForDryRun() {
+        doThrow(new fruition.core.authz.WorkspacePermissionRequiredException("wiki.lint"))
+                .when(workspaceAccessGuard).requirePermission("ws_1", "user_1", "wiki.lint");
+
+        assertThatThrownBy(() -> service.lint("ws_1", "user_1", new WikiLintRequest(true, false)))
+                .isInstanceOf(fruition.core.authz.WorkspacePermissionRequiredException.class);
+        assertThatThrownBy(() -> service.lint("ws_1", "user_1", null))
+                .isInstanceOf(fruition.core.authz.WorkspacePermissionRequiredException.class);
+        verify(outboxWriter, never()).begin(any(), any(), any(), any());
+    }
+
+    @Test
+    void lint_checksWikiLintPermission() {
+        service.lint("ws_1", "user_1", new WikiLintRequest(false, false));
+
+        verify(workspaceAccessGuard).requirePermission("ws_1", "user_1", "wiki.lint");
     }
 
     @Test
@@ -77,7 +96,7 @@ class WikiMaintenanceServiceTest {
         ArgumentCaptor<AiCommandOutbox> outbox = ArgumentCaptor.forClass(AiCommandOutbox.class);
         verify(outboxRepository).save(outbox.capture());
         assertThat(outbox.getValue().getPayload())
-                .contains("\"provider\":\"openai\"", "\"model\":\"gpt-5-nano\"");
+                .contains("\"provider\":\"openai\"", "\"model\":\"gpt-6-luna\"");
     }
 
     @Test
@@ -98,6 +117,18 @@ class WikiMaintenanceServiceTest {
         assertThatThrownBy(() -> service.lint("ws_1", "user_2", new WikiLintRequest(null, null)))
                 .isInstanceOf(WorkspaceNotFoundException.class);
         verify(outboxRepository, never()).save(any(AiCommandOutbox.class));
+    }
+
+    @Test
+    void run_mapsFailureCodeToKoreanMessage() {
+        when(runStatusRequester.find("run-1")).thenReturn(Optional.of(
+                new PipelineRunStatusRequester.PipelineRunStatus(
+                        "run-1", null, "ws_1", "user_1", "lint", "failed", "provider_unavailable", null)));
+
+        var body = service.run("ws_1", "user_1", "run-1");
+
+        assertThat(body.path("error_code").asText()).isEqualTo("provider_unavailable");
+        assertThat(body.path("error").asText()).doesNotContain("provider_unavailable").contains("AI 서비스");
     }
 
     @Test

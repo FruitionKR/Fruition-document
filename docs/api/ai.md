@@ -3,7 +3,7 @@
 [서비스 문서](../README.md) / [document-svc](README.md)
 
 사용자용 AI 모델 설정과 AI 작업·변환·ingest Gateway API다. 모델 설정은 access-svc,
-변환은 converter, ingest·Wiki 복구는 Kafka를 통해 각 소유 서비스에 전달한다.
+변환·ingest·Wiki 복구는 Kafka를 통해 각 소유 서비스에 전달한다.
 
 - API 수: 9
 
@@ -68,8 +68,8 @@
 {
   "models": [
     {
-      "display_name": "GPT-5 nano",
-      "model": "gpt-5-nano",
+      "display_name": "GPT-6 Luna",
+      "model": "gpt-6-luna",
       "provider": "openai"
     },
     {
@@ -79,7 +79,7 @@
     },
     {
       "display_name": "Gemini 3.1 Flash-Lite",
-      "model": "gemini-3.1-flash-lite",
+      "model": "gemini-3.5-flash-lite",
       "provider": "gemini"
     },
     {
@@ -91,10 +91,11 @@
 }
 ```
 
-- provider마다 여러 모델을 반환한다(2026-10-06 기준 OpenAI 21개, Gemini 8개, Claude 9개). 순서는 provider별로 묶여 있다. 각 provider의 첫 항목은 기존 기본 모델(`gpt-5-nano`, `gemini-3.1-flash-lite`, `claude-sonnet-5`)이고, 그 뒤로 최신 모델부터 온다. 프론트는 저장된 선택이 없으면 첫 항목을 고르므로 기본 선택이 바뀌지 않는다. 위 예시는 일부만 보여준다.
-- 목록은 `AiModelCatalog`의 정적 화이트리스트다. 실제 호출에서 JSON 응답을 확인한 텍스트 생성 모델만 넣는다. 폐기된 모델(`gpt-5-chat-latest`, `gemini-2.5-*` 등), JSON 모드를 지원하지 않는 모델(`gpt-4`), image·tts·audio·embedding 계열은 넣지 않는다.
+- provider마다 여러 모델을 반환한다(2026-10-10 기준 OpenAI 14개, Gemini 5개, Claude 9개). 순서는 provider별로 묶여 있다. 각 provider의 첫 항목은 기존 기본 모델(`gpt-6-luna`, `gemini-3.5-flash-lite`, `claude-sonnet-5`)이고, 그 뒤로 최신 모델부터 온다. 프론트는 저장된 선택이 없으면 첫 항목을 고르므로 기본 선택이 바뀌지 않는다. 위 예시는 일부만 보여준다.
+- 목록은 `AiModelCatalog`의 정적 화이트리스트다. 실제 호출에서 JSON 응답을 확인한 텍스트 생성 모델만 넣는다. 폐기·종료 예정 모델(`gpt-5-nano`, `o4-mini`, `gemini-3.1-flash-lite` 등, `gpt-5-chat-latest`, `gemini-2.5-*` 등), JSON 모드를 지원하지 않는 모델(`gpt-4`), image·tts·audio·embedding 계열은 넣지 않는다.
 - `app.ai.enabled-providers`에서 비활성화한 provider의 모델은 빠진다. 같은 목록이 질의·Agent 요청과 워크스페이스 모델 설정의 `provider`/`model` 검증에도 쓰인다.
-- provider/model을 생략했을 때의 기본값은 `openai` / `gpt-5-nano`다.
+- 이 목록이 기준이다. Fruition-access에도 같은 목록이 있고, access CI가 이 저장소 `dev`의 목록과 비교해 다르면 실패한다(#45, Fruition-access#8). 목록을 바꿀 때는 이 저장소 PR을 먼저 `dev`에 머지한 뒤 access를 맞춘다.
+- provider/model을 생략했을 때의 기본값은 `openai` / `gpt-6-luna`다.
 
 #### 6. Error response
 
@@ -120,8 +121,8 @@ curl -X GET "$DOCUMENT/api/ai-models" \
 {
   "models": [
     {
-      "display_name": "GPT-5 nano",
-      "model": "gpt-5-nano",
+      "display_name": "GPT-6 Luna",
+      "model": "gpt-6-luna",
       "provider": "openai"
     },
     {
@@ -131,7 +132,7 @@ curl -X GET "$DOCUMENT/api/ai-models" \
     },
     {
       "display_name": "Gemini 3.1 Flash-Lite",
-      "model": "gemini-3.1-flash-lite",
+      "model": "gemini-3.5-flash-lite",
       "provider": "gemini"
     },
     {
@@ -203,7 +204,7 @@ ingest·lint 작업에 쓰는 provider/model 설정을 반환합니다. OWNER와
 {
   "can_update": true,
   "ingest_lint": {
-    "model": "gemini-3.1-flash-lite",
+    "model": "gemini-3.5-flash-lite",
     "provider": "gemini"
   }
 }
@@ -245,7 +246,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
 {
   "can_update": true,
   "ingest_lint": {
-    "model": "gemini-3.1-flash-lite",
+    "model": "gemini-3.5-flash-lite",
     "provider": "gemini"
   }
 }
@@ -304,7 +305,7 @@ ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있�
 ```json
 {
   "ingest_lint": {
-    "model": "gpt-5-nano",
+    "model": "gpt-6-luna",
     "provider": "openai"
   }
 }
@@ -319,7 +320,7 @@ ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있�
 {
   "can_update": true,
   "ingest_lint": {
-    "model": "gpt-5-nano",
+    "model": "gpt-6-luna",
     "provider": "openai"
   }
 }
@@ -365,14 +366,14 @@ ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있�
 curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-model-settings" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"ingest_lint":{"model":"gpt-5-nano","provider":"openai"}}'
+  --data '{"ingest_lint":{"model":"gpt-6-luna","provider":"openai"}}'
 ```
 
 ```json
 {
   "can_update": true,
   "ingest_lint": {
-    "model": "gpt-5-nano",
+    "model": "gpt-6-luna",
     "provider": "openai"
   }
 }
@@ -417,6 +418,8 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
 
 `target_display_name`은 작업 시작 시점 snapshot이다. Ingest 로그 제목과 원본 문서 표시는 현재 문서 이름을 다시 조회하지 않고 이 값을 사용한다.
 
+`operation_type`은 `document_edit`·`ingest`·`lint`·`restore`·`wiki_edit`이다. `wiki_edit`은 사람이 Wiki 페이지 본문을 고친 작업([`PUT .../wiki/pages/{id}/content`](wiki.md#summary-put-api-workspaces-workspace-id-wiki-pages-wiki-page-id-content))으로, 저장과 함께 `succeeded`로 남고 `target_display_name`은 비어 있다. 변경분은 상세 조회의 `wiki_page` 변경 한 건이다.
+
 #### 3. Auth 필요 여부
 
 - 필요
@@ -452,7 +455,8 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
       "status": "succeeded",
       "summary": "string",
       "target_document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
-      "target_display_name": "설계문서"
+      "target_display_name": "설계문서",
+      "user_id": "user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83"
     }
   ],
   "next_cursor": "string"
@@ -504,7 +508,8 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
       "status": "succeeded",
       "summary": "string",
       "target_document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
-      "target_display_name": "설계문서"
+      "target_display_name": "설계문서",
+      "user_id": "user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83"
     }
   ],
   "next_cursor": "string"
@@ -600,7 +605,8 @@ ingest·lint는 생성·삭제된 Wiki의 제목과 page_type(concept/source)을
   "status": "succeeded",
   "summary": "string",
   "target_document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
-  "target_display_name": "설계문서"
+  "target_display_name": "설계문서",
+  "user_id": "user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83"
 }
 ```
 
@@ -665,7 +671,8 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
   "status": "succeeded",
   "summary": "string",
   "target_document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
-  "target_display_name": "설계문서"
+  "target_display_name": "설계문서",
+  "user_id": "user_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83"
 }
 ```
 
@@ -690,7 +697,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 | 입력 | **Path** — `workspace_id`: `string`, `operation_id`: `string`<br>**Body** — `RestoreExecuteRequest` |
 | 출력 | `200` 문서 편집 복구 즉시 완료 — `RestoreExecuteResponse`<br>`202` Wiki 복구 queued 등록 — `RestoreExecuteResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 되돌릴 수 없는 작업이거나 대상이 없음 — `ErrorResponse`<br>`404` 작업 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 미리보기 이후 대상이 변경됨 — `ErrorResponse` |
+| 주요 오류 | `400` 되돌릴 수 없는 작업이거나 대상이 없음 — `ErrorResponse`<br>`403` 문서 편집 복구에서 실행자에게 해당 문서의 편집 권한이 없음(`DOCUMENT_WRITE_FORBIDDEN`) — `ErrorResponse`<br>`403` 위키 작업(ingest·lint)에서 작업 실행자도 OWNER도 아니고 `wiki.restore` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` 작업 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 미리보기 이후 대상이 변경됨 — `ErrorResponse`<br>`423` 문서 편집 복구에서 다른 사용자가 편집 잠금을 쥐고 있음(`DOCUMENT_EDIT_LOCKED`) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -705,6 +712,8 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 #### 2. 목적
 
 복구 대상에 따라 처리 방식이 다릅니다. 문서 편집 복구는 즉시 완료되어 200을 반환하고, Wiki 복구는 queued 상태로 등록되어 202를 반환합니다. 미리보기와 같은 계산을 다시 하고 Wiki에 반영합니다. 받치는 기여가 남지 않은 페이지는 삭제합니다. Source는 마지막 남은 ingest의 본문으로 복원하고, Concept는 과거 버전 유무와 관계없이 남은 활성 기여를 llmPipeline에 전달해 재작성합니다. 재작성이 있으면 status가 rebuilding으로 돌아오며 결과는 로그 상세로 확인합니다. ingest 되돌리기는 Wiki만 되돌리고 원문 문서는 건드리지 않습니다.
+
+사람이 고친 본문(`wiki_edit`)은 수동 기여로 남는다. ingest·lint를 되돌릴 때 이 기여는 남길 기여(`keep_contributions`)에 포함되고, 원문 문서가 없어 `document_id`를 `null`로 보낸다(ai `RestoreContributionIn.document_id: str | None`). `wiki_edit` 작업 자체를 되돌리는 것은 지원하지 않는다(`400`, 정책 결정 사항).
 
 #### 3. Auth 필요 여부
 
@@ -750,8 +759,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 되돌릴 수 없는 작업이거나 대상이 없음 | `ErrorResponse` |
+| `403` | 문서 편집 복구에서 실행자에게 해당 문서의 편집 권한이 없음(`DOCUMENT_WRITE_FORBIDDEN`). 문서·폴더 권한이 view이고 실행자가 문서 소유자·OWNER가 아닌 경우 | `ErrorResponse` |
 | `404` | 작업 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
+| `403` | 위키 작업(ingest·lint)인데 작업 실행자도 OWNER도 아니고 `wiki.restore` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) | `ErrorResponse` |
 | `409` | 미리보기 이후 대상이 변경됨 | `ErrorResponse` |
+| `423` | 문서 편집 복구에서 다른 사용자가 편집 잠금을 쥐고 있음(`DOCUMENT_EDIT_LOCKED`) | `ErrorResponse` |
 
 ```json
 {
@@ -777,6 +789,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 위키 작업(ingest·lint)은 작업을 실행한 본인, 워크스페이스 OWNER, `wiki.restore` 권한을 받은 멤버만 되돌릴 수 있다. 문서 편집 복구에는 적용하지 않는다.
 
 #### 9. 예시 요청/응답
 
@@ -821,7 +834,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-op
 | 입력 | **Path** — `workspace_id`: `string`, `operation_id`: `string` |
 | 출력 | `200` 계산 성공 — `RestorePreviewResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `404` 작업 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
+| 주요 오류 | `403` 위키 작업(ingest·lint)에서 작업 실행자도 OWNER도 아니고 `wiki.restore` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` 작업 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -885,6 +898,7 @@ Wiki 복구에서 남은 기여가 있는 Concept의 `pages[].action`은 항상 
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
+| `403` | 위키 작업(ingest·lint)인데 작업 실행자도 OWNER도 아니고 `wiki.restore` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) | `ErrorResponse` |
 | `404` | 작업 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 
 ```json
@@ -905,6 +919,7 @@ Wiki 복구에서 남은 기여가 있는 Concept의 `pages[].action`은 항상 
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 복구 실행과 같은 규칙으로 위키 작업(ingest·lint)은 실행자 본인, OWNER, `wiki.restore` 권한자만 미리볼 수 있다.
 
 #### 9. 예시 요청/응답
 
@@ -957,7 +972,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string` |
 | 출력 | `202` 변환 요청 접수 및 placeholder 문서 생성 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` PDF 원본 문서가 아니거나 잘못된 Idempotency-Key — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
+| 주요 오류 | `400` PDF 원본 문서가 아니거나 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 남이 올린 PDF인데 `document.convert` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`). 업로더 본인과 OWNER는 항상 가능 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -971,7 +986,9 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 
 #### 2. 목적
 
-PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을 편집 가능 placeholder 문서를 즉시 만들어 반환하고, 실제 변환은 백그라운드에서 진행됩니다. worker는 실행 시점의 workspace `ingest_lint` provider/model을 converter에 전달하며 converter는 선택 provider의 API key로 복원합니다. AWS 모드에서는 10페이지 묶음 결과를 placeholder 문서 하나에 이어 붙이고(페이지 주석은 원본 PDF 기준 번호), Markdown이 5MB를 넘을 때만 다음 파트 문서(`origin=convert_part`)를 만듭니다. 변환이 끝나면 문서마다 최종 버전을 한 번 기록하고 AI 큐에 한 번 등록합니다([ADR-0024](../adr/0024-converted-pdf-single-document.md)). 변환 결과는 저장 전에 거릅니다. 원시 HTML 중 서식 태그(`<u>`, `<span>` 등)는 태그만 지우고 글자를 남기며, 줄·칸을 나누던 태그(`<br>`, `<td>` 등)는 공백으로, 실행·삽입 태그(`<script>`, `<img>` 등)는 지우고, 그 밖의 태그는 글자로 보이게 escape합니다. HTML 주석은 남깁니다. 외부 주소(scheme이 있거나 `//`·`/\`로 시작)의 이미지는 `외부 이미지(host)` 글자로 바꿉니다. 링크는 사용자가 올린 원문 내용이라 http·https·mailto·상대 경로를 남기고, 그 밖의 주소(`javascript:` 등)는 링크를 빼고 글자만 남깁니다. 코드 블록과 인라인 코드는 바꾸지 않습니다. 변환 이미지는 첨부 이미지와 같은 상한(10MB, 가로·세로 16,384px)을 넘으면 저장하지 않고 `(이미지가 너무 커서 생략됨)` 문구로 바꿉니다.
+PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을 편집 가능 placeholder 문서를 즉시 만들어 반환하고, 실제 변환은 백그라운드에서 진행됩니다. 요청 트랜잭션이 첫 batch(0쪽부터 `CONVERT_PAGES_PER_BATCH`쪽, 기본 10) command를 Kafka `ai.convert.command`에 발행하고(요청 시점의 workspace `ingest_lint` provider/model 포함), converter worker가 돌려준 결과 이벤트(`ai.task.event` `kind=convert_batch`)로 진행합니다. 첫 결과로 전체 쪽수를 알면 한 문서에 batch를 최대 `CONVERT_MAX_IN_FLIGHT`개(기본 3)까지 동시에 열고, 쪽 순서가 이어진 결과부터 병합합니다(순서가 뒤바뀐 결과는 앞 쪽이 채워질 때까지 기다림). 이벤트 계약은 [AI PDF 변환 command](https://github.com/FruitionKR/Fruition-ai/blob/main/docs/api/tasks.md#pdf-변환-command)와 [AI ADR 0034](https://github.com/FruitionKR/Fruition-ai/blob/main/docs/adr/0034-async-pdf-conversion.md)를 따르며 AWS·로컬 경로가 같습니다. 결과를 placeholder 문서 하나에 이어 붙이고(페이지 주석은 원본 PDF 기준 번호), Markdown이 5MB를 넘을 때만 다음 파트 문서(`origin=convert_part`)를 만듭니다. 변환이 끝나면 문서마다 최종 버전을 한 번 기록하고 AI 큐에 한 번 등록합니다([ADR-0024](../adr/0024-converted-pdf-single-document.md)). 변환 결과는 저장 전에 거릅니다. 원시 HTML 중 서식 태그(`<u>`, `<span>` 등)는 태그만 지우고 글자를 남기며, 줄·칸을 나누던 태그(`<br>`, `<td>` 등)는 공백으로, 실행·삽입 태그(`<script>`, `<img>` 등)는 지우고, 그 밖의 태그는 글자로 보이게 escape합니다. HTML 주석은 남깁니다. 외부 주소(scheme이 있거나 `//`·`/\`로 시작)의 이미지는 `외부 이미지(host)` 글자로 바꿉니다. 링크는 사용자가 올린 원문 내용이라 http·https·mailto·상대 경로를 남기고, 그 밖의 주소(`javascript:` 등)는 링크를 빼고 글자만 남깁니다. 코드 블록과 인라인 코드는 바꾸지 않습니다. 변환 이미지는 첨부 이미지와 같은 상한(10MB, 가로·세로 16,384px)을 넘으면 저장하지 않고 `(이미지가 너무 커서 생략됨)` 문구로 바꿉니다.
+
+변환 batch가 실패하면 placeholder 문서는 `failed`가 되고 `error_message`는 `PDF 변환에 실패했습니다. ` 뒤에 AI 실패 코드별 문구를 붙입니다(공통 코드 문구는 `AiErrorMessages` 목록을 따르고, `input_rejected`는 암호·손상 PDF 문구, 그 밖은 "변환 중 오류가 발생했습니다."). 예외 원문은 싣지 않습니다. AI가 batch를 절반으로 나눠 다시 시도한 뒤의 실패이므로 문서 단위 재시도는 없고, 변환 run을 닫아 크레딧 예약을 풉니다. 나머지 결과 대기 batch는 batch `run_id`마다 AI 취소 API로 취소합니다. 사용자 취소·placeholder 삭제도 결과 대기 batch를 모두 취소합니다. 취소·삭제·종료된 변환의 늦은 결과 이벤트와 같은 batch의 중복 이벤트는 무시합니다.
 
 #### 3. Auth 필요 여부
 
@@ -1013,6 +1030,7 @@ PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | PDF 원본 문서가 아니거나 잘못된 Idempotency-Key | `ErrorResponse` |
+| `403` | 남이 올린 PDF인데 `document.convert` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`). 업로더 본인과 OWNER는 항상 가능 | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 | `ErrorResponse` |
 
@@ -1040,6 +1058,8 @@ PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 원본 PDF를 올린 사용자 본인, 워크스페이스 OWNER, `document.convert` 권한을 받은 멤버만 변환을 요청할 수 있다.
+- 변환이 끝나면 워크스페이스 설정 `auto_ingest_on_upload`가 켜져 있고 요청자에게 `wiki.ingest`가 있을 때만 자동으로 위키에 편입한다(AWS 묶음 경로와 단일 경로 모두). 그렇지 않으면 편입하지 않는다.
 
 #### 9. 예시 요청/응답
 
@@ -1069,7 +1089,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 - 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: convertMarkdown`)
 - 호출자: 프론트엔드 — `src/entities/document/api/document.ts:97`(`convertDocumentToMarkdown`)
-- 하위 호출: 동기 구간에서는 없음(`202` 반환). 커밋 후 비동기로 converter-svc `POST /convert`·`POST /convert-source-batch`(`ConverterClient`, `${CONVERTER_ENDPOINT}`, 인증 헤더 없음·NetworkPolicy 격리)와 access-svc `WorkspaceAiModelClient`를 호출한다
+- 하위 호출: access-svc `WorkspaceAiModelClient`로 provider/model을 읽고 Kafka `ai.convert.command`에 첫 batch command를 outbox로 발행한다(`202` 반환). 이후 batch 발행·결과 병합은 `ai.task.event` `convert_batch` 소비가 맡고, 취소는 AI `POST /internal/ai/tasks/{run_id}/cancel`을 batch `run_id`마다 호출한다. converter HTTP 호출은 없다([ADR 0034](https://github.com/FruitionKR/Fruition-ai/blob/main/docs/adr/0034-async-pdf-conversion.md))
+- 사용량 귀속(#91): converter의 공급사 호출(selective repair)을 변환 요청 때 만든 실행 `convert:<placeholder 문서 ID>`에 귀속한다. AI는 command의 `parent_run_id`(`convert:<placeholder 문서 ID>`)를 사용량 `run_id`로, command의 `workspace_id`·`user_id`를 귀속 대상으로 쓴다. batch 발행은 `ai_task_runs` 행도 크레딧 예약도 만들지 않으므로(outbox에만 저장) 예약은 변환 요청 때 한 번이다. 변환 run은 마지막 batch를 병합한 직후 정산하고 닫는다. AI의 `ai.convert.command` worker 배포와 함께 배포한다.
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-convert-markdown)
@@ -1085,7 +1106,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string` |
 | 출력 | `202` 재처리 큐 등록됨 — `DocumentIngestResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 편집 가능한 Markdown 문서가 아님 — `ErrorResponse`<br>`403` 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 이미 처리 중인 문서 — `ErrorResponse` |
+| 주요 오류 | `400` 편집 가능한 Markdown 문서가 아님 — `ErrorResponse`<br>`403` `wiki.ingest` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능) 또는 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 이미 처리 중인 문서 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1133,7 +1154,7 @@ Markdown 문서를 Wiki 파이프라인에 넣습니다. 일반 문서는 최신
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 편집 가능한 Markdown 문서가 아니거나 스킬 참고 문서임 | `ErrorResponse` |
-| `403` | 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
+| `403` | `wiki.ingest` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능) 또는 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 이미 처리 중인 문서 | `ErrorResponse` |
 
@@ -1161,6 +1182,7 @@ Markdown 문서를 Wiki 파이프라인에 넣습니다. 일반 문서는 최신
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 일반 문서와 채팅 내보내기 문서 모두 `wiki.ingest` 권한(OWNER는 항상 가능)이 필요하다.
 
 #### 9. 예시 요청/응답
 

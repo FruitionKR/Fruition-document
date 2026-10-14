@@ -3,7 +3,10 @@ package fruition.core.document.domain;
 import jakarta.persistence.*;
 import java.time.Instant;
 
-/** PDF → Markdown 변환 대기열 행. documentId는 변환 결과를 담을 placeholder Markdown 문서다. */
+/**
+ * PDF → Markdown 변환 진행 상태 행. documentId는 변환 결과를 담을 placeholder Markdown 문서다.
+ * completedPages는 쪽 순서로 병합을 마친 쪽 수, nextStartPage는 다음에 발행할 batch의 시작 쪽(0부터)이다.
+ */
 @Entity
 @Table(name = "document_convert_queue")
 public class DocumentConvertQueue {
@@ -28,26 +31,26 @@ public class DocumentConvertQueue {
     private int completedPages;
     @Column(name = "total_pages", nullable = false)
     private int totalPages;
-    @Column(nullable = false)
-    private int attempts;
+    @Column(name = "next_start_page", nullable = false)
+    private int nextStartPage;
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
-    @Column(name = "next_attempt_at", nullable = false)
-    private Instant nextAttemptAt;
 
     public int getCompletedPages() { return completedPages; }
     public int getTotalPages() { return totalPages; }
-    public int getAttempts() { return attempts; }
+    public int getNextStartPage() { return nextStartPage; }
     public void checkpoint(int pages, int total) {
         completedPages = Math.max(completedPages, pages);
         totalPages = total;
         updatedAt = Instant.now();
     }
-    public void heartbeat() { updatedAt = Instant.now(); }
-    public void retry() {
-        attempts++;
-        status = attempts < 3 ? "pending" : "failed";
-        nextAttemptAt = Instant.now().plusSeconds(30L * attempts);
+    /** 첫 결과에서 전체 쪽수를 알게 된다. 병합 전에도 다음 batch 발행에 쓴다. */
+    public void recordTotalPages(int total) {
+        totalPages = total;
+        updatedAt = Instant.now();
+    }
+    public void dispatchedUpTo(int nextStartPage) {
+        this.nextStartPage = nextStartPage;
         updatedAt = Instant.now();
     }
 
@@ -58,13 +61,11 @@ public class DocumentConvertQueue {
         this.sourceDocumentId = sourceDocumentId;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
-        this.nextAttemptAt = this.createdAt;
-        this.status = "pending";
+        this.status = "processing";
     }
 
     public Long getId() { return id; }
     public String getDocumentId() { return documentId; }
     public String getSourceDocumentId() { return sourceDocumentId; }
     public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; heartbeat(); }
 }

@@ -65,7 +65,7 @@ class OperationQueryControllerTest {
         when(queryService.list(eq(WORKSPACE_ID), eq(USER_ID), eq(List.of("ingest")), isNull(),
                 eq("2026-08-01T00:00:00Z"), eq(50)))
                 .thenReturn(new OperationLogListResponse(List.of(
-                        new OperationLogListResponse.Item(OPERATION_ID, "ingest", "succeeded",
+                        new OperationLogListResponse.Item(OPERATION_ID, "ingest", USER_ID, "succeeded",
                                 "doc_A", "설계 문서", "요약", 3, null, NOW, NOW)),
                         "2026-07-31T00:00:00Z"));
 
@@ -77,6 +77,7 @@ class OperationQueryControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.logs[0].operation_id").value(OPERATION_ID))
                 .andExpect(jsonPath("$.logs[0].operation_type").value("ingest"))
+                .andExpect(jsonPath("$.logs[0].user_id").value(USER_ID))
                 .andExpect(jsonPath("$.logs[0].target_display_name").value("설계 문서"))
                 .andExpect(jsonPath("$.logs[0].changed_resource_count").value(3))
                 .andExpect(jsonPath("$.next_cursor").value("2026-07-31T00:00:00Z"));
@@ -88,7 +89,7 @@ class OperationQueryControllerTest {
         when(queryService.list(eq(WORKSPACE_ID), eq(USER_ID), eq(List.of("lint")), isNull(),
                 isNull(), eq(20)))
                 .thenReturn(new OperationLogListResponse(List.of(
-                        new OperationLogListResponse.Item(OPERATION_ID, "lint", "succeeded",
+                        new OperationLogListResponse.Item(OPERATION_ID, "lint", USER_ID, "succeeded",
                                 null, "위키 다듬기", "Wiki lint로 페이지 2개를 변경했습니다.",
                                 2, null, NOW, NOW)), null));
 
@@ -134,13 +135,14 @@ class OperationQueryControllerTest {
     @DisplayName("Wiki 작업 상세는 유형과 제목을 전달하고 변경분을 생략한다")
     void detailIncludesWikiTitles() throws Exception {
         when(queryService.detail(WORKSPACE_ID, USER_ID, OPERATION_ID))
-                .thenReturn(new OperationLogDetailResponse(OPERATION_ID, "ingest", "succeeded",
+                .thenReturn(new OperationLogDetailResponse(OPERATION_ID, "ingest", USER_ID, "succeeded",
                         "doc_A", "요약", 1, null, NOW, NOW,
                         List.of(new OperationLogDetailResponse.Change(1L, "wiki_page", "wp_C3",
                                 "개념 C3", null, null, "created", null, null, null, null, null, "concept"))));
 
         mockMvc.perform(get(BASE + "/" + OPERATION_ID).header("Authorization", bearer()))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user_id").value(USER_ID))
                 .andExpect(jsonPath("$.changes[0].resource_id").value("wp_C3"))
                 .andExpect(jsonPath("$.changes[0].resource_display_name").value("개념 C3"))
                 .andExpect(jsonPath("$.changes[0].page_type").value("concept"))
@@ -163,7 +165,7 @@ class OperationQueryControllerTest {
                                         "wp_delete", "delete", 0))),
                         new OperationLogDetailResponse.RestoreResult(1, 0, 0, 0, 1, 0));
         when(queryService.detail(WORKSPACE_ID, USER_ID, OPERATION_ID))
-                .thenReturn(new OperationLogDetailResponse(OPERATION_ID, "restore", "rebuilding",
+                .thenReturn(new OperationLogDetailResponse(OPERATION_ID, "restore", USER_ID, "rebuilding",
                         "doc_A", null, "복구 중", 2, "op_a1", NOW, null,
                         List.of(new OperationLogDetailResponse.Change(1L, "wiki_page", "wp_delete",
                                 null, 3L, null, "deleted", null, null, null, null, null, null)), restore));

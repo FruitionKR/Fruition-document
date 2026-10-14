@@ -1,6 +1,7 @@
 package fruition.core.aitask.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.aitask.AiErrorMessages;
 import fruition.core.chat.service.ChatEvidenceRecorder;
 import fruition.core.chat.service.ChatTurnRecorder;
 import org.slf4j.Logger;
@@ -23,6 +24,8 @@ import fruition.core.aihistory.service.RestoreExecuteService;
 import fruition.core.aihistory.service.RestoreOperationLifecycle;
 import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.core.document.service.DocumentService;
+import fruition.core.meeting.MeetingNotesService;
+import fruition.core.meeting.MeetingTranscriptionService;
 import fruition.core.usage.service.UsageChargeService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -58,6 +61,8 @@ public class AiTaskResultApplier {
     private final RestoreOperationLifecycle restoreLifecycle;
     private final DocumentService documentService;
     private final UsageChargeService usageCharges;
+    private final MeetingNotesService meetingNotesService;
+    private final MeetingTranscriptionService meetingTranscription;
 
     public AiTaskResultApplier(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
                                QueryService queryService,
@@ -70,7 +75,10 @@ public class AiTaskResultApplier {
                                DocumentService documentService,
                                ChatTurnRecorder chatTurnRecorder,
                                ChatEvidenceRecorder chatEvidenceRecorder,
-                               UsageChargeService usageCharges) {
+                               UsageChargeService usageCharges,
+                               MeetingNotesService meetingNotesService,
+                               MeetingTranscriptionService meetingTranscription) {
+        this.meetingTranscription = meetingTranscription;
         this.chatTurnRecorder = chatTurnRecorder;
         this.chatEvidenceRecorder = chatEvidenceRecorder;
         this.jdbcTemplate = jdbcTemplate;
@@ -84,6 +92,7 @@ public class AiTaskResultApplier {
         this.restoreLifecycle = restoreLifecycle;
         this.documentService = documentService;
         this.usageCharges = usageCharges;
+        this.meetingNotesService = meetingNotesService;
     }
 
     @Transactional
@@ -154,6 +163,15 @@ public class AiTaskResultApplier {
         wikiMaintenanceService.markLintSucceeded(workspaceId);
     }
 
+    /** 회의록 초안 결과. 같은 트랜잭션에서 run을 닫고 행을 반영한다. 닫힌 run의 재전달은 무시한다. */
+    @Transactional
+    public void applyMeetingNotes(JsonNode event) {
+        String runId = text(event, "run_id");
+        if (!beginResult(runId)) return;
+        boolean succeeded = "succeeded".equals(text(event, "status"));
+        meetingNotesService.applyResult(runId, succeeded, event.path("payload"), event.path("error").asText(null));
+    }
+
     @Transactional
     public void applyRestore(JsonNode event) {
         String eventId = text(event, "event_id");
@@ -194,7 +212,10 @@ public class AiTaskResultApplier {
     public void applyIngest(JsonNode event) {
         String eventId = text(event, "event_id");
         String runId = text(event, "run_id");
-        if (!beginResult(runId)) return;
+        // 성공한 ingest만 AI가 post_ingest를 이어서 돌린다(#102). AI가 post_ingest_dispatched=false로 알린 편입은 기다릴 결과가 없어 바로 정산한다.
+        // 필드가 없는 이벤트(이전 ai-svc)는 예전 동작인 보류를 유지한다. 배포 순서 때문에 남기는 기본값이며 별도 호환 경로가 아니다.
+        boolean holdForPostIngest = "succeeded".equals(text(event, "status")) && event.path("post_ingest_dispatched").asBoolean(true);
+        if (!beginResult(runId, holdForPostIngest)) return;
         if (jdbcTemplate.update("""
                 INSERT INTO ai_task_result_receipts (event_id, run_id, task_kind)
                 VALUES (?, ?, 'ingest') ON CONFLICT (event_id) DO NOTHING
@@ -208,6 +229,29 @@ public class AiTaskResultApplier {
         documentService.applyPipelineResult(documentId, runId,
                 "succeeded".equals(text(event, "status")) ? "succeeded" : "failed",
                 event.path("error").asText(null));
+    }
+
+    /**
+     * PDF 변환 batch 결과(ai ADR 0034). batch run_id는 document가 등록한 실행이 아니라 변환 run({@code convert:<id>})의
+     * 하위 단위라 {@link #beginResult}를 쓰지 않는다. 멱등·병합은 변환 대기열 행 잠금 안에서 처리한다.
+     */
+    public void applyConvertBatch(JsonNode event) {
+        documentService.applyConvertBatch(event);
+    }
+
+    /** 회의 녹음 전사 결과. 회의 매칭·중복 무시·run 정산은 {@link MeetingTranscriptionService}가 한다. */
+    public void applyMeetingTranscription(JsonNode event) {
+        meetingTranscription.apply(event);
+    }
+
+    /** post_ingest(품질 평가) 종료 이벤트. 결과는 AI에 남아 있어 사용 금액 정산과 ingest 예약 해제만 한다. */
+    @Transactional
+    public void applyPostIngest(JsonNode event) {
+        // 사용자 귀속이 없는 이벤트로 consumer 재시도 루프를 만들지 않는다.
+        String workspaceId = event.path("workspace_id").asText("");
+        String userId = event.path("user_id").asText("");
+        if (workspaceId.isBlank() || userId.isBlank()) return;
+        usageCharges.releasePostIngestHold(text(event, "run_id"), event.path("ingest_run_id").asText(null), workspaceId, userId);
     }
 
     /**
@@ -285,7 +329,7 @@ public class AiTaskResultApplier {
                         payload.path("action").asText(null), agentMessageContent(payload));
                 recordAgentChatEvidence(assistantMessageId, payload);
             } else {
-                chatTurnRecorder.markFailed(assistantMessageId, describeAgentError(errorCode));
+                chatTurnRecorder.markFailed(assistantMessageId, AiErrorMessages.agent(errorCode));
             }
         } catch (RuntimeException e) {
             log.warn("[Agent 채팅 기록 실패] runId={} assistantMessageId={} errorType={}",
@@ -294,23 +338,6 @@ public class AiTaskResultApplier {
     }
 
     public record AgentApplyResult(boolean applied, String error) {}
-
-    /**
-     * 내부 오류 코드에 대응하는 사용자 문구. 코드는 판정과 로그에 쓰고, 화면에는 이 문장을 보낸다.
-     * 여기 없는 값은 pipeline이 준 사유 문장이라 그대로 내보낸다.
-     */
-    private static final Map<String, String> AGENT_ERROR_MESSAGE = Map.of(
-            "agent_turn_failed", "Agent 처리 중 오류가 발생했습니다.",
-            "agent_result_invalid_request", "Agent 결과의 요청 정보가 올바르지 않습니다.",
-            "agent_result_invalid_payload", "Agent 결과 형식이 올바르지 않습니다.",
-            "agent_result_unsupported_action", "지원하지 않는 Agent 처리 결과입니다.",
-            "agent_result_missing_canonical_markdown", "편집안 본문이 비어 있어 적용할 수 없습니다.",
-            "agent_result_request_mismatch", "요청과 결과가 달라 적용할 수 없습니다.");
-
-    /** 화면·SSE로 나갈 문구. 내부 코드가 그대로 사용자에게 보이지 않게 한다. */
-    public static String describeAgentError(String errorCode) {
-        return AGENT_ERROR_MESSAGE.getOrDefault(errorCode, errorCode);
-    }
 
     /**
      * AI가 질의로 판정한 턴은 답변과 함께 근거가 온다. 질의 경로와 같은 자리에 남겨야
@@ -498,7 +525,7 @@ public class AiTaskResultApplier {
             return new QueryProjection(runId, response, null);
         }
 
-        String error = canonical.path("error").asText("질의 처리 중 오류가 발생했습니다.");
+        String error = canonical.path("error").asText("internal_error");
         if (first) {
             queryService.failAsync(runId, context, error);
         }
@@ -532,13 +559,24 @@ public class AiTaskResultApplier {
     }
 
     private boolean beginResult(String runId) {
+        return beginResult(runId, false);
+    }
+
+    /** holdForPostIngest면 사용 금액 수집·정산을 미뤄 post_ingest가 끝날 때까지 예약을 남긴다. */
+    private boolean beginResult(String runId, boolean holdForPostIngest) {
         var states = jdbcTemplate.queryForList("SELECT status FROM ai_task_runs WHERE id = ? FOR UPDATE", String.class, runId);
-        if (states.isEmpty()) throw new IllegalStateException("AI 작업 등록을 찾을 수 없습니다: " + runId);
+        if (states.isEmpty()) {
+            // 파기(#88)로 지워진 실행이다. 예외를 던지면 같은 레코드를 끝없이 재시도해 파티션 전체가 멈춘다.
+            // 실행 기록 없이 나간 command(document_deleted 등)의 결과도 여기 오지만, 지금은 반영하지 않는 종류다.
+            log.warn("[AI task 결과 건너뜀] runId={} reason=run_not_found", runId);
+            return false;
+        }
         if (!Set.of("running", "completed").contains(states.getFirst())) return false;
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
         jdbcTemplate.update("UPDATE ai_task_runs SET status = 'completed', updated_at = now() WHERE id = ?", runId);
         // 결과 반영과 같은 트랜잭션에 넣어 커밋된 뒤에 사용 금액을 수집한다(#78).
-        usageCharges.enqueue(runId);
+        if (holdForPostIngest) usageCharges.enqueueAfterPostIngest(runId);
+        else usageCharges.enqueue(runId);
         return true;
     }
 
@@ -563,5 +601,6 @@ public class AiTaskResultApplier {
         return value;
     }
 
+    /** error는 ai가 보낸 실패 코드다. 사용자 문구는 소비 쪽에서 AiErrorMessages로 만든다. */
     public record QueryProjection(String runId, QueryResponse response, String error) {}
 }

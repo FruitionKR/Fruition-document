@@ -1,5 +1,7 @@
 package fruition.core.wikimaintenance.service;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -13,6 +15,7 @@ import fruition.core.wikimaintenance.dto.WikiMaintenanceStatusResponse;
 import fruition.core.wikimaintenance.exception.PipelineWikiMaintenanceException;
 import fruition.core.wikimaintenance.repository.WikiLintStateRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.authz.WorkspacePermissions;
 import fruition.core.authz.WorkspaceAiModelClient;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
@@ -57,6 +60,8 @@ public class WikiMaintenanceService {
     @Transactional
     public JsonNode lint(String workspaceId, String userId, WikiLintRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
+        // dry_run도 LLM 비용을 쓰므로 모든 lint 요청에 권한을 요구한다.
+        workspaceAccessGuard.requirePermission(workspaceId, userId, WorkspacePermissions.WIKI_LINT);
         WikiLintRequest safe = request == null ? new WikiLintRequest(null, null) : request;
         boolean dryRun = !Boolean.FALSE.equals(safe.dryRun());
         String runId = UUID.randomUUID().toString();
@@ -76,7 +81,13 @@ public class WikiMaintenanceService {
                 .filter(value -> workspaceId.equals(value.workspaceId()) && userId.equals(value.userId()))
                 .orElseThrow(() -> new PipelineWikiMaintenanceException(
                         "Wiki maintenance run을 찾을 수 없습니다.", 404, null));
-        return objectMapper.valueToTree(run);
+        // error는 ai가 보낸 코드다. 화면에는 한국어 문구를 error로, 코드를 error_code로 내보낸다.
+        var node = (ObjectNode) objectMapper.valueToTree(run);
+        if (run.error() != null) {
+            node.put("error_code", run.error());
+            node.put("error", AiErrorMessages.lint(run.error()));
+        }
+        return node;
     }
 
     /** 마지막 lint 성공 이후 위키 페이지가 변경됐으면 needs_lint = true. */

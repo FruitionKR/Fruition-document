@@ -40,39 +40,26 @@ class DocumentApplicationTests {
 	}
 
 	@Test
-	void flywayPreparesWikiBoundaryWithoutDroppingDataTables() {
+	void flywayDropsLegacyAiTablesAndKeepsInUseOnes() {
 		for (String table : new String[]{
-				"pipeline_runs",
-				"wiki_page_embeddings",
-				"wiki_embedding_vectors",
-				"wiki_embedding_units",
-				"wiki_pages",
-				"source_blocks"
+				"pipeline_runs", "wiki_page_embeddings", "wiki_embedding_vectors", "wiki_embedding_units",
+				"wiki_pages", "wiki_page_links", "source_blocks", "document_wiki_links", "document_processing_queue",
+				"skills", "skill_versions", "skill_version_sources", "agent_runs", "agent_plans",
+				"agent_plan_operations", "agent_approvals", "agent_jobs", "agent_tool_executions",
+				"agent_run_artifacts", "checkpoint_migrations", "checkpoints", "checkpoint_blobs", "checkpoint_writes"
 		}) {
-			Boolean exists = jdbcTemplate.queryForObject(
-					"SELECT to_regclass(?) IS NOT NULL",
-					Boolean.class,
-					"public." + table
-			);
-			assertThat(exists).as(table).isTrue();
+			assertThat(tableExists(table)).as(table).isFalse();
 		}
-		Integer crossDatabaseConstraints = jdbcTemplate.queryForObject("""
-				SELECT count(*)
-				FROM information_schema.table_constraints
-				WHERE constraint_name IN (
-				    'fk_wiki_page_versions_page',
-				    'fk_wiki_page_contributions_page',
-				    'pipeline_runs_document_id_fkey'
-				)
-				""", Integer.class);
-		assertThat(crossDatabaseConstraints).isZero();
-		Integer actorColumns = jdbcTemplate.queryForObject("""
-				SELECT count(*)
-				FROM information_schema.columns
-				WHERE table_name = 'pipeline_runs'
-				  AND column_name IN ('user_id', 'workspace_id')
-				""", Integer.class);
-		assertThat(actorColumns).isEqualTo(2);
+		for (String table : new String[]{
+				"wiki_page_versions", "wiki_page_contributions", "wiki_lint_state", "chat_partial_wiki"
+		}) {
+			assertThat(tableExists(table)).as(table).isTrue();
+		}
+	}
+
+	private boolean tableExists(String table) {
+		return Boolean.TRUE.equals(jdbcTemplate.queryForObject(
+				"SELECT to_regclass(?) IS NOT NULL", Boolean.class, "public." + table));
 	}
 
 	/** dev-up.sh와 README가 안내하는 진입 URL이다. permit 목록에서 빠지면 401이 되므로 회귀를 막는다. */

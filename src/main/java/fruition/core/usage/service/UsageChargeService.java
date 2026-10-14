@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import fruition.core.aitask.AiErrorMessages;
 import fruition.core.aitask.service.AiTaskCancellationService;
 import fruition.shared.http.PipelineClientFactory;
 import org.slf4j.Logger;
@@ -23,13 +24,18 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 /**
  * 호출 단위 AI 사용 금액(#78). AI 원장의 호출 1건을 {@code usage_charges} 1행으로 옮기며 금액을 계산한다.
@@ -40,17 +46,26 @@ import java.util.function.Function;
  *   <li>같은 호출(call_id)은 여러 번 수집해도 한 행이다. 금액이 확정된({@code charged}) 행은 다시 계산하지 않아
  *       이후 단가가 바뀌어도 과거 청구가 변하지 않는다.</li>
  *   <li>단가·환율·정책 버전은 호출 {@code started_at}에 적용 중인 행을 고른다.</li>
- *   <li>단가·환율·정책이 없으면 {@code unpriced}(금액 비움), 토큰을 모르는 호출은 {@code needs_review}(금액 0)다.</li>
+ *   <li>단가는 실제 응답 모델 → 요청 모델 순으로 찾는다. 단가·환율·정책이 없으면 {@code unpriced}(금액 비움)다.</li>
+ *   <li>{@code succeeded}·{@code cancelled}(스트리밍을 중간에 멈췄지만 공급사가 생성한 만큼 사용량이 남은 호출)·{@code failed}·{@code abandoned}
+ *       호출은 토큰·오디오 길이·TTS 글자 수가 하나라도 있으면 그 사용량으로 청구한다. 사용량을 모두 모르는 호출은
+ *       {@code needs_review}(금액 0)다.</li>
+ *   <li>과금 단위(오디오 분·TTS 글자·토큰)는 단가 행이 정하고 하나만 쓴다({@link UsagePricing#callCostUsd}).</li>
+ *   <li>{@code unpriced}·{@code needs_review} 행은 매시간 저장된 사용량으로 다시 계산한다({@link #recompute}).</li>
  * </ul>
  */
 @Service
 public class UsageChargeService {
+
+    /** ai-svc가 HTTP 동기 호출의 사용량을 귀속할 run_id를 받는 헤더. 본문·쿼리로 보내면 버려지거나 거부된다. */
+    public static final String RUN_ID_HEADER = "X-Request-Id";
 
     private static final Logger log = LoggerFactory.getLogger(UsageChargeService.class);
     private static final int MAX_ATTEMPTS = 10;
     private static final Duration RECONCILE_DELAY = Duration.ofHours(1);
     private static final Duration RECONCILE_CHUNK = Duration.ofDays(1);
     private static final Duration MAX_PERIOD = Duration.ofDays(366);
+    private static final int RECOMPUTE_BATCH = 500;
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
@@ -59,11 +74,14 @@ public class UsageChargeService {
     private final ObjectMapper mapper;
     private final RestClient client;
     private final String endpoint;
+    private final long postIngestHoldSeconds;
+    private final Map<String, LocalDate> warnedOn = new ConcurrentHashMap<>();
 
     public UsageChargeService(JdbcTemplate jdbc, PlatformTransactionManager manager, AiTaskCancellationService runs,
                               CreditService credits,
                               ObjectMapper mapper, PipelineClientFactory factory,
-                              @Value("${app.usage-charge.calls-endpoint}") String endpoint) {
+                              @Value("${app.usage-charge.calls-endpoint}") String endpoint,
+                              @Value("${app.billing.post-ingest-hold-seconds:900}") long postIngestHoldSeconds) {
         this.jdbc = jdbc;
         this.transaction = new TransactionTemplate(manager);
         this.runs = runs;
@@ -71,11 +89,106 @@ public class UsageChargeService {
         this.mapper = mapper;
         this.client = factory.restClient(30);
         this.endpoint = endpoint;
+        this.postIngestHoldSeconds = postIngestHoldSeconds;
     }
 
     /** 실행이 끝난 run_id를 수집 대기열에 넣는다. 호출자 트랜잭션이 있으면 함께 커밋된 뒤에 수집된다. */
     public void enqueue(String runId) {
         jdbc.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", runId);
+    }
+
+    /** 사용량이 남았으면 청구하는 호출 상태. 실패·중단된 호출도 공급사가 받은 만큼은 청구한다(ADR-0027). */
+    private static final Set<String> BILLABLE_STATUSES = Set.of("succeeded", "cancelled", "failed", "abandoned");
+    private static final String AUTONOMOUS_KIND = "agent_run";
+    /** post_ingest 종료를 ingest run 기준으로 기록하는 receipt event_id 접두어. */
+    private static final String POST_INGEST_DONE = "post_ingest_done:";
+    /** AI가 더 이상 일하지 않는 AgentRun 상태. cancel_requested·rolling_back은 곧 cancelled가 되므로 뺀다. */
+    private static final Set<String> AUTONOMOUS_TERMINAL = Set.of(
+            "completed", "partial_failed", "failed", "conflicted", "rejected", "cancelled", "rollback_failed");
+
+    /**
+     * AgentRun 승인·수정은 ai-svc가 새 run_id(AgentRun id, 처음 요청의 turn id와 다르다)로 모델을 부른다. 전달하기 전에 그
+     * id를 {@code agent_run} 실행으로 등록해 예약한다(처음이면 사전 승인, 이미 등록돼 있으면 구간 갱신과 같은 규칙).
+     * 부족하면 {@link CreditService.InsufficientCreditException}("중단했습니다")을 던진다. enforce가 꺼져 있으면 아무것도 하지
+     * 않는다. 호출자는 AgentRun의 소유를 먼저 확인해야 한다(남의 id를 선점하지 못하게). 이어 가는 승인이 정리 작업에 밀려
+     * 끝난 것으로 보이지 않게 {@code updated_at}을 갱신한다.
+     */
+    public void reserveAutonomousRun(String runId, String workspaceId, String userId) {
+        if (!credits.enforcing()) return;
+        boolean known = jdbc.update("UPDATE ai_task_runs SET updated_at = now() WHERE id = ? AND kind = ? "
+                + "AND workspace_id = ? AND user_id = ? AND status = 'running'", runId, AUTONOMOUS_KIND, workspaceId, userId) == 1;
+        if (known) {
+            Integer seq = jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE run_id = ? AND type = 'reserve'",
+                    Integer.class, runId);
+            credits.renew(runId, userId, AUTONOMOUS_KIND, seq);
+            return;
+        }
+        try {
+            runs.register(mapper.createObjectNode().put("run_id", runId).put("kind", AUTONOMOUS_KIND)
+                    .put("workspace_id", workspaceId).put("user_id", userId));
+        } catch (CreditService.InsufficientCreditException e) {
+            throw new CreditService.InsufficientCreditException(AiErrorMessages.INSUFFICIENT_CREDIT_STOPPED);
+        }
+    }
+
+    /**
+     * 전달이 거절된 시도의 예약만 푼다. 실행은 닫지 않고 {@code running}으로 두어 다음 시도가 잔액을 다시 확인한다
+     * (종료 해제 키는 진짜 종료 정산용으로 남긴다).
+     */
+    public void abortAutonomousAttempt(String runId, String userId) {
+        if (credits.enforcing()) credits.abort(runId, userId);
+    }
+
+    /** AgentRun 응답의 상태가 끝났으면 {@link #endAutonomousRun}으로 닫는다. 등록하지 않은 실행이면 아무 일도 없다. */
+    public void endAutonomousRunIfTerminal(String runId, JsonNode run) {
+        if (isAutonomousTerminal(run)) endAutonomousRun(runId);
+    }
+
+    /** AgentRun 응답의 상태가 AI가 더 일하지 않는 끝난 상태인지. */
+    public boolean isAutonomousTerminal(JsonNode run) {
+        return run != null && AUTONOMOUS_TERMINAL.contains(run.path("status").asText());
+    }
+
+    /** 등록한 AgentRun 실행을 닫고 사용량 수집·정산을 대기열에 넣는다. 이미 닫았으면 다시 넣지 않는다. */
+    public void endAutonomousRun(String runId) {
+        if (jdbc.update("UPDATE ai_task_runs SET status = 'completed', updated_at = now() WHERE id = ? AND kind = ? "
+                + "AND status = 'running'", runId, AUTONOMOUS_KIND) == 1) {
+            enqueue(runId);
+        }
+    }
+
+    /**
+     * 성공한 ingest를 수집 대기열에 넣되 {@code app.billing.post-ingest-hold-seconds} 뒤로 미룬다. 정산이 예약을 푸는 시점이라,
+     * AI가 ingest 뒤에 따로 돌리는 post_ingest(품질 평가)가 끝날 때까지 ingest의 예약이 남아 가용 잔액을 줄인다.
+     * post_ingest 종료 이벤트가 오면 {@link #releasePostIngestHold}가 앞당기고, 오지 않으면 이 시간이 상한이다.
+     */
+    public void enqueueAfterPostIngest(String runId) {
+        // 거절하지 않는 환경이거나 post_ingest 종료 이벤트가 ingest 결과보다 먼저 왔으면 붙잡을 이유가 없어 바로 정산한다.
+        if (!credits.enforcing() || !jdbc.queryForList("SELECT 1 FROM ai_task_result_receipts WHERE event_id = ?",
+                Integer.class, POST_INGEST_DONE + runId).isEmpty()) {
+            enqueue(runId);
+            return;
+        }
+        jdbc.update("INSERT INTO usage_collect_queue (run_id, available_at) VALUES (?, now() + make_interval(secs => ?)) "
+                + "ON CONFLICT (run_id) DO NOTHING", runId, postIngestHoldSeconds);
+    }
+
+    /**
+     * post_ingest command의 호출을 바로 수집·정산하고, 이벤트의 {@code ingest_run_id}가 가리키는 ingest의 미뤄 둔 정산을
+     * 앞당긴다. 같은 사용자·워크스페이스의 ingest만 앞당긴다. {@code ingest_run_id}가 없는 이벤트(이전 ai-svc)는 앞당기지
+     * 않고, 그 ingest는 {@code app.billing.post-ingest-hold-seconds}가 지나면 정산된다.
+     */
+    public void releasePostIngestHold(String postRunId, String ingestRunId, String workspaceId, String userId) {
+        enqueue(postRunId);
+        if (ingestRunId == null || ingestRunId.isBlank()) return;
+        // ingest 결과가 아직 안 왔을 수도 있어 종료를 기록해 둔다. 뒤늦게 온 ingest 결과는 보류하지 않는다.
+        if (credits.enforcing()) {
+            jdbc.update("INSERT INTO ai_task_result_receipts (event_id, run_id, task_kind) VALUES (?, ?, 'post_ingest') "
+                    + "ON CONFLICT (event_id) DO NOTHING", POST_INGEST_DONE + ingestRunId, ingestRunId);
+        }
+        jdbc.update("UPDATE usage_collect_queue SET available_at = now() WHERE run_id = ? AND available_at > now() "
+                + "AND EXISTS (SELECT 1 FROM ai_task_runs t WHERE t.id = usage_collect_queue.run_id AND t.kind = 'document' "
+                + "AND t.workspace_id = ? AND t.user_id = ?)", ingestRunId, workspaceId, userId);
     }
 
     /**
@@ -142,7 +255,12 @@ public class UsageChargeService {
                     log.warn("[사용 금액 수집 포기] runId={} attempts={} 종료 시각 대사가 채운다. error={}", runId, attempts, e.toString());
                     jdbc.update("DELETE FROM usage_collect_queue WHERE run_id = ?", runId);
                 } else {
-                    log.warn("[사용 금액 수집 실패] runId={} attempts={} error={}", runId, attempts, e.toString());
+                    // 아직 끝나지 않은 호출을 기다리는 재시도는 정상 지연이다(답변 음성 정지 직후 등). 장애와 구분한다.
+                    if (e instanceof IllegalStateException) {
+                        log.info("[사용 금액 수집 대기] runId={} attempts={} reason={}", runId, attempts, e.getMessage());
+                    } else {
+                        log.warn("[사용 금액 수집 실패] runId={} attempts={} error={}", runId, attempts, e.toString());
+                    }
                     jdbc.update("UPDATE usage_collect_queue SET available_at = now() + make_interval(mins => ?) "
                             + "WHERE run_id = ?", attempts * attempts, runId);
                 }
@@ -153,7 +271,15 @@ public class UsageChargeService {
 
     /** 실행 하나의 호출을 가져와 청구 행을 만들고 크레딧을 정산한다. 호출이 없어도 끝난 실행의 예약은 푼다. */
     public void collectRun(String runId) {
-        Set<String> runIds = recordAll(fetch(Map.of("run_id", runId)));
+        JsonNode calls = fetch(Map.of("run_id", runId));
+        Set<String> runIds = recordAll(calls);
+        // 연결이 끊겨 끝난 합성처럼 ai가 원장 행을 늦게 마감하는 경우가 있다. 아직 started인 호출이 있으면 정산하지 않고
+        // 실패로 던져 수집 대기열의 재시도(백오프)가 다시 가져오게 한다. 대사까지 기다리지 않는다.
+        for (JsonNode call : calls) {
+            if ("started".equals(call.path("status").asText())) {
+                throw new IllegalStateException("아직 끝나지 않은 호출이 있습니다. runId=" + runId);
+            }
+        }
         runIds.remove(runId);
         credits.settle(runId);
         settleQuietly(runIds);
@@ -261,60 +387,35 @@ public class UsageChargeService {
         if (callId.isBlank()) throw new IllegalArgumentException("호출 id가 없습니다.");
         Timestamp startedAt = Timestamp.from(Instant.parse(call.path("started_at").asText()));
         String provider = call.path("provider").asText(null);
-        // 단가는 실제 응답 모델 기준이다. 실패해 응답 모델이 없으면 요청 모델을 남긴다.
-        String model = call.path("model").isTextual() ? call.path("model").asText() : call.path("requested_model").asText(null);
+        String requestedModel = call.path("requested_model").asText(null);
+        // 실패해 응답 모델이 없으면 요청 모델을 남긴다.
+        String model = call.path("model").isTextual() ? call.path("model").asText() : requestedModel;
         Long input = count(call, "input_tokens");
         Long cached = count(call, "cached_input_tokens");
         Long creation = count(call, "cache_creation_tokens");
         Long output = count(call, "output_tokens");
         BigDecimal audioSeconds = call.path("audio_seconds").isNumber() ? call.path("audio_seconds").decimalValue() : null;
-        Long ttsCharacters = count(call, "tts_characters");
+        Long ttsCharacters = count(call, "input_characters");
 
-        String status;
-        Timestamp priceFrom = null, fxFrom = null, policyFrom = null;
-        Long cost = null, charge = null;
-        if (!"succeeded".equals(callStatus)) {
-            status = "needs_review";
-            cost = 0L;
-            charge = 0L;
+        Priced p = price(callStatus, provider, model, requestedModel, startedAt, input, cached, creation, output,
+                audioSeconds, ttsCharacters);
+        // 공급사 오류로 실패한 호출은 사용량이 없는 것이 정상이라 경보 대상 로그를 남기지 않는다(금액 0, needs_review로 남는다).
+        if ("needs_review".equals(p.status()) && !"failed".equals(callStatus)) {
             log.warn("[AI 사용량 확인 필요] callId={} runId={} status={}", callId, call.path("run_id").asText(), callStatus);
-        } else {
-            var prices = jdbc.query("SELECT * FROM ai_model_prices WHERE provider = ? AND model = ? AND effective_from <= ? "
-                    + "ORDER BY effective_from DESC LIMIT 1", (rs, i) -> Map.entry(rs.getTimestamp("effective_from"),
-                    UsagePricing.Price.from(rs)), provider, model, startedAt);
-            var fx = jdbc.queryForList("SELECT * FROM fx_rates WHERE effective_from <= ? ORDER BY effective_from DESC LIMIT 1",
-                    startedAt);
-            var policy = jdbc.queryForList("SELECT * FROM pricing_policies WHERE effective_from <= ? "
-                    + "ORDER BY effective_from DESC LIMIT 1", startedAt);
-            BigDecimal costUsd = prices.isEmpty() ? null : UsagePricing.callCostUsd(prices.getFirst().getValue(),
-                    zero(input), zero(cached), zero(creation), zero(output), audioSeconds, zero(ttsCharacters));
-            if (costUsd != null) {
-                priceFrom = prices.getFirst().getKey();
-                cost = UsagePricing.costUsdMicro(costUsd);
-            }
-            if (costUsd != null && !fx.isEmpty() && !policy.isEmpty()) {
-                status = "charged";
-                fxFrom = (Timestamp) fx.getFirst().get("effective_from");
-                policyFrom = (Timestamp) policy.getFirst().get("effective_from");
-                charge = UsagePricing.chargeKrwMilli(costUsd, (BigDecimal) fx.getFirst().get("krw_per_usd"),
-                        ((Number) policy.getFirst().get("margin_bp")).intValue(),
-                        ((Number) policy.getFirst().get("vat_bp")).intValue());
-            } else {
-                status = "unpriced";
-                log.warn("[AI 단가 없음] callId={} provider={} model={} price={} fx={} policy={}", callId, provider, model,
-                        costUsd != null, !fx.isEmpty(), !policy.isEmpty());
-            }
         }
-        // 확정된 청구는 다시 계산하지 않는다. 단가 없음·확인 필요 행은 단가를 넣은 뒤 다시 수집하면 갱신된다.
+        // 확정된 청구는 다시 계산하지 않는다. 단가 없음·확인 필요 행은 다시 수집하거나 재계산 작업이 갱신한다.
         jdbc.update("""
-                INSERT INTO usage_charges (call_id, user_id, workspace_id, run_id, kind, provider, model, call_status,
+                INSERT INTO usage_charges (call_id, user_id, workspace_id, run_id, kind, provider, model, requested_model,
+                    price_model, model_routing, call_status,
                     input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_tokens,
                     audio_seconds, tts_characters, price_effective_from, fx_effective_from, policy_effective_from,
                     cost_usd_micro, charge_krw_milli, status, started_at)
                 VALUES (?, coalesce((SELECT nullif(user_id, '') FROM ai_task_runs WHERE id = ?), ?),
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (call_id) DO UPDATE SET user_id = EXCLUDED.user_id, workspace_id = EXCLUDED.workspace_id,
                     run_id = EXCLUDED.run_id, kind = EXCLUDED.kind, provider = EXCLUDED.provider, model = EXCLUDED.model,
+                    requested_model = EXCLUDED.requested_model, price_model = EXCLUDED.price_model,
+                    model_routing = EXCLUDED.model_routing,
                     call_status = EXCLUDED.call_status, input_tokens = EXCLUDED.input_tokens,
                     cached_input_tokens = EXCLUDED.cached_input_tokens, cache_creation_tokens = EXCLUDED.cache_creation_tokens,
                     output_tokens = EXCLUDED.output_tokens, reasoning_tokens = EXCLUDED.reasoning_tokens,
@@ -325,17 +426,143 @@ public class UsageChargeService {
                 WHERE usage_charges.status <> 'charged'
                 """, callId, call.path("run_id").asText(null), call.path("user_id").asText("unattributed"),
                 call.path("workspace_id").asText(null),
-                call.path("run_id").asText(null), call.path("kind").asText(null), provider, model, callStatus,
+                call.path("run_id").asText(null), call.path("kind").asText(null), provider, model, requestedModel,
+                p.priceModel(), p.routing(), callStatus,
                 input, cached, creation, output, count(call, "reasoning_tokens"), audioSeconds, ttsCharacters,
-                priceFrom, fxFrom, policyFrom, cost, charge, status, startedAt);
+                p.priceFrom(), p.fxFrom(), p.policyFrom(), p.cost(), p.charge(), p.status(), startedAt);
+    }
+
+    /** 청구 상태·금액과 계산에 쓴 버전. 단가를 찾은 모델 이름({@code priceModel})과 모델 전환 분류를 함께 남긴다. */
+    private record Priced(String status, String priceModel, String routing, Timestamp priceFrom, Timestamp fxFrom,
+                          Timestamp policyFrom, Long cost, Long charge) {
+    }
+
+    /**
+     * 사용량으로 청구 상태와 금액을 정한다. 수집과 재계산이 같은 규칙을 쓴다.
+     *
+     * <ul>
+     *   <li>{@code succeeded}·{@code cancelled}·{@code failed}·{@code abandoned}가 아니거나, 입력·출력 토큰·오디오 길이·TTS 글자 수를 모두 모르면 {@code needs_review}(금액 0)다.
+     *       공급사가 usage를 주지 않은 호출을 0원으로 확정하지 않는다(#98). 성공하지 못한 호출에 토큰·오디오 길이 없이
+     *       글자 수만 있으면(요청 전에 적는 값) 역시 {@code needs_review}다.</li>
+     *   <li>단가는 실제 응답 모델 → 요청 모델 순으로 찾고, 둘 다 없으면 {@code unpriced}다(#99).</li>
+     *   <li>단가·환율·정책 버전은 호출 {@code started_at}에 적용 중인 행이다.</li>
+     * </ul>
+     */
+    private Priced price(String callStatus, String provider, String model, String requestedModel, Timestamp startedAt,
+                         Long input, Long cached, Long creation, Long output, BigDecimal audioSeconds, Long ttsCharacters) {
+        String routing = UsagePricing.routing(requestedModel, model);
+        if ("routed".equals(routing) && firstToday("routed|" + provider + "|" + requestedModel + "|" + model)) {
+            log.warn("[AI 모델 전환 감지] provider={} requested={} actual={}", provider, requestedModel, model);
+        }
+        // 멈춘 합성은 영수증에 글자 수가 먼저 들어가므로, 토큰을 받지 못했으면 글자 수만으로 확정하지 않는다.
+        boolean cancelledWithoutTokens = "cancelled".equals(callStatus) && input == null && output == null;
+        // 실패·중단한 합성도 같다. 글자 수는 공급사에 연결하기 전에 적히므로 토큰·오디오 길이 없이 글자 수만 남은 호출은
+        // 공급사가 받은 사용량이 아니다(단가 행이 토큰 단가뿐이라 unpriced 경보로 새지 않게 needs_review로 둔다).
+        boolean failedWithCharactersOnly = !"succeeded".equals(callStatus) && input == null && output == null
+                && audioSeconds == null && ttsCharacters != null;
+        if (!BILLABLE_STATUSES.contains(callStatus) || cancelledWithoutTokens || failedWithCharactersOnly
+                || (input == null && output == null && audioSeconds == null && ttsCharacters == null)) {
+            return new Priced("needs_review", null, routing, null, null, null, 0L, 0L);
+        }
+        String priceModel = null;
+        Map.Entry<Timestamp, UsagePricing.Price> price = null;
+        for (String candidate : Stream.of(model, requestedModel).filter(Objects::nonNull).distinct().toList()) {
+            var rows = jdbc.query("SELECT * FROM ai_model_prices WHERE provider = ? AND model = ? AND effective_from <= ? "
+                    + "ORDER BY effective_from DESC LIMIT 1", (rs, i) -> Map.entry(rs.getTimestamp("effective_from"),
+                    UsagePricing.Price.from(rs)), provider, candidate, startedAt);
+            if (!rows.isEmpty()) {
+                priceModel = candidate;
+                price = rows.getFirst();
+                break;
+            }
+        }
+        BigDecimal costUsd = price == null ? null : UsagePricing.callCostUsd(price.getValue(), input, cached, creation,
+                output, audioSeconds, ttsCharacters);
+        if (costUsd == null) {
+            if (firstToday("unpriced|" + provider + "|" + model + "|" + requestedModel)) {
+                log.warn("[AI 단가 미등록] provider={} model={} requested={}", provider, model, requestedModel);
+            }
+            return new Priced("unpriced", null, routing, null, null, null, null, null);
+        }
+        var fx = jdbc.queryForList("SELECT * FROM fx_rates WHERE effective_from <= ? ORDER BY effective_from DESC LIMIT 1",
+                startedAt);
+        var policy = jdbc.queryForList("SELECT * FROM pricing_policies WHERE effective_from <= ? "
+                + "ORDER BY effective_from DESC LIMIT 1", startedAt);
+        if (fx.isEmpty() || policy.isEmpty()) {
+            if (firstToday("versions|" + fx.isEmpty() + "|" + policy.isEmpty())) {
+                log.warn("[AI 환율·정책 없음] fx={} policy={} startedAt={}", !fx.isEmpty(), !policy.isEmpty(), startedAt);
+            }
+            return new Priced("unpriced", priceModel, routing, price.getKey(), null, null,
+                    UsagePricing.costUsdMicro(costUsd), null);
+        }
+        long charge = UsagePricing.chargeKrwMilli(costUsd, (BigDecimal) fx.getFirst().get("krw_per_usd"),
+                ((Number) policy.getFirst().get("fx_buffer_bp")).intValue(),
+                ((Number) policy.getFirst().get("margin_bp")).intValue(),
+                ((Number) policy.getFirst().get("vat_bp")).intValue());
+        return new Priced("charged", priceModel, routing, price.getKey(),
+                (Timestamp) fx.getFirst().get("effective_from"), (Timestamp) policy.getFirst().get("effective_from"),
+                UsagePricing.costUsdMicro(costUsd), charge);
+    }
+
+    /** 같은 경고를 프로세스·UTC 날짜마다 한 번만 남긴다. 키는 공급사·모델 조합이라 수가 적다. */
+    private boolean firstToday(String key) {
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        return !today.equals(warnedOn.put(key, today));
+    }
+
+    /**
+     * 최근 90일의 {@code unpriced}·{@code needs_review} 행을 저장된 사용량으로 다시 계산한다(#99). AI 원장을 다시 조회하지
+     * 않는다. {@code charged} 행은 건드리지 않는다. 행 잠금(SKIP LOCKED)으로 여러 Pod가 같은 행을 동시에 계산하지 않고,
+     * 금액이 확정된 실행은 커밋한 뒤 수집과 같은 경로({@link CreditService#settle})로 정산한다.
+     * 청구 대상 상태가 아닌 호출은 규칙상 계속 {@code needs_review}라 대상에서 뺀다.
+     */
+    @Scheduled(initialDelay = 180_000, fixedDelayString = "${app.usage-charge.recompute-interval-ms:3600000}")
+    public void recompute() {
+        try {
+            long after = 0;
+            Batch batch;
+            do {
+                long from = after;
+                batch = transaction.execute(tx -> recomputeBatch(from));
+                settleQuietly(batch.runIds());
+                after = batch.lastId();
+            } while (batch.more());
+        } catch (RuntimeException e) {
+            log.warn("[사용 금액 재계산 실패] error={}", e.toString());
+        }
+    }
+
+    private record Batch(Set<String> runIds, long lastId, boolean more) {
+    }
+
+    private Batch recomputeBatch(long after) {
+        var rows = jdbc.queryForList("""
+                SELECT * FROM usage_charges WHERE id > ? AND status IN ('unpriced', 'needs_review')
+                    AND call_status IN ('succeeded', 'cancelled', 'failed', 'abandoned') AND started_at >= now() - interval '90 days'
+                ORDER BY id LIMIT ? FOR UPDATE SKIP LOCKED
+                """, after, RECOMPUTE_BATCH);
+        Set<String> runIds = new TreeSet<>();
+        long lastId = after;
+        for (var row : rows) {
+            lastId = ((Number) row.get("id")).longValue();
+            Priced p = price((String) row.get("call_status"), (String) row.get("provider"), (String) row.get("model"),
+                    (String) row.get("requested_model"), (Timestamp) row.get("started_at"),
+                    (Long) row.get("input_tokens"), (Long) row.get("cached_input_tokens"),
+                    (Long) row.get("cache_creation_tokens"), (Long) row.get("output_tokens"),
+                    (BigDecimal) row.get("audio_seconds"), (Long) row.get("tts_characters"));
+            jdbc.update("""
+                    UPDATE usage_charges SET status = ?, price_model = ?, model_routing = ?, price_effective_from = ?,
+                        fx_effective_from = ?, policy_effective_from = ?, cost_usd_micro = ?, charge_krw_milli = ?
+                    WHERE id = ?
+                    """, p.status(), p.priceModel(), p.routing(), p.priceFrom(), p.fxFrom(), p.policyFrom(), p.cost(),
+                    p.charge(), lastId);
+            if ("charged".equals(p.status()) && row.get("run_id") != null) runIds.add((String) row.get("run_id"));
+        }
+        return new Batch(runIds, lastId, rows.size() == RECOMPUTE_BATCH);
     }
 
     private static Long count(JsonNode call, String field) {
         return call.path(field).isNumber() ? call.path(field).asLong() : null;
-    }
-
-    private static long zero(Long value) {
-        return value == null ? 0 : value;
     }
 
     /** 사용자 본인의 기간 [from, to) 청구 합계. 워크스페이스를 가로질러 합친다. */

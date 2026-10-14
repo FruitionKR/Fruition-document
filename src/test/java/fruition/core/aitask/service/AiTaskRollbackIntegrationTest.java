@@ -29,8 +29,8 @@ class AiTaskRollbackIntegrationTest {
     void cancellationWaitsForPythonThenRestoresCoreAndRejectsWrongActor() throws Exception {
         String id = "cancel-" + UUID.randomUUID();
         String workspace = "ws-" + id;
-        redis.opsForValue().set("authz:role:" + workspace + ":user", "OWNER");
-        redis.opsForValue().set("authz:role:" + workspace + ":other", "MEMBER");
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":user", "{\"role\":\"OWNER\",\"permissions\":[]}");
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":other", "{\"role\":\"MEMBER\",\"permissions\":[]}");
         var command = mapper.createObjectNode().put("run_id", id).put("kind", "query")
                 .put("workspace_id", workspace).put("user_id", "user");
         cancellation.register(command);
@@ -57,10 +57,40 @@ class AiTaskRollbackIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_sessions WHERE id = ?", Integer.class, id)).isZero();
         assertThat(redis.opsForList().range("query:events:" + id, 0, -1)).allSatisfy(event -> assertThat(event).contains("query.cancelled"));
         assertThat(cancellation.cancel(id, workspace, "user").get("status")).isEqualTo("cancelled");
+        // 질의 취소는 위키를 바꾸지 않는다.
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM wiki_workspace_versions WHERE workspace_id = ?",
+                Integer.class, workspace)).isZero();
         assertThatThrownBy(() -> cancellation.finish(id))
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
     }
 
+
+    @Test
+    void ownerCanCancelAndReadAnotherMembersTaskButOtherMembersCannot() throws Exception {
+        String id = "owner-cancel-" + UUID.randomUUID();
+        String workspace = "ws-" + id;
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":boss", "{\"role\":\"OWNER\",\"permissions\":[]}");
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":member", "{\"role\":\"MEMBER\",\"permissions\":[]}");
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":peer", "{\"role\":\"MEMBER\",\"permissions\":[\"wiki.restore\"]}");
+        var command = mapper.createObjectNode().put("run_id", id).put("kind", "query")
+                .put("workspace_id", workspace).put("user_id", "member");
+        cancellation.register(command);
+        // ai에는 OWNER가 아니라 작업 행의 요청자(member)가 그대로 전달된다.
+        org.mockito.Mockito.when(pipeline.cancel(id, workspace, "member", command)).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "rolling_back", null));
+        org.mockito.Mockito.when(pipeline.status(id, workspace, "member")).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "rolling_back", null));
+
+        assertThat(cancellation.status(id, workspace, "boss").get("status")).isEqualTo("running");
+        assertThat(cancellation.status(id, workspace, "member").get("status")).isEqualTo("running");
+        assertThatThrownBy(() -> cancellation.status(id, workspace, "peer"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        assertThatThrownBy(() -> cancellation.cancel(id, workspace, "peer"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+
+        assertThat(cancellation.cancel(id, workspace, "boss").get("status")).isEqualTo("rolling_back");
+        org.mockito.Mockito.verify(pipeline).cancel(id, workspace, "member", command);
+    }
 
     @Test
     void anotherPodSkipsRunWhileOneIsAdvancingAndCallbacksDoNotBlock() throws Exception {
@@ -92,6 +122,26 @@ class AiTaskRollbackIntegrationTest {
                 .containsEntry("status", "rolling_back")
                 .containsEntry("resume_claimed_by", null)
                 .containsEntry("resume_claimed_until", null);
+    }
+
+    @Test
+    void cancelledWikiTaskBumpsWorkspaceWikiVersion() throws Exception {
+        String id = "lint-cancel-" + UUID.randomUUID();
+        String workspace = "ws-" + id;
+        var command = mapper.createObjectNode().put("run_id", id).put("kind", "lint")
+                .put("workspace_id", workspace).put("user_id", "user");
+        jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, command, status) "
+                + "VALUES (?, ?, 'user', 'lint', CAST(? AS jsonb), 'rolling_back')", id, workspace, command.toString());
+        org.mockito.Mockito.when(pipeline.status(id, workspace, "user")).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "cancelled", null));
+
+        cancellation.resume();
+
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, id))
+                .isEqualTo("cancelled");
+        // ai가 lint의 위키 변경을 되돌렸으므로 그래프 ETag가 바뀌어야 한다.
+        assertThat(jdbc.queryForObject("SELECT version FROM wiki_workspace_versions WHERE workspace_id = ?",
+                Long.class, workspace)).isEqualTo(1L);
     }
 
     @Test
@@ -180,4 +230,40 @@ class AiTaskRollbackIntegrationTest {
         assertThat(cancellation.finalizeEdits(id, "ws", "user")).isEqualTo(events);
     }
 
+
+    @Test
+    void convertCancellationCancelsEveryInFlightBatchWithItsCommandThenClosesTheQueue() throws Exception {
+        String placeholder = "doc_cv_" + UUID.randomUUID().toString().replace("-", "");
+        String source = placeholder + "_src";
+        for (String documentId : new String[]{source, placeholder}) {
+            jdbc.update("INSERT INTO documents(id, byte_size, content_hash, filename, display_name, normalized_filename, "
+                    + "mime_type, status, uploaded_at, updated_at, user_id, workspace_id, current_content_hash, current_version, document_role, sort_order) "
+                    + "VALUES (?, 1, 'h', ?, ?, ?, 'text/markdown', 'processing', now(), now(), 'user', 'ws', 'h', 1, 'EDITABLE', 0)",
+                    documentId, documentId, documentId, documentId);
+        }
+        String id = "convert:" + placeholder;
+        jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, status) VALUES (?, 'ws', 'user', 'convert', 'cancel_requested')", id);
+        long queueId = jdbc.queryForObject("INSERT INTO document_convert_queue(document_id, source_document_id, status, created_at) "
+                + "VALUES (?, ?, 'processing', now()) RETURNING id", Long.class, placeholder, source);
+        var commands = new java.util.HashMap<Integer, com.fasterxml.jackson.databind.JsonNode>();
+        for (int startPage : new int[]{10, 20, 30}) {
+            var command = mapper.createObjectNode().put("run_id", id + ":" + startPage).put("kind", "convert_batch")
+                    .put("start_page", startPage);
+            commands.put(startPage, command);
+            jdbc.update("INSERT INTO document_convert_batches(queue_id, start_page, page_count, command, status, page_end, result_key) "
+                    + "VALUES (?, ?, 10, CAST(? AS jsonb), ?, ?, ?)", queueId, startPage, command.toString(),
+                    startPage == 30 ? "ready" : "dispatched", startPage == 30 ? 40 : null, startPage == 30 ? "tmp/convert/ws/x/30.md" : null);
+        }
+
+        cancellation.resume();
+
+        // 결과를 기다리는 batch만 각자 발행한 command로 취소한다. 이미 결과가 온 batch는 취소하지 않는다.
+        org.mockito.Mockito.verify(pipeline).cancel(id + ":10", "ws", "user", commands.get(10));
+        org.mockito.Mockito.verify(pipeline).cancel(id + ":20", "ws", "user", commands.get(20));
+        org.mockito.Mockito.verify(pipeline, org.mockito.Mockito.never()).cancel(org.mockito.ArgumentMatchers.eq(id + ":30"),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, id)).isEqualTo("cancelled");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM document_convert_queue WHERE id = ?", Integer.class, queueId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM document_convert_batches WHERE queue_id = ?", Integer.class, queueId)).isZero();
+    }
 }

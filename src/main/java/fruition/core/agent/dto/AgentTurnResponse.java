@@ -2,6 +2,7 @@ package fruition.core.agent.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.aitask.AiErrorMessages;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 /**
@@ -39,6 +40,16 @@ public record AgentTurnResponse(
         @Schema(description = "완료된 턴의 편집 제안 결과")
         JsonNode result,
 
-        @Schema(description = "실패 사유. 성공이면 null이다.")
-        String error
-) {}
+        @Schema(description = "실패 코드. 성공이면 null이다.", example = "provider_unavailable")
+        String error,
+
+        @JsonProperty("error_message")
+        @Schema(description = "실패 코드에 대응하는 사용자용 한국어 문구. 성공이면 null이다.", nullable = true)
+        String errorMessage
+) {
+    public AgentTurnResponse(String documentId, Long baseVersion, String requestId, String applyOperationId,
+                             String status, JsonNode result, String error) {
+        this(documentId, baseVersion, requestId, applyOperationId, status, result, error,
+                error == null ? null : AiErrorMessages.agent(error));
+    }
+}

@@ -105,7 +105,7 @@ class QueryServiceTest {
 
         verify(chatTurnRecorder).createPendingPair(
                 eq(SESSION_ID), anyString(), anyString(), anyString(), eq("Self-Attention이 뭐야?"), any(),
-                eq("openai"), eq("gpt-5-nano"));
+                eq("openai"), eq("gpt-6-luna"));
         ArgumentCaptor<ChatMessage> messageCaptor = ArgumentCaptor.forClass(ChatMessage.class);
         verify(chatMessageRepository).save(messageCaptor.capture());
         assertThat(messageCaptor.getValue().getRole()).isEqualTo("assistant");
@@ -315,8 +315,9 @@ class QueryServiceTest {
     @Test
     void failAsync_marksPendingAssistantFailed() {
         var context = queryService.prepareMessages(SESSION_ID, "질문", "query_test");
-        queryService.failAsync("query_test", context, "처리 실패");
-        verify(chatTurnRecorder).markFailed(context.assistantMessageId(), "처리 실패");
+        queryService.failAsync("query_test", context, "provider_rate_limited");
+        verify(chatTurnRecorder).markFailed(context.assistantMessageId(),
+                "AI 서비스 요청이 많아 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     }
 
     @Test
@@ -357,7 +358,7 @@ class QueryServiceTest {
         order.verify(chatMessageRepository).findAllBySessionIdInTurnOrder(SESSION_ID);
         order.verify(chatTurnRecorder).createPendingPair(
                 eq(SESSION_ID), anyString(), anyString(), anyString(), eq("새 질문"), any(),
-                eq("openai"), eq("gpt-5-nano"));
+                eq("openai"), eq("gpt-6-luna"));
     }
 
     @Test
@@ -412,7 +413,7 @@ class QueryServiceTest {
     }
 
     private QueryResponse complete(String question, boolean webSearch, PipelineQueryResponse response) {
-        var context = queryService.prepareMessages(SESSION_ID, question, "query_test", "openai", "gpt-5-nano", webSearch);
+        var context = queryService.prepareMessages(SESSION_ID, question, "query_test", "openai", "gpt-6-luna", webSearch);
         return queryService.completeAsync(SESSION_ID, question, "query_test", context, response);
     }
 

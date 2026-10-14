@@ -64,7 +64,7 @@ class MultipartStorageTest {
             props.setEndpoint(endpoint); props.setBucket("test-bucket");
             props.setCredentialsMode("aws"); props.setRegion("ap-northeast-2");
             var multipart = new MultipartStorage(props, new IamAwsProvider(endpoint, null));
-            assertEquals("upload-1", multipart.start("sources/documents/a/original"));
+            assertEquals("upload-1", multipart.start("sources/documents/a/original", "application/pdf"));
             assertTrue(requestPath.get().contains("uploads"));
             assertTrue(authorization.get().contains("irsa-access"));
             assertTrue(authorization.get().contains("ap-northeast-2"));

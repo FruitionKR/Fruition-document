@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, String> {
 
@@ -48,4 +49,8 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, String
             """)
     List<ChatMessage> findByPairIdsInTurnOrder(@Param("sessionId") String sessionId,
                                                @Param("pairIds") Collection<String> pairIds);
+
+    /** 메시지가 속한 세션 ID. 지연 로딩 프록시를 열지 않고 소유 검증에 넘긴다. */
+    @Query("SELECT m.session.id FROM ChatMessage m WHERE m.id = :messageId")
+    Optional<String> findSessionIdById(@Param("messageId") String messageId);
 }

@@ -142,7 +142,7 @@ class QueryEventBrokerTest {
         broker.publish("run", "progress", "stage", "진행", Map.of());
         broker.cancel("run");
         broker.complete("run");
-        broker.fail("run", "늦은 오류");
+        broker.fail("run", "internal_error", "늦은 오류");
         assertThat(redisLists.get("query:events:run")).hasSize(1);
         assertThat(redisLists.get("query:events:run").getFirst()).contains("query.cancelled");
     }
@@ -233,12 +233,13 @@ class QueryEventBrokerTest {
     void fail_sendsFailedEventWithErrorMessage() throws Exception {
         SseEmitter emitter = broker.subscribe("query_abc123");
 
-        broker.fail("query_abc123", "쿼리 파이프라인을 사용할 수 없습니다.");
+        broker.fail("query_abc123", "provider_unavailable", "쿼리 파이프라인을 사용할 수 없습니다.");
 
         List<Map<String, Object>> payloads = capturedPayloads(emitter);
         assertThat(payloads).hasSize(1);
         assertThat(payloads.get(0).get("status")).isEqualTo("failed");
         assertThat(payloads.get(0).get("error")).isEqualTo("쿼리 파이프라인을 사용할 수 없습니다.");
+        assertThat(payloads.get(0).get("code")).isEqualTo("provider_unavailable");
     }
 
     @Test

@@ -89,7 +89,6 @@ public class RestoreExecuteService {
     public RestoreExecuteResponse execute(String workspaceId, String userId,
                                           String operationId, String previewToken) {
         OperationLog target = previewService.loadOperation(workspaceId, userId, operationId);
-        validator.requireRestorable(target);
         // 인가·대상 유형을 확인한 뒤 claim을 먼저 본다. 이후 상태가 바뀌어도 재실행은 중복이다.
         String restoreTokenHash = tokenHash(previewToken);
         if (lifecycle.isClaimed(target.getOperationId(), restoreTokenHash)) {
@@ -97,7 +96,7 @@ public class RestoreExecuteService {
                     "같은 미리보기 토큰으로 복구가 이미 접수되었습니다.");
         }
         if (target.getOperationType() == OperationType.document_edit) {
-            return executeDocument(target, previewToken, restoreTokenHash);
+            return executeDocument(target, userId, previewToken, restoreTokenHash);
         }
 
         Set<String> excluded = scopeResolver.resolve(target);
@@ -125,7 +124,7 @@ public class RestoreExecuteService {
         Instant now = Instant.now();
         Map<String, List<String>> expected = contributionSignatures(contributions);
         OperationLog restore = lifecycle.startQueued(
-                        target, manifestJson(new RestoreManifest(plan, excluded, expected)),
+                        target, userId, manifestJson(new RestoreManifest(plan, excluded, expected)),
                         restoreTokenHash, now)
                 .orElseThrow(() -> new InvalidRestoreRequestException(
                         "같은 미리보기 토큰으로 복구가 이미 접수되었습니다."));
@@ -137,8 +136,8 @@ public class RestoreExecuteService {
     /**
      * 문서 편집 되돌리기. Wiki와 달리 재작성이 없어 llmPipeline을 부르지 않고 그 자리에서 끝난다.
      */
-    private RestoreExecuteResponse executeDocument(OperationLog target, String previewToken,
-                                                   String restoreTokenHash) {
+    private RestoreExecuteResponse executeDocument(OperationLog target, String userId,
+                                                   String previewToken, String restoreTokenHash) {
         DocumentRestorePlan plan = documentPlanner.plan(target);
         if (!tokenSigner.matches(previewToken, target.getOperationId(), plan)) {
             throw new RestorePreviewStaleException();
@@ -150,7 +149,7 @@ public class RestoreExecuteService {
             return executeWithDocumentRestoreRetry(() -> transaction.execute(status -> {
                 Instant now = Instant.now();
                 OperationLog restore = lifecycle.start(
-                                target, manifestJson(plan), restoreTokenHash, now)
+                                target, userId, manifestJson(plan), restoreTokenHash, now)
                         .orElseThrow(() -> new InvalidRestoreRequestException(
                                 "같은 미리보기 토큰으로 복구가 이미 접수되었습니다."));
                 long newVersion = documentApplier.apply(restore, plan);
@@ -271,6 +270,8 @@ public class RestoreExecuteService {
             @com.fasterxml.jackson.annotation.JsonProperty("keep_contributions") List<Kept> keepContributions
     ) {
         static RebuildPage from(PageRestorePlan page) {
+            // 사람 수정(wiki_edit) 기여는 원문 문서가 없어 document_id가 null이다(ai `RestoreContributionIn.document_id: str | None`).
+            // ai 재조립은 이 값을 쓰지 않는다(ai ADR 0031).
             return new RebuildPage(page.pageId(), page.keepContributions().stream()
                     .map(value -> new Kept(value.operationId(), value.documentId())).toList());
         }

@@ -26,6 +26,7 @@ class PipelineSkillRequesterTest {
     private final AtomicReference<String> body = new AtomicReference<>();
     private final AtomicReference<String> token = new AtomicReference<>();
     private int responseStatus = 200;
+    private long responseDelayMillis = 0;
     private String responseBody = "{\"status\":\"proposal_ready\"}";
 
     @BeforeEach
@@ -36,6 +37,9 @@ class PipelineSkillRequesterTest {
             uri.set(exchange.getRequestURI().toString());
             body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             token.set(exchange.getRequestHeaders().getFirst("X-Agent-Service-Token"));
+            if (responseDelayMillis > 0) {
+                try { Thread.sleep(responseDelayMillis); } catch (InterruptedException ignored) { }
+            }
             if ("DELETE".equals(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(204, -1);
                 exchange.close();
@@ -60,7 +64,7 @@ class PipelineSkillRequesterTest {
         requester().author("ws_1", "user_1", new SkillAuthoringRequest(
                 "personal", "meeting-notes", null,
                 "회의록을 작성해줘", "enhance", List.of("doc_1")),
-                new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.1-flash-lite"), "run-author");
+                new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"), "run-author");
 
         assertThat(method.get()).isEqualTo("POST");
         assertThat(uri.get()).isEqualTo("/skills/tasks");
@@ -70,7 +74,7 @@ class PipelineSkillRequesterTest {
                 .contains("\"user_id\":\"user_1\"")
                 .contains("\"reference_document_ids\":[\"doc_1\"]")
                 .contains("\"provider\":\"gemini\"")
-                .contains("\"model\":\"gemini-3.1-flash-lite\"")
+                .contains("\"model\":\"gemini-3.5-flash-lite\"")
                 .doesNotContain("capabilities", "allowed_tools");
     }
 
@@ -104,7 +108,7 @@ class PipelineSkillRequesterTest {
     void update_usesSkillPathAndScopePayload() {
         requester().update("ws_1", "user_1", "skill_1",
                 new SkillUpdateRequest("meeting-notes", "회의록 작성", "# 작성 절차"),
-                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run-update");
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-update");
 
         assertThat(method.get()).isEqualTo("POST");
         assertThat(uri.get()).isEqualTo("/skills/tasks");
@@ -113,7 +117,7 @@ class PipelineSkillRequesterTest {
                 .contains("\"user_id\":\"user_1\"")
                 .contains("\"instructions_markdown\":\"# 작성 절차\"")
                 .contains("\"provider\":\"openai\"")
-                .contains("\"model\":\"gpt-5-nano\"")
+                .contains("\"model\":\"gpt-6-luna\"")
                 .doesNotContain("api_key", "base_url");
     }
 
@@ -172,17 +176,33 @@ class PipelineSkillRequesterTest {
         org.assertj.core.api.Assertions.catchThrowableOfType(fruition.core.skill.exception.PipelineSkillException.class,
                 () -> requester(usageCharges).author("ws_1", "user_1", new SkillAuthoringRequest(
                         "personal", "meeting-notes", null, "회의록을 작성해줘", "enhance", List.of()),
-                        new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run-failed"));
+                        new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-failed"));
 
         var order = org.mockito.Mockito.inOrder(usageCharges);
         order.verify(usageCharges).failRun("run-failed");
         order.verify(usageCharges).enqueue("run-failed");
     }
 
+    @Test
+    void timeoutRequestsAiCancellationForTheRun() {
+        var cancellation = org.mockito.Mockito.mock(fruition.core.aitask.service.AiTaskCancellationService.class);
+        responseDelayMillis = 2500;
+
+        var exception = org.assertj.core.api.Assertions.catchThrowableOfType(
+                fruition.core.skill.exception.PipelineSkillException.class,
+                () -> requester(org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class),
+                        cancellation, 1).author("ws_1", "user_1", new SkillAuthoringRequest(
+                        "personal", "meeting-notes", null, "회의록을 작성해줘", "enhance", List.of()),
+                        new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-timeout"));
+
+        assertThat(exception.getHttpStatus()).isEqualTo(503);
+        org.mockito.Mockito.verify(cancellation).cancel("run-timeout", "ws_1", "user_1");
+    }
+
     private void author() {
         requester().author("ws_1", "user_1", new SkillAuthoringRequest(
                 "personal", "meeting-notes", null, "ㅁㄴㅇㅁㄴㅇㅁㄴ", "enhance", List.of()),
-                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-5-nano"), "run-author");
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-author");
     }
 
     private PipelineSkillRequester requester() {
@@ -190,10 +210,16 @@ class PipelineSkillRequesterTest {
     }
 
     private PipelineSkillRequester requester(fruition.core.usage.service.UsageChargeService usageCharges) {
+        return requester(usageCharges,
+                org.mockito.Mockito.mock(fruition.core.aitask.service.AiTaskCancellationService.class), 5);
+    }
+
+    private PipelineSkillRequester requester(fruition.core.usage.service.UsageChargeService usageCharges,
+            fruition.core.aitask.service.AiTaskCancellationService cancellation, int timeoutSeconds) {
         return new PipelineSkillRequester(
                 new PipelineClientFactory("unused-internal-token"),
-                "http://localhost:" + server.getAddress().getPort() + "/skills", "agent-token", 5,
-                org.mockito.Mockito.mock(fruition.core.aitask.service.AiTaskCancellationService.class),
+                "http://localhost:" + server.getAddress().getPort() + "/skills", "agent-token", timeoutSeconds,
+                cancellation,
                 new com.fasterxml.jackson.databind.ObjectMapper(), usageCharges);
     }
 }

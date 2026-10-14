@@ -210,6 +210,73 @@ class RestorePreviewServiceTest {
                 .isInstanceOf(OperationNotFoundException.class);
     }
 
+    @Test
+    @DisplayName("위키 작업(ingest)은 실행자도 OWNER도 wiki.restore 권한자도 아니면 403")
+    void wikiOperation_byOtherMemberWithoutPermission_isForbidden() {
+        givenTargetBy(OperationType.ingest, "user_other");
+        when(workspaceAccessGuard.hasPermission(WORKSPACE, USER, "wiki.restore")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.preview(WORKSPACE, USER, OPERATION_ID))
+                .isInstanceOf(fruition.core.authz.WorkspacePermissionRequiredException.class)
+                .hasMessageContaining("wiki.restore");
+    }
+
+    @Test
+    @DisplayName("위키 작업(lint)도 같은 규칙을 따른다")
+    void lintOperation_byOtherMemberWithoutPermission_isForbidden() {
+        givenTargetBy(OperationType.lint, "user_other");
+        when(workspaceAccessGuard.hasPermission(WORKSPACE, USER, "wiki.restore")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.loadOperation(WORKSPACE, USER, OPERATION_ID))
+                .isInstanceOf(fruition.core.authz.WorkspacePermissionRequiredException.class);
+    }
+
+    @Test
+    @DisplayName("위키 작업은 wiki.restore 권한자(OWNER는 hasPermission이 항상 true)면 남의 작업도 불러온다")
+    void wikiOperation_byOtherMemberWithPermission_isAllowed() {
+        givenTargetBy(OperationType.ingest, "user_other");
+        when(workspaceAccessGuard.hasPermission(WORKSPACE, USER, "wiki.restore")).thenReturn(true);
+
+        assertThat(service.loadOperation(WORKSPACE, USER, OPERATION_ID).getUserId()).isEqualTo("user_other");
+    }
+
+    @Test
+    @DisplayName("위키 작업의 실행자 본인은 권한 항목 없이도 불러온다")
+    void wikiOperation_byExecutor_isAllowedWithoutPermission() {
+        givenTargetBy(OperationType.ingest, USER);
+        when(workspaceAccessGuard.hasPermission(WORKSPACE, USER, "wiki.restore")).thenReturn(false);
+
+        assertThat(service.loadOperation(WORKSPACE, USER, OPERATION_ID).getUserId()).isEqualTo(USER);
+    }
+
+    @Test
+    @DisplayName("문서 편집 작업은 이 규칙을 적용하지 않는다(실행 단계의 편집 권한 검사를 따른다)")
+    void documentEditOperation_byOtherMember_isNotGatedByWikiRestore() {
+        givenTargetBy(OperationType.document_edit, "user_other");
+        when(workspaceAccessGuard.hasPermission(WORKSPACE, USER, "wiki.restore")).thenReturn(false);
+
+        assertThat(service.loadOperation(WORKSPACE, USER, OPERATION_ID).getOperationType())
+                .isEqualTo(OperationType.document_edit);
+    }
+
+    @Test
+    @DisplayName("되돌릴 수 없는 유형은 권한이 없는 호출자에게도 403이 아니라 400이다")
+    void nonRestorableType_isRejectedBeforePermissionGate() {
+        givenTargetBy(OperationType.restore, "user_other");
+        when(workspaceAccessGuard.hasPermission(WORKSPACE, USER, "wiki.restore")).thenReturn(false);
+        doThrow(new InvalidRestoreRequestException("되돌릴 수 없는 작업입니다."))
+                .when(validator).requireRestorable(any());
+
+        assertThatThrownBy(() -> service.loadOperation(WORKSPACE, USER, OPERATION_ID))
+                .isInstanceOf(InvalidRestoreRequestException.class);
+    }
+
+    private void givenTargetBy(OperationType type, String executor) {
+        when(operationLogRepository.findByOperationIdAndWorkspaceId(OPERATION_ID, WORKSPACE))
+                .thenReturn(Optional.of(OperationLog.completed(OPERATION_ID, WORKSPACE, executor,
+                        type, "doc_A", "요약", 1, NOW)));
+    }
+
     private void givenTarget(OperationType type) {
         when(operationLogRepository.findByOperationIdAndWorkspaceId(OPERATION_ID, WORKSPACE))
                 .thenReturn(Optional.of(OperationLog.completed(OPERATION_ID, WORKSPACE, USER,

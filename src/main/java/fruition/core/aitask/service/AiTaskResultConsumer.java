@@ -1,10 +1,12 @@
 package fruition.core.aitask.service;
 
+import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.query.service.QueryEventBroker;
 import fruition.core.query.service.QueryRunStore;
+import fruition.core.wiki.repository.WikiWorkspaceVersionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -23,15 +25,18 @@ public class AiTaskResultConsumer {
     private final AiTaskResultApplier applier;
     private final QueryRunStore queryRunStore;
     private final QueryEventBroker queryEventBroker;
+    private final WikiWorkspaceVersionRepository wikiVersions;
 
     public AiTaskResultConsumer(ObjectMapper objectMapper,
                                 AiTaskResultApplier applier,
                                 QueryRunStore queryRunStore,
-                                QueryEventBroker queryEventBroker) {
+                                QueryEventBroker queryEventBroker,
+                                WikiWorkspaceVersionRepository wikiVersions) {
         this.objectMapper = objectMapper;
         this.applier = applier;
         this.queryRunStore = queryRunStore;
         this.queryEventBroker = queryEventBroker;
+        this.wikiVersions = wikiVersions;
     }
 
     @KafkaListener(
@@ -56,16 +61,37 @@ public class AiTaskResultConsumer {
                 applier.applySessionTitle(event);
                 return;
             }
+            if ("convert_batch".equals(kind)) {
+                applier.applyConvertBatch(event);
+                return;
+            }
+            if ("meeting_transcription".equals(kind)) {
+                applier.applyMeetingTranscription(event);
+                return;
+            }
             if ("ingest".equals(kind)) {
                 applier.applyIngest(event);
+                bumpWikiVersion(event);
+                return;
+            }
+            if ("post_ingest".equals(kind)) {
+                applier.applyPostIngest(event);
+                bumpWikiVersion(event);
                 return;
             }
             if ("lint".equals(kind)) {
                 applier.applyLint(event);
+                // dry_run은 위키를 바꾸지 않는다.
+                if (!event.path("request").path("dry_run").asBoolean(false)) bumpWikiVersion(event);
+                return;
+            }
+            if ("meeting_notes".equals(kind)) {
+                applier.applyMeetingNotes(event);
                 return;
             }
             if (kind.startsWith("restore_")) {
                 applier.applyRestore(event);
+                bumpWikiVersion(event);
                 return;
             }
             if ("agent".equals(kind)) {
@@ -75,9 +101,14 @@ public class AiTaskResultConsumer {
                     if (result.error() == null) {
                         queryEventBroker.complete(flowId);
                     } else {
-                        queryEventBroker.fail(flowId, AiTaskResultApplier.describeAgentError(result.error()));
+                        queryEventBroker.fail(flowId, result.error(), AiErrorMessages.agent(result.error()));
                     }
                 }
+                return;
+            }
+            if ("document_cleanup".equals(kind) || "document_rename".equals(kind)) {
+                // 반영할 결과는 없지만 ai가 source 페이지를 지우거나 제목을 바꿨다.
+                bumpWikiVersion(event);
                 return;
             }
             if (!"query".equals(kind)) {
@@ -91,7 +122,8 @@ public class AiTaskResultConsumer {
                     queryEventBroker.complete(projection.runId());
                 }
             } else if (queryRunStore.markFailed(projection.runId(), projection.error())) {
-                queryEventBroker.fail(projection.runId(), projection.error());
+                queryEventBroker.fail(projection.runId(), projection.error(),
+                        AiErrorMessages.query(projection.error()));
             }
         } catch (Exception e) {
             log.error("[AI task 결과 소비 실패] kind={} flowId={} errorType={}",
@@ -126,6 +158,21 @@ public class AiTaskResultConsumer {
             log.warn("[질의 진행 이벤트 중계 실패] flowId={} eventId={} errorType={} error={}",
                     flowId, event.path("event_id").asText(), e.getClass().getSimpleName(), e.getMessage());
         }
+    }
+
+    /**
+     * 위키를 바꾸는 결과마다 워크스페이스 위키 버전을 올린다(#68). 반영과 별도 트랜잭션이라 반영 중 잠금을 늘리지 않는다.
+     * 반영이 커밋된 뒤 여기서 실패하면 레코드가 다시 소비되고, 반영은 receipt로 건너뛰며 버전만 다시 오른다.
+     * 상태와 무관하게 올린다. 실패한 편입·복구도 일부 페이지를 바꿨을 수 있다. 중복 이벤트는 304 한 번을 놓칠 뿐이다.
+     */
+    private void bumpWikiVersion(JsonNode event) {
+        String workspaceId = event.path("workspace_id").asText("");
+        if (workspaceId.isBlank()) workspaceId = event.path("request").path("workspace_id").asText("");
+        if (workspaceId.isBlank()) {
+            log.warn("[위키 버전 갱신 생략] kind={} reason=workspace_id_missing", event.path("kind").asText());
+            return;
+        }
+        wikiVersions.bump(workspaceId);
     }
 
     private String resolveFlowId(JsonNode event) {

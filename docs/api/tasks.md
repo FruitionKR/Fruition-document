@@ -18,7 +18,7 @@ Agent turn 취소는 이미 완료한 하위 Agent run과 해당 턴의 Skill �
 
 ### 3. Auth 필요 여부
 
-Bearer access token. 해당 workspace 구성원이면서 작업을 시작한 사용자여야 합니다.
+Bearer access token. 해당 workspace 구성원이면서 작업을 시작한 사용자 본인이거나 워크스페이스 OWNER여야 합니다. OWNER는 같은 workspace의 다른 멤버 작업을 취소·조회할 수 있으며, AI에는 작업을 시작한 사용자의 workspace·user가 그대로 전달됩니다.
 
 ### 4. Request body
 
@@ -35,7 +35,7 @@ Bearer access token. 해당 workspace 구성원이면서 작업을 시작한 사
 | 상태 | 의미 |
 |---|---|
 | `running`, `completed` | 정상 작업 기록 |
-| `failed` | 동기 AI 호출이 실패했거나 PDF 변환이 재시도를 다 쓰고 실패함 |
+| `failed` | 동기 AI 호출이 실패했거나 PDF 변환 batch 하나가 AI의 나눠 다시 시도까지 마치고 실패함(문서 단위 재시도 없음) |
 | `cancel_requested` | 취소를 저장하고 실행 중인 작업이 멈추기를 기다림 |
 | `rolling_back` | AI DB·객체 저장소와 업무 DB를 복구 중 |
 | `cancelled` | 복구 확인 완료 |
@@ -43,7 +43,7 @@ Bearer access token. 해당 workspace 구성원이면서 작업을 시작한 사
 
 ### 6. Error response
 
-인증 실패 `401`, 권한 실패 `403`, 다른 actor의 작업 또는 없는 작업 `404`.
+인증 실패 `401`, 권한 실패 `403`, 작업을 시작한 사용자도 OWNER도 아닌 actor의 요청 또는 없는 작업 `404`.
 복구 실패는 상태의 `error_code`로 확인합니다. 연결 장애는 `rollback_retry_pending`을 남기고 자동 재시도합니다.
 `rollback_failed`는 같은 취소 요청으로 재시도할 수 있으며 이미 복구한 단계는 재실행하지 않습니다.
 Agent 복구 worker가 응답 없이 종료되면 마지막 시도의 lease도 만료 후 회수합니다.
@@ -74,7 +74,7 @@ Authorization: Bearer <access-token>
 - Python: `app/modules/task_cancellation/`, `app/modules/agent_run/application/rollback_agent_run.py`
 - 기계 판독 계약: `api-specs/openapi.yaml`, `AI/pipeline/api-specs/openapi.yaml`
 - 호출자: 프론트엔드 — `src/entities/wiki/api/wiki.ts:40`(취소), `:49`(상태 조회) (`cancelQueryRun`)
-- 하위 호출: ai-svc `POST ${AGENT_STATUS_ENDPOINT 호스트}/internal/ai/tasks/{id}/cancel`·`/rollback-backend`·`GET /{id}`·`POST /documents/{id}/cancel` (`PipelineTaskCancellationClient`), 되돌리기 중 객체 저장소 `removeObject`
+- 하위 호출: ai-svc `POST ${AGENT_STATUS_ENDPOINT 호스트}/internal/ai/tasks/{id}/cancel`·`/rollback-backend`·`GET /{id}` (`PipelineTaskCancellationClient`), 되돌리기 중 객체 저장소 `removeObject`
 - 배선 상태: 배선됨
 
 ## 업무 변경 복구 내부 API

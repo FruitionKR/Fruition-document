@@ -28,12 +28,19 @@ public class AiTaskCancellationService {
     private final io.minio.MinioClient storage;
     private final fruition.shared.util.StorageProperties storageProperties;
     private final fruition.core.usage.service.CreditService credits;
+    private final fruition.core.wiki.repository.WikiWorkspaceVersionRepository wikiVersions;
+
+    /** 취소 복구가 ai 위키를 되돌릴 수 있는 실행 종류. 복구가 끝나면 위키 버전을 올린다(#68). */
+    private static final java.util.Set<String> WIKI_KINDS =
+            java.util.Set.of("document", "post_ingest", "lint", "restore_ingest", "restore_lint");
 
     public AiTaskCancellationService(JdbcTemplate jdbc, PlatformTransactionManager manager,
             PipelineTaskCancellationClient pipeline, WorkspaceAccessGuard access, ObjectMapper mapper,
             QueryRunStore queryRuns, fruition.core.query.service.QueryEventBroker events, io.minio.MinioClient storage, fruition.shared.util.StorageProperties storageProperties,
-            fruition.core.usage.service.CreditService credits) {
+            fruition.core.usage.service.CreditService credits,
+            fruition.core.wiki.repository.WikiWorkspaceVersionRepository wikiVersions) {
         this.credits = credits;
+        this.wikiVersions = wikiVersions;
         this.jdbc = jdbc;
         this.transaction = new TransactionTemplate(manager);
         this.pipeline = pipeline;
@@ -68,8 +75,9 @@ public class AiTaskCancellationService {
 
     public Map<String, Object> cancel(String id, String workspaceId, String userId) {
         access.requireMember(workspaceId, userId);
+        String taskUserId = taskOwner(id, workspaceId, userId);
         transaction.executeWithoutResult(tx -> {
-            owned(id, workspaceId, userId, true);
+            owned(id, workspaceId, taskUserId, true);
             jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
                     + "WHERE id = ? AND status NOT IN ('cancelled', 'rolling_back')", id);
         });
@@ -77,32 +85,25 @@ public class AiTaskCancellationService {
         return status(id, workspaceId, userId);
     }
 
-    public boolean cancelDocumentTasks(String documentId, String workspaceId, String userId) {
-        var tasks = jdbc.queryForList("SELECT id FROM ai_task_runs WHERE workspace_id = ? AND user_id = ? "
-                + "AND command->>'document_id' = ? ORDER BY created_at DESC", String.class, workspaceId, userId, documentId);
-        for (String id : tasks) {
-            transaction.executeWithoutResult(tx -> {
-                owned(id, workspaceId, userId, true);
-                jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL "
-                        + "WHERE id = ? AND status NOT IN ('cancelled', 'rolling_back')", id);
-            });
-        }
-        for (String id : tasks) {
-            advance(id);
-            if (!owned(id, workspaceId, userId, false).get("status").equals("cancelled")) return false;
-        }
-        return pipeline.cancelDocumentTasks(documentId, workspaceId, userId);
+    /**
+     * 시스템이 자기 작업(만료·취소한 회의록 등)의 취소를 요청한다. 소유자·멤버십을 보지 않고 상태만 바꾸며,
+     * 파이프라인 호출은 하지 않는다. {@link #resume()}이 이어서 진행한다. 호출자 트랜잭션 안에서 쓸 수 있다.
+     */
+    public void requestCancel(String id) {
+        jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
+                + "WHERE id = ? AND status NOT IN ('cancelled', 'rolling_back')", id);
     }
 
     public java.util.Optional<Map<String, Object>> findStatus(String id, String workspaceId, String userId) {
-        var rows = jdbc.queryForList("SELECT id, status, error_code FROM ai_task_runs WHERE id = ? AND workspace_id = ? AND user_id = ?",
+        var rows = jdbc.queryForList("SELECT id, status, error_code FROM ai_task_runs WHERE id = ? AND workspace_id = ? AND user_id = ? "
+                + "AND kind <> 'agent_run'",
                 id, workspaceId, userId);
         return rows.stream().findFirst();
     }
 
     public Map<String, Object> status(String id, String workspaceId, String userId) {
         access.requireMember(workspaceId, userId);
-        Map<String, Object> row = owned(id, workspaceId, userId, false);
+        Map<String, Object> row = owned(id, workspaceId, taskOwner(id, workspaceId, userId), false);
         return Map.of("id", id, "status", row.get("status"), "error_code",
                 row.get("error_code") == null ? "" : row.get("error_code"));
     }
@@ -144,8 +145,8 @@ public class AiTaskCancellationService {
             boolean converting = row.get("kind").equals("convert");
             JsonNode command = converting ? mapper.valueToTree(Map.of("run_id", id, "kind", "convert",
                     "workspace_id", workspaceId, "user_id", userId)) : mapper.readTree(row.get("command").toString());
-            if (converting && !jdbc.queryForList("SELECT id FROM document_convert_queue WHERE document_id = ? AND status = 'processing'",
-                    Long.class, id.substring("convert:".length())).isEmpty()) return;
+            // 결과를 기다리는 변환 batch를 먼저 취소한다. 실패하면 아래 catch가 다음 주기에 다시 시도한다.
+            if (converting) cancelConvertBatches(id, workspaceId, userId);
             // DB 취소를 먼저 커밋한다. Python 복구 중 돌아오는 내부 요청과 잠금이 충돌하지 않는다.
             var result = converting ? new PipelineTaskCancellationClient.TaskStatus(id, "cancelled", null)
                     : row.get("status").equals("cancel_requested")
@@ -172,6 +173,8 @@ public class AiTaskCancellationService {
                 queryRuns.markCancelled(id);
                 events.cancel(id);
                 jdbc.update("UPDATE ai_task_runs SET status = 'cancelled', error_code = NULL, updated_at = now() WHERE id = ?", id);
+                if (WIKI_KINDS.contains(row.get("kind"))) wikiVersions.bump(workspaceId);
+                if (converting) jdbc.update("DELETE FROM document_convert_queue WHERE document_id = ?", id.substring("convert:".length()));
                 // 취소 전까지 일어난 호출을 수집해 정산하고 남은 예약을 푼다(#78·#79).
                 jdbc.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", id);
             });
@@ -181,6 +184,17 @@ public class AiTaskCancellationService {
             // 연결 장애는 다음 주기에 재시도한다. 복구 확인 전 완료로 표시하지 않는다.
             jdbc.update("UPDATE ai_task_runs SET error_code = 'rollback_retry_pending', updated_at = now() "
                     + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back')", id);
+        }
+    }
+
+    /** 변환 run의 결과 대기 batch를 AI에서 취소한다. parent_run_id로는 취소할 수 없어 batch run_id마다 발행한 command를 보낸다. */
+    private void cancelConvertBatches(String convertRunId, String workspaceId, String userId) throws Exception {
+        var batches = jdbc.queryForList("SELECT b.start_page, b.command::text AS command FROM document_convert_batches b "
+                + "JOIN document_convert_queue q ON q.id = b.queue_id WHERE q.document_id = ? AND b.status = 'dispatched' "
+                + "ORDER BY b.start_page", convertRunId.substring("convert:".length()));
+        for (var batch : batches) {
+            pipeline.cancel(convertRunId + ":" + batch.get("start_page"), workspaceId, userId,
+                    mapper.readTree(batch.get("command").toString()));
         }
     }
 
@@ -228,6 +242,17 @@ public class AiTaskCancellationService {
     private void requireRollingBack(Map<String, Object> row) {
         if (!List.of("cancel_requested", "rolling_back").contains(row.get("status")))
             throw new ResponseStatusException(HttpStatus.CONFLICT, "취소 중인 작업만 복구할 수 있습니다.");
+    }
+
+    /**
+     * 취소·조회를 요청한 사용자 기준의 작업 소유자. 요청자 본인의 작업이면 요청자이고,
+     * 요청자가 워크스페이스 OWNER이면 같은 워크스페이스 작업의 요청자(행의 user_id)로 대신한다.
+     * 해당 작업이 없으면 요청자를 그대로 돌려 {@link #owned}가 404를 낸다.
+     */
+    private String taskOwner(String id, String workspaceId, String requesterId) {
+        if (!access.isOwner(workspaceId, requesterId)) return requesterId;
+        return jdbc.queryForList("SELECT user_id FROM ai_task_runs WHERE id = ? AND workspace_id = ?",
+                String.class, id, workspaceId).stream().findFirst().orElse(requesterId);
     }
 
     private Map<String, Object> owned(String id, String workspaceId, String userId, boolean lock) {

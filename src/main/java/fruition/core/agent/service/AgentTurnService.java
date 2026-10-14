@@ -53,6 +53,7 @@ public class AgentTurnService {
     private final String commandTopic;
     private final fruition.core.aitask.service.AiTaskCancellationService cancellation;
     private final com.fasterxml.jackson.databind.ObjectMapper mapper;
+    private final fruition.core.usage.service.UsageChargeService usageCharges;
 
     public AgentTurnService(DocumentService documentService,
                             DocumentEditLockService editLockService,
@@ -67,7 +68,8 @@ public class AgentTurnService {
                             ChatTurnRecorder chatTurnRecorder,
                             @Value("${app.agent.command-topic}") String commandTopic,
                             fruition.core.aitask.service.AiTaskCancellationService cancellation,
-                            com.fasterxml.jackson.databind.ObjectMapper mapper) {
+                            com.fasterxml.jackson.databind.ObjectMapper mapper,
+                            fruition.core.usage.service.UsageChargeService usageCharges) {
         this.documentService = documentService;
         this.editLockService = editLockService;
         this.workspaceAccessGuard = workspaceAccessGuard;
@@ -82,6 +84,7 @@ public class AgentTurnService {
         this.commandTopic = commandTopic;
         this.cancellation = cancellation;
         this.mapper = mapper;
+        this.usageCharges = usageCharges;
     }
 
     @Transactional
@@ -219,19 +222,19 @@ public class AgentTurnService {
 
     public JsonNode getRun(String workspaceId, String userId, String runId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return statusRequester.getAutonomousRun(workspaceId, userId, runId);
+        return closeIfTerminal(runId, statusRequester.getAutonomousRun(workspaceId, userId, runId));
     }
 
     public JsonNode approve(String workspaceId, String userId, String runId,
                             AgentRunApproveRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return statusRequester.approve(workspaceId, userId, runId,
-                request.planVersion(), request.operationHash());
+        return rerun(workspaceId, userId, runId, () -> statusRequester.approve(workspaceId, userId, runId,
+                request.planVersion(), request.operationHash()));
     }
 
     public JsonNode reject(String workspaceId, String userId, String runId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return statusRequester.reject(workspaceId, userId, runId);
+        return closeIfTerminal(runId, statusRequester.reject(workspaceId, userId, runId));
     }
 
     public JsonNode cancel(String workspaceId, String userId, String runId) {
@@ -239,13 +242,42 @@ public class AgentTurnService {
         if (cancellation.findStatus(runId, workspaceId, userId).isPresent()) {
             return mapper.valueToTree(cancellation.cancel(runId, workspaceId, userId));
         }
-        return statusRequester.cancel(workspaceId, userId, runId);
+        return closeIfTerminal(runId, statusRequester.cancel(workspaceId, userId, runId));
     }
 
     public JsonNode revise(String workspaceId, String userId, String runId,
                            AgentRunReviseRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return statusRequester.revise(workspaceId, userId, runId, request.instruction());
+        return rerun(workspaceId, userId, runId,
+                () -> statusRequester.revise(workspaceId, userId, runId, request.instruction()));
+    }
+
+    /**
+     * 계획 수정·승인은 ai-svc가 AgentRun(처음 요청의 turn과 다른 id)으로 모델을 다시 부른다. 먼저 AgentRun을 조회해 호출자의
+     * 것임을 확인하고(남의 id를 크레딧 실행으로 선점하지 못하게), 전달하기 전에 크레딧 실행으로 등록·예약해 처음 요청과 같은
+     * 규칙으로 가용 잔액을 확인한다(부족하면 402, 전달하지 않음). ai-svc가 전달을 거절하면 이번 시도의 예약만 풀고 실행은
+     * 닫지 않아 다음 시도가 잔액을 다시 확인한다. 실행의 종료는 AgentRun 응답의 상태로 알아챈다({@link #closeIfTerminal}).
+     * enforce가 꺼져 있으면 아무것도 하지 않는다(#102).
+     */
+    private JsonNode rerun(String workspaceId, String userId, String runId, java.util.function.Supplier<JsonNode> forward) {
+        JsonNode current = statusRequester.getAutonomousRun(workspaceId, userId, runId);
+        if (usageCharges.isAutonomousTerminal(current)) {  // 이미 끝난 실행은 ai-svc가 거절한다. 예약하지 않는다.
+            closeIfTerminal(runId, current);
+            return forward.get();
+        }
+        usageCharges.reserveAutonomousRun(runId, workspaceId, userId);
+        try {
+            return closeIfTerminal(runId, forward.get());
+        } catch (RuntimeException e) {
+            usageCharges.abortAutonomousAttempt(runId, userId);
+            throw e;
+        }
+    }
+
+    /** AgentRun이 끝났으면 크레딧 실행을 닫아 사용량 수집·정산(예약 해제)을 시작한다. */
+    private JsonNode closeIfTerminal(String runId, JsonNode run) {
+        usageCharges.endAutonomousRunIfTerminal(runId, run);
+        return run;
     }
 
     private String publicStatus(String status) {

@@ -56,6 +56,15 @@ public class AiCommandOutboxWriter {
         close(runId, "completed");
     }
 
+    /**
+     * 실행을 끝내면서 같은 트랜잭션에서 예약도 바로 푼다. 이어서 새 작업(변환 뒤 자동 ingest)을 시작할 때 이 실행의 예약이
+     * 가용 잔액을 줄여 그 작업을 거절하게 만들지 않는다. 끝난 실행의 사용 금액은 수집 대기열이 이어서 차감한다.
+     */
+    public void completeAndSettle(String runId) {
+        close(runId, "completed");
+        credits.settle(runId);
+    }
+
     /** 다시 시도하지 않을 실패로 실행을 닫는다. 실패 전까지의 공급사 호출도 수집·정산한다. */
     public void fail(String runId) {
         close(runId, "failed");
@@ -78,6 +87,14 @@ public class AiCommandOutboxWriter {
         if (states.isEmpty() || !java.util.List.of("running", "completed").contains(states.getFirst())) return false;
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
         return true;
+    }
+
+    /**
+     * 이미 등록·예약된 부모 실행에 딸린 command를 outbox에만 저장한다. {@link #enqueue}와 달리 이 runId로
+     * 실행 행을 만들거나 크레딧을 예약하지 않는다(PDF 변환 batch는 변환 run 하나가 예약한다).
+     */
+    public void enqueueJoined(String runId, String topic, String messageKey, String payload) {
+        repository.save(new AiCommandOutbox(UUID.randomUUID().toString(), runId, topic, messageKey, payload));
     }
 
     public void enqueue(String runId, String topic, String messageKey, Object command) {

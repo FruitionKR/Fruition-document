@@ -25,7 +25,7 @@ class IngestCommandOutboxTest {
     void enqueue_serializesProviderAndModelAtOutboxBoundary() {
         ObjectMapper objectMapper = new ObjectMapper();
         when(workspaceAiModelClient.get("ws_1"))
-                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.1-flash-lite"));
+                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
         AiCommandOutboxWriter writer = spy(new AiCommandOutboxWriter(outboxRepository, objectMapper,
                 org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class),
                 org.mockito.Mockito.mock(jakarta.persistence.EntityManager.class),
@@ -45,7 +45,29 @@ class IngestCommandOutboxTest {
         verify(outboxRepository).save(saved.capture());
         assertThat(saved.getValue().getPayload())
                 .contains("\"kind\":\"chat_wiki\"", "\"provider\":\"gemini\"",
-                        "\"model\":\"gemini-3.1-flash-lite\"",
+                        "\"model\":\"gemini-3.5-flash-lite\"",
                         "\"block_id\":\"session_1:pair_1\"");
+    }
+
+    @Test
+    void enqueueRename_serializesDocumentRenamedWithoutUser() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        AiCommandOutboxWriter writer = spy(new AiCommandOutboxWriter(outboxRepository, objectMapper,
+                org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class),
+                org.mockito.Mockito.mock(jakarta.persistence.EntityManager.class),
+                org.mockito.Mockito.mock(fruition.core.usage.service.CreditService.class)));
+        IngestCommandOutbox outbox = new IngestCommandOutbox(
+                writer, "ai.ingest.command", workspaceAiModelClient, objectMapper);
+
+        outbox.enqueueRename("doc_1", "ws_1", "새 이름");
+
+        verify(writer).enqueue(org.mockito.ArgumentMatchers.anyString(), eq("ai.ingest.command"), eq("doc_1"),
+                org.mockito.ArgumentMatchers.any(IngestCommandOutbox.RenameCommand.class));
+        ArgumentCaptor<AiCommandOutbox> saved = ArgumentCaptor.forClass(AiCommandOutbox.class);
+        verify(outboxRepository).save(saved.capture());
+        assertThat(saved.getValue().getPayload())
+                .contains("\"kind\":\"document_renamed\"", "\"document_id\":\"doc_1\"",
+                        "\"workspace_id\":\"ws_1\"", "\"title\":\"새 이름\"")
+                .doesNotContain("user_id");
     }
 }

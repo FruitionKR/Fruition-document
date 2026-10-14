@@ -18,6 +18,8 @@ import java.net.URI;
 /** ai-svc 파일 전사(`POST /speech/transcriptions`) 호출. 오디오·결과를 저장하지 않는다. */
 @Component
 public class SpeechTranscriptionClient {
+    /** 채팅 음성은 ALB 유휴 120초 안에 끝나야 해서 AI에 전체 전사 시간을 100초로 제한하게 한다. 클라이언트 대기(150초)는 그보다 길다. */
+    static final int DEADLINE_SECONDS = 100;
     private final RestClient restClient;
     private final String endpoint;
     private final UsageChargeService usageCharges;
@@ -31,7 +33,7 @@ public class SpeechTranscriptionClient {
         this.usageCharges = usageCharges;
     }
 
-    /** AI가 사용량을 남기도록 run_id를 함께 보낸다. */
+    /** AI가 사용량을 남기도록 run_id를 {@code X-Request-Id} 헤더로 보낸다. */
     public String transcribe(String workspaceId, String userId, MediaType mediaType, byte[] audio) {
         return usageCharges.track("speech_transcription", workspaceId, userId,
                 runId -> transcribe(runId, workspaceId, userId, mediaType, audio));
@@ -41,12 +43,13 @@ public class SpeechTranscriptionClient {
         URI uri = UriComponentsBuilder.fromUriString(endpoint)
                 .queryParam("workspace_id", "{workspaceId}")
                 .queryParam("user_id", "{userId}")
-                .queryParam("run_id", "{runId}")
+                .queryParam("deadline_seconds", DEADLINE_SECONDS)
                 .encode()
-                .buildAndExpand(workspaceId, userId, runId)
+                .buildAndExpand(workspaceId, userId)
                 .toUri();
         try {
-            JsonNode body = restClient.post().uri(uri).contentType(mediaType).body(audio)
+            JsonNode body = restClient.post().uri(uri).contentType(mediaType)
+                    .header(UsageChargeService.RUN_ID_HEADER, runId).body(audio)
                     .retrieve().body(JsonNode.class);
             if (body == null || !body.path("text").isTextual()) {
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "음성을 전사하지 못했습니다.");

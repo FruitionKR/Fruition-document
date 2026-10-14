@@ -27,6 +27,7 @@ final class OperationFailureSummary {
                     ? "되돌리기를 일부만 반영했습니다." : "되돌리기에 실패했습니다.";
             case document_edit -> partial
                     ? "AI 편집을 일부만 반영했습니다." : "AI 편집을 반영하지 못했습니다.";
+            case wiki_edit -> "Wiki 본문 수정을 반영하지 못했습니다.";
         };
     }
 }

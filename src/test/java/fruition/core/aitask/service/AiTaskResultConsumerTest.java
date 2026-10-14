@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.query.dto.QueryResponse;
 import fruition.core.query.service.QueryEventBroker;
 import fruition.core.query.service.QueryRunStore;
+import fruition.core.wiki.repository.WikiWorkspaceVersionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +26,7 @@ class AiTaskResultConsumerTest {
     @Mock AiTaskResultApplier applier;
     @Mock QueryRunStore queryRunStore;
     @Mock QueryEventBroker queryEventBroker;
+    @Mock WikiWorkspaceVersionRepository wikiVersions;
 
     private AiTaskResultConsumer consumer;
 
@@ -32,7 +34,7 @@ class AiTaskResultConsumerTest {
     void setUp() {
         org.mockito.Mockito.lenient().when(applier.acceptsProgress(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         consumer = new AiTaskResultConsumer(
-                new ObjectMapper(), applier, queryRunStore, queryEventBroker);
+                new ObjectMapper(), applier, queryRunStore, queryEventBroker, wikiVersions);
     }
 
     @Test
@@ -61,7 +63,7 @@ class AiTaskResultConsumerTest {
         consumer.consume("{\"kind\":\"query\"}");
 
         verify(queryEventBroker).complete("query-1");
-        verify(queryEventBroker, never()).fail("query-1", "late failure");
+        verify(queryEventBroker, never()).fail(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -163,14 +165,15 @@ class AiTaskResultConsumerTest {
     @Test
     void agentFailureEventFailsTheSseStream() throws Exception {
         when(applier.applyAgent(any())).thenReturn(
-                new AiTaskResultApplier.AgentApplyResult(true, "모델 호출 실패"));
+                new AiTaskResultApplier.AgentApplyResult(true, "provider_unavailable"));
 
         consumer.consume("""
                 {"event_id":"agent:agent-1:failed","kind":"agent","run_id":"agent-1",
-                 "status":"failed","error":"모델 호출 실패"}
+                 "status":"failed","error":"provider_unavailable"}
                 """);
 
-        verify(queryEventBroker).fail("agent-1", "모델 호출 실패");
+        verify(queryEventBroker).fail("agent-1", "provider_unavailable",
+                "AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     }
 
     @Test
@@ -184,7 +187,8 @@ class AiTaskResultConsumerTest {
                 """);
 
         // 내부 코드가 아니라 사용자에게 보일 문구가 나가야 한다.
-        verify(queryEventBroker).fail("agent-1", "Agent 결과 형식이 올바르지 않습니다.");
+        verify(queryEventBroker).fail("agent-1", "agent_result_invalid_payload",
+                "Agent 결과 형식이 올바르지 않습니다.");
         verify(queryEventBroker, never()).complete(anyString());
     }
 
@@ -199,7 +203,7 @@ class AiTaskResultConsumerTest {
                 """);
 
         verify(queryEventBroker, never()).complete(anyString());
-        verify(queryEventBroker, never()).fail(anyString(), anyString());
+        verify(queryEventBroker, never()).fail(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -212,5 +216,60 @@ class AiTaskResultConsumerTest {
         consumer.consume("{\"kind\":\"ingest\",\"run_id\":\"run-1\"}");
 
         assertThat(MDC.get("flowId")).isNull();
+    }
+
+    @Test
+    void consumeRoutesPostIngestEventToApplier() throws Exception {
+        consumer.consume("{\"kind\":\"post_ingest\",\"run_id\":\"post-1\",\"status\":\"succeeded\"}");
+
+        verify(applier).applyPostIngest(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void convertBatchEventIsAppliedWithoutQueryProjection() throws Exception {
+        consumer.consume("{\"kind\":\"convert_batch\",\"run_id\":\"convert:doc_1:0\",\"status\":\"succeeded\"}");
+
+        verify(applier).applyConvertBatch(any());
+        verifyNoInteractions(queryRunStore, queryEventBroker);
+    }
+
+    @Test
+    void meetingTranscriptionEventIsAppliedWithoutQueryProjection() throws Exception {
+        consumer.consume("{\"kind\":\"meeting_transcription\",\"run_id\":\"meeting_transcription:mtg_1:u\",\"status\":\"succeeded\"}");
+
+        verify(applier).applyMeetingTranscription(any());
+        verifyNoInteractions(queryRunStore, queryEventBroker);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "ingest", "post_ingest", "lint", "restore_ingest", "restore_lint", "document_cleanup", "document_rename"})
+    void wikiChangingResultBumpsWorkspaceWikiVersion(String kind) throws Exception {
+        consumer.consume("{\"kind\":\"" + kind + "\",\"status\":\"succeeded\",\"workspace_id\":\"ws_1\","
+                + "\"run_id\":\"run-1\",\"request\":{\"workspace_id\":\"ws_1\"}}");
+
+        verify(wikiVersions).bump("ws_1");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "query", "agent", "meeting_notes", "meeting_transcription", "convert_batch"})
+    void nonWikiResultDoesNotBumpWikiVersion(String kind) throws Exception {
+        org.mockito.Mockito.lenient().when(applier.applyAgent(any()))
+                .thenReturn(new AiTaskResultApplier.AgentApplyResult(false, null));
+        consumer.consume("{\"kind\":\"" + kind + "\",\"status\":\"succeeded\",\"workspace_id\":\"ws_1\","
+                + "\"run_id\":\"run-1\"}");
+
+        verifyNoInteractions(wikiVersions);
+    }
+
+    @Test
+    void lintDryRunAndProgressDoNotBumpWikiVersion() throws Exception {
+        consumer.consume("{\"kind\":\"lint\",\"status\":\"succeeded\",\"workspace_id\":\"ws_1\","
+                + "\"request\":{\"dry_run\":true}}");
+        consumer.consume("{\"kind\":\"ingest\",\"status\":\"progress\",\"workspace_id\":\"ws_1\","
+                + "\"run_id\":\"run-1\",\"payload\":{}}");
+
+        verifyNoInteractions(wikiVersions);
     }
 }

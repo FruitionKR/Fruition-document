@@ -52,7 +52,7 @@ public record ChatMessageResponse(
         String provider,
 
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        @Schema(description = "이 답변을 생성한 모델명", example = "gpt-5-nano")
+        @Schema(description = "이 답변을 생성한 모델명", example = "gpt-6-luna")
         String model,
 
         @JsonInclude(JsonInclude.Include.NON_NULL)

@@ -1101,7 +1101,7 @@ class DocumentEditingSchemaIntegrationTest {
         String workspaceId = "ws_" + suffix;
         String sourceId = "doc_source_" + suffix;
         // guard가 Redis projection을 읽으므로 멤버십을 projection에 심는다 (access 테이블은 access_db 소유).
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"OWNER\",\"permissions\":[]}");
         insertDocument(sourceId, workspaceId, userId, "보고서.md", "source-hash", "EDITABLE");
         jdbcTemplate.update(
                 """
@@ -1649,7 +1649,7 @@ class DocumentEditingSchemaIntegrationTest {
 
     private void insertWorkspaceMember(String userId, String workspaceId) {
         // workspace_members는 access_db 소유 — guard가 읽는 Redis projection만 심는다 (MSA DB 분리).
-        redisTemplate.opsForValue().set("authz:role:" + workspaceId + ":" + userId, "OWNER");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"OWNER\",\"permissions\":[]}");
     }
 
     private void insertDocument(

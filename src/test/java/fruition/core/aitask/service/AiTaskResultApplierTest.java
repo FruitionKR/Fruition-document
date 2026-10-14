@@ -56,6 +56,7 @@ class AiTaskResultApplierTest {
     @Mock fruition.core.chat.service.ChatTurnRecorder chatTurnRecorder;
     @Mock fruition.core.chat.service.ChatEvidenceRecorder chatEvidenceRecorder;
     @Mock fruition.core.usage.service.UsageChargeService usageCharges;
+    @Mock fruition.core.meeting.MeetingNotesService meetingNotesService;
 
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private AiTaskResultApplier applier;
@@ -72,7 +73,8 @@ class AiTaskResultApplierTest {
         applier = new AiTaskResultApplier(jdbcTemplate, objectMapper, queryService,
                 operationIngestService, lintOperationStarter, wikiMaintenanceService,
                 operationLogRepository, restoreApplier, restoreLifecycle, documentService, chatTurnRecorder,
-                chatEvidenceRecorder, usageCharges);
+                chatEvidenceRecorder, usageCharges, meetingNotesService,
+                org.mockito.Mockito.mock(fruition.core.meeting.MeetingTranscriptionService.class));
     }
 
     @Test
@@ -89,6 +91,23 @@ class AiTaskResultApplierTest {
         assertThat(projection.response().assistantMessage().content()).isEqualTo("first answer");
         verify(queryService, never()).failAsync(any(), any(), any());
         verify(queryService, never()).completeAsync(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void resultOfPurgedRunIsSkippedAndLaterResultsStillApply() throws Exception {
+        when(jdbcTemplate.queryForList(eq("SELECT status FROM ai_task_runs WHERE id = ? FOR UPDATE"),
+                eq(String.class), eq("restore-run-1"))).thenReturn(java.util.List.of());
+
+        assertThatCode(() -> applier.applyRestore(restoreEvent())).doesNotThrowAnyException();
+        verify(operationLogRepository, never()).findById(any());
+        verify(usageCharges, never()).enqueue("restore-run-1");
+
+        when(jdbcTemplate.update(any(String.class), any(), any(), any())).thenReturn(1);
+        var projection = applier.applyQuery(objectMapper.readTree(event("event-1", "succeeded", "answer", null)));
+
+        assertThat(projection.error()).isNull();
+        verify(queryService).completeAsync(eq("session-1"), eq("question"), eq("query-1"), any(), any());
+        verify(usageCharges).enqueue("query-1");
     }
 
     @Test
@@ -421,6 +440,24 @@ class AiTaskResultApplierTest {
     }
 
     @Test
+    void failedAgentChatMessageShowsKoreanMessageNotCode() throws Exception {
+        JsonNode event = objectMapper.readTree("""
+                {"event_id":"agent:run-4:failed","run_id":"run-4","kind":"agent",
+                 "status":"failed","error":"provider_unavailable",
+                 "request":{"message_context":{"assistant_message_id":"chat_assistant_4"}}}
+                """);
+        when(jdbcTemplate.update(any(String.class), eq("agent:run-4:failed"), eq("run-4"), any()))
+                .thenReturn(1);
+        when(jdbcTemplate.update(org.mockito.ArgumentMatchers.contains("UPDATE agent_apply_projections"),
+                eq("provider_unavailable"), eq("run-4"))).thenReturn(1);
+
+        applier.applyAgent(event);
+
+        verify(chatTurnRecorder).markFailed("chat_assistant_4",
+                "AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    }
+
+    @Test
     void extractsCanonicalMarkdownForSupportedCreateAndEditResults() throws Exception {
         JsonNode create = objectMapper.readTree("""
                 {"request":{},"payload":{"action":"markdown_create",
@@ -558,6 +595,60 @@ class AiTaskResultApplierTest {
         ((com.fasterxml.jackson.databind.node.ObjectNode) root.get("payload"))
                 .put("updated_conversation_summary", summary);
         return root.toString();
+    }
+
+    @Test
+    void succeededIngestDefersUsageSettlementUntilPostIngestAndFailedIngestSettlesNow() throws Exception {
+        when(jdbcTemplate.update(contains("ai_task_result_receipts"), anyString(), anyString())).thenReturn(1);
+
+        applier.applyIngest(objectMapper.readTree(ingestEvent("ingest-ok", "succeeded")));
+        applier.applyIngest(objectMapper.readTree(ingestEvent("ingest-bad", "failed")));
+
+        verify(usageCharges).enqueueAfterPostIngest("ingest-ok");
+        verify(usageCharges, never()).enqueue("ingest-ok");
+        verify(usageCharges).enqueue("ingest-bad");
+        verify(usageCharges, never()).enqueueAfterPostIngest("ingest-bad");
+    }
+
+    @Test
+    void succeededIngestHoldsOnlyWhenPostIngestWasDispatchedOrFieldIsAbsent() throws Exception {
+        when(jdbcTemplate.update(contains("ai_task_result_receipts"), anyString(), anyString())).thenReturn(1);
+
+        applier.applyIngest(objectMapper.readTree(ingestEvent("ingest-true", "succeeded").replaceFirst("\\{", "{\"post_ingest_dispatched\":true,")));
+        applier.applyIngest(objectMapper.readTree(ingestEvent("ingest-false", "succeeded").replaceFirst("\\{", "{\"post_ingest_dispatched\":false,")));
+        applier.applyIngest(objectMapper.readTree(ingestEvent("ingest-absent", "succeeded")));
+
+        verify(usageCharges).enqueueAfterPostIngest("ingest-true");
+        verify(usageCharges).enqueue("ingest-false");
+        verify(usageCharges, never()).enqueueAfterPostIngest("ingest-false");
+        verify(usageCharges).enqueueAfterPostIngest("ingest-absent");
+    }
+
+    @Test
+    void postIngestEventReleasesIngestHoldAndIgnoresEventsWithoutOwner() throws Exception {
+        applier.applyPostIngest(objectMapper.readTree("""
+                {"run_id":"post-1","ingest_run_id":"ingest-1","kind":"post_ingest","status":"succeeded","workspace_id":"ws-1","user_id":"user-1"}
+                """));
+        applier.applyPostIngest(objectMapper.readTree("""
+                {"run_id":"post-2","kind":"post_ingest","status":"failed","workspace_id":null,"user_id":"user-1"}
+                """));
+
+        applier.applyPostIngest(objectMapper.readTree("""
+                {"run_id":"post-3","kind":"post_ingest","status":"succeeded","workspace_id":"ws-1","user_id":"user-1"}
+                """));
+
+        verify(usageCharges).releasePostIngestHold("post-1", "ingest-1", "ws-1", "user-1");
+        // 이전 ai-svc는 ingest_run_id가 없다. 앞당기지 않고 시간 상한에 맡긴다.
+        verify(usageCharges).releasePostIngestHold("post-3", null, "ws-1", "user-1");
+        verify(usageCharges, never()).releasePostIngestHold(eq("post-2"), any(), anyString(), anyString());
+    }
+
+    private String ingestEvent(String runId, String status) {
+        return """
+                {"event_id":"ingest:%s:%s","run_id":"%s","kind":"ingest","status":"%s",
+                 "request":{"document_id":"doc-1","operation_id":"op-1"},
+                 "payload":{"operation_id":"op-1","status":"%s","changed_pages":[]}}
+                """.formatted(runId, status, runId, status, status);
     }
 
     private String event(String eventId, String status, String answer, String error) {

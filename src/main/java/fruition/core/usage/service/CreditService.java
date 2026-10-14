@@ -1,6 +1,7 @@
 package fruition.core.usage.service;
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,12 +22,14 @@ import java.util.TreeMap;
  * 사용자 선불 크레딧(#79). 금액은 milli-KRW 정수이고 원장 {@code credit_entries}는 추가만 한다.
  *
  * <ul>
- *   <li>사전 승인: AI 요청 전에 계정 행을 잠그고 kind별 예상 상한을 예약한다. {@code app.billing.enforce}가 true일 때만
- *       가용 잔액(잔액 − 예약)이 상한보다 작거나 잔액이 음수면 402로 거절한다. false면 기록만 한다.</li>
+ *   <li>사전 승인(ADR-0029): AI 요청 전에 계정 행을 잠그고 가용 잔액(잔액 − 예약)을 본다. {@code app.billing.enforce}가
+ *       true일 때만 가용 잔액이 kind별 최저 비용({@code app.billing.minimum.<kind>}, 없으면 예상 상한의 10%)보다 작으면
+ *       402로 거절하고, 통과하면 {@code min(예상 상한, 가용 잔액)}을 예약한다. false면 상한 전체를 예약만 하고 거절하지 않는다.</li>
  *   <li>정산: 실행의 청구 행({@code usage_charges}) 합계를 차감하고 남은 예약을 푼다. 실제 금액이 예약보다 크면
  *       그대로 차감해 잔액이 음수가 될 수 있다. 실행이 아직 진행 중이면 차감만 하고 예약은 두며, 종료 신호 없이
  *       {@code app.billing.stale-reservation-hours}가 지난 실행은 끝난 것으로 본다.</li>
- *   <li>재예약: 실시간 전사처럼 긴 실행은 구간마다 그때까지의 청구를 차감하고 예약을 다음 구간 상한으로 바꾼다.</li>
+ *   <li>재예약: 실시간 전사처럼 긴 실행은 구간마다 그때까지의 청구를 차감하고 예약을 다음 구간 몫으로 바꾼다(사전 승인과 같은 규칙).
+</li>
  *   <li>멱등: 원장 키가 run_id 기반이라 같은 실행을 여러 번 정산해도 같은 금액은 한 번만 차감한다.</li>
  * </ul>
  */
@@ -58,26 +61,73 @@ public class CreditService {
     }
 
     /**
-     * AI 요청 전에 kind별 예상 상한을 예약한다. 호출자 트랜잭션이 있으면 그 안에서 계정 행을 잠근다.
-     * 같은 실행은 한 번만 예약한다. 사용자가 없는 시스템 작업은 예약하지 않는다(Fruition 부담).
+     * AI 요청 전에 가용 잔액을 확인하고 예약한다. 호출자 트랜잭션이 있으면 그 안에서 계정 행을 잠근다.
+     * 같은 실행은 한 번만 예약한다. enforce에서 가용 잔액이 최저 비용보다 작으면 거절하고, 아니면 예상 상한과 가용 잔액 중
+     * 작은 쪽을 예약한다. 사용자가 없는 요청은 enforce에서 거절한다(시스템 정리 작업은 사용자 없는 command라 여기까지 오지 않는다).
      */
     public void reserve(String runId, String userId, String kind) {
-        if (userId == null || userId.isBlank()) return;
-        long estimate = environment.getProperty("app.billing.estimate." + kind, Long.class, defaultEstimate);
+        if (isFree(kind)) return;
+        if (userId == null || userId.isBlank()) {
+            if (enforce) throw new IllegalArgumentException("AI 요청에 사용자가 없어 크레딧을 예약할 수 없습니다: runId=" + runId);
+            return;
+        }
+        long estimate = estimate(kind);
         transaction.executeWithoutResult(tx -> {
             Map<String, Object> account = lock(userId);
             if (!jdbc.queryForList("SELECT id FROM credit_entries WHERE idempotency_key = ?", Long.class,
                     "reserve:" + runId).isEmpty()) return;
-            long balance = ((Number) account.get("balance")).longValue();
-            long reserved = ((Number) account.get("reserved")).longValue();
-            if (enforce && (balance < 0 || balance - reserved < estimate)) {
-                throw new InsufficientCreditException();
-            }
-            if (append(userId, "reserve", estimate, runId, "reserve:" + runId, kind)) {
+            long available = ((Number) account.get("balance")).longValue() - ((Number) account.get("reserved")).longValue();
+            long amount = admit(kind, estimate, available, AiErrorMessages.INSUFFICIENT_CREDIT);
+            if (append(userId, "reserve", amount, runId, "reserve:" + runId, kind)) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
-                        estimate, userId);
+                        amount, userId);
             }
         });
+    }
+
+    /**
+     * 예약 없이 지금 가용 잔액이 이 종류의 최저 비용 이상인지만 확인한다(대용량 업로드 전 사전 거절용).
+     * {@link #reserve}와 같은 규칙이며 enforce가 꺼져 있으면 항상 통과한다. 잔액은 바뀔 수 있어 실제 예약은 따로 한다.
+     */
+    public void checkAdmission(String userId, String kind) {
+        if (!enforce || isFree(kind)) return;
+        var rows = jdbc.queryForList("SELECT balance, reserved FROM credit_accounts WHERE user_id = ?", userId);
+        long available = rows.isEmpty() ? 0
+                : ((Number) rows.getFirst().get("balance")).longValue() - ((Number) rows.getFirst().get("reserved")).longValue();
+        admit(kind, estimate(kind), available, AiErrorMessages.INSUFFICIENT_CREDIT);
+    }
+
+    /**
+     * 모델을 부르지 않아 비용이 없는 작업(복원: 자체 호스팅 임베딩만 쓰고 원장에 호출이 남지 않는다)은 예약도 사전 승인도 하지 않는다.
+     * 실행 추적({@code ai_task_runs})은 그대로 남는다.
+     */
+    private static boolean isFree(String kind) {
+        return kind != null && kind.startsWith("restore_");
+    }
+
+    /** 사전 승인으로 거절하는 환경인지({@code app.billing.enforce}). */
+    public boolean enforcing() {
+        return enforce;
+    }
+
+    /** kind별 예상 상한. */
+    private long estimate(String kind) {
+        return environment.getProperty("app.billing.estimate." + kind, Long.class, defaultEstimate);
+    }
+
+    /** kind별 최저 비용. 설정이 없으면 예상 상한의 10%이고 최소 1이다(0이면 가용 잔액 0도 통과해 버린다). */
+    private long minimum(String kind, long estimate) {
+        return environment.getProperty("app.billing.minimum." + kind, Long.class, Math.max(1, estimate / 10));
+    }
+
+    /**
+     * 예약 금액을 정한다. enforce에서 가용 잔액이 최저 비용보다 작으면 거절하고, 아니면 상한과 가용 잔액 중 작은 쪽이다.
+     * enforce가 꺼져 있으면 거절 없이 상한 전체다.
+     */
+    private long admit(String kind, long estimate, long available, String rejection) {
+        if (!enforce) return estimate;
+        if (available < minimum(kind, estimate)) throw new InsufficientCreditException(rejection);
+        return Math.min(estimate, available);
     }
 
     /**
@@ -92,13 +142,14 @@ public class CreditService {
                     .forEach(row -> totals.put((String) row.get("user_id"), ((Number) row.get("total")).longValue()));
             jdbc.queryForList("SELECT DISTINCT user_id FROM credit_entries WHERE run_id = ? AND type = 'reserve'",
                     String.class, runId).forEach(user -> totals.putIfAbsent(user, 0L));
-            boolean inProgress = inProgress(runId);
             // 잠금 순서를 user_id 순으로 고정해 정산끼리 교착하지 않는다.
             totals.forEach((userId, total) -> {
                 lock(userId);
                 charge(runId, userId, total);
+                // 진행 여부는 계정 잠금 뒤에 읽는다. 앞에서 읽으면 그 사이 재예약(renew)된 예약을 종료된 것으로 보고 풀 수 있다.
+                boolean inProgress = inProgress(runId);
                 long open = open(runId, userId);
-                if (!inProgress && open > 0 && append(userId, "release", -open, runId, "release:" + runId, null)) {
+                if (!inProgress && open > 0 && append(userId, "release", -open, runId, releaseKey(runId), null)) {
                     jdbc.update("UPDATE credit_accounts SET reserved = reserved - ?, updated_at = now() WHERE user_id = ?",
                             open, userId);
                 }
@@ -107,12 +158,13 @@ public class CreditService {
     }
 
     /**
-     * 진행 중인 실행의 청구를 차감하고, 남은 예약을 풀어 다음 구간 상한으로 다시 예약한다. enforce에서 차감 뒤 가용 잔액이
-     * 상한보다 작으면 {@link InsufficientCreditException}을 던지고 아무것도 반영하지 않는다(실행 종료 정산이 차감한다).
+     * 진행 중인 실행의 청구를 차감하고, 남은 예약을 풀어 다음 구간 몫으로 다시 예약한다. enforce에서 차감 뒤 가용 잔액(다른
+     * 실행의 예약만 뺀 값)이 최저 비용보다 작으면 {@link InsufficientCreditException}을 던지고 아무것도 반영하지 않는다
+     * (실행 종료 정산이 차감한다). 통과하면 {@code min(예상 상한, 가용 잔액)}을 예약한다.
      * seq는 구간 번호이며 같은 구간을 다시 불러도 한 번만 반영한다. 이미 끝난 실행은 차감만 한다.
      */
     public void renew(String runId, String userId, String kind, int seq) {
-        long estimate = environment.getProperty("app.billing.estimate." + kind, Long.class, defaultEstimate);
+        long estimate = estimate(kind);
         transaction.executeWithoutResult(tx -> {
             lock(userId);
             Long total = jdbc.queryForObject("SELECT coalesce(sum(charge_krw_milli), 0) FROM usage_charges "
@@ -124,16 +176,15 @@ public class CreditService {
             long balance = ((Number) account.get("balance")).longValue();
             long open = open(runId, userId);
             long othersReserved = ((Number) account.get("reserved")).longValue() - open;
-            if (enforce && (balance < 0 || balance - othersReserved < estimate)) {
-                throw new InsufficientCreditException();
-            }
+            long amount = admit(kind, estimate, balance - othersReserved,
+                    AiErrorMessages.INSUFFICIENT_CREDIT_STOPPED);
             if (open > 0 && append(userId, "release", -open, runId, "release:" + runId + ":" + seq, null)) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved - ?, updated_at = now() WHERE user_id = ?",
                         open, userId);
             }
-            if (append(userId, "reserve", estimate, runId, "reserve:" + runId + ":" + seq, kind)) {
+            if (append(userId, "reserve", amount, runId, "reserve:" + runId + ":" + seq, kind)) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
-                        estimate, userId);
+                        amount, userId);
             }
         });
     }
@@ -147,6 +198,35 @@ public class CreditService {
             jdbc.update("UPDATE credit_accounts SET balance = balance - ?, updated_at = now() WHERE user_id = ?",
                     delta, userId);
         }
+    }
+
+    /**
+     * 종료 정산의 해제 키. 보통은 {@code release:<run>} 하나지만, 정리 작업이 이미 풀었는데 사용자가 승인을 이어 가
+     * 다시 예약한 실행도 풀 수 있게 키가 쓰였으면 뒤에 번호를 붙인다. 계정 행을 잠근 호출자 안에서만 부른다.
+     */
+    private String releaseKey(String runId) {
+        String key = "release:" + runId;
+        if (jdbc.queryForList("SELECT id FROM credit_entries WHERE idempotency_key = ?", Long.class, key).isEmpty()) return key;
+        Long released = jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE run_id = ? AND type = 'release'",
+                Long.class, runId);
+        return key + ":late:" + released;
+    }
+
+    /**
+     * 실패한 시도의 예약을 푼다. 실행은 닫지 않아 다음 시도가 {@link #renew}로 가용 잔액을 다시 확인한다. 시도마다 다른
+     * 키({@code release:<run>:abort:<n>})를 쓰고, 종료 정산의 해제 키는 건드리지 않는다.
+     */
+    public void abort(String runId, String userId) {
+        transaction.executeWithoutResult(tx -> {
+            lock(userId);
+            long open = open(runId, userId);
+            Long aborted = jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE run_id = ? AND user_id = ? "
+                    + "AND idempotency_key LIKE ?", Long.class, runId, userId, "release:" + runId + ":abort:%");
+            if (open > 0 && append(userId, "release", -open, runId, "release:" + runId + ":abort:" + aborted, null)) {
+                jdbc.update("UPDATE credit_accounts SET reserved = reserved - ?, updated_at = now() WHERE user_id = ?",
+                        open, userId);
+            }
+        });
     }
 
     /** 실행에 아직 남은 예약. */
@@ -169,7 +249,8 @@ public class CreditService {
     public void releaseStale() {
         for (String runId : jdbc.queryForList("SELECT r.run_id FROM credit_entries r "
                 + "WHERE r.type = 'reserve' AND r.created_at < now() - make_interval(hours => ?) "
-                + "AND NOT EXISTS (SELECT 1 FROM credit_entries e WHERE e.idempotency_key = 'release:' || r.run_id) "
+                + "AND (SELECT coalesce(sum(e.amount), 0) FROM credit_entries e WHERE e.run_id = r.run_id "
+                + "AND e.type IN ('reserve', 'release')) > 0 "
                 + "AND NOT EXISTS (SELECT 1 FROM ai_task_runs t WHERE t.id = r.run_id AND " + IN_PROGRESS + ") "
                 + "GROUP BY r.run_id ORDER BY min(r.created_at) LIMIT 100", String.class, staleHours, staleHours)) {
             try {
@@ -237,8 +318,8 @@ public class CreditService {
 
     /** 잔액이 모자라 AI 요청 전에 거절한다. 402 {@code INSUFFICIENT_CREDIT}로 응답한다. */
     public static class InsufficientCreditException extends RuntimeException {
-        public InsufficientCreditException() {
-            super("크레딧 잔액이 부족합니다. 크레딧을 충전한 뒤 다시 시도해 주세요.");
+        public InsufficientCreditException(String message) {
+            super(message);
         }
     }
 }

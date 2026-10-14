@@ -49,10 +49,10 @@ class QueryRunServiceTest {
     void start_createsPendingMessagesAndCommand() {
         QueryRun pending = QueryRun.pending("query_abc123", "ws_abc123", "session_abc123",
                 "질문", Instant.parse("2026-06-20T10:00:00Z"));
-        when(queryRunStore.create("ws_abc123", "session_abc123", "openai", "gpt-5-nano", "질문"))
+        when(queryRunStore.create("ws_abc123", "session_abc123", "openai", "gpt-6-luna", "질문"))
                 .thenReturn(pending);
         when(queryService.prepareMessages("session_abc123", "질문", "query_abc123",
-                "openai", "gpt-5-nano"))
+                "openai", "gpt-6-luna"))
                 .thenReturn(new QueryService.QueryMessageContext(
                         "pair_abc123", "chat_user_abc123", "chat_assistant_abc123", pending.createdAt(),
                         List.of(new QueryService.RecentMessage("user", "이전 질문"),
@@ -71,7 +71,7 @@ class QueryRunServiceTest {
                 QueryService.RecentMessage::content)
                 .containsExactly("이전 질문", "이전 답변");
         assertThat(outbox.getValue().getPayload())
-                .contains("\"provider\":\"openai\"", "\"model\":\"gpt-5-nano\"",
+                .contains("\"provider\":\"openai\"", "\"model\":\"gpt-6-luna\"",
                         "\"recent_messages\":[{\"role\":\"user\",\"content\":\"이전 질문\"},"
                                 + "{\"role\":\"assistant\",\"content\":\"이전 답변\"}]",
                         "\"allow_web_search\":false");
@@ -82,10 +82,10 @@ class QueryRunServiceTest {
     void start_sendsAccumulatedConversationSummary() {
         QueryRun pending = QueryRun.pending("query_abc123", "ws_abc123", "session_abc123",
                 "질문", Instant.parse("2026-06-20T10:00:00Z"));
-        when(queryRunStore.create("ws_abc123", "session_abc123", "openai", "gpt-5-nano", "질문"))
+        when(queryRunStore.create("ws_abc123", "session_abc123", "openai", "gpt-6-luna", "질문"))
                 .thenReturn(pending);
         when(queryService.prepareMessages("session_abc123", "질문", "query_abc123",
-                "openai", "gpt-5-nano"))
+                "openai", "gpt-6-luna"))
                 .thenReturn(new QueryService.QueryMessageContext(
                         "pair_abc123", "chat_user_abc123", "chat_assistant_abc123", pending.createdAt(),
                         List.of()));

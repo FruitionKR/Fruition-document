@@ -1,5 +1,6 @@
 package fruition.core.query.service;
 
+import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.query.domain.QueryRun;
@@ -54,7 +55,7 @@ public class QueryRunStore {
     }
 
     public QueryRun create(String workspaceId, String sessionId, String question) {
-        return create(workspaceId, sessionId, "openai", "gpt-5-nano", false, question);
+        return create(workspaceId, sessionId, "openai", "gpt-6-luna", false, question);
     }
 
     public QueryRun createWithId(String requestId, String workspaceId, String sessionId,
@@ -90,11 +91,11 @@ public class QueryRunStore {
         });
     }
 
-    public boolean markFailed(String requestId, String errorMessage) {
+    public boolean markFailed(String requestId, String errorCode) {
         return finish(requestId, run -> {
-            log.warn("[질의 run 상태 변경] requestId={} {}->failed error={}",
-                    requestId, run.status(), errorMessage);
-            return run.failed(errorMessage, clock.instant());
+            log.warn("[질의 run 상태 변경] requestId={} {}->failed errorCode={}",
+                    requestId, run.status(), errorCode);
+            return run.failed(errorCode, AiErrorMessages.query(errorCode), clock.instant());
         });
     }
 

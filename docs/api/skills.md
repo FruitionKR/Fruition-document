@@ -11,6 +11,7 @@ workspace AI 모델을 확인한 뒤 ai-svc 내부 HTTP로 전달한다.
 호출자가 ID를 미리 지정하면 HTTP 응답을 기다리는 중에도 [공통 취소 API](tasks.md)를
 호출할 수 있다. Backend는 `/skills/tasks` 내부 API에 원래 body와 검증한 actor·모델을 전달하며,
 취소는 생성한 Skill 삭제 또는 이전 게시 버전·설정 복구까지 확인한다.
+응답 대기가 `app.skill.timeout-seconds`(기본 60초)를 넘기면 core가 같은 run에 취소를 요청해 AI가 변경을 복구하고, 호출자에는 `503 SKILL_AI_UNAVAILABLE`을 반환한다. AI도 55초에 자체 중단한다.
 
 ## API 목차
 
@@ -217,7 +218,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `SkillAuthoringRequest` |
 | 출력 | `200` 초안 작성 성공 — `allowed_tools`, `capabilities`, `description`, `instructions_markdown`, `issues`, `name`, `question`, `scope_type`, … |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 워크스페이스 또는 참조 문서를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 이름 또는 버전 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`413` 참조 문서 또는 요청 본문이 너무 큼 — `JsonNode` / `ErrorResponse`<br>`422` Skill 요청 검증 실패 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`403` 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` 워크스페이스 또는 참조 문서를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 이름 또는 버전 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`413` 참조 문서 또는 요청 본문이 너무 큼 — `JsonNode` / `ErrorResponse`<br>`422` Skill 요청 검증 실패 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -290,6 +291,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | AI가 거절한 요청(아래 code 표) | `ErrorResponse` |
+| `403` | 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다 | `ErrorResponse` |
 | `404` | 워크스페이스 또는 참조 문서를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Skill 이름 또는 버전 충돌 | `ErrorResponse` |
 | `410` | Skill이 더 이상 유효하지 않음 | `ErrorResponse` |
@@ -333,6 +335,7 @@ AI가 사유 code를 주지 않거나 응답 형식이 다르면 `SKILL_REQUEST_
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- `scope_type=team`이면 `skill.author` 권한(OWNER는 항상 가능)이 필요하다. `personal`은 필요 없다.
 
 #### 9. 예시 요청/응답
 
@@ -385,7 +388,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `SkillPublishRequest` |
 | 출력 | `200` 게시 성공 — `allowed_tools`, `capabilities`, `description`, `instructions_markdown`, `issues`, `name`, `question`, `scope_type`, … |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 Skill 정의 — `ErrorResponse`<br>`404` 워크스페이스 또는 참조 문서를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 이름 또는 버전 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`413` 요청 본문이 너무 큼 — `JsonNode` / `ErrorResponse`<br>`422` Skill 요청 검증 실패 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 Skill 정의 — `ErrorResponse`<br>`403` 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` 워크스페이스 또는 참조 문서를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 이름 또는 버전 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`413` 요청 본문이 너무 큼 — `JsonNode` / `ErrorResponse`<br>`422` Skill 요청 검증 실패 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -460,6 +463,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 Skill 정의 | `ErrorResponse` |
+| `403` | 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다 | `ErrorResponse` |
 | `404` | 워크스페이스 또는 참조 문서를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Skill 이름 또는 버전 충돌 | `ErrorResponse` |
 | `410` | Skill이 더 이상 유효하지 않음 | `ErrorResponse` |
@@ -491,6 +495,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- `scope_type=team`이면 `skill.author` 권한(OWNER는 항상 가능)이 필요하다. `personal`은 필요 없다.
 
 #### 9. 예시 요청/응답
 
@@ -720,7 +725,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
 | 입력 | **Path** — `workspace_id`: `string`, `skill_id`: `string`<br>**Body** — `SkillUpdateRequest` |
 | 출력 | `200` 수정 성공 — `description`, `instructions_markdown`, `issues`, `name`, `question`, `scope_type`, `skill_id`, `skill_markdown`, … |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 Skill 정의 — `ErrorResponse`<br>`404` Skill 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 이름 또는 버전 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`413` 요청 본문이 너무 큼 — `JsonNode` / `ErrorResponse`<br>`422` Skill 요청 검증 실패 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 Skill 정의 — `ErrorResponse`<br>`403` 대상이 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` Skill 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 이름 또는 버전 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`413` 요청 본문이 너무 큼 — `JsonNode` / `ErrorResponse`<br>`422` Skill 요청 검증 실패 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -785,6 +790,7 @@ Skill의 정의를 수정합니다.
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 Skill 정의 | `ErrorResponse` |
+| `403` | 대상이 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다 | `ErrorResponse` |
 | `404` | Skill 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Skill 이름 또는 버전 충돌 | `ErrorResponse` |
 | `410` | Skill이 더 이상 유효하지 않음 | `ErrorResponse` |
@@ -816,6 +822,7 @@ Skill의 정의를 수정합니다.
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 대상 Skill이 팀 범위이면 `skill.author` 권한(OWNER는 항상 가능)이 필요하다. 범위는 Skill 조회로 확인하며 개인 Skill은 필요 없다.
 
 #### 9. 예시 요청/응답
 
@@ -864,7 +871,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skil
 | 입력 | **Path** — `workspace_id`: `string`, `skill_id`: `string` |
 | 출력 | `200` 비활성화 성공 — `SkillResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `404` Skill 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 요청 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
+| 주요 오류 | `403` 대상이 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` Skill 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 요청 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -946,6 +953,7 @@ Skill을 Agent 실행 대상에서 제외합니다.
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
+| `403` | 대상이 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다 | `ErrorResponse` |
 | `404` | Skill 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Skill 요청 충돌 | `ErrorResponse` |
 | `410` | Skill이 더 이상 유효하지 않음 | `ErrorResponse` |
@@ -969,6 +977,7 @@ Skill을 Agent 실행 대상에서 제외합니다.
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 대상 Skill이 팀 범위이면 `skill.author` 권한(OWNER는 항상 가능)이 필요하다. 범위는 Skill 조회로 확인하며 개인 Skill은 필요 없다. 활성화·비활성화는 사용자별 설정이 아니라 Skill 자체의 상태를 바꿔 워크스페이스 전체에 적용되므로 수정과 같이 판정한다.
 
 #### 9. 예시 요청/응답
 
@@ -1041,7 +1050,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 | 입력 | **Path** — `workspace_id`: `string`, `skill_id`: `string` |
 | 출력 | `200` 활성화 성공 — `SkillResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `404` Skill 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 요청 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
+| 주요 오류 | `403` 대상이 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` Skill 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 요청 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1123,6 +1132,7 @@ Skill을 Agent 실행 대상에 포함합니다.
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
+| `403` | 대상이 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다 | `ErrorResponse` |
 | `404` | Skill 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Skill 요청 충돌 | `ErrorResponse` |
 | `410` | Skill이 더 이상 유효하지 않음 | `ErrorResponse` |
@@ -1146,6 +1156,7 @@ Skill을 Agent 실행 대상에 포함합니다.
 
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 대상 Skill이 팀 범위이면 `skill.author` 권한(OWNER는 항상 가능)이 필요하다. 범위는 Skill 조회로 확인하며 개인 Skill은 필요 없다. 활성화·비활성화는 사용자별 설정이 아니라 Skill 자체의 상태를 바꿔 워크스페이스 전체에 적용되므로 수정과 같이 판정한다.
 
 #### 9. 예시 요청/응답
 
@@ -1315,8 +1326,9 @@ curl -X POST "$DOCUMENT/internal/agent/skill-authoring/references/read" \
 ## `DELETE /api/workspaces/{workspace_id}/skills/{skill_id}`
 
 - 인증: Bearer 토큰. Path의 워크스페이스 멤버십을 확인하고 인증된 사용자 ID를 AI 서비스에 전달한다. 요청 본문은 없다.
-- 개인 스킬은 소유자, 워크스페이스 스킬은 OWNER만 삭제할 수 있다.
+- 개인 스킬은 소유자, 워크스페이스 스킬은 OWNER 또는 `skill.author` 보유자만 삭제할 수 있다.
 - 내부 호출: `DELETE /skills/{skill_id}?workspace_id=...&user_id=...`, `X-Agent-Service-Token` 사용.
+- 권한: 대상 Skill이 팀 범위이면 `skill.author` 권한(OWNER는 항상 가능)이 필요하며 없으면 `403 WORKSPACE_PERMISSION_REQUIRED`다. 개인 Skill은 필요 없다. 범위는 Skill 조회로 확인한다.
 - 성공: `204 No Content`. 미인증 `401`, 워크스페이스·스킬이 없거나 삭제 권한이 없으면 `404`, AI 서비스 사용 불가 `503`.
 - 스킬·저장된 버전·버전 출처를 삭제한다. 과거 실행 기록은 보존하고 삭제된 버전의 참조만 해제한다. 실행 중 작업의 취소는 별도 계약이다.
 - OFF는 목록에 남는 비활성화이며, DELETE는 되돌릴 수 없는 삭제다.

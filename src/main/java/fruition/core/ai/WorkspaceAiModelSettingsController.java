@@ -109,10 +109,10 @@ public class WorkspaceAiModelSettingsController {
             String provider,
 
             @NotBlank
-            @Schema(description = "모델명", example = "gpt-5-nano")
+            @Schema(description = "모델명", example = "gpt-6-luna")
             String model) {}
 
-    @Schema(description = "AI 모델 설정. 기본값은 gemini + gemini-3.1-flash-lite다.")
+    @Schema(description = "AI 모델 설정. 기본값은 gemini + gemini-3.5-flash-lite다.")
     public record SettingsResponse(
             @JsonProperty("ingest_lint")
             @Schema(description = "ingest·lint에 쓰는 provider/model 조합")

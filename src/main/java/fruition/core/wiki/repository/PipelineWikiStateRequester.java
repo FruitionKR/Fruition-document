@@ -10,6 +10,7 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.Instant;
@@ -72,6 +73,27 @@ public class PipelineWikiStateRequester {
                 .toBodilessEntity();
     }
 
+    /**
+     * 사람이 고친 본문을 수동 기여로 저장한다(ai ADR 0031). 같은 {@code operationId} 재요청은 ai가 같은 결과를 돌려준다.
+     *
+     * @return 페이지가 없거나 다른 워크스페이스·비활성이면 empty
+     */
+    public Optional<ManualEditResult> manualEdit(String workspaceId, String userId, String pageId,
+                                                 String operationId, String markdown) {
+        try {
+            return Optional.of(requireBody(restClient.put()
+                    .uri(uri("/pages/" + pageId + "/manual-edit", null, null))
+                    .body(new ManualEditRequest(userId, workspaceId, operationId, markdown))
+                    .retrieve()
+                    .body(ManualEditResult.class)));
+        } catch (HttpClientErrorException.NotFound e) {
+            return Optional.empty();
+        } catch (RestClientException e) {
+            // ai 오류 본문은 내부 구성을 드러내므로 전달하지 않는다. 같은 write ID로 다시 보내면 ai가 같은 작업으로 처리한다.
+            throw new PipelineWikiPageException("Wiki 본문을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.", 503, null);
+        }
+    }
+
     public Instant lastUpdatedAt(String workspaceId) {
         LastUpdated response = requireBody(restClient.get()
                 .uri(uri("/workspaces/" + workspaceId + "/last-updated", null, null))
@@ -96,6 +118,21 @@ public class PipelineWikiStateRequester {
     private record LookupRequest(
             @JsonProperty("page_ids") List<String> pageIds,
             @JsonProperty("workspace_id") String workspaceId
+    ) {}
+
+    private record ManualEditRequest(
+            @JsonProperty("user_id") String userId,
+            @JsonProperty("workspace_id") String workspaceId,
+            @JsonProperty("operation_id") String operationId,
+            String markdown
+    ) {}
+
+    public record ManualEditResult(
+            @JsonProperty("page_id") String pageId,
+            @JsonProperty("page_type") String pageType,
+            @JsonProperty("markdown_key") String markdownKey,
+            @JsonProperty("contribution_key") String contributionKey,
+            @JsonProperty("content_hash") String contentHash
     ) {}
 
     private record LastUpdated(@JsonProperty("updated_at") Instant updatedAt) {}

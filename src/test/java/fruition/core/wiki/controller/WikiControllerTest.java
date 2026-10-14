@@ -4,6 +4,7 @@ import fruition.core.CoreExceptionHandler;
 import fruition.core.config.SecurityConfig;
 import fruition.core.wiki.dto.WikiGraphNode;
 import fruition.core.wiki.dto.WikiGraphResponse;
+import fruition.core.wiki.service.WikiPageEditService;
 import fruition.core.wiki.service.WikiService;
 import fruition.shared.security.JwtAuthenticationFilter;
 import fruition.shared.security.JwtTokenProvider;
@@ -16,6 +17,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -34,30 +37,34 @@ class WikiControllerTest {
     @Autowired MockMvc mockMvc;
     @Autowired JwtTokenProvider jwtTokenProvider;
     @MockBean WikiService wikiService;
+    @MockBean WikiPageEditService wikiPageEditService;
 
     @Test
-    void graph_returns304WhenGraphIsUnchanged() throws Exception {
+    void graph_returns304WithoutLoadingGraphWhenWikiVersionIsUnchanged() throws Exception {
+        when(wikiService.graphVersion(WORKSPACE_ID, USER_ID)).thenReturn(3L);
         when(wikiService.findGraph(WORKSPACE_ID, USER_ID)).thenReturn(graph("제목"));
         String etag = mockMvc.perform(get(GRAPH).header("Authorization", bearer()))
                 .andExpect(status().isOk())
+                .andExpect(header().string("ETag", "\"wiki-3\""))
                 .andExpect(jsonPath("$.nodes[0].title").value("제목"))
                 .andReturn().getResponse().getHeader("ETag");
 
         mockMvc.perform(get(GRAPH).header("Authorization", bearer()).header("If-None-Match", etag))
                 .andExpect(status().isNotModified())
                 .andExpect(content().string(""));
+        verify(wikiService, times(1)).findGraph(WORKSPACE_ID, USER_ID);
     }
 
     @Test
-    void graph_returnsBodyWithNewEtagWhenGraphChanged() throws Exception {
-        when(wikiService.findGraph(WORKSPACE_ID, USER_ID)).thenReturn(graph("제목"));
+    void graph_returnsBodyWithNewEtagWhenWikiVersionChanged() throws Exception {
+        when(wikiService.graphVersion(WORKSPACE_ID, USER_ID)).thenReturn(3L, 4L);
+        when(wikiService.findGraph(WORKSPACE_ID, USER_ID)).thenReturn(graph("제목"), graph("바뀐 제목"));
         String etag = mockMvc.perform(get(GRAPH).header("Authorization", bearer()))
                 .andReturn().getResponse().getHeader("ETag");
-        when(wikiService.findGraph(WORKSPACE_ID, USER_ID)).thenReturn(graph("바뀐 제목"));
 
         mockMvc.perform(get(GRAPH).header("Authorization", bearer()).header("If-None-Match", etag))
                 .andExpect(status().isOk())
-                .andExpect(header().exists("ETag"))
+                .andExpect(header().string("ETag", "\"wiki-4\""))
                 .andExpect(jsonPath("$.nodes[0].title").value("바뀐 제목"));
     }
 

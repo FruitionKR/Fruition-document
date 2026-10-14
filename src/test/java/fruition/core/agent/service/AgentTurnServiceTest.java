@@ -59,6 +59,7 @@ class AgentTurnServiceTest {
     private AgentTurnService service;
 
     @Mock fruition.core.aitask.service.AiTaskCancellationService cancellation;
+    @Mock fruition.core.usage.service.UsageChargeService usageCharges;
 
     @BeforeEach
     void setUp() {
@@ -69,7 +70,8 @@ class AgentTurnServiceTest {
                         java.util.List.of(), null));
         service = new AgentTurnService(documentService, editLockService, workspaceAccessGuard, runRepository,
                 statusRequester, outboxWriter, applyOperationStore, aiModelCatalog,
-                chatSessionService, chatConversationReader, chatTurnRecorder, "ai.agent.command", cancellation, new ObjectMapper());
+                chatSessionService, chatConversationReader, chatTurnRecorder, "ai.agent.command", cancellation, new ObjectMapper(),
+                usageCharges);
     }
 
     @Test
@@ -98,7 +100,7 @@ class AgentTurnServiceTest {
         verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
                 org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
         assertThat(command.getValue().provider()).isEqualTo("openai");
-        assertThat(command.getValue().model()).isEqualTo("gpt-5-nano");
+        assertThat(command.getValue().model()).isEqualTo("gpt-6-luna");
         assertThat(command.getValue().skillMode()).isEqualTo("auto");
         assertThat(command.getValue().skillId()).isNull();
         assertThat(command.getValue().conversationContext().pendingSkillProposal().scopeType()).isEqualTo("personal");
@@ -120,7 +122,7 @@ class AgentTurnServiceTest {
     void turn_withoutDocumentSkipsEditPreconditionsAndApplyTable() {
         // 문서를 열지 않은 턴은 적용할 대상이 없다. 문서 조회·편집 잠금·버전 검사를 하지 않고,
         // 되돌려받을 표(apply_operation_id)도 만들지 않는다.
-        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-5-nano", null, null);
+        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-6-luna", null, null);
 
         var response = service.turn("ws_1", "user_1", request);
 
@@ -150,7 +152,7 @@ class AgentTurnServiceTest {
         when(runRepository.find("ws_1", "user_1", "agent_previous")).thenReturn(Optional.of(
                 new AgentRunCommandRepository.RunView(
                         "agent_previous", null, 0L, null, "ready", result, null)));
-        var request = new AgentTurnRequest("session_1", null, null, "이어서 해줘", "openai", "gpt-5-nano",
+        var request = new AgentTurnRequest("session_1", null, null, "이어서 해줘", "openai", "gpt-6-luna",
                 null, "auto", null,
                 new AgentTurnRequest.ConversationContext(java.util.List.of("pair_9"), null, null),
                 java.util.List.of(), java.util.List.of(), java.util.List.of(), null, null);
@@ -200,7 +202,7 @@ class AgentTurnServiceTest {
                         objectMapper.createObjectNode().put("route", "markdown_edit"), null)));
 
         service.turn("ws_1", "user_1",
-                new AgentTurnRequest("session_1", null, null, "이어서 해줘", "openai", "gpt-5-nano", null, null));
+                new AgentTurnRequest("session_1", null, null, "이어서 해줘", "openai", "gpt-6-luna", null, null));
 
         ArgumentCaptor<AgentTurnService.AgentCommand> command =
                 ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
@@ -216,7 +218,7 @@ class AgentTurnServiceTest {
     @Test
     void turn_carriesWebSearchFlagIntoCommand() {
         // 질의 엔드포인트가 받던 옵션이다. 한 입력창으로 합치면 이 경로로만 들어오므로 끊기면 안 된다.
-        var request = new AgentTurnRequest("session_1", null, null, "최신 소식 알려줘", "openai", "gpt-5-nano",
+        var request = new AgentTurnRequest("session_1", null, null, "최신 소식 알려줘", "openai", "gpt-6-luna",
                 true, "auto", null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(),
                 null, null);
 
@@ -230,7 +232,7 @@ class AgentTurnServiceTest {
 
     @Test
     void turn_omitsWebSearchFlagWhenNotRequested() {
-        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-5-nano", null, null);
+        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-6-luna", null, null);
 
         service.turn("ws_1", "user_1", request);
 
@@ -243,7 +245,7 @@ class AgentTurnServiceTest {
     @Test
     void turn_savesPendingChatPairAndCarriesMessageContextInCommand() {
         // 결과가 왔을 때 어느 말풍선을 채울지 알아야 하므로 ID를 command에 실어 되받는다.
-        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-5-nano", null, null);
+        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-6-luna", null, null);
 
         var response = service.turn("ws_1", "user_1", request);
 
@@ -262,13 +264,13 @@ class AgentTurnServiceTest {
                 org.mockito.ArgumentMatchers.eq("RAG가 뭐야?"),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.eq("openai"),
-                org.mockito.ArgumentMatchers.eq("gpt-5-nano"),
+                org.mockito.ArgumentMatchers.eq("gpt-6-luna"),
                 org.mockito.ArgumentMatchers.eq(response.requestId()));
     }
 
     @Test
     void turn_withoutDocumentStillKeysOutboxBySession() {
-        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-5-nano", null, null);
+        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-6-luna", null, null);
 
         service.turn("ws_1", "user_1", request);
 
@@ -285,7 +287,7 @@ class AgentTurnServiceTest {
     @Test
     void request_rejectsPartialDocumentContext() {
         // 셋 중 하나만 오면 적용 경로가 반쯤 성립해 뒤에서 터진다. 생성 시점에 막는다.
-        assertThatThrownBy(() -> new AgentTurnRequest("session_1", "doc_1", null, "수정해줘", "openai", "gpt-5-nano", null, null))
+        assertThatThrownBy(() -> new AgentTurnRequest("session_1", "doc_1", null, "수정해줘", "openai", "gpt-6-luna", null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("provided together or omitted together");
     }
@@ -295,7 +297,7 @@ class AgentTurnServiceTest {
         AgentTurnRequest request = new ObjectMapper().readValue("""
                 {
                   "session_id":"session_1","documentId":"doc_1","baseVersion":7,"message":"문서를 점검해줘",
-                  "provider":"openai","model":"gpt-5-nano",
+                  "provider":"openai","model":"gpt-6-luna",
                   "skill_mode":"explicit","skill_id":"skill-1",
                   "editorSnapshot":{"markdown":"# 제목\\n본문","target":{"type":"whole_document","startLine":1,"endLine":2}}
                 }
@@ -321,7 +323,7 @@ class AgentTurnServiceTest {
         AgentTurnRequest request = new ObjectMapper().readValue("""
                 {
                   "session_id":"session_1","documentId":"doc_1","baseVersion":7,"message":"문서를 점검해줘",
-                  "provider":"openai","model":"gpt-5-nano",
+                  "provider":"openai","model":"gpt-6-luna",
                   "skill_mode":"off",
                   "editorSnapshot":{"markdown":"# 제목\\n본문","target":{"type":"whole_document","startLine":1,"endLine":2}}
                 }
@@ -345,7 +347,7 @@ class AgentTurnServiceTest {
         AgentTurnRequest request = new ObjectMapper().readValue("""
                 {
                   "session_id":"session_1","documentId":"doc_1","baseVersion":7,"message":"이 작업을 Skill로 만들어줘",
-                  "provider":"openai","model":"gpt-5-nano",
+                  "provider":"openai","model":"gpt-6-luna",
                   "skill_draft_sources":[{"run_id":"%s","status":"completed",
                     "request_summary":"조작된 요청","plan_summary":"조작된 계획",
                     "successful_operations":[{"tool_name":"delete_document","reason":"조작된 이유"}]}],
@@ -442,7 +444,7 @@ class AgentTurnServiceTest {
                 new AgentTurnRequest.SkillDraftSourceSelector("agent_1123456789abcdef0123456789abcdef"),
                 new AgentTurnRequest.SkillDraftSourceSelector("agent_2123456789abcdef0123456789abcdef"),
                 new AgentTurnRequest.SkillDraftSourceSelector("agent_3123456789abcdef0123456789abcdef"));
-        var request = new AgentTurnRequest("session_1", "doc_1", 7L, "이 작업을 Skill로 만들어줘", "openai", "gpt-5-nano",
+        var request = new AgentTurnRequest("session_1", "doc_1", 7L, "이 작업을 Skill로 만들어줘", "openai", "gpt-6-luna",
                 null, sources, List.of(), List.of(), "team",
                 new AgentTurnRequest.EditorSnapshot("# 제목\n본문",
                         new AgentTurnRequest.Target("whole_document", 1, 2)));
@@ -559,6 +561,77 @@ class AgentTurnServiceTest {
     }
 
     @Test
+    void reviseAndApproveReserveAutonomousRunBeforeForwardingAndDoNotForwardWhenShort() {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";  // ai가 새로 만든 AgentRun id
+        JsonNode response = new ObjectMapper().createObjectNode().put("id", runId).put("status", "executing");
+        when(statusRequester.revise("ws_1", "user_1", runId, "좁혀줘")).thenReturn(response);
+        when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64))).thenReturn(response);
+
+        service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("좁혀줘"));
+        service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64)));
+
+        var order = org.mockito.Mockito.inOrder(usageCharges, statusRequester);
+        order.verify(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
+        order.verify(statusRequester).revise("ws_1", "user_1", runId, "좁혀줘");
+        order.verify(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
+        order.verify(statusRequester).approve("ws_1", "user_1", runId, 1, "a".repeat(64));
+        verify(usageCharges, never()).endAutonomousRun(anyString());
+
+        org.mockito.Mockito.doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("부족"))
+                .when(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
+        org.mockito.Mockito.clearInvocations(statusRequester);
+        assertThatThrownBy(() -> service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("또")))
+                .isInstanceOf(fruition.core.usage.service.CreditService.InsufficientCreditException.class);
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(fruition.core.usage.service.CreditService.InsufficientCreditException.class);
+        verify(statusRequester, never()).revise(anyString(), anyString(), anyString(), anyString());
+        verify(statusRequester, never()).approve(anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt(), anyString());
+    }
+
+    @Test
+    void failedForwardReleasesOnlyThisAttemptAndKeepsRunOpen() {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        when(statusRequester.revise("ws_1", "user_1", runId, "좁혀줘")).thenThrow(new IllegalStateException("conflict"));
+
+        assertThatThrownBy(() -> service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("좁혀줘")))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(usageCharges).abortAutonomousAttempt(runId, "user_1");
+        verify(usageCharges, never()).endAutonomousRun(anyString());
+    }
+
+    @Test
+    void ownershipIsCheckedBeforeReservingAndTerminalRunIsNotReserved() {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        // 소유 확인(조회)이 404면 예약하지 않는다.
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId))
+                .thenThrow(new fruition.core.agent.exception.AgentRunNotFoundException(runId));
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(fruition.core.agent.exception.AgentRunNotFoundException.class);
+        verify(usageCharges, never()).reserveAutonomousRun(anyString(), anyString(), anyString());
+
+        // 이미 끝난 실행은 예약 없이 전달한다(ai-svc가 거절).
+        JsonNode done = new ObjectMapper().createObjectNode().put("id", runId).put("status", "completed");
+        org.mockito.Mockito.reset(statusRequester);
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(done);
+        when(usageCharges.isAutonomousTerminal(done)).thenReturn(true);
+        service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("좁혀줘"));
+        verify(usageCharges, never()).reserveAutonomousRun(anyString(), anyString(), anyString());
+        verify(statusRequester).revise("ws_1", "user_1", runId, "좁혀줘");
+    }
+
+    @Test
+    void autonomousRunStateIsReportedToCreditsSoTerminalStateSettles() {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        JsonNode done = new ObjectMapper().createObjectNode().put("id", runId).put("status", "completed");
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(done);
+
+        service.getRun("ws_1", "user_1", runId);
+
+        verify(usageCharges).endAutonomousRunIfTerminal(runId, done);
+    }
+
+    @Test
     void get_firstPollReturnsCoreQueuedProjectionBeforeAiRunExists() {
         String runId = "agent_0123456789abcdef0123456789abcdef";
         when(statusRequester.find("ws_1", "user_1", runId)).thenReturn(Optional.empty());
@@ -616,6 +689,7 @@ class AgentTurnServiceTest {
 
         assertThat(response.status()).isEqualTo("failed");
         assertThat(response.error()).isEqualTo("agent_turn_failed");
+        assertThat(response.errorMessage()).isEqualTo("Agent 처리 중 오류가 발생했습니다.");
         assertThat(response.result()).isNull();
     }
 
@@ -684,14 +758,14 @@ class AgentTurnServiceTest {
 
     private AgentTurnRequest request(String type, int startLine, int endLine,
                                      AgentTurnRequest.ConversationContext conversationContext) {
-        return new AgentTurnRequest("session_1", "doc_1", 7L, "문서를 점검해줘", "openai", "gpt-5-nano", conversationContext,
+        return new AgentTurnRequest("session_1", "doc_1", 7L, "문서를 점검해줘", "openai", "gpt-6-luna", conversationContext,
                 new AgentTurnRequest.EditorSnapshot("# 제목\n본문",
                         new AgentTurnRequest.Target(type, startLine, endLine)));
     }
 
     private AgentTurnRequest skillDraftRequest(String sourceRunId) {
         return new AgentTurnRequest("session_1", 
-                "doc_1", 7L, "이 작업을 Skill로 만들어줘", "openai", "gpt-5-nano", null,
+                "doc_1", 7L, "이 작업을 Skill로 만들어줘", "openai", "gpt-6-luna", null,
                 List.of(new AgentTurnRequest.SkillDraftSourceSelector(sourceRunId)),
                 List.of("일반화해줘"), List.of("secret-doc"), "team",
                 new AgentTurnRequest.EditorSnapshot("# 제목\n본문",
@@ -721,7 +795,7 @@ class AgentTurnServiceTest {
         java.util.List<String> tooMany = java.util.stream.IntStream.rangeClosed(0, 20)
                 .mapToObj(index -> "pair_" + index)
                 .toList();
-        var request = new AgentTurnRequest("session_1", null, null, "정리해줘", "openai", "gpt-5-nano",
+        var request = new AgentTurnRequest("session_1", null, null, "정리해줘", "openai", "gpt-6-luna",
                 new AgentTurnRequest.ConversationContext(tooMany, null, null), null);
 
         var violations = jakarta.validation.Validation.buildDefaultValidatorFactory()

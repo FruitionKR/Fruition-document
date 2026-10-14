@@ -39,7 +39,7 @@ class DocumentFileHashIntegrationTest {
 
     @BeforeEach
     void member() {
-        redis.opsForValue().set("authz:role:" + workspace + ":" + user, "OWNER");
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":" + user, "{\"role\":\"OWNER\",\"permissions\":[]}");
     }
 
     @Test

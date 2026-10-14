@@ -41,13 +41,5 @@ public class PipelineTaskCancellationClient {
                 .retrieve().body(TaskStatus.class);
     }
 
-    public boolean cancelDocumentTasks(String documentId, String workspaceId, String userId) {
-        var response = client.post().uri(endpoint + "/documents/{id}/cancel", documentId)
-                .body(Map.of("workspace_id", workspaceId, "user_id", userId))
-                .retrieve().body(DocumentCleanup.class);
-        return response != null && response.cleanupComplete();
-    }
-
     public record TaskStatus(String id, String status, @JsonProperty("error_code") String errorCode) {}
-    private record DocumentCleanup(@JsonProperty("cleanup_complete") boolean cleanupComplete) {}
 }

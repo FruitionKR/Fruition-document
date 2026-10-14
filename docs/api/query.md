@@ -63,7 +63,7 @@
 ```json
 {
   "allow_web_search": false,
-  "model": "gpt-5-nano",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "question": "검색 인덱싱은 어떻게 동작하나요?"
 }
@@ -210,7 +210,7 @@
 curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/sessions/<value>/query" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"allow_web_search":false,"model":"gpt-5-nano","provider":"openai","question":"검색 인덱싱은 어떻게 동작하나요?"}'
+  --data '{"allow_web_search":false,"model":"gpt-6-luna","provider":"openai","question":"검색 인덱싱은 어떻게 동작하나요?"}'
 ```
 
 ```json
@@ -360,7 +360,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 ```json
 {
   "allow_web_search": false,
-  "model": "gpt-5-nano",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "question": "검색 인덱싱은 어떻게 동작하나요?"
 }
@@ -416,7 +416,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/sessions/<value>/query/runs" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"allow_web_search":false,"model":"gpt-5-nano","provider":"openai","question":"검색 인덱싱은 어떻게 동작하나요?"}'
+  --data '{"allow_web_search":false,"model":"gpt-6-luna","provider":"openai","question":"검색 인덱싱은 어떻게 동작하나요?"}'
 ```
 
 ```json
@@ -446,7 +446,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 | 목적 | 비동기 질의의 현재 상태와 완료 결과 또는 오류 정보를 반환합니다. |
 | 입력 | **Path** — `requestId`: `string` |
 | 출력 | `200` 상태 조회 성공 — `QueryRunStatusResponse` |
-| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다. |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>run이 속한 채팅 세션의 주인만 호출할 수 있다(남의 run은 `404`). 세션을 지우면 주인도 `404`를 받는다. |
 | 주요 오류 | `404` 질의 실행 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
 
 <details>
@@ -484,7 +484,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/
 ```json
 {
   "error": "string",
-  "model": "gpt-5-nano",
+  "error_code": "string",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "request_id": "query_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
@@ -616,7 +617,8 @@ curl -X GET "$DOCUMENT/api/query/runs/<value>" \
 ```json
 {
   "error": "string",
-  "model": "gpt-5-nano",
+  "error_code": "string",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "request_id": "query_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
@@ -734,7 +736,7 @@ curl -X GET "$DOCUMENT/api/query/runs/<value>" \
 | 목적 | 비동기 질의의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. |
 | 입력 | **Path** — `requestId`: `string` |
 | 출력 | `200` SSE 구독 시작 — `string` |
-| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다. |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>run이 속한 채팅 세션의 주인만 호출할 수 있다(남의 run은 `404`). 세션을 지우면 주인도 `404`를 받는다. |
 | 주요 오류 | `404` 질의 실행 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
 
 <details>
@@ -779,7 +781,7 @@ string
 |---|---|---|
 | `query.log` | AI worker가 단계마다 발행한 진행 상황을 중계 | `request_id`, `sequence`, `received_at`, `stage`, `message`, `data` |
 | `query.completed` | 최종 결과 반영 완료 | `request_id`, `status` |
-| `query.failed` | 실패 확정 | `request_id`, `status`, `error` |
+| `query.failed` | 실패 확정 | `request_id`, `status`, `code`(실패 코드), `error`(사용자용 한국어 문구) |
 | `query.cancelled` | 취소 및 변경 복구 완료 | `request_id`, `status` |
 
 - 구독 시점 이전 이벤트는 Redis buffer에서 최대 200건까지 재생한다. `sequence`가 뒤로 가는 이벤트는 전달하지 않는다.

@@ -16,6 +16,8 @@ import fruition.core.aihistory.repository.OperationChangeRepository;
 import fruition.core.wiki.domain.WikiPageContribution;
 import fruition.core.wiki.repository.WikiPageContributionRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.authz.WorkspacePermissionRequiredException;
+import fruition.core.authz.WorkspacePermissions;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -74,7 +76,6 @@ public class RestorePreviewService {
     @Transactional
     public RestorePreviewResponse preview(String workspaceId, String userId, String operationId) {
         OperationLog target = loadOperation(workspaceId, userId, operationId);
-        validator.requireRestorable(target);
 
         // 문서 편집은 되돌릴 편집 revision이 변경내역에 이미 적혀 있어 계산할 것이 없다.
         if (target.getOperationType() == OperationType.document_edit) {
@@ -120,7 +121,17 @@ public class RestorePreviewService {
 
     OperationLog loadOperation(String workspaceId, String userId, String operationId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return operationLogRepository.findByOperationIdAndWorkspaceId(operationId, workspaceId)
+        OperationLog operation = operationLogRepository.findByOperationIdAndWorkspaceId(operationId, workspaceId)
                 .orElseThrow(() -> new OperationNotFoundException(operationId));
+        // 되돌릴 수 없는 유형은 권한과 무관하게 일관되게 400으로 거절한다(멤버가 아니면 위에서 404).
+        validator.requireRestorable(operation);
+        // 위키 작업(ingest·lint 등)은 팀 위키를 바꾸므로 실행자 본인·OWNER·wiki.restore 권한자만 되돌린다.
+        // 문서 편집은 실행 단계의 편집 권한 검사를 그대로 쓴다.
+        if (operation.getOperationType() != OperationType.document_edit
+                && !userId.equals(operation.getUserId())
+                && !workspaceAccessGuard.hasPermission(workspaceId, userId, WorkspacePermissions.WIKI_RESTORE)) {
+            throw new WorkspacePermissionRequiredException(WorkspacePermissions.WIKI_RESTORE);
+        }
+        return operation;
     }
 }

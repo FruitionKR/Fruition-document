@@ -5,7 +5,6 @@ import com.sun.net.httpserver.HttpServer;
 import fruition.TestcontainersConfiguration;
 import fruition.core.aitask.service.AiTaskCancellationService;
 import fruition.core.document.repository.AiCommandOutboxWriter;
-import fruition.core.meeting.MeetingNotesClient;
 import fruition.core.speech.SpeechTranscriptionClient;
 import fruition.shared.http.PipelineClientFactory;
 import org.junit.jupiter.api.AfterEach;
@@ -66,7 +65,8 @@ class UsageChargeServiceIntegrationTest {
             String query = exchange.getRequestURI().getQuery();
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             requests.add(exchange.getRequestURI().getPath() + "?" + query + " " + body
-                    + " token=" + exchange.getRequestHeaders().getFirst("X-Internal-Token"));
+                    + " token=" + exchange.getRequestHeaders().getFirst("X-Internal-Token")
+                    + " request_id=" + exchange.getRequestHeaders().getFirst("X-Request-Id"));
             String response = switch (exchange.getRequestURI().getPath()) {
                 case "/internal/model-usage/calls" -> "{\"calls\":[" + callsByQuery.getOrDefault(
                         query.replaceAll(".*(finished_from=[^&]*).*", "$1"), "") + "]}";
@@ -82,7 +82,7 @@ class UsageChargeServiceIntegrationTest {
         server.start();
         base = "http://127.0.0.1:" + server.getAddress().getPort();
         charges = new UsageChargeService(jdbc, manager, runs, credits, mapper, new PipelineClientFactory("internal-test"),
-                base + "/internal/model-usage/calls");
+                base + "/internal/model-usage/calls", 900);
         user = "user-" + UUID.randomUUID();
         model = "m-" + UUID.randomUUID();
     }
@@ -94,7 +94,7 @@ class UsageChargeServiceIntegrationTest {
 
     @Test
     void sameCallCollectedManyTimesIsChargedOnceAndKeepsAmountAfterPriceChange() {
-        versions("2041-01-01T00:00:00Z", "1400", 3000, 1000);
+        versions("2041-01-01T00:00:00Z", "1400", 200, 3000, 1000);
         price(model, "2041-01-01T00:00:00Z", "1");
         // 입력 1,000 = 일반 500 + 캐시 읽기 400 + 캐시 생성 100, 출력 500(reasoning 300 포함)
         String call = call("c-" + UUID.randomUUID(), "run-a", "ws-1", model, "succeeded", "2041-02-01T00:00:00Z",
@@ -110,15 +110,16 @@ class UsageChargeServiceIntegrationTest {
         assertThat(row.get("status")).isEqualTo("charged");
         // 원가는 1,665 micro-USD. 캐시·reasoning 토큰을 일반 입력·출력에 다시 더하지 않는다.
         assertThat(row.get("cost_usd_micro")).isEqualTo(1665L);
-        assertThat(row.get("charge_krw_milli")).isEqualTo(3334L);
+        // 환율 버퍼 2% 포함: 1,400 × 1.02 × 1.3 × 1.1 × 0.001665 USD = 3.3999966 KRW
+        assertThat(row.get("charge_krw_milli")).isEqualTo(3400L);
         assertThat(row.get("reasoning_tokens")).isEqualTo(300L);
-        assertThat(requests).allMatch(request -> request.endsWith("token=internal-test"));
+        assertThat(requests).allMatch(request -> request.contains(" token=internal-test "));
 
         // 호출 전부터 적용되는 비싼 단가 행을 넣고 다시 수집해도 확정된 청구는 다시 계산하지 않는다.
         price(model, "2041-01-15T00:00:00Z", "9");
         charges.collectRun("run-a");
         assertThat(jdbc.queryForObject("SELECT charge_krw_milli FROM usage_charges WHERE user_id = ?", Long.class, user))
-                .isEqualTo(3334L);
+                .isEqualTo(3400L);
     }
 
     @Test
@@ -128,9 +129,7 @@ class UsageChargeServiceIntegrationTest {
                 "2042-02-01T00:00:00Z", 1_000_000, 0, 0, 0, 0);
         String unknown = call("c-" + UUID.randomUUID(), "run-b", "ws-1", model, "unknown",
                 "2042-02-01T00:00:00Z", null, null, null, null, null);
-        String running = call("c-" + UUID.randomUUID(), "run-b", "ws-1", model, "started",
-                "2042-02-01T00:00:00Z", null, null, null, null, null);
-        callsByQuery.put("run_id=run-b", String.join(",", unpriced, unknown, running));
+        callsByQuery.put("run_id=run-b", String.join(",", unpriced, unknown));
 
         charges.collectRun("run-b");
 
@@ -143,6 +142,58 @@ class UsageChargeServiceIntegrationTest {
 
         assertThat(jdbc.queryForList("SELECT status || ':' || charge_krw_milli FROM usage_charges WHERE user_id = ? "
                 + "ORDER BY status", String.class, user)).containsExactly("charged:1000000", "needs_review:0");
+    }
+
+    @Test
+    void cancelledCallWithUsageIsChargedAndStartedCallMakesCollectionRetry() {
+        versions("2049-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2049-01-01T00:00:00Z", "1");
+        String id = "c-" + UUID.randomUUID();
+        // 연결이 끊겨 ai가 아직 원장 행을 마감하지 못한 상태: 수집은 실패해 대기열 재시도에 맡긴다.
+        callsByQuery.put("run_id=run-cancel", call(id, "run-cancel", "ws-1", model, "started", "2049-02-01T00:00:00Z",
+                null, null, null, null, null));
+        assertThatThrownBy(() -> charges.collectRun("run-cancel")).isInstanceOf(IllegalStateException.class);
+
+        // 마감 후 cancelled + usage: 생성된 만큼 과금한다.
+        callsByQuery.put("run_id=run-cancel", call(id, "run-cancel", "ws-1", model, "cancelled", "2049-02-01T00:00:00Z",
+                1000, 0, 0, 0, 0));
+        charges.collectRun("run-cancel");
+
+        assertThat(jdbc.queryForList("SELECT status || ':' || charge_krw_milli || ':' || call_status FROM usage_charges "
+                + "WHERE user_id = ?", String.class, user)).containsExactly("charged:1000:cancelled");
+    }
+
+    @Test
+    void failedAndAbandonedCallsAreChargedOnlyWhenTheyCarryUsage() {
+        versions("2049-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2049-01-01T00:00:00Z", "1");
+        String run = "run-fa-" + UUID.randomUUID();
+        callsByQuery.put("run_id=" + run, String.join(",",
+                call("f1-" + run, run, "ws-1", model, "failed", "2049-02-01T00:00:00Z", 1000, 0, 0, 0, 0),
+                call("f2-" + run, run, "ws-1", model, "failed", "2049-02-01T00:00:01Z", null, null, null, null, null),
+                call("a1-" + run, run, "ws-1", model, "abandoned", "2049-02-01T00:00:02Z", 1000, 0, 0, 0, 0),
+                // 공급사에 연결하지 못한 합성: 글자 수는 요청 전에 적히고 토큰은 없다. unpriced가 아니라 needs_review다.
+                call("f3-" + run, run, "ws-1", model, "failed", "2049-02-01T00:00:03Z", null, null, null, null, null)
+                        .replace("\"input_characters\":null", "\"input_characters\":120")));
+        charges.collectRun(run);
+
+        assertThat(jdbc.queryForList("SELECT call_id || ':' || status || ':' || charge_krw_milli FROM usage_charges "
+                + "WHERE run_id = ? ORDER BY call_id", String.class, run))
+                .containsExactly("a1-" + run + ":charged:1000", "f1-" + run + ":charged:1000", "f2-" + run + ":needs_review:0",
+                        "f3-" + run + ":needs_review:0");
+    }
+
+    @Test
+    void cancelledCallWithoutTokensNeedsReviewEvenWithCharacters() {
+        versions("2049-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2049-01-01T00:00:00Z", "1");
+        // 정지한 합성에서 response.done을 못 받으면 글자 수만 있고 토큰은 null이다.
+        callsByQuery.put("run_id=run-cancel-nt", call("c-" + UUID.randomUUID(), "run-cancel-nt", "ws-1", model, "cancelled",
+                "2049-02-01T00:00:00Z", null, null, null, null, null).replace("\"input_characters\":null", "\"input_characters\":120"));
+        charges.collectRun("run-cancel-nt");
+
+        assertThat(jdbc.queryForList("SELECT status || ':' || charge_krw_milli FROM usage_charges WHERE user_id = ?",
+                String.class, user)).containsExactly("needs_review:0");
     }
 
     @Test
@@ -172,33 +223,29 @@ class UsageChargeServiceIntegrationTest {
         versions("2044-01-01T00:00:00Z", "1000", 0, 0);
         var speech = new SpeechTranscriptionClient(new PipelineClientFactory("internal-test"),
                 base + "/speech/transcriptions", 5, charges);
-        var notes = new MeetingNotesClient(new PipelineClientFactory("internal-test"), base + "/meeting-notes/preview", 5, charges);
 
         assertThat(speech.transcribe("ws-1", user, MediaType.parseMediaType("audio/wav"), new byte[] {1})).isEqualTo("안녕하세요");
-        notes.preview("ws-1", user, "회의", List.of(Map.of("text", "안건")));
 
         var runIds = jdbc.queryForList("SELECT id FROM ai_task_runs WHERE user_id = ? AND status = 'completed' ORDER BY kind",
                 String.class, user);
-        assertThat(runIds).hasSize(2);
-        assertThat(runIds.get(0)).startsWith("meeting_notes:");
-        assertThat(runIds.get(1)).startsWith("speech_transcription:");
+        assertThat(runIds).hasSize(1);
+        assertThat(runIds.get(0)).startsWith("speech_transcription:");
+        // ai-svc 계약: run_id는 X-Request-Id 헤더로만 보낸다. 본문·쿼리에 넣으면 버려지거나 422로 거부된다(#87).
         assertThat(requests).anySatisfy(request -> assertThat(request).startsWith("/speech/transcriptions?")
-                .contains("user_id=" + user, "run_id=" + runIds.get(1)));
-        assertThat(requests).anySatisfy(request -> assertThat(request).startsWith("/meeting-notes/preview")
-                .contains("\"user_id\":\"" + user + "\"", "\"run_id\":\"" + runIds.get(0) + "\""));
+                .contains("user_id=" + user, "request_id=" + runIds.get(0)).doesNotContain("run_id"));
 
         // 대기열의 run을 worker가 꺼내 수집하고 지운다.
-        callsByQuery.put("run_id=" + runIds.get(1), call("c-" + UUID.randomUUID(), runIds.get(1),
+        callsByQuery.put("run_id=" + runIds.get(0), call("c-" + UUID.randomUUID(), runIds.get(0),
                 "ws-1", "whisper-" + model, "succeeded", "2044-02-01T00:00:00Z", 0, 0, 0, 0, 0));
-        for (int i = 0; i < 10 && !jdbc.queryForList("SELECT run_id FROM usage_collect_queue WHERE run_id IN (?, ?)",
-                String.class, runIds.get(0), runIds.get(1)).isEmpty(); i++) {
-            jdbc.update("UPDATE usage_collect_queue SET available_at = now() - interval '1 day' WHERE run_id IN (?, ?)",
-                    runIds.get(0), runIds.get(1));
+        for (int i = 0; i < 10 && !jdbc.queryForList("SELECT run_id FROM usage_collect_queue WHERE run_id = ?",
+                String.class, runIds.get(0)).isEmpty(); i++) {
+            jdbc.update("UPDATE usage_collect_queue SET available_at = now() - interval '1 day' WHERE run_id = ?",
+                    runIds.get(0));
             charges.collectPending();
         }
-        assertThat(jdbc.queryForList("SELECT run_id FROM usage_collect_queue WHERE run_id IN (?, ?)",
-                String.class, runIds.get(0), runIds.get(1))).isEmpty();
-        assertThat(jdbc.queryForList("SELECT status FROM usage_charges WHERE run_id = ?", String.class, runIds.get(1)))
+        assertThat(jdbc.queryForList("SELECT run_id FROM usage_collect_queue WHERE run_id = ?",
+                String.class, runIds.get(0))).isEmpty();
+        assertThat(jdbc.queryForList("SELECT status FROM usage_charges WHERE run_id = ?", String.class, runIds.get(0)))
                 .containsExactly("unpriced");
     }
 
@@ -279,11 +326,92 @@ class UsageChargeServiceIntegrationTest {
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
     }
 
+    @Test
+    void succeededCallWithoutAnyUsageNeedsReview() {
+        versions("2047-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2047-01-01T00:00:00Z", "1");
+        String runId = "run-" + UUID.randomUUID();
+        callsByQuery.put("run_id=" + runId, call("c-" + UUID.randomUUID(), runId, "ws-1", model, "succeeded",
+                "2047-02-01T00:00:00Z", null, null, null, null, null));
+
+        charges.collectRun(runId);
+
+        // 공급사가 usage를 주지 않은 성공 호출을 0원 charged로 확정하지 않는다(#98).
+        assertThat(jdbc.queryForMap("SELECT status, charge_krw_milli FROM usage_charges WHERE run_id = ?", runId))
+                .containsEntry("status", "needs_review").containsEntry("charge_krw_milli", 0L);
+    }
+
+    @Test
+    void snapshotResponseIsPricedByRequestedModel() {
+        versions("2048-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2048-01-01T00:00:00Z", "1");
+        String runId = "run-" + UUID.randomUUID();
+        String routedRun = "run-" + UUID.randomUUID();
+        callsByQuery.put("run_id=" + runId, call("c-" + UUID.randomUUID(), runId, "ws-1", model, "succeeded",
+                "2048-02-01T00:00:00Z", 1000, 0, 0, 0, 0)
+                .replace("\"model\":\"" + model + "\"", "\"model\":\"" + model + "-2025-08-07\""));
+        callsByQuery.put("run_id=" + routedRun, call("c-" + UUID.randomUUID(), routedRun, "ws-1", model, "succeeded",
+                "2048-02-01T00:00:00Z", 1000, 0, 0, 0, 0)
+                .replace("\"model\":\"" + model + "\"", "\"model\":\"other-" + model + "\""));
+
+        charges.collectRun(runId);
+        charges.collectRun(routedRun);
+
+        // 응답 모델 단가가 없으면 요청 모델 단가로 계산하고, 어느 이름으로 찾았는지와 전환 분류를 남긴다(#99).
+        assertThat(jdbc.queryForMap("SELECT status, charge_krw_milli, model, requested_model, price_model, model_routing "
+                + "FROM usage_charges WHERE run_id = ?", runId))
+                .containsEntry("status", "charged").containsEntry("charge_krw_milli", 1000L)
+                .containsEntry("model", model + "-2025-08-07").containsEntry("requested_model", model)
+                .containsEntry("price_model", model).containsEntry("model_routing", "snapshot");
+        assertThat(jdbc.queryForMap("SELECT status, price_model, model_routing FROM usage_charges WHERE run_id = ?", routedRun))
+                .containsEntry("status", "charged").containsEntry("price_model", model)
+                .containsEntry("model_routing", "routed");
+    }
+
+    @Test
+    void recomputeChargesUnpricedCallAfterPriceArrivesAndSettlesCredit() {
+        versions("2049-01-01T00:00:00Z", "1000", 0, 0);
+        String runId = "run-" + UUID.randomUUID();
+        credits.reserve(runId, user, "test_kind");
+        callsByQuery.put("run_id=" + runId, call("c-" + UUID.randomUUID(), runId, "ws-1", model, "succeeded",
+                "2049-02-01T00:00:00Z", 1000, 0, 0, 0, 0));
+        charges.collectRun(runId);
+        assertThat(jdbc.queryForObject("SELECT status FROM usage_charges WHERE run_id = ?", String.class, runId))
+                .isEqualTo("unpriced");
+        assertThat(credits.credits(user).balanceKrwMilli()).isZero();
+
+        // AI 원장을 다시 조회하지 않고 저장된 사용량으로 다시 계산한다.
+        callsByQuery.clear();
+        price(model, "2049-01-01T00:00:00Z", "1");
+        // 앱의 재계산 작업이 같은 행을 잠깐 잠글 수 있어 바뀔 때까지 다시 부른다.
+        for (int i = 0; i < 10 && !"charged".equals(jdbc.queryForObject(
+                "SELECT status FROM usage_charges WHERE run_id = ?", String.class, runId)); i++) {
+            charges.recompute();
+        }
+
+        assertThat(jdbc.queryForMap("SELECT status, charge_krw_milli, price_model FROM usage_charges WHERE run_id = ?", runId))
+                .containsEntry("status", "charged").containsEntry("charge_krw_milli", 1000L)
+                .containsEntry("price_model", model);
+        // 수집과 같은 정산 경로로 차감된다.
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-1000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+
+        // 확정된 행은 이후 단가가 바뀌어도 다시 계산하지 않는다.
+        price(model, "2049-01-15T00:00:00Z", "9");
+        charges.recompute();
+        assertThat(jdbc.queryForObject("SELECT charge_krw_milli FROM usage_charges WHERE run_id = ?", Long.class, runId))
+                .isEqualTo(1000L);
+    }
+
     private void versions(String effectiveFrom, String krwPerUsd, int marginBp, int vatBp) {
+        versions(effectiveFrom, krwPerUsd, 0, marginBp, vatBp);
+    }
+
+    private void versions(String effectiveFrom, String krwPerUsd, int fxBufferBp, int marginBp, int vatBp) {
         jdbc.update("INSERT INTO fx_rates VALUES (?::timestamptz, ?) ON CONFLICT DO NOTHING", effectiveFrom,
                 new BigDecimal(krwPerUsd));
-        jdbc.update("INSERT INTO pricing_policies VALUES (?::timestamptz, ?, ?) ON CONFLICT DO NOTHING", effectiveFrom,
-                marginBp, vatBp);
+        jdbc.update("INSERT INTO pricing_policies VALUES (?::timestamptz, ?, ?, ?) ON CONFLICT DO NOTHING", effectiveFrom,
+                marginBp, vatBp, fxBufferBp);
     }
 
     /** 입력·출력 단가가 같고 캐시 읽기 0.1배, 캐시 생성 1.25배, 출력 2배다. */
@@ -301,7 +429,7 @@ class UsageChargeServiceIntegrationTest {
                 {"id":"%s","run_id":"%s","workspace_id":"%s","user_id":"%s","kind":"agent","provider":"openai",
                  "requested_model":"%s","model":"%s","status":"%s","input_tokens":%s,"cached_input_tokens":%s,
                  "cache_creation_tokens":%s,"output_tokens":%s,"reasoning_tokens":%s,"audio_seconds":null,
-                 "tts_characters":null,"started_at":"%s","finished_at":"%s"}"""
+                 "input_characters":null,"started_at":"%s","finished_at":"%s"}"""
                 .formatted(id, runId, workspaceId, user, model, model, status, input, cached, creation, output, reasoning,
                         startedAt, startedAt);
     }
