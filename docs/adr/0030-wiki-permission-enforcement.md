@@ -30,7 +30,7 @@
 | PDF 변환 요청 | 원본 PDF 업로더 본인, OWNER, `document.convert` 중 하나 |
 | AI 작업 취소·상태 조회 | 요청자 본인 또는 OWNER |
 
-- **Skill**: 활성화·비활성화는 사용자별 설정이 아니라 ai의 `skills.status`를 바꾸므로 팀 Skill이면 모든 멤버에게 영향을 준다. 그래서 수정·삭제와 같이 판정한다. 기존 Skill의 범위는 ai의 Skill 조회 응답의 `scope_type`으로 확인한다. `scope_type`이 정확히 `personal`이 아니면(누락 포함) `skill.author`를 요구한다(fail-closed). 현재 ai는 팀 Skill 관리 자체를 OWNER로 제한하므로(`postgres_skill_repository.py`의 `_require_manage_scope`·`_is_team_owner`) `skill.author`를 받은 MEMBER는 document 판정을 통과해도 ai에서 거절된다. 이 항목을 실제로 열려면 ai가 같은 권한 항목을 판정하도록 바꿔야 한다.
+- **Skill**: 활성화·비활성화는 사용자별 설정이 아니라 ai의 `skills.status`를 바꾸므로 팀 Skill이면 모든 멤버에게 영향을 준다. 그래서 수정·삭제와 같이 판정한다. 기존 Skill의 범위는 ai의 Skill 조회 응답의 `scope_type`으로 확인한다. `scope_type`이 정확히 `personal`이 아니면(누락 포함) `skill.author`를 요구한다(fail-closed). ai도 같은 항목으로 팀 Skill 관리를 판정한다(Fruition-ai#94, `dev` 머지됨). ai가 그 변경 전이면 `skill.author`를 받은 MEMBER는 document 판정을 통과해도 ai에서 거절된다.
 - **복구**: `RestorePreviewService.loadOperation`(미리보기와 실행이 공유)에서 판정한다. `document_edit` 이외의 작업 유형은 위키 작업으로 본다. 복구 가능한 유형은 `document_edit`·`ingest`·`lint`뿐이라 사실상 ingest·lint다. 문서 편집 복구는 기존 규칙(복구하는 사람의 문서 편집 권한)을 유지한다.
 - **취소·조회**: `AiTaskCancellationService`의 공개 `cancel`·`status`만 OWNER를 허용한다. 요청자가 OWNER면 작업 행의 `user_id`로 소유 판정을 대신하고, 이후 ai 호출에는 처음부터 행의 workspace·user를 넘긴다. 내부 복구 endpoint(`changes`·`undo`·`finalizeEdits`), `cancelDocumentTasks`, 에이전트의 `findStatus`는 바꾸지 않았다.
 
@@ -65,4 +65,4 @@ access #32(권한 항목 내부 API·설정 API)를 이 변경보다 먼저 배�
 - 권한 없는 멤버는 편입·정리·팀 Skill 관리·남의 위키 작업 복구·남의 PDF 변환에서 `403 WORKSPACE_PERMISSION_REQUIRED`를 받는다. 프런트는 `code`로 분기한다.
 - 이 변경이 배포되면 기본 설정(자동 편입 꺼짐)에서는 업로드·변환 뒤 위키에 자동으로 들어가지 않는다. 수동 편입 UI는 이미 있다.
 - 비AWS 변환 경로도 AWS 경로와 같은 정책으로 편입한다(이전에는 편입하지 않았다).
-- `skill.author`는 ai가 팀 Skill 관리를 OWNER에 묶고 있는 동안 MEMBER에게 효과가 없다. ai 쪽 후속 변경이 필요하다.
+- `skill.author`가 MEMBER에게 실제로 효과를 내려면 ai가 Fruition-ai#94 이후 버전이어야 한다.
