@@ -24,6 +24,9 @@ class ConverterClientTest {
     private HttpServer server;
     private final AtomicReference<String> capturedBody = new AtomicReference<>();
     private final AtomicReference<String> capturedContentType = new AtomicReference<>();
+    private final AtomicReference<String> capturedRequestId = new AtomicReference<>();
+    private static final ConverterClient.Attribution ATTRIBUTION =
+            new ConverterClient.Attribution("convert:doc-1", "ws-1", "user-1");
     private final AtomicInteger responseStatus = new AtomicInteger(200);
     private final AtomicReference<String> responseBody = new AtomicReference<>(
             "{\"filename\":\"보고서.pdf\",\"content_type\":\"application/pdf\","
@@ -35,6 +38,7 @@ class ConverterClientTest {
         server.createContext("/convert", exchange -> {
             capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.ISO_8859_1));
             capturedContentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
+            capturedRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
             byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(responseStatus.get(), body.length);
@@ -43,6 +47,7 @@ class ConverterClientTest {
         });
         server.createContext("/convert-source-batch", exchange -> {
             capturedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            capturedRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
             byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(responseStatus.get(), body.length);
@@ -74,7 +79,7 @@ class ConverterClientTest {
     void convertPdf_sendsMultipartFilePartAndReturnsMarkdown() {
         String markdown = client().convertPdf(
                 "보고서.pdf", "%PDF-1.4".getBytes(StandardCharsets.US_ASCII),
-                "gemini", "gemini-3.5-flash-lite");
+                "gemini", "gemini-3.5-flash-lite", ATTRIBUTION);
 
         assertThat(markdown).isEqualTo("# 변환 결과\n");
         assertThat(capturedContentType.get()).startsWith("multipart/form-data");
@@ -83,7 +88,12 @@ class ConverterClientTest {
                 .containsPattern("(?s)name=\"provider\"\\r\\n.*?\\r\\n\\r\\ngemini\\r\\n--")
                 .containsPattern("(?s)name=\"model\"\\r\\n.*?\\r\\n\\r\\ngemini-3\\.5-flash-lite\\r\\n--")
                 .contains("Content-Type: application/pdf")
-                .contains("%PDF-1.4");
+                .contains("%PDF-1.4")
+                // 사용량 귀속(#91): run_id는 헤더, workspace_id·user_id는 Form 필드다.
+                .containsPattern("(?s)name=\"workspace_id\"\\r\\n.*?\\r\\n\\r\\nws-1\\r\\n--")
+                .containsPattern("(?s)name=\"user_id\"\\r\\n.*?\\r\\n\\r\\nuser-1\\r\\n--")
+                .doesNotContain("run_id");
+        assertThat(capturedRequestId.get()).isEqualTo("convert:doc-1");
     }
 
     @Test
@@ -92,7 +102,7 @@ class ConverterClientTest {
         responseBody.set("{\"detail\":\"Command failed: ocrmypdf\"}");
 
         assertThatThrownBy(() -> client().convertPdf(
-                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna"))
+                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna", ATTRIBUTION))
                 .isInstanceOf(DocumentConvertException.class)
                 .hasMessageContaining("status=422");
     }
@@ -103,7 +113,7 @@ class ConverterClientTest {
         responseBody.set("{\"detail\":\"Command timeout: ocrmypdf\"}");
 
         assertThatThrownBy(() -> client().convertPdf(
-                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna"))
+                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna", ATTRIBUTION))
                 .isInstanceOf(DocumentConvertException.class)
                 .hasMessageContaining("status=504");
     }
@@ -113,7 +123,7 @@ class ConverterClientTest {
         responseBody.set("{\"filename\":\"보고서.pdf\"}");
 
         assertThatThrownBy(() -> client().convertPdf(
-                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna"))
+                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna", ATTRIBUTION))
                 .isInstanceOf(DocumentConvertException.class)
                 .hasMessageContaining("markdown");
     }
@@ -123,7 +133,7 @@ class ConverterClientTest {
         server.stop(0);
 
         assertThatThrownBy(() -> client().convertPdf(
-                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna"))
+                "보고서.pdf", new byte[]{1}, "openai", "gpt-6-luna", ATTRIBUTION))
                 .isInstanceOf(DocumentConvertException.class);
     }
 
@@ -133,7 +143,7 @@ class ConverterClientTest {
         responseBody.set("{\"detail\":\"Could not read the PDF storage range: HTTP 403 AccessDenied\"}");
         String sourceUrl = "https://bucket.s3.ap-northeast-2.amazonaws.com/o?X-Amz-Credential=SECRETKEY&X-Amz-Signature=sig";
 
-        assertThatThrownBy(() -> client().convertSourceBatch(sourceUrl, 1234, "gemini", "m", 0, () -> true))
+        assertThatThrownBy(() -> client().convertSourceBatch(sourceUrl, 1234, "gemini", "m", 0, ATTRIBUTION, () -> true))
                 .isInstanceOf(DocumentConvertException.class)
                 .hasMessageContaining("페이지 묶음 변환 실패")
                 .hasMessageContaining("status=422")
@@ -145,10 +155,12 @@ class ConverterClientTest {
     void convertSourceBatch_success_returnsBatch() {
         responseBody.set("{\"page_start\":1,\"page_end\":10,\"total_pages\":25,\"markdown\":\"# p\",\"done\":false}");
 
-        var batch = client().convertSourceBatch("https://example.invalid/o", 1234, "gemini", "m", 0, () -> true);
+        var batch = client().convertSourceBatch("https://example.invalid/o", 1234, "gemini", "m", 0, ATTRIBUTION, () -> true);
 
         assertThat(batch.page_end()).isEqualTo(10);
         assertThat(batch.done()).isFalse();
-        assertThat(capturedBody.get()).contains("\"start_page\":0").contains("\"byte_size\":1234");
+        assertThat(capturedBody.get()).contains("\"start_page\":0").contains("\"byte_size\":1234")
+                .contains("\"workspace_id\":\"ws-1\"").contains("\"user_id\":\"user-1\"").doesNotContain("run_id");
+        assertThat(capturedRequestId.get()).isEqualTo("convert:doc-1");
     }
 }

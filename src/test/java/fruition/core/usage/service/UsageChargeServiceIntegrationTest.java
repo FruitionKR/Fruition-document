@@ -282,6 +282,83 @@ class UsageChargeServiceIntegrationTest {
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
     }
 
+    @Test
+    void succeededCallWithoutAnyUsageNeedsReview() {
+        versions("2047-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2047-01-01T00:00:00Z", "1");
+        String runId = "run-" + UUID.randomUUID();
+        callsByQuery.put("run_id=" + runId, call("c-" + UUID.randomUUID(), runId, "ws-1", model, "succeeded",
+                "2047-02-01T00:00:00Z", null, null, null, null, null));
+
+        charges.collectRun(runId);
+
+        // 공급사가 usage를 주지 않은 성공 호출을 0원 charged로 확정하지 않는다(#98).
+        assertThat(jdbc.queryForMap("SELECT status, charge_krw_milli FROM usage_charges WHERE run_id = ?", runId))
+                .containsEntry("status", "needs_review").containsEntry("charge_krw_milli", 0L);
+    }
+
+    @Test
+    void snapshotResponseIsPricedByRequestedModel() {
+        versions("2048-01-01T00:00:00Z", "1000", 0, 0);
+        price(model, "2048-01-01T00:00:00Z", "1");
+        String runId = "run-" + UUID.randomUUID();
+        String routedRun = "run-" + UUID.randomUUID();
+        callsByQuery.put("run_id=" + runId, call("c-" + UUID.randomUUID(), runId, "ws-1", model, "succeeded",
+                "2048-02-01T00:00:00Z", 1000, 0, 0, 0, 0)
+                .replace("\"model\":\"" + model + "\"", "\"model\":\"" + model + "-2025-08-07\""));
+        callsByQuery.put("run_id=" + routedRun, call("c-" + UUID.randomUUID(), routedRun, "ws-1", model, "succeeded",
+                "2048-02-01T00:00:00Z", 1000, 0, 0, 0, 0)
+                .replace("\"model\":\"" + model + "\"", "\"model\":\"other-" + model + "\""));
+
+        charges.collectRun(runId);
+        charges.collectRun(routedRun);
+
+        // 응답 모델 단가가 없으면 요청 모델 단가로 계산하고, 어느 이름으로 찾았는지와 전환 분류를 남긴다(#99).
+        assertThat(jdbc.queryForMap("SELECT status, charge_krw_milli, model, requested_model, price_model, model_routing "
+                + "FROM usage_charges WHERE run_id = ?", runId))
+                .containsEntry("status", "charged").containsEntry("charge_krw_milli", 1000L)
+                .containsEntry("model", model + "-2025-08-07").containsEntry("requested_model", model)
+                .containsEntry("price_model", model).containsEntry("model_routing", "snapshot");
+        assertThat(jdbc.queryForMap("SELECT status, price_model, model_routing FROM usage_charges WHERE run_id = ?", routedRun))
+                .containsEntry("status", "charged").containsEntry("price_model", model)
+                .containsEntry("model_routing", "routed");
+    }
+
+    @Test
+    void recomputeChargesUnpricedCallAfterPriceArrivesAndSettlesCredit() {
+        versions("2049-01-01T00:00:00Z", "1000", 0, 0);
+        String runId = "run-" + UUID.randomUUID();
+        credits.reserve(runId, user, "test_kind");
+        callsByQuery.put("run_id=" + runId, call("c-" + UUID.randomUUID(), runId, "ws-1", model, "succeeded",
+                "2049-02-01T00:00:00Z", 1000, 0, 0, 0, 0));
+        charges.collectRun(runId);
+        assertThat(jdbc.queryForObject("SELECT status FROM usage_charges WHERE run_id = ?", String.class, runId))
+                .isEqualTo("unpriced");
+        assertThat(credits.credits(user).balanceKrwMilli()).isZero();
+
+        // AI 원장을 다시 조회하지 않고 저장된 사용량으로 다시 계산한다.
+        callsByQuery.clear();
+        price(model, "2049-01-01T00:00:00Z", "1");
+        // 앱의 재계산 작업이 같은 행을 잠깐 잠글 수 있어 바뀔 때까지 다시 부른다.
+        for (int i = 0; i < 10 && !"charged".equals(jdbc.queryForObject(
+                "SELECT status FROM usage_charges WHERE run_id = ?", String.class, runId)); i++) {
+            charges.recompute();
+        }
+
+        assertThat(jdbc.queryForMap("SELECT status, charge_krw_milli, price_model FROM usage_charges WHERE run_id = ?", runId))
+                .containsEntry("status", "charged").containsEntry("charge_krw_milli", 1000L)
+                .containsEntry("price_model", model);
+        // 수집과 같은 정산 경로로 차감된다.
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-1000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+
+        // 확정된 행은 이후 단가가 바뀌어도 다시 계산하지 않는다.
+        price(model, "2049-01-15T00:00:00Z", "9");
+        charges.recompute();
+        assertThat(jdbc.queryForObject("SELECT charge_krw_milli FROM usage_charges WHERE run_id = ?", Long.class, runId))
+                .isEqualTo(1000L);
+    }
+
     private void versions(String effectiveFrom, String krwPerUsd, int marginBp, int vatBp) {
         jdbc.update("INSERT INTO fx_rates VALUES (?::timestamptz, ?) ON CONFLICT DO NOTHING", effectiveFrom,
                 new BigDecimal(krwPerUsd));

@@ -1053,7 +1053,7 @@ public class DocumentService {
             WorkspaceAiModelClient.AiModelSelection aiModel =
                     workspaceAiModelClient.get(placeholder.getWorkspaceId());
             String markdown = converterClient.convertPdf(
-                    source.getFilename(), pdfBytes, aiModel.provider(), aiModel.model(),
+                    source.getFilename(), pdfBytes, aiModel.provider(), aiModel.model(), convertAttribution(placeholder),
                     () -> taskWriter.active("convert:" + documentId));
             DocumentEditingRules.MarkdownContent content = applyConvertedMarkdown(queueId, placeholder, markdown);
             if (content != null) {
@@ -1085,6 +1085,12 @@ public class DocumentService {
             log.warn("[문서 변환 실패 반영] documentId={} sourceDocumentId={} error={} cause={}",
                     documentId, sourceDocumentId, e.getMessage(), e.getCause() == null ? "-" : e.getCause().toString());
         }
+    }
+
+    /** 변환 요청 때 만든 실행({@code convert:<placeholderId>})과 요청자에게 converter 사용량을 귀속한다(#91). */
+    private static ConverterClient.Attribution convertAttribution(Document placeholder) {
+        return new ConverterClient.Attribution("convert:" + placeholder.getId(), placeholder.getWorkspaceId(),
+                placeholder.getUserId());
     }
 
     private void doConvertBatches(long queueId, Document placeholder, Document source) throws Exception {
@@ -1120,7 +1126,8 @@ public class DocumentService {
             String url = minioClient.getPresignedObjectUrl(io.minio.GetPresignedObjectUrlArgs.builder()
                     .bucket(storageProps.getBucket()).object(normalizeObjectKey(source.getSourceUri()))
                     .method(io.minio.http.Method.GET).expiry(3600).build());
-            var batch = converterClient.convertSourceBatch(url, source.getByteSize(), model.provider(), model.model(), completed, active);
+            var batch = converterClient.convertSourceBatch(url, source.getByteSize(), model.provider(), model.model(),
+                    completed, convertAttribution(placeholder), active);
             if (batch.page_start() != completed + 1 || (batch.done() && batch.page_end() != batch.total_pages())
                     || batch.page_end() < completed || batch.total_pages() < batch.page_end()
                     || (!batch.done() && batch.page_end() == completed)) {
