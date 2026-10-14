@@ -74,6 +74,13 @@ public class IngestCommandOutbox {
                 new DeleteCommand(runId, "document_deleted", documentId, workspaceId));
     }
 
+    /** 문서 이름이 바뀌면 AI가 소유한 소스 페이지 제목을 새 표시 이름으로 맞추게 한다. 문서 단위 순서를 위해 key는 documentId다. */
+    public void enqueueRename(String documentId, String workspaceId, String title) {
+        String runId = UUID.randomUUID().toString();
+        writer.enqueue(runId, commandTopic, documentId,
+                new RenameCommand(runId, "document_renamed", documentId, workspaceId, title));
+    }
+
     record IngestCommand(
             @JsonProperty("run_id") String runId,
             String kind,
@@ -95,5 +102,13 @@ public class IngestCommandOutbox {
             String kind,
             @JsonProperty("document_id") String documentId,
             @JsonProperty("workspace_id") String workspaceId
+    ) {}
+
+    record RenameCommand(
+            @JsonProperty("run_id") String runId,
+            String kind,
+            @JsonProperty("document_id") String documentId,
+            @JsonProperty("workspace_id") String workspaceId,
+            String title
     ) {}
 }

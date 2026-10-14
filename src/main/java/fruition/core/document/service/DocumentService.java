@@ -818,6 +818,7 @@ public class DocumentService {
         }
         document.rename(filename);
         documentRepository.save(document);
+        // ai 소스 페이지는 이미 이 생성 제목을 쓴다. 다시 보내면 "[채팅] " 접두사가 위키 제목에 붙는다.
         log.info("[채팅 export 문서 이름 확정] documentId={} filename={}", document.getId(), filename);
     }
 
@@ -2129,6 +2130,9 @@ public class DocumentService {
         );
         if (updated == 0) {
             throw conditionalUpdateFailure(workspaceId, documentId);
+        }
+        if (document.getDocumentRole() == DocumentRole.EDITABLE) {
+            ingestCommandOutbox.enqueueRename(documentId, workspaceId, filename.displayName());
         }
         return new DocumentRenameResponse(
                 documentId,

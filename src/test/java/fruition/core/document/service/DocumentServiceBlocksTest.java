@@ -1619,6 +1619,66 @@ class DocumentServiceBlocksTest {
         verify(documentRepository, times(1)).save(chatDoc);
     }
 
+    private Document renameTarget(String documentId, String filename, String mimeType) {
+        stubOwnedWorkspace();
+        Document document = new Document(documentId, WORKSPACE_ID, USER_ID, filename, mimeType, 10L,
+                "sources/documents/" + documentId + "/original", "h");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, WORKSPACE_ID))
+                .thenReturn(Optional.of(document));
+        return document;
+    }
+
+    @Test
+    @DisplayName("편집 문서 이름을 바꾸면 새 표시 이름으로 document_renamed command를 보낸다")
+    void rename_editableDocument_enqueuesRenameCommand() {
+        Document document = renameTarget("doc_ren1", "old.md", "text/markdown");
+        when(documentRepository.renameIfVersionMatches(
+                eq("doc_ren1"), eq(WORKSPACE_ID), eq(1L), anyString(), anyString(), anyString(), any()))
+                .thenReturn(1);
+
+        documentService.rename(WORKSPACE_ID, USER_ID, "doc_ren1", new DocumentRenameRequest("새 이름", 1L));
+
+        verify(ingestCommandOutbox).enqueueRename("doc_ren1", WORKSPACE_ID, "새 이름");
+    }
+
+    @Test
+    @DisplayName("표시 이름이 그대로면 command를 보내지 않는다")
+    void rename_unchangedName_doesNotEnqueue() {
+        renameTarget("doc_ren2", "same.md", "text/markdown");
+
+        documentService.rename(WORKSPACE_ID, USER_ID, "doc_ren2", new DocumentRenameRequest("same", 1L));
+
+        verify(ingestCommandOutbox, never()).enqueueRename(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("PDF 원본 이름을 바꿔도 command를 보내지 않는다")
+    void rename_originalDocument_doesNotEnqueue() {
+        renameTarget("doc_ren3", "paper.pdf", "application/pdf");
+        when(documentRepository.renameIfVersionMatches(
+                eq("doc_ren3"), eq(WORKSPACE_ID), eq(1L), anyString(), anyString(), anyString(), any()))
+                .thenReturn(1);
+
+        documentService.rename(WORKSPACE_ID, USER_ID, "doc_ren3", new DocumentRenameRequest("논문", 1L));
+
+        verify(ingestCommandOutbox, never()).enqueueRename(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("채팅 export 이름 확정은 위키 제목 command를 보내지 않는다(ai가 이미 생성 제목을 씀)")
+    void confirmChatExportName_doesNotEnqueueRenameCommand() {
+        Document chatDoc = new Document(
+                "chatdoc_ren", WORKSPACE_ID, USER_ID, "[채팅] 첫 질문.md", "text/markdown", 10L,
+                "sources/documents/chatdoc_ren/original", "h", "chat_export");
+        when(documentRepository.findActiveSiblingNames(WORKSPACE_ID, null)).thenReturn(List.of());
+
+        documentService.confirmChatExportName(chatDoc, "검색 인덱싱");
+        documentService.confirmChatExportName(chatDoc, "검색 인덱싱");
+
+        assertThat(chatDoc.getFilename()).isEqualTo("[채팅] 검색 인덱싱.md");
+        verify(ingestCommandOutbox, never()).enqueueRename(any(), any(), any());
+    }
+
     @Test
     @DisplayName("Wiki 페이지 제목이 폴백값이면 임시 이름을 유지한다")
     void confirmChatExportName_ignoresFallbackTitle() {

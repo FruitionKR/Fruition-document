@@ -24,7 +24,7 @@
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}`](#summary-get-api-workspaces-workspace-id-documents-document-id) | 특정 문서의 상세 정보를 반환합니다. 연결된 Wiki 페이지 목록이 포함됩니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/{document_id}/duplicate`](#summary-post-api-workspaces-workspace-id-documents-document-id-duplicate) | 워크스페이스 멤버가 최신 Markdown 편집본을 같은 부모의 마지막 위치에 새 문서로 복제합니다. |
 | [`PATCH /api/workspaces/{workspace_id}/documents/{document_id}/position`](#summary-patch-api-workspaces-workspace-id-documents-document-id-position) | 문서를 대상 폴더와 정렬 위치로 이동합니다. base version과 Idempotency-Key로 동시 변경을 검증합니다. |
-| [`PATCH /api/workspaces/{workspace_id}/documents/{document_id}/rename`](#summary-patch-api-workspaces-workspace-id-documents-document-id-rename) | Notion의 page title처럼 표시 이름만 변경하며 본문과 Wiki 제목은 유지합니다. |
+| [`PATCH /api/workspaces/{workspace_id}/documents/{document_id}/rename`](#summary-patch-api-workspaces-workspace-id-documents-document-id-rename) | Notion의 page title처럼 표시 이름만 변경하며 본문은 유지합니다. 편집 문서는 같은 트랜잭션에서 `document_renamed` command를 보내 AI가 위키 소스 페이지 제목도 새 이름으로 갱신합니다. |
 | [`POST /internal/workspaces/{workspace_id}/initial-note`](#summary-post-internal-workspaces-workspace-id-initial-note) | 새 워크스페이스에 기본 Markdown 문서를 생성합니다. |
 | [`POST /internal/purge/workspaces`](#summary-post-internal-purge-workspaces) | 워크스페이스의 문서·폴더·채팅·회의·AI 작업 기록과 저장소 객체를 모두 지웁니다. |
 | [`POST /internal/purge/users`](#summary-post-internal-purge-users) | 탈퇴 사용자의 채팅·회의·AI 실행 기록을 지우고 공유 문서는 남깁니다. |
@@ -1311,7 +1311,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docu
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | Notion의 page title처럼 표시 이름만 변경하며 본문과 Wiki 제목은 유지합니다. |
+| 목적 | Notion의 page title처럼 표시 이름만 변경하며 본문은 유지합니다. 편집 문서는 같은 트랜잭션에서 `document_renamed` command를 보내 AI가 위키 소스 페이지 제목도 새 이름으로 갱신합니다. |
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Body** — `DocumentRenameRequest` |
 | 출력 | `200` 이름 변경 성공 — `DocumentRenameResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
@@ -1329,7 +1329,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docu
 
 #### 2. 목적
 
-Notion의 page title처럼 표시 이름만 변경하며 본문과 Wiki 제목은 유지합니다.
+Notion의 page title처럼 표시 이름만 변경하며 본문은 유지합니다. 편집 문서는 같은 트랜잭션에서 `document_renamed` command를 보내 AI가 위키 소스 페이지 제목도 새 이름으로 갱신합니다.
 
 #### 3. Auth 필요 여부
 

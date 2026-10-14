@@ -2504,7 +2504,7 @@ paths:
       - Documents
   /api/workspaces/{workspace_id}/documents/{document_id}/rename:
     patch:
-      description: Notion의 page title처럼 표시 이름만 변경하며 본문과 Wiki 제목은 유지합니다.
+      description: Notion의 page title처럼 표시 이름만 변경하며 본문은 유지합니다. 편집 문서는 같은 트랜잭션에서 `document_renamed` command를 보내 AI가 위키 소스 페이지 제목도 새 이름으로 갱신합니다.
       operationId: rename_1
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
