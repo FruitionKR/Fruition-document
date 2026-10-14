@@ -18,6 +18,8 @@ import java.net.URI;
 /** ai-svc 파일 전사(`POST /speech/transcriptions`) 호출. 오디오·결과를 저장하지 않는다. */
 @Component
 public class SpeechTranscriptionClient {
+    /** 채팅 음성은 ALB 유휴 120초 안에 끝나야 해서 AI에 전체 전사 시간을 100초로 제한하게 한다. 클라이언트 대기(150초)는 그보다 길다. */
+    static final int DEADLINE_SECONDS = 100;
     private final RestClient restClient;
     private final String endpoint;
     private final UsageChargeService usageCharges;
@@ -41,6 +43,7 @@ public class SpeechTranscriptionClient {
         URI uri = UriComponentsBuilder.fromUriString(endpoint)
                 .queryParam("workspace_id", "{workspaceId}")
                 .queryParam("user_id", "{userId}")
+                .queryParam("deadline_seconds", DEADLINE_SECONDS)
                 .encode()
                 .buildAndExpand(workspaceId, userId)
                 .toUri();

@@ -217,6 +217,31 @@ class MeetingLiveIntegrationTest {
                 Integer.class, meetingId)).isEqualTo(MeetingLiveHandler.MAX_SEGMENTS);
     }
 
+    @Test
+    void charsLimit_countsBundledTextIncludingSeparators() {
+        // 499자 구간 199개는 둘씩 묶여(구분 공백 1자) 99,400자다. 600자를 더하면 정확히 100,000자로 허용된다.
+        var segments = new java.util.ArrayList<MeetingRepository.Segment>();
+        for (int i = 0; i < 199; i++) {
+            segments.add(new MeetingRepository.Segment("s" + i, i, "가".repeat(499)));
+        }
+        assertThat(MeetingLiveHandler.bundledChars(segments)).isEqualTo(99_400);
+        segments.add(new MeetingRepository.Segment("last", 199, "가".repeat(600)));
+        assertThat(MeetingLiveHandler.bundledChars(segments)).isEqualTo(100_000);
+        // 601자는 원문 합계(99,902)로는 한도 안이지만 묶음 글자로는 100,001자라 거절한다.
+        segments.set(199, new MeetingRepository.Segment("last", 199, "가".repeat(601)));
+        assertThat(MeetingLiveHandler.bundledChars(segments)).isEqualTo(100_001);
+    }
+
+    @Test
+    void charsAtLimit_refusesConnection() throws Exception {
+        String meetingId = createMeeting();
+        jdbc.update("INSERT INTO meeting_streams (id, meeting_id, stream_order, end_reason, started_at) VALUES (?, ?, 0, 'finished', now())",
+                "seed_" + meetingId, meetingId);
+        jdbc.update("INSERT INTO meeting_segments (meeting_id, id, stream_id, position, text, created_at) VALUES (?, 's0_u1', ?, 1, ?, now())",
+                meetingId, "seed_" + meetingId, "가".repeat(100_000));
+        assertThat(connect(meetingId).untilType("error").path("code").asText()).isEqualTo("transcript_limit");
+    }
+
     // ---------- helpers
 
     /** 한도 검사용으로 확정 구간을 미리 채운다. 글자 수 한도에는 걸리지 않게 짧은 문장을 쓴다. */
