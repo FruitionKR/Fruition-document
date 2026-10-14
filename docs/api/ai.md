@@ -713,7 +713,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 
 복구 대상에 따라 처리 방식이 다릅니다. 문서 편집 복구는 즉시 완료되어 200을 반환하고, Wiki 복구는 queued 상태로 등록되어 202를 반환합니다. 미리보기와 같은 계산을 다시 하고 Wiki에 반영합니다. 받치는 기여가 남지 않은 페이지는 삭제합니다. Source는 마지막 남은 ingest의 본문으로 복원하고, Concept는 과거 버전 유무와 관계없이 남은 활성 기여를 llmPipeline에 전달해 재작성합니다. 재작성이 있으면 status가 rebuilding으로 돌아오며 결과는 로그 상세로 확인합니다. ingest 되돌리기는 Wiki만 되돌리고 원문 문서는 건드리지 않습니다.
 
-사람이 고친 본문(`wiki_edit`)은 수동 기여로 남는다. ingest·lint를 되돌릴 때 이 기여는 남길 기여(`keep_contributions`)에 포함되고, 원문 문서가 없어 `document_id`를 빈 문자열로 보낸다. `wiki_edit` 작업 자체를 되돌리는 것은 아직 지원하지 않는다(`400`).
+사람이 고친 본문(`wiki_edit`)은 수동 기여로 남는다. ingest·lint를 되돌릴 때 이 기여는 남길 기여(`keep_contributions`)에 포함되고, 원문 문서가 없어 `document_id`를 `null`로 보낸다(ai `RestoreContributionIn.document_id: str | None`). `wiki_edit` 작업 자체를 되돌리는 것은 지원하지 않는다(`400`, 정책 결정 사항).
 
 #### 3. Auth 필요 여부
 

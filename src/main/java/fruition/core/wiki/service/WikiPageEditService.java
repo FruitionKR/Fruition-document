@@ -16,12 +16,14 @@ import fruition.core.wiki.domain.WikiPageContribution;
 import fruition.core.wiki.domain.WikiPageVersion;
 import fruition.core.wiki.dto.WikiPageContentSaveRequest;
 import fruition.core.wiki.dto.WikiPageContentSaveResponse;
+import fruition.core.wiki.dto.WikiPageDetailResponse;
 import fruition.core.wiki.exception.PipelineWikiPageException;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
 import fruition.core.wiki.exception.WikiPageVersionConflictException;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.wiki.repository.WikiPageContributionRepository;
 import fruition.core.wiki.repository.WikiPageVersionRepository;
+import fruition.core.wiki.repository.WikiWorkspaceVersionRepository;
 import fruition.shared.idempotency.IdempotencyConflictException;
 import fruition.shared.idempotency.InvalidIdempotencyKeyException;
 import org.springframework.stereotype.Service;
@@ -30,7 +32,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -50,6 +51,7 @@ public class WikiPageEditService {
     private final WikiPageContributionRepository contributionRepository;
     private final OperationLogRepository operationLogRepository;
     private final OperationChangeRepository operationChangeRepository;
+    private final WikiWorkspaceVersionRepository workspaceVersionRepository;
     private final LineCounter lineCounter;
 
     public WikiPageEditService(WorkspaceAccessGuard workspaceAccessGuard,
@@ -58,6 +60,7 @@ public class WikiPageEditService {
                                WikiPageContributionRepository contributionRepository,
                                OperationLogRepository operationLogRepository,
                                OperationChangeRepository operationChangeRepository,
+                               WikiWorkspaceVersionRepository workspaceVersionRepository,
                                LineCounter lineCounter) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.wikiStateRequester = wikiStateRequester;
@@ -65,6 +68,7 @@ public class WikiPageEditService {
         this.contributionRepository = contributionRepository;
         this.operationLogRepository = operationLogRepository;
         this.operationChangeRepository = operationChangeRepository;
+        this.workspaceVersionRepository = workspaceVersionRepository;
         this.lineCounter = lineCounter;
     }
 
@@ -87,18 +91,34 @@ public class WikiPageEditService {
         }
         Optional<WikiPageVersion> previous = versionRepository.findTopByIdPageIdOrderByIdRevisionDesc(pageId);
         long current = previous.map(WikiPageVersion::getRevision).orElse(0L);
-        if (current != baseRevision) {
-            throw new WikiPageVersionConflictException(current);
-        }
-        // 문서 본문 저장과 같이 같은 본문은 revision을 올리지 않는다.
-        if (previous.isPresent() && previous.get().getMarkdown().equals(markdown)) {
-            return response(previous.get());
+
+        // ai의 현재 본문을 먼저 본다. ai가 이 작업을 이미 저장했는지(기록 누락 재시도)와,
+        // ai에서 끝났지만 아직 반영되지 않은 결과가 있는지(revision 순서 역전)를 가른다.
+        WikiPageDetailResponse page = wikiStateRequester.page(workspaceId, pageId)
+                .orElseThrow(() -> new WikiPageNotFoundException(pageId));
+        if (aiHoldsEdit(page, workspaceId, pageId, operationId)) {
+            // ai 저장은 끝났는데 document 기록만 빠진 재시도다. ai의 현재 본문이 이 작업 본문이므로
+            // 그 뒤 다른 결과가 끼지 않았다. base_revision을 다시 묻지 않고 현재 revision 다음에 기록한다.
+            if (page.markdown() != null && !page.markdown().equals(markdown)) {
+                throw new IdempotencyConflictException("같은 revision_write_id를 다른 저장 요청에 사용할 수 없습니다.");
+            }
+        } else {
+            if (current != baseRevision) {
+                throw new WikiPageVersionConflictException(current);
+            }
+            // 문서 본문 저장과 같이 같은 본문은 revision을 올리지 않는다.
+            if (previous.isPresent() && previous.get().getMarkdown().equals(markdown)) {
+                return response(previous.get());
+            }
+            // 최신 버전 본문은 ai가 결과로 준 객체를 읽어 남긴 것이라 ai의 현재 본문과 같다. 다르면 ai에서 끝난
+            // 작업 결과가 아직 반영되지 않은 것이다. 지금 저장하면 그 결과가 나중에 더 높은 revision으로 기록돼
+            // 순서가 뒤집히므로 거절한다. 반영이 끝나면 새 revision으로 다시 시도한다.
+            if (previous.isPresent() && hasText(page.markdown())
+                    && !page.markdown().equals(previous.get().getMarkdown())) {
+                throw new WikiPageVersionConflictException(current);
+            }
         }
 
-        var page = wikiStateRequester.lookup(List.of(pageId), workspaceId).stream()
-                .filter(snapshot -> workspaceId.equals(snapshot.workspaceId()))
-                .findFirst()
-                .orElseThrow(() -> new WikiPageNotFoundException(pageId));
         var result = wikiStateRequester.manualEdit(workspaceId, userId, pageId, operationId, markdown)
                 .orElseThrow(() -> new WikiPageNotFoundException(pageId));
         if (!pageId.equals(result.pageId())) {
@@ -125,7 +145,20 @@ public class WikiPageEditService {
         operationChangeRepository.save(new OperationChange(
                 operationId, ResourceType.wiki_page, pageId, page.title(), beforeRevision, revision,
                 ChangeType.updated, null, lines.additions(), lines.deletions()));
+        // 위키를 바꿨으므로 wiki/graph의 ETag 기준 버전을 올린다(#68).
+        workspaceVersionRepository.bump(workspaceId);
         return response(version);
+    }
+
+    /** ai가 이 작업의 본문(`ops/{operation_id}.md`)을 현재 본문으로 가리키면 이미 저장한 작업이다. */
+    private static boolean aiHoldsEdit(WikiPageDetailResponse page, String workspaceId, String pageId,
+                                       String operationId) {
+        String uri = page.markdownUri();
+        return uri != null && uri.endsWith("/wiki/" + workspaceId + "/pages/" + pageId + "/ops/" + operationId + ".md");
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private String validate(WikiPageContentSaveRequest request) {

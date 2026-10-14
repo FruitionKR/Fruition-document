@@ -3,7 +3,7 @@ package fruition.core.wiki.service;
 import fruition.TestcontainersConfiguration;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.wiki.repository.PipelineWikiStateRequester.ManualEditResult;
-import fruition.core.wiki.repository.PipelineWikiStateRequester.WikiPageSnapshot;
+import fruition.core.wiki.dto.WikiPageDetailResponse;
 import fruition.shared.security.JwtTokenProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +18,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -35,7 +36,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** 사람이 Wiki 본문을 고치는 API(#75): revision 충돌, write ID 재전송, 권한, ai 기록. */
+/** 사람이 Wiki 본문을 고치는 API(#75): revision 충돌, write ID 재전송, 권한, ai 기록, 기록 누락 재시도, 반영 전 결과. */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
@@ -58,8 +59,8 @@ class WikiPageEditIntegrationTest {
         workspaceId = "ws_" + suffix;
         pageId = "wp_" + suffix;
         role(userId, "OWNER", "[]");
-        when(wikiStateRequester.lookup(List.of(pageId), workspaceId)).thenReturn(List.of(
-                new WikiPageSnapshot(pageId, "concept", "캐시", "cache", workspaceId, "active")));
+        // ai의 현재 본문은 document 최신 버전(revision 2)과 같다. 결과 반영이 끝난 평상시 상태.
+        aiPage("s3://bucket/wiki/" + workspaceId + "/pages/" + pageId + "/ops/op_ai.md", "# 캐시\n근거");
         when(wikiStateRequester.manualEdit(eq(workspaceId), anyString(), eq(pageId), anyString(), anyString()))
                 .thenAnswer(invocation -> {
                     String operationId = invocation.getArgument(3);
@@ -139,6 +140,67 @@ class WikiPageEditIntegrationTest {
         save("# 캐시\n근거", 2, "w1").andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(2));
 
         verify(wikiStateRequester, never()).manualEdit(any(), any(), any(), any(), any());
+        assertThat(workspaceWikiVersion()).isZero();
+    }
+
+    @Test
+    void save_bumpsWorkspaceWikiVersion() throws Exception {
+        save("# 고침", 2, "w1").andExpect(status().isOk());
+
+        assertThat(workspaceWikiVersion()).isEqualTo(1);
+    }
+
+    /** ai 저장은 끝났는데 document 기록이 빠진 뒤 다른 결과가 반영돼 revision이 올라간 경우의 재시도. */
+    @Test
+    void aiAlreadyHoldsEdit_recordsAfterCurrentRevisionEvenIfBaseIsStale() throws Exception {
+        String operationId = operationId("w1");
+        aiPage("s3://bucket/wiki/" + workspaceId + "/pages/" + pageId + "/ops/" + operationId + ".md", "# 고침");
+        insertVersion(3, "# 캐시\n근거\n다른 작업");
+
+        save("# 고침", 2, "w1").andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(4))
+                .andExpect(jsonPath("$.markdown").value("# 고침"));
+
+        verify(wikiStateRequester, times(1)).manualEdit(workspaceId, userId, pageId, operationId, "# 고침");
+        assertThat(jdbc.queryForMap("SELECT * FROM wiki_page_contributions WHERE page_id = ? AND ingest_operation_id = ?",
+                pageId, operationId)).containsEntry("sequence_revision", 4L).containsEntry("active", true);
+        assertThat(jdbc.queryForMap("SELECT * FROM wiki_page_versions WHERE page_id = ? AND revision = 4", pageId))
+                .containsEntry("operation_id", operationId);
+        assertThat(workspaceWikiVersion()).isEqualTo(1);
+    }
+
+    @Test
+    void aiAlreadyHoldsEdit_withDifferentMarkdown_returnsIdempotencyConflict() throws Exception {
+        String operationId = operationId("w1");
+        aiPage("s3://bucket/wiki/" + workspaceId + "/pages/" + pageId + "/ops/" + operationId + ".md", "# 고침");
+
+        save("# 다른 본문", 2, "w1").andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_CONFLICT"));
+
+        verify(wikiStateRequester, never()).manualEdit(any(), any(), any(), any(), any());
+        assertThat(maxRevision()).isEqualTo(2);
+    }
+
+    /** ai에서는 끝났지만 document에 아직 반영되지 않은 결과가 있으면 지금 저장하면 revision 순서가 뒤집힌다. */
+    @Test
+    void unappliedAiResult_returns409AndDoesNotCallAi() throws Exception {
+        aiPage("s3://bucket/wiki/" + workspaceId + "/pages/" + pageId + "/ops/op_pending.md", "# 캐시\n근거\nAI가 더 쓴 근거");
+
+        save("# 고침", 2, "w1").andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("WIKI_PAGE_VERSION_CONFLICT"))
+                .andExpect(jsonPath("$.error.current_revision").value(2));
+
+        verify(wikiStateRequester, never()).manualEdit(any(), any(), any(), any(), any());
+        assertThat(maxRevision()).isEqualTo(2);
+    }
+
+    /** 버전 이력이 없는 페이지는 비교 기준이 없으므로 ai 본문과 무관하게 저장한다. */
+    @Test
+    void pageWithoutHistory_savesAsRevisionOne() throws Exception {
+        jdbc.update("DELETE FROM wiki_page_versions WHERE page_id = ?", pageId);
+        aiPage("s3://bucket/wiki/" + workspaceId + "/sources/doc.md", "# 캐시");
+
+        save("# 고침", 0, "w1").andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(1));
     }
 
     @Test
@@ -184,6 +246,31 @@ class WikiPageEditIntegrationTest {
                 .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(userId, userId + "@example.com"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));
+    }
+
+    private void aiPage(String markdownUri, String markdown) {
+        when(wikiStateRequester.page(workspaceId, pageId)).thenReturn(Optional.of(new WikiPageDetailResponse(
+                pageId, "concept", "캐시", "cache", null, markdownUri, markdown, "active", null, null, null,
+                List.of(), List.of())));
+    }
+
+    private void insertVersion(long revision, String markdown) {
+        jdbc.update("""
+                INSERT INTO wiki_page_versions(page_id, revision, contribution_count, markdown, markdown_key,
+                    content_hash, created_at)
+                VALUES (?, ?, 1, ?, ?, ?, now())
+                """, pageId, revision, markdown, "k" + revision, "h" + revision);
+    }
+
+    /** 서비스와 같은 규칙으로 write ID에서 작업 ID를 정한다. */
+    private String operationId(String writeId) {
+        String key = workspaceId + "\n" + pageId + "\n" + writeId;
+        return "op_" + UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private long workspaceWikiVersion() {
+        return jdbc.query("SELECT version FROM wiki_workspace_versions WHERE workspace_id = ?",
+                rs -> rs.next() ? rs.getLong(1) : 0L, workspaceId);
     }
 
     private long maxRevision() {

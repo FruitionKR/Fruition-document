@@ -57,6 +57,7 @@ lint·복구는 Kafka `ai.maintenance.command`로 전달한다.
 | 편입(`ingest`, 채팅 Wiki 포함)·후속 품질 평가(`post_ingest`)·lint(`dry_run` 제외)·복구(`restore_ingest`·`restore_lint`) 결과 | `AiTaskResultConsumer` — 결과 반영 뒤. 상태와 무관하게 올린다 |
 | 문서 삭제 정리(`document_cleanup`)·문서 이름 변경(`document_rename`) 결과 | `AiTaskResultConsumer` |
 | 위키 작업(편입·`post_ingest`·lint·복구) 취소 복구 완료 | `AiTaskCancellationService` — `cancelled`로 바꾸는 트랜잭션 |
+| 사람의 페이지 본문 수정(`PUT .../wiki/pages/{id}/content`, #75) | `WikiPageEditService` — 새 revision을 기록하는 트랜잭션. 같은 본문 no-op·재전송 replay는 올리지 않는다 |
 
 문서 이름(`source_document.filename`)은 document DB에서 채우므로 이름 변경은 ai의 `document_rename` 결과가 반영될 때 그래프에 나타난다.
 
@@ -369,9 +370,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
 
 - **revision**: `wiki_page_versions`의 최대 revision이 현재 revision이다(상세 조회의 `revision`). 버전 이력이 없는 페이지는 0이다. 페이지 단위 advisory lock(ingest·lint·복구 결과 반영과 같은 잠금)을 쥔 채 비교하고 ai를 호출하므로 그 사이에 다른 revision이 끼지 않는다. 다르면 `409 WIKI_PAGE_VERSION_CONFLICT`이며 ai를 부르지 않는다.
 - **같은 본문**: 최신 버전 본문과 같으면 ai를 부르지 않고 현재 revision을 그대로 돌려준다.
-- **멱등**: 작업 ID를 `workspace_id`·`wiki_page_id`·`revision_write_id`에서 정한다. 같은 write ID 재시도는 그 작업이 만든 버전을 돌려주고(`base_revision`·본문이 처음과 같아야 한다, 다르면 `409 IDEMPOTENCY_CONFLICT`), ai를 다시 부르지 않는다. ai 저장 뒤 응답을 못 받았거나(`503`) document 기록이 실패한 경우도 같은 write ID로 다시 보내면 ai가 같은 수동 기여를 돌려주고 document가 기록을 채운다.
-- **기록**(한 트랜잭션): `ai_operation_logs`에 `wiki_edit` 작업(`succeeded`), `wiki_page_contributions`에 수동 기여(`source_document_id` NULL, `object_key`=ai의 `contribution_key`), `wiki_page_versions`에 새 revision(`markdown_key`=ai의 `markdown_key`, `created_by`=요청자), `ai_operation_changes`에 `wiki_page` `updated` 한 건.
-- **복구와의 관계**: 수동 기여는 활성 기여라 ingest·lint 되돌리기의 `keep_contributions`에 남는다. `wiki_edit` 작업 자체를 되돌리는 것은 아직 지원하지 않는다.
+- **반영 전 결과**: 저장 전에 ai의 현재 본문(`GET ${WIKI_STATE_ENDPOINT}/pages/{id}`)을 최신 버전 본문과 비교한다. 최신 버전은 ai가 결과로 준 객체를 읽어 남긴 것이라 평상시에는 같다. 다르면 ai에서 끝난 작업 결과가 아직 document에 반영되지 않은 것이므로 `409 WIKI_PAGE_VERSION_CONFLICT`(`current_revision`은 지금 revision)로 거절한다. 지금 저장하면 그 결과가 나중에 더 높은 revision으로 기록돼 순서가 실제와 뒤집히기 때문이다. 결과가 반영되면 새 revision으로 다시 시도한다. 버전 이력이 없는 페이지는 비교하지 않는다.
+- **멱등**: 작업 ID를 `workspace_id`·`wiki_page_id`·`revision_write_id`에서 정한다. 같은 write ID 재시도는 그 작업이 만든 버전을 돌려주고(`base_revision`·본문이 처음과 같아야 한다, 다르면 `409 IDEMPOTENCY_CONFLICT`), ai를 다시 부르지 않는다.
+- **기록 누락 재시도**: ai 저장 뒤 응답을 못 받았거나(`503`) document 기록이 실패한 경우도 같은 write ID로 다시 보내면 ai가 같은 수동 기여를 돌려주고 document가 기록을 채운다. ai의 현재 본문 경로(`markdown_uri`)가 이 작업의 `ops/{operation_id}.md`이면 ai가 이미 저장한 작업이므로, 그 사이 다른 결과가 반영돼 revision이 올라갔어도 `base_revision`을 다시 묻지 않고 현재 revision 다음에 기록한다(ai의 현재 본문이 이 작업 본문이라 그 뒤에 다른 결과가 끼지 않았다). 이때 본문이 다르면 `409 IDEMPOTENCY_CONFLICT`다.
+- **기록**(한 트랜잭션): `ai_operation_logs`에 `wiki_edit` 작업(`succeeded`), `wiki_page_contributions`에 수동 기여(`source_document_id` NULL, `object_key`=ai의 `contribution_key`), `wiki_page_versions`에 새 revision(`markdown_key`=ai의 `markdown_key`, `created_by`=요청자), `ai_operation_changes`에 `wiki_page` `updated` 한 건, `wiki_workspace_versions` 버전 +1(`wiki/graph` ETag, #68).
+- **복구와의 관계**: 수동 기여는 활성 기여라 ingest·lint 되돌리기의 `keep_contributions`에 `document_id: null`로 남는다. `wiki_edit` 작업 자체를 되돌리는 것은 지원하지 않는다(`400`). 수동 작업을 지목한 복구는 지금 복구 명령 형식에 맞는 자리가 없어 정책이 정해지면 이어서 만든다.
 - 편집 잠금은 두지 않는다. 클라이언트는 revision 충돌로 판단한다.
 
 #### 3. Auth 필요 여부
@@ -460,7 +463,7 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
 - 서비스: `src/main/java/fruition/core/wiki/service/WikiPageEditService.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: saveWikiPageContent`)
 - 호출자: 없음 — 맥 데스크톱 앱이 연동할 예정
-- 하위 호출: ai-svc `POST ${WIKI_STATE_ENDPOINT}/pages/lookup`(표시 이름), `PUT ${WIKI_STATE_ENDPOINT}/pages/{pageId}/manual-edit`(`X-Internal-Token`, FruitionKR/Fruition-ai#64)
+- 하위 호출: ai-svc `GET ${WIKI_STATE_ENDPOINT}/pages/{pageId}?workspace_id`(현재 본문·표시 이름), `PUT ${WIKI_STATE_ENDPOINT}/pages/{pageId}/manual-edit`(`X-Internal-Token`, FruitionKR/Fruition-ai#64), `wiki_workspace_versions` 갱신
 - 배선 상태: **미배선 — 호출자 없음**. ai의 manual-edit API(Fruition-ai#64)가 배포돼야 동작한다
 
 [↑ 요약으로 돌아가기](#summary-put-api-workspaces-workspace-id-wiki-pages-wiki-page-id-content)
