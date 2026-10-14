@@ -442,7 +442,8 @@ public class UsageChargeService {
      *
      * <ul>
      *   <li>{@code succeeded}·{@code cancelled}·{@code failed}·{@code abandoned}가 아니거나, 입력·출력 토큰·오디오 길이·TTS 글자 수를 모두 모르면 {@code needs_review}(금액 0)다.
-     *       공급사가 usage를 주지 않은 호출을 0원으로 확정하지 않는다(#98).</li>
+     *       공급사가 usage를 주지 않은 호출을 0원으로 확정하지 않는다(#98). 성공하지 못한 호출에 토큰·오디오 길이 없이
+     *       글자 수만 있으면(요청 전에 적는 값) 역시 {@code needs_review}다.</li>
      *   <li>단가는 실제 응답 모델 → 요청 모델 순으로 찾고, 둘 다 없으면 {@code unpriced}다(#99).</li>
      *   <li>단가·환율·정책 버전은 호출 {@code started_at}에 적용 중인 행이다.</li>
      * </ul>
@@ -455,7 +456,11 @@ public class UsageChargeService {
         }
         // 멈춘 합성은 영수증에 글자 수가 먼저 들어가므로, 토큰을 받지 못했으면 글자 수만으로 확정하지 않는다.
         boolean cancelledWithoutTokens = "cancelled".equals(callStatus) && input == null && output == null;
-        if (!BILLABLE_STATUSES.contains(callStatus) || cancelledWithoutTokens
+        // 실패·중단한 합성도 같다. 글자 수는 공급사에 연결하기 전에 적히므로 토큰·오디오 길이 없이 글자 수만 남은 호출은
+        // 공급사가 받은 사용량이 아니다(단가 행이 토큰 단가뿐이라 unpriced 경보로 새지 않게 needs_review로 둔다).
+        boolean failedWithCharactersOnly = !"succeeded".equals(callStatus) && input == null && output == null
+                && audioSeconds == null && ttsCharacters != null;
+        if (!BILLABLE_STATUSES.contains(callStatus) || cancelledWithoutTokens || failedWithCharactersOnly
                 || (input == null && output == null && audioSeconds == null && ttsCharacters == null)) {
             return new Priced("needs_review", null, routing, null, null, null, 0L, 0L);
         }
