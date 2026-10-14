@@ -24,12 +24,15 @@ class UsagePricingTest {
     @Test
     void chargeAppliesFxMarginAndVatAndRoundsUp() {
         // 0.000001 USD × 1,400 KRW × 1.3 × 1.1 = 0.002002 KRW = 2.002 milli-KRW → 3
-        assertThat(UsagePricing.chargeKrwMilli(new BigDecimal("0.000001"), new BigDecimal("1400"), 3000, 1000))
+        assertThat(UsagePricing.chargeKrwMilli(new BigDecimal("0.000001"), new BigDecimal("1400"), 0, 3000, 1000))
                 .isEqualTo(3);
         // 0.001665 USD × 1,400 × 1.3 × 1.1 = 3.333330 KRW
-        assertThat(UsagePricing.chargeKrwMilli(new BigDecimal("0.001665"), new BigDecimal("1400"), 3000, 1000))
+        assertThat(UsagePricing.chargeKrwMilli(new BigDecimal("0.001665"), new BigDecimal("1400"), 0, 3000, 1000))
                 .isEqualTo(3334);
-        assertThat(UsagePricing.chargeKrwMilli(BigDecimal.ZERO, new BigDecimal("1400"), 3000, 1000)).isZero();
+        assertThat(UsagePricing.chargeKrwMilli(BigDecimal.ZERO, new BigDecimal("1400"), 0, 3000, 1000)).isZero();
+        // 환율 버퍼 2%: 3.333330 KRW × 1.02 = 3.3999966 KRW
+        assertThat(UsagePricing.chargeKrwMilli(new BigDecimal("0.001665"), new BigDecimal("1400"), 200, 3000, 1000))
+                .isEqualTo(3400);
     }
 
     /** 분당 과금 모델: 토큰 단가 열은 NOT NULL이라 0이다. */
@@ -65,6 +68,13 @@ class UsagePricingTest {
         // 그 단가가 없으면 계산할 수 없다.
         assertThat(UsagePricing.callCostUsd(PRICE, null, null, null, null, new BigDecimal("30"), null)).isNull();
         assertThat(UsagePricing.callCostUsd(PRICE, null, null, null, null, null, 10L)).isNull();
+    }
+
+    @Test
+    void priceRowUnitWithoutMatchingQuantityIsUnpricedNotZero() {
+        // 분당 단가 행인데 audio_seconds가 없으면 토큰(단가 0)으로 0원 확정하지 않고 계산 불가(null)다.
+        assertThat(UsagePricing.callCostUsd(PER_MINUTE, 1000L, null, null, 500L, null, null)).isNull();
+        assertThat(UsagePricing.callCostUsd(PER_MCHAR, 1000L, null, null, 500L, null, null)).isNull();
     }
 
     @Test

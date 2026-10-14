@@ -94,7 +94,7 @@ class UsageChargeServiceIntegrationTest {
 
     @Test
     void sameCallCollectedManyTimesIsChargedOnceAndKeepsAmountAfterPriceChange() {
-        versions("2041-01-01T00:00:00Z", "1400", 3000, 1000);
+        versions("2041-01-01T00:00:00Z", "1400", 200, 3000, 1000);
         price(model, "2041-01-01T00:00:00Z", "1");
         // 입력 1,000 = 일반 500 + 캐시 읽기 400 + 캐시 생성 100, 출력 500(reasoning 300 포함)
         String call = call("c-" + UUID.randomUUID(), "run-a", "ws-1", model, "succeeded", "2041-02-01T00:00:00Z",
@@ -110,7 +110,8 @@ class UsageChargeServiceIntegrationTest {
         assertThat(row.get("status")).isEqualTo("charged");
         // 원가는 1,665 micro-USD. 캐시·reasoning 토큰을 일반 입력·출력에 다시 더하지 않는다.
         assertThat(row.get("cost_usd_micro")).isEqualTo(1665L);
-        assertThat(row.get("charge_krw_milli")).isEqualTo(3334L);
+        // 환율 버퍼 2% 포함: 1,400 × 1.02 × 1.3 × 1.1 × 0.001665 USD = 3.3999966 KRW
+        assertThat(row.get("charge_krw_milli")).isEqualTo(3400L);
         assertThat(row.get("reasoning_tokens")).isEqualTo(300L);
         assertThat(requests).allMatch(request -> request.contains(" token=internal-test "));
 
@@ -118,7 +119,7 @@ class UsageChargeServiceIntegrationTest {
         price(model, "2041-01-15T00:00:00Z", "9");
         charges.collectRun("run-a");
         assertThat(jdbc.queryForObject("SELECT charge_krw_milli FROM usage_charges WHERE user_id = ?", Long.class, user))
-                .isEqualTo(3334L);
+                .isEqualTo(3400L);
     }
 
     @Test
@@ -353,10 +354,14 @@ class UsageChargeServiceIntegrationTest {
     }
 
     private void versions(String effectiveFrom, String krwPerUsd, int marginBp, int vatBp) {
+        versions(effectiveFrom, krwPerUsd, 0, marginBp, vatBp);
+    }
+
+    private void versions(String effectiveFrom, String krwPerUsd, int fxBufferBp, int marginBp, int vatBp) {
         jdbc.update("INSERT INTO fx_rates VALUES (?::timestamptz, ?) ON CONFLICT DO NOTHING", effectiveFrom,
                 new BigDecimal(krwPerUsd));
-        jdbc.update("INSERT INTO pricing_policies VALUES (?::timestamptz, ?, ?) ON CONFLICT DO NOTHING", effectiveFrom,
-                marginBp, vatBp);
+        jdbc.update("INSERT INTO pricing_policies VALUES (?::timestamptz, ?, ?, ?) ON CONFLICT DO NOTHING", effectiveFrom,
+                marginBp, vatBp, fxBufferBp);
     }
 
     /** 입력·출력 단가가 같고 캐시 읽기 0.1배, 캐시 생성 1.25배, 출력 2배다. */

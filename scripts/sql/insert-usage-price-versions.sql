@@ -13,7 +13,7 @@ BEGIN;
 -- USD→KRW 고정 환율.
 -- INSERT INTO fx_rates (effective_from, krw_per_usd) VALUES (:'effective_from', 0);
 
--- 마진·부가세율(basis point, 1000 = 10%).
--- INSERT INTO pricing_policies (effective_from, margin_bp, vat_bp) VALUES (:'effective_from', 0, 1000);
+-- 마진·부가세율·환율 버퍼(basis point, 1000 = 10%). 환율은 FxRateService가 매일 갱신하므로 환율 행은 보통 넣지 않는다.
+-- INSERT INTO pricing_policies (effective_from, margin_bp, vat_bp, fx_buffer_bp) VALUES (:'effective_from', 0, 1000, 200);
 
 COMMIT;
