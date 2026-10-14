@@ -28,6 +28,41 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 표의 HTTP 합계는 107이고 위의 operation 108개와 1 차이가 난다. 96개 path 전부가 문서에 있음은 확인했으므로
 누락된 API가 아니라 도메인별 집계 단위(같은 path의 여러 method를 1개로 세는지)가 섞인 결과다. 정확한 수는 OpenAPI를 본다.
 
+## AI 실패 코드와 사용자 문구
+
+ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 로그에만 남긴다. 사용자에게 나가는 문구는
+`AiErrorMessages`(`fruition/core/aitask/AiErrorMessages.java`) 한 곳에서 코드를 한국어로 바꾼다.
+코드가 목록에 없으면 기능별 기본 문구(질의 "질의 처리 중 오류가 발생했습니다.", Agent "Agent 처리 중 오류가 발생했습니다.",
+위키 편입 "위키 편입에 실패했습니다.", 위키 정리 "위키 정리에 실패했습니다.")로 바꾸고 코드마다 한 번 WARN을 남긴다. 회의록 API(`MEETING_NOTES_*`)는 이 목록을 거치지 않고 코드를 그대로 준다.
+
+| 노출 위치 | 코드 | 문구 |
+|---|---|---|
+| Agent `GET /agent/turn/{id}` | `error` | `error_message` |
+| Agent 채팅 말풍선 `error_message`, Agent·질의 SSE `error` | - | 문구만. SSE에는 `code`도 함께 간다 |
+| 질의 `GET /query/runs/{id}` | `error_code` | `error` |
+| 질의 SSE `query.failed` | `code` | `error` |
+| 문서 `error_message`(목록·상세) | 저장 안 함 | 문구 |
+| Wiki 정리 `GET .../wiki/maintenance/runs/{id}` | `error_code` | `error` |
+
+| 코드 | 문구 |
+|---|---|
+| `provider_rate_limited` | AI 서비스 요청이 많아 처리하지 못했습니다. 잠시 후 다시 시도해 주세요. |
+| `provider_unavailable` | AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요. |
+| `input_rejected` | 요청 내용을 처리할 수 없습니다. 입력을 확인해 주세요. |
+| `deadline_exceeded` | 처리 시간이 초과되어 중단했습니다. 다시 시도해 주세요. |
+| `cancelled` | 처리가 취소되었습니다. |
+| `internal_error`, `task_failed`, `agent_turn_failed` | 기능별 기본 문구 |
+| `interrupted_attempts_exhausted` | 처리가 여러 번 중단되어 완료하지 못했습니다. 다시 시도해 주세요. |
+| `rollback_failed`, `rollback_child_failed`, 그 밖의 `rollback_*`(개별 항목 우선, 없으면 접두사) | 변경을 되돌리지 못했습니다. 작업 기록을 확인해 주세요. |
+| `agent_turn_cancelled` / `agent_turn_interrupted` | Agent 작업이 취소되었습니다. / 중단되었습니다. 다시 시도해 주세요. |
+| `invalid_agent_turn_request` / `agent_not_configured` / `agent_turn_route_contract_failed` | Agent 요청이 올바르지 않습니다. / 사용할 수 없는 상태입니다. 관리자에게 문의해 주세요. / 처리 결과를 확정하지 못했습니다. 다시 시도해 주세요. |
+| `mutation_intent_required` | 어떤 변경을 원하시는지 조금 더 구체적으로 알려 주세요. (오류가 아니라 되묻는 문구) |
+| `ready_markdown_migration_unrecoverable` | 이전 편집안을 복구할 수 없어 적용하지 못했습니다. 다시 요청해 주세요. |
+| `markdown_*` | 편집안을 만들지 못했습니다. 다시 시도해 주세요. |
+| `SKILL_NOT_FOUND` / `SKILL_DISABLED` / `invalid_llm_selection` | 선택한 Skill을 찾을 수 없습니다. / 비활성화되어 있습니다. / 선택한 모델을 사용할 수 없습니다. 모델을 다시 선택해 주세요. |
+| `agent_result_*` | 결과 형식·요청 불일치·본문 누락 등 Agent 결과를 적용할 수 없는 사유별 문구 |
+| `PIPELINE_UNAVAILABLE` / `PIPELINE_TIMEOUT` / `INSUFFICIENT_CREDIT` | AI 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요. / 질의 대기 시간이 지나 취소를 요청했습니다. / 크레딧 잔액이 부족합니다. 크레딧을 충전한 뒤 다시 시도해 주세요. |
+
 ## 호출 관계(배선) 요약
 
 각 API의 상세 계약 `10. 구현 파일`에 `호출자` / `하위 호출` / `배선 상태` 세 줄을 함께 적는다.

@@ -1,6 +1,7 @@
 package fruition.core.aitask.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.aitask.AiErrorMessages;
 import fruition.core.chat.service.ChatEvidenceRecorder;
 import fruition.core.chat.service.ChatTurnRecorder;
 import org.slf4j.Logger;
@@ -298,7 +299,7 @@ public class AiTaskResultApplier {
                         payload.path("action").asText(null), agentMessageContent(payload));
                 recordAgentChatEvidence(assistantMessageId, payload);
             } else {
-                chatTurnRecorder.markFailed(assistantMessageId, describeAgentError(errorCode));
+                chatTurnRecorder.markFailed(assistantMessageId, AiErrorMessages.agent(errorCode));
             }
         } catch (RuntimeException e) {
             log.warn("[Agent 채팅 기록 실패] runId={} assistantMessageId={} errorType={}",
@@ -307,23 +308,6 @@ public class AiTaskResultApplier {
     }
 
     public record AgentApplyResult(boolean applied, String error) {}
-
-    /**
-     * 내부 오류 코드에 대응하는 사용자 문구. 코드는 판정과 로그에 쓰고, 화면에는 이 문장을 보낸다.
-     * 여기 없는 값은 pipeline이 준 사유 문장이라 그대로 내보낸다.
-     */
-    private static final Map<String, String> AGENT_ERROR_MESSAGE = Map.of(
-            "agent_turn_failed", "Agent 처리 중 오류가 발생했습니다.",
-            "agent_result_invalid_request", "Agent 결과의 요청 정보가 올바르지 않습니다.",
-            "agent_result_invalid_payload", "Agent 결과 형식이 올바르지 않습니다.",
-            "agent_result_unsupported_action", "지원하지 않는 Agent 처리 결과입니다.",
-            "agent_result_missing_canonical_markdown", "편집안 본문이 비어 있어 적용할 수 없습니다.",
-            "agent_result_request_mismatch", "요청과 결과가 달라 적용할 수 없습니다.");
-
-    /** 화면·SSE로 나갈 문구. 내부 코드가 그대로 사용자에게 보이지 않게 한다. */
-    public static String describeAgentError(String errorCode) {
-        return AGENT_ERROR_MESSAGE.getOrDefault(errorCode, errorCode);
-    }
 
     /**
      * AI가 질의로 판정한 턴은 답변과 함께 근거가 온다. 질의 경로와 같은 자리에 남겨야
@@ -511,7 +495,7 @@ public class AiTaskResultApplier {
             return new QueryProjection(runId, response, null);
         }
 
-        String error = canonical.path("error").asText("질의 처리 중 오류가 발생했습니다.");
+        String error = canonical.path("error").asText("internal_error");
         if (first) {
             queryService.failAsync(runId, context, error);
         }
@@ -576,5 +560,6 @@ public class AiTaskResultApplier {
         return value;
     }
 
+    /** error는 ai가 보낸 실패 코드다. 사용자 문구는 소비 쪽에서 AiErrorMessages로 만든다. */
     public record QueryProjection(String runId, QueryResponse response, String error) {}
 }

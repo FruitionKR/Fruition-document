@@ -596,12 +596,15 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 - HTTP `202`: Agent 실행이 대기열에 등록됨
 - Content-Type: `*/*` (`AgentTurnResponse`)
 
+- **실패 표시:** `error`는 실패 코드(예: `provider_unavailable`)이며 사용자에게 그대로 보여주면 안 된다. 클라이언트는 `error_message`(한국어 문구)를 표시해야 한다. 코드와 문구 목록은 [API 목차](README.md#ai-실패-코드와-사용자-문구)를 따른다.
+
 ```json
 {
   "apply_operation_id": "string",
   "baseVersion": 3,
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
+  "error_message": "string",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -658,6 +661,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
   "baseVersion": 3,
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
+  "error_message": "string",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -721,12 +725,15 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 - HTTP `200`: 결과 조회 성공
 - Content-Type: `*/*` (`AgentTurnResponse`)
 
+- **실패 표시:** `error`는 실패 코드(예: `provider_unavailable`)이며 사용자에게 그대로 보여주면 안 된다. 클라이언트는 `error_message`(한국어 문구)를 표시해야 한다. 코드와 문구 목록은 [API 목차](README.md#ai-실패-코드와-사용자-문구)를 따른다.
+
 ```json
 {
   "apply_operation_id": "string",
   "baseVersion": 3,
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
+  "error_message": "string",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -780,6 +787,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
   "baseVersion": 3,
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
+  "error_message": "string",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },

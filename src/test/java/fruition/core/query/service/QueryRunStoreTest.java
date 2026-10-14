@@ -129,11 +129,12 @@ class QueryRunStoreTest {
     void markFailed_updatesStatusAndErrorMessage() {
         QueryRun run = store.create("ws_abc123", "session_abc123", "질문");
 
-        assertThat(store.markFailed(run.requestId(), "파이프라인 오류")).isTrue();
+        assertThat(store.markFailed(run.requestId(), "provider_unavailable")).isTrue();
 
         QueryRun failed = store.find(run.requestId()).orElseThrow();
         assertThat(failed.status()).isEqualTo(QueryRunStatus.FAILED);
-        assertThat(failed.errorMessage()).isEqualTo("파이프라인 오류");
+        assertThat(failed.errorCode()).isEqualTo("provider_unavailable");
+        assertThat(failed.errorMessage()).contains("AI 서비스").doesNotContain("provider_unavailable");
     }
 
     @Test

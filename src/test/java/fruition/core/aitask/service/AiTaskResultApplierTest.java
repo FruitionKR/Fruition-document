@@ -422,6 +422,24 @@ class AiTaskResultApplierTest {
     }
 
     @Test
+    void failedAgentChatMessageShowsKoreanMessageNotCode() throws Exception {
+        JsonNode event = objectMapper.readTree("""
+                {"event_id":"agent:run-4:failed","run_id":"run-4","kind":"agent",
+                 "status":"failed","error":"provider_unavailable",
+                 "request":{"message_context":{"assistant_message_id":"chat_assistant_4"}}}
+                """);
+        when(jdbcTemplate.update(any(String.class), eq("agent:run-4:failed"), eq("run-4"), any()))
+                .thenReturn(1);
+        when(jdbcTemplate.update(org.mockito.ArgumentMatchers.contains("UPDATE agent_apply_projections"),
+                eq("provider_unavailable"), eq("run-4"))).thenReturn(1);
+
+        applier.applyAgent(event);
+
+        verify(chatTurnRecorder).markFailed("chat_assistant_4",
+                "AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    }
+
+    @Test
     void extractsCanonicalMarkdownForSupportedCreateAndEditResults() throws Exception {
         JsonNode create = objectMapper.readTree("""
                 {"request":{},"payload":{"action":"markdown_create",

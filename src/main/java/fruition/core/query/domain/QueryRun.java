@@ -16,13 +16,14 @@ public record QueryRun(
         String question,
         QueryResponse result,
         String errorMessage,
+        String errorCode,
         Instant createdAt,
         Instant completedAt) {
 
     public static QueryRun pending(String requestId, String workspaceId, String sessionId, String provider,
                                    String model, boolean webSearchEnabled, String question, Instant createdAt) {
         return new QueryRun(requestId, workspaceId, sessionId, provider, model, webSearchEnabled,
-                QueryRunStatus.PENDING, question, null, null, createdAt, null);
+                QueryRunStatus.PENDING, question, null, null, null, createdAt, null);
     }
 
     public static QueryRun pending(String requestId, String workspaceId, String sessionId,
@@ -32,22 +33,22 @@ public record QueryRun(
 
     public QueryRun running() {
         return new QueryRun(requestId, workspaceId, sessionId, provider, model, webSearchEnabled,
-                QueryRunStatus.RUNNING, question, result, errorMessage, createdAt, completedAt);
+                QueryRunStatus.RUNNING, question, result, errorMessage, errorCode, createdAt, completedAt);
     }
 
     public QueryRun completed(QueryResponse result, Instant completedAt) {
         return new QueryRun(requestId, workspaceId, sessionId, provider, model, webSearchEnabled,
-                QueryRunStatus.COMPLETED, question, result, null, createdAt, completedAt);
+                QueryRunStatus.COMPLETED, question, result, null, null, createdAt, completedAt);
     }
 
     public QueryRun cancelled(Instant completedAt) {
         return new QueryRun(requestId, workspaceId, sessionId, provider, model, webSearchEnabled,
-                QueryRunStatus.CANCELLED, question, null, null, createdAt, completedAt);
+                QueryRunStatus.CANCELLED, question, null, null, null, createdAt, completedAt);
     }
 
-    public QueryRun failed(String errorMessage, Instant completedAt) {
+    public QueryRun failed(String errorCode, String errorMessage, Instant completedAt) {
         return new QueryRun(requestId, workspaceId, sessionId, provider, model, webSearchEnabled,
-                QueryRunStatus.FAILED, question, null, errorMessage, createdAt, completedAt);
+                QueryRunStatus.FAILED, question, null, errorMessage, errorCode, createdAt, completedAt);
     }
 
     // 파생 값이라 Redis 저장 JSON에 필드로 직렬화되지 않게 한다.

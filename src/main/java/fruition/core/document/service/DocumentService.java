@@ -1,5 +1,6 @@
 package fruition.core.document.service;
 
+import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.authz.WorkspaceAiModelClient;
@@ -1068,7 +1069,7 @@ public class DocumentService {
                 documentRepository.findByIdInActiveWorkspace(documentId).ifPresent(doc -> {
                     // 일부 분할 문서가 이미 AI 큐에 등록된 뒤의 실패는 진행 중인 AI 상태를 덮어쓰지 않는다.
                     if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
-                        doc.markProcessingFailed("PDF 변환에 실패했습니다: " + e.getMessage(), now);
+                        doc.markProcessingFailed("PDF 변환에 실패했습니다.", now);
                     }
                 });
                 return null;
@@ -1390,7 +1391,7 @@ public class DocumentService {
         if ("succeeded".equals(status)) {
             document.updateStatus(DocumentStatus.completed, null, now, null);
         } else if ("failed".equals(status)) {
-            document.markProcessingFailed(error, now);
+            document.markProcessingFailed(AiErrorMessages.ingest(error), now);
         }
     }
 

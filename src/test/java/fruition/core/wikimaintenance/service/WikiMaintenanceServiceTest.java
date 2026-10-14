@@ -101,6 +101,18 @@ class WikiMaintenanceServiceTest {
     }
 
     @Test
+    void run_mapsFailureCodeToKoreanMessage() {
+        when(runStatusRequester.find("run-1")).thenReturn(Optional.of(
+                new PipelineRunStatusRequester.PipelineRunStatus(
+                        "run-1", null, "ws_1", "user_1", "lint", "failed", "provider_unavailable", null)));
+
+        var body = service.run("ws_1", "user_1", "run-1");
+
+        assertThat(body.path("error_code").asText()).isEqualTo("provider_unavailable");
+        assertThat(body.path("error").asText()).doesNotContain("provider_unavailable").contains("AI 서비스");
+    }
+
+    @Test
     void run_preservesPipelineNotFoundAs404() {
         when(runStatusRequester.find("missing-run")).thenReturn(Optional.empty());
 
