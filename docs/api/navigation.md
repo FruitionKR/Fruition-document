@@ -463,12 +463,14 @@ curl -X DELETE "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/fol
 {
   "items": [
     {
+      "created_at": "2026-10-01T09:12:00Z",
       "current_version": 1,
       "has_children": false,
       "id": "string",
       "name": "회의록",
       "sort_order": 1024,
-      "type": "document"
+      "type": "document",
+      "updated_at": "2026-10-03T02:11:09Z"
     }
   ]
 }
@@ -510,12 +512,14 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folder
 {
   "items": [
     {
+      "created_at": "2026-10-01T09:12:00Z",
       "current_version": 1,
       "has_children": false,
       "id": "string",
       "name": "회의록",
       "sort_order": 1024,
-      "type": "document"
+      "type": "document",
+      "updated_at": "2026-10-03T02:11:09Z"
     }
   ]
 }
@@ -1011,12 +1015,14 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 {
   "items": [
     {
+      "created_at": "2026-10-01T09:12:00Z",
       "current_version": 1,
       "has_children": false,
       "id": "string",
       "name": "회의록",
       "sort_order": 1024,
-      "type": "document"
+      "type": "document",
+      "updated_at": "2026-10-03T02:11:09Z"
     }
   ]
 }
@@ -1058,12 +1064,14 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/naviga
 {
   "items": [
     {
+      "created_at": "2026-10-01T09:12:00Z",
       "current_version": 1,
       "has_children": false,
       "id": "string",
       "name": "회의록",
       "sort_order": 1024,
-      "type": "document"
+      "type": "document",
+      "updated_at": "2026-10-03T02:11:09Z"
     }
   ]
 }

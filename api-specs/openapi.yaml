@@ -7293,6 +7293,11 @@ components:
       type: object
       description: 폴더 바로 아래 항목. 트리와 달리 children을 담지 않는다.
       properties:
+        created_at:
+          type: string
+          format: date-time
+          description: 문서가 처음 만들어지거나 업로드된 시각(ISO-8601 UTC). 폴더에는 없다.
+          example: 2026-10-01T09:12:00Z
         current_version:
           type: integer
           format: int64
@@ -7321,6 +7326,11 @@ components:
           - folder
           - document
           example: document
+        updated_at:
+          type: string
+          format: date-time
+          description: 문서를 마지막으로 바꾼 시각(ISO-8601 UTC). 폴더에는 없다.
+          example: 2026-10-03T02:11:09Z
     FolderChildrenResponse:
       type: object
       properties:

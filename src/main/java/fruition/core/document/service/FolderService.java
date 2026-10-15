@@ -247,7 +247,8 @@ public class FolderService {
         }
         for (Document child : documentRepository.findChildDocuments(workspaceId, folderId)) {
             items.add(FolderChildrenResponse.Item.document(
-                    child.getId(), child.getDisplayName(), child.getSortOrder(), child.getCurrentVersion()));
+                    child.getId(), child.getDisplayName(), child.getSortOrder(), child.getCurrentVersion(),
+                    child.getUploadedAt(), child.getUpdatedAt()));
         }
         items.sort(Comparator.comparingLong(FolderChildrenResponse.Item::sortOrder)
                 .thenComparing(FolderChildrenResponse.Item::id));
