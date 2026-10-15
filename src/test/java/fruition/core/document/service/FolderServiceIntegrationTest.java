@@ -138,6 +138,10 @@ class FolderServiceIntegrationTest {
         assertThat(items.get(0).id()).isEqualTo(childFolder.id().toString());
         assertThat(items.get(1).type()).isEqualTo("document");
         assertThat(items.get(1).id()).isEqualTo("doc_mid");
+        assertThat(items.get(0).createdAt()).isNull();
+        assertThat(items.get(0).updatedAt()).isNull();
+        assertThat(items.get(1).createdAt()).isNotNull();
+        assertThat(items.get(1).updatedAt()).isNotNull();
     }
 
     @Test

@@ -1,8 +1,10 @@
 package fruition.core.document.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 
+import java.time.Instant;
 import java.util.List;
 
 public record FolderChildrenResponse(
@@ -31,7 +33,20 @@ public record FolderChildrenResponse(
 
             @JsonProperty("has_children")
             @Schema(description = "하위 항목이 있는지 여부. 문서는 항상 false다.", example = "false")
-            boolean hasChildren
+            boolean hasChildren,
+
+            // Agent 플래너가 "만든 날짜별로 정리" 같은 요청을 계획할 수 있게 문서에만 내려 준다(#137).
+            @JsonProperty("created_at")
+            @JsonInclude(JsonInclude.Include.NON_NULL)
+            @Schema(description = "문서가 처음 만들어지거나 업로드된 시각(ISO-8601 UTC). 폴더에는 없다.",
+                    example = "2026-10-01T09:12:00Z", nullable = true)
+            Instant createdAt,
+
+            @JsonProperty("updated_at")
+            @JsonInclude(JsonInclude.Include.NON_NULL)
+            @Schema(description = "문서를 마지막으로 바꾼 시각(ISO-8601 UTC). 폴더에는 없다.",
+                    example = "2026-10-03T02:11:09Z", nullable = true)
+            Instant updatedAt
     ) {
         public static Item folder(
                 String id,
@@ -40,11 +55,18 @@ public record FolderChildrenResponse(
                 long currentVersion,
                 boolean hasChildren
         ) {
-            return new Item("folder", id, name, sortOrder, currentVersion, hasChildren);
+            return new Item("folder", id, name, sortOrder, currentVersion, hasChildren, null, null);
         }
 
-        public static Item document(String id, String name, long sortOrder, long currentVersion) {
-            return new Item("document", id, name, sortOrder, currentVersion, false);
+        public static Item document(
+                String id,
+                String name,
+                long sortOrder,
+                long currentVersion,
+                Instant createdAt,
+                Instant updatedAt
+        ) {
+            return new Item("document", id, name, sortOrder, currentVersion, false, createdAt, updatedAt);
         }
     }
 }
