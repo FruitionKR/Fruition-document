@@ -43,8 +43,9 @@ public class DocumentExportService {
     private static final int MAX_ASSETS = 100;
     private static final long MAX_ASSET_BYTES = 100L * 1024 * 1024;
     private static final List<String> AI_SOURCES = List.of("agent", "meeting_notes");
-    private static final Pattern FRONT_MATTER =
-            Pattern.compile("\\A---\\r?\\n.*?\\r?\\n---[ \\t]*(?:\\r?\\n|\\z)", Pattern.DOTALL);
+    // 첫 줄이 `key:`여야 front matter로 본다. `---\n개요\n---`(수평선 + 제목)를 머리말로 오인하지 않기 위해서다.
+    private static final Pattern FRONT_MATTER = Pattern.compile(
+            "\\A---\\r?\\n[A-Za-z0-9_-]+[ \\t]*:.*?\\r?\\n---[ \\t]*(?:\\r?\\n|\\z)", Pattern.DOTALL);
     private static final ZoneId NOTICE_ZONE = ZoneId.of("Asia/Seoul");
     /** 법률 문구는 운영 결정 뒤 확정한다(#135). 그때 APP_EXPORT_AI_NOTICE_MARKDOWN으로 바꾼다. */
     static final String DEFAULT_AI_NOTICE =

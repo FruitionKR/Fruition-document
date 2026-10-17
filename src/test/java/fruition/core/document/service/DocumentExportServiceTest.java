@@ -223,6 +223,21 @@ class DocumentExportServiceTest {
     }
 
     @Test
+    void exportMarkdown_putsNoticeFirstWhenLeadingDashesAreNotFrontMatter() throws Exception {
+        Document document = editableDocument("doc_ai_rule", "수평선 문서");
+        document.markAiOrigin(Document.AGENT_ORIGIN);
+        // 수평선과 setext 제목이다. 첫 줄이 `key:`가 아니라 front matter가 아니다.
+        stubDocument(document, new DocumentEditState(document.getId(), "---\n개요\n---\n본문", "hash", 1));
+        when(referenceRepository.findAllByIdDocumentId(document.getId())).thenReturn(List.of());
+
+        DocumentExportResult result = exportService.exportMarkdown(WORKSPACE_ID, USER_ID, document.getId());
+
+        assertThat(new String(readAll(result.content()), StandardCharsets.UTF_8)).isEqualTo(
+                "> 이 문서에는 생성형 AI가 만든 내용이 포함되어 있습니다. (Fruition, 2026-10-16 내보냄)"
+                        + "\n\n---\n개요\n---\n본문");
+    }
+
+    @Test
     void exportMarkdown_aiEditedDocumentZipPutsNoticeInMarkdownEntry() throws Exception {
         Document document = editableDocument("doc_ai_zip", "편집 문서");
         UUID assetId = UUID.randomUUID();
