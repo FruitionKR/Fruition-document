@@ -8944,11 +8944,10 @@ components:
       properties:
         allowed_tools:
           type: array
-          description: 사용자가 승인한 초안의 Tool 허용 목록
+          description: "사용자가 승인한 초안의 Tool 허용 목록. 생략하거나 []이면 AI가 capabilities로 계산한다."
           items:
             type: string
-          maxItems: 2147483647
-          minItems: 1
+            minLength: 1
         capabilities:
           type: array
           description: 사용자가 승인한 초안의 capability
@@ -8982,7 +8981,6 @@ components:
           minLength: 1
           pattern: personal|team
       required:
-      - allowed_tools
       - capabilities
       - description
       - instructions_markdown
