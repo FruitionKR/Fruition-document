@@ -8916,6 +8916,13 @@ components:
           type: string
         question:
           type: string
+        result_mode:
+          type: string
+          description: 결과 방식
+          enum:
+          - create
+          - edit
+          - auto
         scope_type:
           type: string
         skill_id:
@@ -8924,6 +8931,14 @@ components:
           type: string
         status:
           type: string
+        targets:
+          type: array
+          description: 실행 대상
+          items:
+            type: string
+            enum:
+            - current_document
+            - selection
         version_id:
           type: string
       required:
@@ -8971,6 +8986,15 @@ components:
           example: meeting-notes
           minLength: 1
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        result_mode:
+          type: string
+          description: "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 null로 저장된다."
+          enum:
+          - create
+          - edit
+          - auto
+          example: auto
+          pattern: create|edit|auto
         scope_type:
           type: string
           description: Skill 공개 범위
@@ -8980,6 +9004,15 @@ components:
           example: personal
           minLength: 1
           pattern: personal|team
+        targets:
+          type: array
+          description: "실행 대상. 문서 Skill에서만 의미가 있다. 생략하면 AI 기본값([\"current_document\"])을 쓴다."
+          items:
+            type: string
+            minLength: 1
+            pattern: current_document|selection
+          maxItems: 2
+          minItems: 0
       required:
       - capabilities
       - description
@@ -9074,6 +9107,24 @@ components:
           example: meeting-notes
           minLength: 1
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        result_mode:
+          type: string
+          description: "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 기존 값을 유지한다."
+          enum:
+          - create
+          - edit
+          - auto
+          example: auto
+          pattern: create|edit|auto
+        targets:
+          type: array
+          description: 실행 대상. 문서 Skill에서만 의미가 있다. 생략하면 기존 값을 유지한다.
+          items:
+            type: string
+            minLength: 1
+            pattern: current_document|selection
+          maxItems: 2
+          minItems: 0
       required:
       - description
       - instructions_markdown
@@ -9109,10 +9160,25 @@ components:
           type: string
           description: Skill 이름
           example: meeting-notes
+        result_mode:
+          type: string
+          description: 결과 방식. 문서 Skill이 아니거나 지정하지 않았으면 null이다.
+          enum:
+          - create
+          - edit
+          - auto
         status:
           type: string
           description: 버전 상태
           example: published
+        targets:
+          type: array
+          description: "실행 대상. 문서 Skill이 아니면 []이다. AI가 저장하기 전 버전에는 없을 수 있다."
+          items:
+            type: string
+            enum:
+            - current_document
+            - selection
         version:
           type: integer
           format: int32
