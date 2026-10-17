@@ -109,6 +109,13 @@ public class Document {
     @Column(name = "origin")
     private String origin;
 
+    /**
+     * 문서를 처음 만든 AI 경로({@link #AGENT_ORIGIN}·{@link #MEETING_NOTES_ORIGIN}). 복제본은 원본의 AI 출처를
+     * 물려받는다(chat_export 포함). chat_export 원본은 origin으로 판단하므로 비워 둔다.
+     */
+    @Column(name = "ai_origin", length = 32)
+    private String aiOrigin;
+
     /** 채팅 export의 선택 모드("full"/"partial"). 파이프라인에 전달한다. 일반 업로드는 null. */
     @Column(name = "selection_mode")
     private String selectionMode;
@@ -144,6 +151,8 @@ public class Document {
     private UUID deleteOperationId;
 
     public static final String SKILL_REFERENCE_ORIGIN = "skill_reference";
+    public static final String AGENT_ORIGIN = "agent";
+    public static final String MEETING_NOTES_ORIGIN = "meeting_notes";
 
     protected Document() {}
 
@@ -331,6 +340,14 @@ public class Document {
 
     /** 스킬 참고 문서는 문서 트리·목록·위키 편입에서 빠지고 스킬 피커에서만 보인다. */
     public boolean isSkillReference() { return SKILL_REFERENCE_ORIGIN.equals(origin); }
+
+    /** 처음 만든 경로가 AI면 그 종류를, 사람이 만들거나 올린 문서면 null을 돌려준다. */
+    public String getAiOrigin() {
+        if (aiOrigin != null) return aiOrigin;
+        return "chat_export".equals(origin) ? "chat_export" : null;
+    }
+
+    public void markAiOrigin(String aiOrigin) { this.aiOrigin = aiOrigin; }
 
     public void assignSelectionMode(String selectionMode) { this.selectionMode = selectionMode; }
 

@@ -5,13 +5,17 @@ import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.domain.DocumentProcessingState;
 import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.domain.DocumentStatus;
+import fruition.core.document.dto.DocumentAiChange;
 import fruition.core.document.dto.DocumentListResponse;
+import fruition.core.document.repository.DocumentContentVersionRepository;
 import fruition.core.document.repository.DocumentEditStateRepository;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -29,27 +33,45 @@ public class DocumentItemAssembler {
 
     private final DocumentEditStateRepository editStateRepository;
     private final DocumentAccessPolicy documentAccessPolicy;
+    private final DocumentContentVersionRepository contentVersionRepository;
 
     public DocumentItemAssembler(DocumentEditStateRepository editStateRepository,
-                                 DocumentAccessPolicy documentAccessPolicy) {
+                                 DocumentAccessPolicy documentAccessPolicy,
+                                 DocumentContentVersionRepository contentVersionRepository) {
         this.editStateRepository = editStateRepository;
         this.documentAccessPolicy = documentAccessPolicy;
+        this.contentVersionRepository = contentVersionRepository;
     }
 
-    /** 편집 상태와 권한 설정은 한 번에 읽는다. 문서마다 조회하면 N+1이 된다. */
+    /** 편집 상태·권한 설정·AI 변경은 한 번에 읽는다. 문서마다 조회하면 N+1이 된다. */
     public List<DocumentListResponse.DocumentItem> assemble(String workspaceId, String userId, List<Document> documents) {
         DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
-        Set<String> editableDocumentIds = editStateRepository.findAllById(
-                        documents.stream().map(Document::getId).toList()).stream()
+        List<String> documentIds = documents.stream().map(Document::getId).toList();
+        Set<String> editableDocumentIds = editStateRepository.findAllById(documentIds).stream()
                 .map(DocumentEditState::getDocumentId)
                 .collect(Collectors.toSet());
+        Map<String, DocumentAiChange> aiChanges = lastAiChanges(documentIds);
         return documents.stream()
-                .map(document -> toItem(document, editableDocumentIds.contains(document.getId()), viewer))
+                .map(document -> toItem(document, editableDocumentIds.contains(document.getId()), viewer,
+                        aiChanges.get(document.getId())))
                 .toList();
     }
 
+    /** 문서별 가장 최근 AI 적용 버전. AI 변경이 없는 문서는 결과에 없다. */
+    public Map<String, DocumentAiChange> lastAiChanges(Collection<String> documentIds) {
+        if (documentIds.isEmpty()) {
+            return Map.of();
+        }
+        return contentVersionRepository.findLatestAiChanges(documentIds).stream()
+                .collect(Collectors.toMap(
+                        DocumentContentVersionRepository.AiChange::getDocumentId,
+                        change -> new DocumentAiChange(change.getVersion(), change.getSource(),
+                                change.getOperationId(), change.getCreatedAt())));
+    }
+
     private DocumentListResponse.DocumentItem toItem(Document doc, boolean hasEditState,
-                                                     DocumentAccessPolicy.Viewer viewer) {
+                                                     DocumentAccessPolicy.Viewer viewer,
+                                                     DocumentAiChange lastAiChange) {
         return new DocumentListResponse.DocumentItem(
                 doc.getId(),
                 doc.getFilename(),
@@ -80,7 +102,9 @@ public class DocumentItemAssembler {
                 viewer.canEdit(doc),
                 viewer.canDelete(doc),
                 viewer.override(doc),
-                doc.getUpdatedBy());
+                doc.getUpdatedBy(),
+                doc.getAiOrigin(),
+                lastAiChange);
     }
 
     /** 편집 문서는 현재 본문 해시, 원본은 파일 전체 해시. 원본 해시가 계산 전이거나 계산할 수 없으면 null이다. */

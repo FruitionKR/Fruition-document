@@ -158,8 +158,16 @@ class MeetingNotesIntegrationTest {
 
         assertThat(retried).isEqualTo(first);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM documents WHERE workspace_id = ?", Integer.class, workspaceId))
-                .isEqualTo(1);
+                .isEqualTo(1);  // 복제본은 아래에서 만든다
         assertThat(markdownOf(first)).startsWith("# 출시 회의\n\n## 요약").doesNotContain("s1_a");
+        JsonNode created = listedDocument(first);
+        assertThat(created.path("ai_origin").asText()).isEqualTo("meeting_notes");
+        assertThat(created.path("last_ai_change").isNull()).isTrue();
+        // 복제본도 AI 결과물이므로 원본의 AI 출처를 잇는다.
+        String copy = json(mockMvc.perform(post("/api/workspaces/" + workspaceId + "/documents/" + first + "/duplicate")
+                .header("Authorization", bearer()).header("Idempotency-Key", UUID.randomUUID().toString()))
+                .andExpect(status().is2xxSuccessful())).path("id").asText();
+        assertThat(listedDocument(copy).path("ai_origin").asText()).isEqualTo("meeting_notes");
         apply(meetingId, 1, "a2", "{\"mode\":\"create\"}").andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("MEETING_NOTES_ALREADY_APPLIED"));
         // 같은 키로 내용이 다른 요청은 처음 기록한 요청으로 다시 저장하지 않는다.
@@ -207,6 +215,17 @@ class MeetingNotesIntegrationTest {
         String saved = markdownOf(documentId);
         assertThat(saved).startsWith("# 주간 회의\n\n- 다른 곳에서 수정\n\n# 출시 회의\n");
         assertThat(saved.split("# 출시 회의", -1)).hasSize(2);  // 두 번 붙지 않았다
+
+        // 사용자가 만든 문서라 ai_origin은 없고, 회의록을 덧붙인 버전이 AI 변경으로 보인다.
+        JsonNode listed = listedDocument(documentId);
+        assertThat(listed.path("ai_origin").isNull()).isTrue();
+        assertThat(listed.path("last_ai_change").path("source").asText()).isEqualTo("meeting_notes");
+        assertThat(listed.path("last_ai_change").path("version").asLong()).isEqualTo(fresh + 1);
+        assertThat(listed.path("last_ai_change").path("operation_id").isNull()).isTrue();
+        JsonNode versions = json(mockMvc.perform(get("/api/workspaces/" + workspaceId + "/documents/" + documentId + "/versions")
+                .header("Authorization", bearer())).andExpect(status().isOk())).path("versions");
+        assertThat(versions.get(0).path("source").asText()).isEqualTo("meeting_notes");
+        assertThat(versions.get(1).path("source").asText()).isEqualTo("user");
     }
 
     @Test
@@ -575,6 +594,16 @@ class MeetingNotesIntegrationTest {
                         .part(new org.springframework.mock.web.MockPart("revision_write_id", UUID.randomUUID().toString().getBytes()))
                         .header("Authorization", bearer()))
                 .andExpect(status().isOk());
+    }
+
+    private JsonNode listedDocument(String documentId) throws Exception {
+        for (JsonNode document : json(mockMvc.perform(get("/api/workspaces/" + workspaceId + "/documents")
+                .header("Authorization", bearer())).andExpect(status().isOk())).path("documents")) {
+            if (documentId.equals(document.path("id").asText())) {
+                return document;
+            }
+        }
+        throw new AssertionError("문서 목록에 없다: " + documentId);
     }
 
     private String markdownOf(String documentId) {

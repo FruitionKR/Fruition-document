@@ -148,7 +148,7 @@ class DocumentServiceBlocksTest {
                 workspaceAccessGuard, minioClient, storageProps,
                 ingestCommandOutbox, pipelineWikiStateRequester,
                 convertQueueRepository, convertBatchStore, convertCommandOutbox, pipelineCancellation, transactionTemplate,
-                editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository, accessPolicy),
+                editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository, accessPolicy, contentVersionRepository),
                 postgresDocumentEditStore,
                 contentVersionRepository, markdownDiffService,
                 editLockService, idempotencyService,
@@ -468,6 +468,8 @@ class DocumentServiceBlocksTest {
             @Override public String getCreatedBy() { return USER_ID; }
             @Override public Instant getCreatedAt() { return createdAt; }
             @Override public Long getRestoredFromVersion() { return restoredFromVersion; }
+            @Override public String getSource() { return restoredFromVersion != null ? "restore" : null; }
+            @Override public String getOperationId() { return null; }
         };
     }
 

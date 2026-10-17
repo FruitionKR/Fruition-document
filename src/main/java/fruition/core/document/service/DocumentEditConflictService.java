@@ -154,7 +154,7 @@ public class DocumentEditConflictService {
             // 충돌마다 한 번만 해결되므로 충돌 ID로 write ID를 고정한다.
             resolvedRevision = documentService.saveContentInCurrentTransaction(workspaceId, userId,
                     conflict.documentId(), markdown, request.baseRevision(), "conflict-resolve:" + conflictId,
-                    null).currentVersion();
+                    "user").currentVersion();
         }
 
         jdbc.update("""

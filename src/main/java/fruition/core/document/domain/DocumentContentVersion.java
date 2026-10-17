@@ -34,6 +34,10 @@ public class DocumentContentVersion {
     @Column(name = "restored_from_version")
     private Long restoredFromVersion;
 
+    /** 이 버전을 저장한 경로(user | agent | meeting_notes | restore). 기록 이전 버전이면 NULL이다. */
+    @Column(length = 32)
+    private String source;
+
     protected DocumentContentVersion() {}
 
     public DocumentContentVersion(String documentId, long version, String markdown,
@@ -53,4 +57,5 @@ public class DocumentContentVersion {
     public Instant getCreatedAt() { return createdAt; }
     public String getOperationId() { return operationId; }
     public Long getRestoredFromVersion() { return restoredFromVersion; }
+    public String getSource() { return source; }
 }

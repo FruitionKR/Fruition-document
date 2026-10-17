@@ -317,7 +317,7 @@ class AgentToolServiceTest {
                 "artifact-1", "sha256:abc", "create_document", null, null, null, "# 문서\n");
         var expected = org.mockito.Mockito.mock(fruition.core.document.dto.DocumentUploadResponse.class);
         when(artifactClient.resolve(request, "create_document", arguments)).thenReturn(artifact);
-        when(documentService.createMarkdown(eq("workspace-1"), eq("user-1"), eq("idem-1"), any()))
+        when(documentService.createMarkdown(eq("workspace-1"), eq("user-1"), eq("idem-1"), any(), eq(Document.AGENT_ORIGIN)))
                 .thenReturn(expected);
 
         assertThat(service.execute("create_document", request)).isSameAs(expected);
@@ -326,7 +326,7 @@ class AgentToolServiceTest {
         order.verify(authorizationClient).authorizeExecute("create_document", request);
         order.verify(workspaceAccessGuard).requireMember("workspace-1", "user-1");
         order.verify(artifactClient).resolve(request, "create_document", arguments);
-        order.verify(documentService).createMarkdown(eq("workspace-1"), eq("user-1"), eq("idem-1"), any());
+        order.verify(documentService).createMarkdown(eq("workspace-1"), eq("user-1"), eq("idem-1"), any(), eq(Document.AGENT_ORIGIN));
     }
 
     @Test
@@ -343,8 +343,8 @@ class AgentToolServiceTest {
 
         service.execute("create_document", request);
 
-        verify(documentService).createMarkdown(eq("workspace-2"), eq("user-1"), eq("idem-1"), any());
-        verify(documentService, never()).createMarkdown(eq("workspace-1"), any(), any(), any());
+        verify(documentService).createMarkdown(eq("workspace-2"), eq("user-1"), eq("idem-1"), any(), eq(Document.AGENT_ORIGIN));
+        verify(documentService, never()).createMarkdown(eq("workspace-1"), any(), any(), any(), any());
     }
 
     @Test

@@ -607,13 +607,17 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
       "content_hash": "string",
       "created_at": "2026-08-13T04:25:24.371948Z",
       "created_by": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081",
+      "operation_id": null,
       "restored_from_version": 2,
+      "source": "restore",
       "version": 3
     }
   ]
 }
 ```
 
+- `source`: 이 버전을 저장한 경로. `user`(사용자 저장·충돌 해결), `agent`(Agent 편집 적용), `meeting_notes`(회의록 덧붙이기), `restore`(버전 복원·AI 작업 되돌리기). 요청의 `source` 값은 쓰지 않고 서버가 저장 경로로 정한다. V78 이전 버전은 Agent 편집(`agent`)과 버전 복원(`restore`)만 채우고 나머지는 `null`이다.
+- `operation_id`: Agent 편집으로 만든 버전이면 `GET /ai-operation-logs/{operation_id}`로 여는 AI 작업 ID, 그 밖에는 `null`이다.
 - `restored_from_version`: 버전 복원(`POST .../versions/{version}/restore`)으로 만든 버전이면 복원 대상 버전 번호, 그 밖에는 `null`이다. 일반 저장·Agent 적용·복원 직후 이어진 저장은 `null`이다. 이 필드를 추가하기 전(V57 이전)에 만든 버전은 복원 여부를 알 수 없어 모두 `null`이다. 대상 버전이 나중에 정리되어도 번호는 그대로 남는다.
 
 #### 6. Error response
