@@ -108,13 +108,13 @@ class DocumentRestoreTest {
             DocumentRestorePlan plan = planner.plan(target());
             givenVersion(5, "# 원래 문단");
             when(documentService.saveContentInCurrentTransaction(eq(WORKSPACE), eq(USER), eq(DOCUMENT),
-                    eq("# 원래 문단"), eq(8L), eq("op-restore:op_restore_1"), isNull()))
+                    eq("# 원래 문단"), eq(8L), eq("op-restore:op_restore_1"), eq("restore")))
                     .thenReturn(new DocumentContentSaveResponse(DOCUMENT, 9, "sha256:old", NOW, true));
 
             applier.apply(restore(), plan);
 
             verify(documentService).saveContentInCurrentTransaction(eq(WORKSPACE), eq(USER), eq(DOCUMENT),
-                    eq("# 원래 문단"), eq(8L), eq("op-restore:op_restore_1"), isNull());
+                    eq("# 원래 문단"), eq(8L), eq("op-restore:op_restore_1"), eq("restore"));
             ArgumentCaptor<OperationChange> captor = ArgumentCaptor.forClass(OperationChange.class);
             verify(operationChangeRepository).save(captor.capture());
             assertThat(captor.getValue().getBeforeRevision()).isEqualTo(8L);
@@ -174,7 +174,7 @@ class DocumentRestoreTest {
         void appendsNewVersionInsteadOfRewinding() {
             givenVersion(5, "# 원래 문단");
             when(documentService.saveContentInCurrentTransaction(eq(WORKSPACE), eq(USER), eq(DOCUMENT),
-                    eq("# 원래 문단"), eq(6L), eq("op-restore:op_restore_1"), isNull()))
+                    eq("# 원래 문단"), eq(6L), eq("op-restore:op_restore_1"), eq("restore")))
                     .thenReturn(new DocumentContentSaveResponse(
                             DOCUMENT, 7, "sha256:old", NOW, true));
 

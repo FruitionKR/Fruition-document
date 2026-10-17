@@ -120,7 +120,7 @@ class DocumentServiceConvertTest {
                 ingestCommandOutbox, pipelineWikiStateRequester,
                 convertQueueRepository, batchStore,
                 new ConvertCommandOutbox(taskWriter, mapper, "ai.convert.command"), pipelineCancellation, transactionTemplate,
-                editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository, accessPolicy),
+                editStateInitializer, editStateRepository, new DocumentItemAssembler(editStateRepository, accessPolicy, contentVersionRepository),
                 postgresDocumentEditStore,
                 contentVersionRepository, markdownDiffService,
                 editLockService, idempotencyService,

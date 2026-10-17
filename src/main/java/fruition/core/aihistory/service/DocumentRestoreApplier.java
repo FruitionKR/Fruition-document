@@ -65,7 +65,7 @@ public class DocumentRestoreApplier {
         DocumentContentSaveResponse saved = documentService.saveContentInCurrentTransaction(
                 restore.getWorkspaceId(), restore.getUserId(), plan.documentId(),
                 target.getMarkdown(), plan.fromVersion(),
-                "op-restore:" + restore.getOperationId(), null);
+                "op-restore:" + restore.getOperationId(), "restore");
 
         if (!saved.changed()) {
             throw new InvalidRestoreRequestException(

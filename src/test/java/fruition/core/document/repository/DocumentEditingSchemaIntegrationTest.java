@@ -10,6 +10,7 @@ import fruition.core.document.dto.DocumentLifecycleRequest;
 import fruition.core.document.service.DocumentAssetStorageCoordinator;
 import fruition.core.document.service.DocumentAssetValidator;
 import fruition.core.document.service.DocumentExportService;
+import fruition.core.document.service.DocumentItemAssembler;
 import fruition.core.document.service.DocumentService;
 import fruition.core.agent.dto.AgentToolExecuteRequest;
 import fruition.core.agent.repository.PipelineAgentToolAuthorizationClient;
@@ -95,6 +96,9 @@ class DocumentEditingSchemaIntegrationTest {
 
     @Autowired
     DocumentService documentService;
+
+    @Autowired
+    DocumentItemAssembler documentItemAssembler;
 
     @Autowired
     AgentToolService agentToolService;
@@ -246,6 +250,48 @@ class DocumentEditingSchemaIntegrationTest {
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT revision FROM document_edit_states WHERE document_id = ?", Long.class, documentId))
                 .isEqualTo(2L);
+        // 클라이언트가 보낸 source("manual")는 믿지 않고 저장 경로로 기록한다.
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT source FROM document_content_versions WHERE document_id = ? AND version = 2",
+                String.class, documentId)).isEqualTo("user");
+    }
+
+    @Test
+    void lastAiChanges_returnsLatestAgentOrMeetingNotesVersionPerDocument() {
+        String suffix = UUID.randomUUID().toString().replace("-", "");
+        String userId = "user_ai_change_" + suffix;
+        String workspaceId = "ws_ai_change_" + suffix;
+        String edited = "doc_ai_edited_" + suffix;
+        String manual = "doc_ai_manual_" + suffix;
+        insertWorkspaceMember(userId, workspaceId);
+        insertDocument(edited, workspaceId, userId, "AI.md", "hash", "EDITABLE");
+        insertDocument(manual, workspaceId, userId, "수동.md", "hash", "EDITABLE");
+        String operationId = "op_ai_change_" + suffix;
+        jdbcTemplate.update("""
+                INSERT INTO ai_operation_logs(
+                    operation_id, workspace_id, user_id, operation_type, target_document_id,
+                    status, changed_resource_count, created_at
+                ) VALUES (?, ?, ?, 'document_edit', ?, 'succeeded', 1, now())
+                """, operationId, workspaceId, userId, edited);
+        jdbcTemplate.update("""
+                INSERT INTO document_content_versions(
+                    document_id, version, markdown, content_hash, created_by, created_at, source, operation_id)
+                VALUES (?, 1, 'v1', 'h1', ?, now(), NULL, NULL),
+                       (?, 2, 'v2', 'h2', ?, now(), 'meeting_notes', NULL),
+                       (?, 3, 'v3', 'h3', ?, now(), 'agent', ?),
+                       (?, 4, 'v4', 'h4', ?, now(), 'user', NULL),
+                       (?, 1, 'v1', 'h1', ?, now(), 'user', NULL),
+                       (?, 2, 'v2', 'h2', ?, now(), 'restore', NULL)
+                """, edited, userId, edited, userId, edited, userId, operationId, edited, userId,
+                manual, userId, manual, userId);
+
+        var changes = documentItemAssembler.lastAiChanges(List.of(edited, manual));
+
+        assertThat(changes).containsOnlyKeys(edited);
+        assertThat(changes.get(edited).version()).isEqualTo(3L);
+        assertThat(changes.get(edited).source()).isEqualTo("agent");
+        assertThat(changes.get(edited).operationId()).isEqualTo(operationId);
+        assertThat(changes.get(edited).changedAt()).isNotNull();
     }
 
     @Test
@@ -335,6 +381,9 @@ class DocumentEditingSchemaIntegrationTest {
                 "SELECT count(*) FROM ai_operation_changes WHERE operation_id = ?", Integer.class, restoreOperationId))
                 .isEqualTo(1);
         verify(operationChangeRepository, times(1)).save(any());
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT source FROM document_content_versions WHERE document_id = ? AND version = 2",
+                String.class, documentId)).isEqualTo("restore");
     }
 
     @Test

@@ -383,6 +383,21 @@ public class DocumentService {
             String idempotencyKey,
             MarkdownDocumentCreateRequest request
     ) {
+        return createMarkdown(workspaceId, userId, idempotencyKey, request, null);
+    }
+
+    /**
+     * @param aiOrigin AI가 만든 문서면 {@link Document#AGENT_ORIGIN} 또는 {@link Document#MEETING_NOTES_ORIGIN}.
+     *                 요청 본문의 origin과 달리 서버 내부 호출만 넘긴다.
+     */
+    @Transactional
+    public DocumentUploadResponse createMarkdown(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            MarkdownDocumentCreateRequest request,
+            String aiOrigin
+    ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         validateIdempotencyKey(idempotencyKey);
         if (request == null) {
@@ -410,7 +425,7 @@ public class DocumentService {
 
         DocumentUploadResponse response =
                 createMarkdownDocument(workspaceId, userId, filename.filename(), content,
-                        skillReference ? Document.SKILL_REFERENCE_ORIGIN : "direct", request.folderId());
+                        skillReference ? Document.SKILL_REFERENCE_ORIGIN : "direct", request.folderId(), aiOrigin);
         saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
         return response;
     }
@@ -477,6 +492,8 @@ public class DocumentService {
                 content.bytes().length,
                 sortOrder
         );
+        // 복제본도 내용은 AI 결과물이므로 AI 출처 표시를 잇는다.
+        duplicate.markAiOrigin(source.getAiOrigin());
         documentRepository.save(duplicate);
         editStateRepository.save(new DocumentEditState(
                 duplicateId, content.markdown(), content.contentHash(), 1));
@@ -497,6 +514,7 @@ public class DocumentService {
                     INITIAL_NOTE_FILENAME,
                     DocumentEditingRules.markdown("# 새 노트\n"),
                     "direct",
+                    null,
                     null
             );
         } catch (Exception e) {
@@ -571,7 +589,8 @@ public class DocumentService {
             String filename,
             DocumentEditingRules.MarkdownContent content,
             String origin,
-            UUID folderId
+            UUID folderId,
+            String aiOrigin
     ) {
         String documentId = newDocumentId();
         Document document = new Document(
@@ -592,6 +611,7 @@ public class DocumentService {
                 sortOrder
         );
         document.place(folderId, sortOrder);
+        document.markAiOrigin(aiOrigin);
         documentRepository.save(document);
         editStateRepository.save(new DocumentEditState(
                 documentId, content.markdown(), content.contentHash(), 1));
@@ -1597,7 +1617,9 @@ public class DocumentService {
                 viewer.canEdit(doc),
                 viewer.canDelete(doc),
                 viewer.override(doc),
-                doc.getUpdatedBy()
+                doc.getUpdatedBy(),
+                doc.getAiOrigin(),
+                documentItemAssembler.lastAiChanges(List.of(documentId)).get(documentId)
         );
     }
 
@@ -1630,8 +1652,22 @@ public class DocumentService {
             String source,
             String applyOperationId
     ) {
+        String versionSource = applyOperationId != null && !applyOperationId.isBlank() ? "agent" : "user";
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                source, applyOperationId, false, null);
+                versionSource, applyOperationId, false, null);
+    }
+
+    /** 사용자가 수락한 회의록을 기존 문서에 덧붙인다. 버전 이력에 meeting_notes로 남는다. */
+    public DocumentContentSaveResponse saveMeetingNotesContent(
+            String workspaceId,
+            String userId,
+            String documentId,
+            String markdown,
+            Long baseRevision,
+            String revisionWriteId
+    ) {
+        return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
+                "meeting_notes", null, false, null);
     }
 
     private DocumentContentSaveResponse saveContent(
@@ -1641,7 +1677,7 @@ public class DocumentService {
             String markdown,
             Long baseRevision,
             String revisionWriteId,
-            String source,
+            String versionSource,
             String applyOperationId,
             boolean applyOperationClaimed,
             Long restoredFromVersion
@@ -1650,7 +1686,7 @@ public class DocumentService {
         try {
             return executeWithSaveRetry(() -> saveTransaction.execute(status -> saveContentInTransaction(
                     workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                    source, applyOperationId, applyOperationClaimed, restoredFromVersion)));
+                    versionSource, applyOperationId, applyOperationClaimed, restoredFromVersion)));
         } catch (DocumentVersionConflictException conflict) {
             if (applyOperationId != null && !applyOperationId.isBlank()) {
                 recordConflictInIndependentTransaction(
@@ -1665,6 +1701,8 @@ public class DocumentService {
      * 복구처럼 본문 저장과 추가 변경내역을 한 작업으로 묶어야 하는 호출자를 위한 저장 진입점이다.
      * 호출자는 이미 실제 PostgreSQL transaction을 소유해야 하며, transient 재시도는 그 소유 단위에서
      * 수행해야 한다.
+     *
+     * @param versionSource 버전 이력에 남길 저장 경로(user | restore 등). 서버 내부 호출자가 정한다.
      */
     public DocumentContentSaveResponse saveContentInCurrentTransaction(
             String workspaceId,
@@ -1673,14 +1711,14 @@ public class DocumentService {
             String markdown,
             Long baseRevision,
             String revisionWriteId,
-            String source
+            String versionSource
     ) {
         if (!TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("현재 PostgreSQL transaction 안에서 호출해야 합니다.");
         }
         return saveContentInTransaction(
                 workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                source, null, false, null);
+                versionSource, null, false, null);
     }
 
     private DocumentContentSaveResponse saveContentInTransaction(
@@ -1690,7 +1728,7 @@ public class DocumentService {
             String markdown,
             Long baseRevision,
             String revisionWriteId,
-            String source,
+            String versionSource,
             String applyOperationId,
             boolean applyOperationClaimed,
             Long restoredFromVersion
@@ -1764,6 +1802,9 @@ public class DocumentService {
         if (result.changed()) {
             if (restoredFromVersion != null) {
                 contentVersionRepository.markRestoredFrom(documentId, result.revision(), restoredFromVersion);
+            }
+            if (versionSource != null) {
+                contentVersionRepository.markSource(documentId, result.revision(), versionSource);
             }
             // 재ingest 필요 판단용 projection: 목록 API가 PG만으로 현재 편집본 해시를 비교할 수 있게 한다.
             documentRepository.updateCurrentContentHash(documentId, result.contentHash(), result.updatedAt(), userId);
@@ -1986,7 +2027,7 @@ public class DocumentService {
         List<DocumentContentVersionListResponse.Item> items = contentVersionRepository.findSummaries(documentId).stream()
                 .map(s -> new DocumentContentVersionListResponse.Item(
                         s.getVersion(), s.getContentHash(), s.getCreatedBy(), s.getCreatedAt(),
-                        s.getRestoredFromVersion()))
+                        s.getRestoredFromVersion(), s.getSource(), s.getOperationId()))
                 .toList();
         return new DocumentContentVersionListResponse(documentId, editRevision, items);
     }
@@ -2036,7 +2077,7 @@ public class DocumentService {
                 target.getMarkdown(),
                 baseVersion,
                 "restore:" + version + ":" + baseVersion,
-                null,
+                "restore",
                 null,
                 false,
                 version

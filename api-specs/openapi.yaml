@@ -6151,6 +6151,31 @@ components:
           format: int64
         user_id:
           type: string
+    DocumentAiChange:
+      type: object
+      description: 현재 본문 이력 중 가장 최근 AI 적용
+      properties:
+        changed_at:
+          type: string
+          format: date-time
+          description: 저장 시각(ISO-8601 UTC)
+          example: 2026-10-15T02:11:09Z
+        operation_id:
+          type: string
+          description: "GET /ai-operation-logs/{operation_id}로 여는 AI 작업 ID. 작업 로그가 없는 회의록 적용이면 null이다."
+          example: op_7c2e4b1a9d3f4e6c8b0a2d5f7e9c1b3a
+        source:
+          type: string
+          description: 저장 경로
+          enum:
+          - agent
+          - meeting_notes
+          example: agent
+        version:
+          type: integer
+          format: int64
+          description: AI가 저장한 본문 버전
+          example: 3
     DocumentAttachmentSaveResponse:
       type: object
       description: 본문 저장과 함께 등록된 이미지 asset
@@ -6309,11 +6334,24 @@ components:
           type: string
           description: 저장한 사용자 ID
           example: user_3f1c8a6b52d7411e9c04ab5d2e7f6081
+        operation_id:
+          type: string
+          description: Agent 편집으로 만든 버전이면 AI 작업 ID. 그 밖의 저장은 null
+          example: op_7c2e4b1a9d3f4e6c8b0a2d5f7e9c1b3a
         restored_from_version:
           type: integer
           format: int64
           description: 버전 복원으로 만든 버전이면 복원 대상 버전 번호. 일반 저장·AI 적용·기록 이전 버전은 null
           example: 2
+        source:
+          type: string
+          description: 이 버전을 저장한 경로. 기록 이전 버전은 null
+          enum:
+          - user
+          - agent
+          - meeting_notes
+          - restore
+          example: agent
         version:
           type: integer
           format: int64
@@ -6368,6 +6406,13 @@ components:
       type: object
       description: 문서 상세. 값이 없는 필드는 키 자체가 빠지므로 존재 여부로 확인한다.
       properties:
+        ai_origin:
+          type: string
+          description: "문서를 처음 만든 경로가 AI면 그 종류(agent: Agent 문서 생성, meeting_notes: 회의록 적용, chat_export: 채팅 답변 원문 저장). 사용자가 직접 만들거나 올린 문서는 null이다."
+          enum:
+          - agent
+          - meeting_notes
+          - chat_export
         byte_size:
           type: integer
           format: int64
@@ -6430,6 +6475,9 @@ components:
           type: string
           description: 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        last_ai_change:
+          $ref: "#/components/schemas/DocumentAiChange"
+          description: 현재 본문 이력 중 가장 최근 AI 적용(Agent 편집·회의록 덧붙이기). 없으면 null이다.
         markdown:
           type: string
           description: 편집 가능 문서의 전체 Markdown 본문
@@ -6694,6 +6742,13 @@ components:
       type: object
       description: 값이 없는 필드는 키 자체가 빠진다. null 체크가 아니라 존재 여부로 확인한다.
       properties:
+        ai_origin:
+          type: string
+          description: "문서를 처음 만든 경로가 AI면 그 종류(agent: Agent 문서 생성, meeting_notes: 회의록 적용, chat_export: 채팅 답변 원문 저장). 사용자가 직접 만들거나 올린 문서는 null이다."
+          enum:
+          - agent
+          - meeting_notes
+          - chat_export
         area:
           type: string
           description: 문서가 속한 영역
@@ -6758,6 +6813,9 @@ components:
           type: string
           description: 트리에서의 항목 종류
           example: document
+        last_ai_change:
+          $ref: "#/components/schemas/DocumentAiChange"
+          description: 현재 본문 이력 중 가장 최근 AI 적용(Agent 편집·회의록 덧붙이기). 없으면 null이다.
         mime_type:
           type: string
           description: 파일 MIME 타입

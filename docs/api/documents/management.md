@@ -104,6 +104,7 @@
   편집 문서는 현재 본문(UTF-8)의 해시다. 대용량 직접 업로드 직후나 이 필드 도입 전에 올린 원본은 백그라운드 작업이
   저장소 객체를 읽어 채우므로 그 전까지 `null`이다. 원본 객체가 없어 계산할 수 없는 문서도 `null`이다.
   (`content_hash`는 직접 업로드에서 저장소 ETag 기반 값이라 로컬 파일 해시와 비교할 수 없다.)
+- `ai_origin`·`last_ai_change`: 문서가 AI 결과물인지 나타낸다. [AI 출처 표시](README.md#ai-출처-표시)
 
 #### 6. Error response
 
@@ -987,6 +988,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
   "file_type": "pdf"
 }
 ```
+
+- `ai_origin`·`last_ai_change`: 목록과 같다. [AI 출처 표시](README.md#ai-출처-표시)
 
 #### 6. Error response
 
