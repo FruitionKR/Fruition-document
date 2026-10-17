@@ -7,6 +7,7 @@ import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.config.SecurityConfig;
 import fruition.core.skill.dto.SkillAuthoringRequest;
+import fruition.core.skill.dto.SkillPublishRequest;
 import fruition.core.skill.exception.PipelineSkillException;
 import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
 import fruition.core.skill.repository.PipelineSkillRequester;
@@ -31,6 +32,7 @@ import java.net.InetSocketAddress;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -53,6 +55,7 @@ class SkillControllerTest {
     @Autowired JwtTokenProvider jwtTokenProvider;
     @MockBean SkillService skillService;
     @MockBean SkillReferenceService referenceService;
+    @MockBean fruition.core.skill.service.SkillTestRunService skillTestRunService;
 
     @Test
     void delete_usesAuthenticatedActorAndReturnsNoContent() throws Exception {
@@ -96,6 +99,149 @@ class SkillControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("proposal_ready"))
                 .andExpect(jsonPath("$.name").value("meeting-notes"));
+    }
+
+    @Test
+    void publish_acceptsMissingAllowedTools() throws Exception {
+        when(skillService.publish(eq(WORKSPACE_ID), eq(USER_ID), any(SkillPublishRequest.class), anyString()))
+                .thenReturn(objectMapper.readTree("{\"status\":\"published\",\"allowed_tools\":[\"create_document\"]}"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/author/publish")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"scope_type\":\"personal\",\"name\":\"meeting-notes\",\"description\":\"회의록 작성\","
+                                + "\"instructions_markdown\":\"# 작성 절차\",\"capabilities\":[\"document-create\"]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.allowed_tools[0]").value("create_document"));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(SkillPublishRequest.class);
+        org.mockito.Mockito.verify(skillService).publish(eq(WORKSPACE_ID), eq(USER_ID), captor.capture(), anyString());
+        assertThat(captor.getValue().allowedTools()).isNull();
+    }
+
+    @Test
+    void publish_rejectsBlankAllowedToolEntry() throws Exception {
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/author/publish")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"scope_type\":\"personal\",\"name\":\"meeting-notes\",\"description\":\"회의록 작성\","
+                                + "\"instructions_markdown\":\"# 작성 절차\",\"capabilities\":[\"document-create\"],"
+                                + "\"allowed_tools\":[\"\"]}"))
+                .andExpect(status().is4xxClientError());
+        org.mockito.Mockito.verifyNoInteractions(skillService);
+    }
+
+    @Test
+    void publish_forwardsTargetsAndResultMode() throws Exception {
+        when(skillService.publish(eq(WORKSPACE_ID), eq(USER_ID), any(SkillPublishRequest.class), anyString()))
+                .thenReturn(objectMapper.readTree("{\"status\":\"published\",\"targets\":[\"selection\"],\"result_mode\":\"edit\"}"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/author/publish")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(publishBody(",\"targets\":[\"selection\"],\"result_mode\":\"edit\"")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.targets[0]").value("selection"))
+                .andExpect(jsonPath("$.result_mode").value("edit"));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(SkillPublishRequest.class);
+        org.mockito.Mockito.verify(skillService).publish(eq(WORKSPACE_ID), eq(USER_ID), captor.capture(), anyString());
+        assertThat(captor.getValue().targets()).containsExactly("selection");
+        assertThat(captor.getValue().resultMode()).isEqualTo("edit");
+    }
+
+    @Test
+    void publishAndUpdate_rejectInvalidTargetsAndResultMode() throws Exception {
+        for (String extra : List.of(
+                ",\"targets\":[\"whole_workspace\"]",
+                ",\"targets\":[\"current_document\",\"selection\",\"selection\"]",
+                ",\"result_mode\":\"replace\"")) {
+            mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/author/publish")
+                            .header("Authorization", bearer())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(publishBody(extra)))
+                    .andExpect(status().isBadRequest());
+            mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                                    "/api/workspaces/" + WORKSPACE_ID + "/skills/skill_1")
+                            .header("Authorization", bearer())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"name\":\"meeting-notes\",\"description\":\"회의록 작성\","
+                                    + "\"instructions_markdown\":\"# 작성 절차\"" + extra + "}"))
+                    .andExpect(status().isBadRequest());
+        }
+        org.mockito.Mockito.verifyNoInteractions(skillService);
+    }
+
+    private String publishBody(String extra) {
+        return "{\"scope_type\":\"personal\",\"name\":\"meeting-notes\",\"description\":\"회의록 작성\","
+                + "\"instructions_markdown\":\"# 작성 절차\",\"capabilities\":[\"document-edit\"]" + extra + "}";
+    }
+
+    @Test
+    void testRun_forwardsPrincipalAndGeneratesRunId() throws Exception {
+        when(skillTestRunService.testRun(eq(WORKSPACE_ID), eq(USER_ID),
+                any(fruition.core.skill.dto.SkillTestRunRequest.class), anyString()))
+                .thenReturn(objectMapper.readTree("{\"run_id\":\"skill_test_1\",\"status\":\"blocked\",\"changes\":[],\"issues\":[{}]}"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/test-run")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(testRunBody(",\"target\":{\"type\":\"selection\",\"start_line\":10,\"end_line\":24}")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("blocked"));
+
+        var request = org.mockito.ArgumentCaptor.forClass(fruition.core.skill.dto.SkillTestRunRequest.class);
+        var runId = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(skillTestRunService).testRun(eq(WORKSPACE_ID), eq(USER_ID), request.capture(), runId.capture());
+        assertThat(request.getValue().documentId()).isEqualTo("doc_1");
+        assertThat(request.getValue().target().startLine()).isEqualTo(10);
+        assertThat(request.getValue().target().endLine()).isEqualTo(24);
+        assertThat(runId.getValue()).startsWith("skill_test_");
+    }
+
+    @Test
+    void testRun_rejectsInvalidBodyBeforeService() throws Exception {
+        for (String body : List.of(
+                "{\"name\":\"research-summary\",\"description\":\"연구 요약\",\"instructions_markdown\":\"지침\","
+                        + "\"capabilities\":[\"document-edit\"]}",
+                testRunBody(",\"target\":{\"type\":\"paragraph\",\"start_line\":1,\"end_line\":2}"),
+                testRunBody(",\"target\":{\"type\":\"selection\",\"start_line\":0,\"end_line\":2}"))) {
+            mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/test-run")
+                            .header("Authorization", bearer())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest());
+        }
+        org.mockito.Mockito.verifyNoInteractions(skillTestRunService);
+    }
+
+    @Test
+    void testRun_missingAiEndpointUsesDedicatedUnavailableCode() throws Exception {
+        when(skillTestRunService.testRun(eq(WORKSPACE_ID), eq(USER_ID),
+                any(fruition.core.skill.dto.SkillTestRunRequest.class), anyString()))
+                .thenThrow(new PipelineSkillException("Skill 테스트 실행을 아직 사용할 수 없습니다.", 503, null,
+                        "SKILL_TEST_RUN_UNAVAILABLE"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/test-run")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(testRunBody("")))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error.code").value("SKILL_TEST_RUN_UNAVAILABLE"));
+    }
+
+    @Test
+    void testRun_requiresAuthentication() throws Exception {
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/test-run")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(testRunBody("")))
+                .andExpect(status().isUnauthorized());
+        org.mockito.Mockito.verifyNoInteractions(skillTestRunService);
+    }
+
+    private String testRunBody(String extra) {
+        return "{\"name\":\"research-summary\",\"description\":\"연구 요약\",\"instructions_markdown\":\"지침\","
+                + "\"capabilities\":[\"document-edit\"],\"document_id\":\"doc_1\"" + extra + "}";
     }
 
     @Test
@@ -200,7 +346,8 @@ class SkillControllerTest {
                 .get("SkillVersionResponse");
 
         assertThat(skill.getProperties()).containsKeys("id", "workspace_id", "enabled_version", "latest_version");
-        assertThat(version.getProperties()).containsKeys("capabilities", "allowed_tools", "lint_result", "status");
+        assertThat(version.getProperties()).containsKeys("capabilities", "allowed_tools", "targets", "result_mode",
+                "lint_result", "status");
         assertThat(skill.getRequired()).contains("id", "enabled_version", "latest_version");
         assertThat(version.getRequired()).containsExactlyInAnyOrder("id", "version", "name", "description",
                 "instructions_markdown", "capabilities", "allowed_tools", "lint_result", "status");

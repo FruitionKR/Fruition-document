@@ -354,6 +354,49 @@ class CreditServiceIntegrationTest {
     }
 
     @Test
+    void registerNewRejectsReusedRunIdSoRetriesCannotSkipAdmission() throws Exception {
+        CreditService credits = credits(true);
+        grant(300_000);
+        var runs = new AiTaskCancellationService(jdbc, manager, pipeline, access, mapper, queryRuns, events, storage,
+                storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc));
+        var command = mapper.createObjectNode().put("run_id", "skill_test_" + UUID.randomUUID())
+                .put("kind", "skill_test_run").put("workspace_id", "ws-1").put("user_id", user);
+
+        runs.registerNew(command);
+        jdbc.update("UPDATE credit_accounts SET balance = 0, reserved = 0 WHERE user_id = ?", user);
+
+        // 기존 register는 같은 command를 통과시키고 예약이 있다고 보아 잔액을 보지 않는다. registerNew는 거절한다.
+        assertThatThrownBy(() -> runs.registerNew(command))
+                .isInstanceOfSatisfying(org.springframework.web.server.ResponseStatusException.class,
+                        e -> assertThat(e.getStatusCode().value()).isEqualTo(409));
+        assertThat(jdbc.queryForList("SELECT id FROM credit_entries WHERE user_id = ? AND type = 'reserve'",
+                Long.class, user)).hasSize(1);
+
+        // 동시에 들어온 같은 새 run_id는 하나만 통과한다.
+        grant(1_000_000);
+        var concurrent = mapper.createObjectNode().put("run_id", "skill_test_" + UUID.randomUUID())
+                .put("kind", "skill_test_run").put("workspace_id", "ws-1").put("user_id", user);
+        var pool = Executors.newFixedThreadPool(5);
+        List<Future<Boolean>> results = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            results.add(pool.submit(() -> {
+                try {
+                    runs.registerNew(concurrent);
+                    return true;
+                } catch (org.springframework.web.server.ResponseStatusException e) {
+                    return false;
+                }
+            }));
+        }
+        int accepted = 0;
+        for (Future<Boolean> result : results) {
+            if (result.get()) accepted++;
+        }
+        pool.shutdown();
+        assertThat(accepted).isEqualTo(1);
+    }
+
+    @Test
     void renewKeepsOtherRunsReservationsOutOfAvailableAndShrinksPartialReservation() {
         CreditService credits = credits(true);
         grant(500_000);

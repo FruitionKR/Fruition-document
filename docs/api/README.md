@@ -18,7 +18,7 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Notifications](notifications.md) | 3 | 앱 안 알림 목록과 읽음 처리 |
 | [Query](query.md) | 4 | 동기·비동기 Query와 SSE |
 | [Speech](speech.md) | 2 | 채팅 음성 입력(음성 → 텍스트, 저장 없음), 답변 음성 듣기(NDJSON 스트림) |
-| [Skills](skills.md) | 8 | Skill 작성·게시·설정과 참조 읽기 |
+| [Skills](skills.md) | 10 | Skill 작성·게시·설정과 참조 읽기 |
 | [Wiki](wiki.md) | 8 | Wiki 조회·사람의 본문 수정·기여·유지보수 |
 | [Usage](agent.md#본인-모델-사용량-조회) | 1 | 본인 모델별 토큰 사용량 조회 |
 
