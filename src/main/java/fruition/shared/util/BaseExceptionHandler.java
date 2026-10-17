@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -64,6 +65,21 @@ public abstract class BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body(ErrorResponse.of("INVALID_REQUEST", "요청 형식이 올바르지 않습니다."));
+    }
+
+    /**
+     * 경로·쿼리 파라미터를 선언된 타입으로 바꿀 수 없을 때(limit=abc, UUID 자리에 임의 문자열 등).
+     * Spring의 상태 코드 예외가 아니라 fallback이 500으로 처리하므로 여기서 400으로 잡는다.
+     * 응답에는 파라미터 이름만 담고 예외 메시지(대상 타입·변환기 정보)는 노출하지 않는다.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleArgumentTypeMismatch(MethodArgumentTypeMismatchException e) {
+        logHandled(e, HttpStatus.BAD_REQUEST, "INVALID_REQUEST");
+        List<ErrorResponse.ErrorDetail.FieldError> details = List.of(
+                new ErrorResponse.ErrorDetail.FieldError(e.getName(), "값의 형식이 올바르지 않습니다."));
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(ErrorResponse.ofValidation(details));
     }
 
     @ExceptionHandler(MultipartException.class)
