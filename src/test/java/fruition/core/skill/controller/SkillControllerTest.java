@@ -55,6 +55,7 @@ class SkillControllerTest {
     @Autowired JwtTokenProvider jwtTokenProvider;
     @MockBean SkillService skillService;
     @MockBean SkillReferenceService referenceService;
+    @MockBean fruition.core.skill.service.SkillTestRunService skillTestRunService;
 
     @Test
     void delete_usesAuthenticatedActorAndReturnsNoContent() throws Exception {
@@ -174,6 +175,73 @@ class SkillControllerTest {
     private String publishBody(String extra) {
         return "{\"scope_type\":\"personal\",\"name\":\"meeting-notes\",\"description\":\"회의록 작성\","
                 + "\"instructions_markdown\":\"# 작성 절차\",\"capabilities\":[\"document-edit\"]" + extra + "}";
+    }
+
+    @Test
+    void testRun_forwardsPrincipalAndGeneratesRunId() throws Exception {
+        when(skillTestRunService.testRun(eq(WORKSPACE_ID), eq(USER_ID),
+                any(fruition.core.skill.dto.SkillTestRunRequest.class), anyString()))
+                .thenReturn(objectMapper.readTree("{\"run_id\":\"skill_test_1\",\"status\":\"blocked\",\"changes\":[],\"issues\":[{}]}"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/test-run")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(testRunBody(",\"target\":{\"type\":\"selection\",\"start_line\":10,\"end_line\":24}")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("blocked"));
+
+        var request = org.mockito.ArgumentCaptor.forClass(fruition.core.skill.dto.SkillTestRunRequest.class);
+        var runId = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(skillTestRunService).testRun(eq(WORKSPACE_ID), eq(USER_ID), request.capture(), runId.capture());
+        assertThat(request.getValue().documentId()).isEqualTo("doc_1");
+        assertThat(request.getValue().target().startLine()).isEqualTo(10);
+        assertThat(request.getValue().target().endLine()).isEqualTo(24);
+        assertThat(runId.getValue()).startsWith("skill_test_");
+    }
+
+    @Test
+    void testRun_rejectsInvalidBodyBeforeService() throws Exception {
+        for (String body : List.of(
+                "{\"name\":\"research-summary\",\"description\":\"연구 요약\",\"instructions_markdown\":\"지침\","
+                        + "\"capabilities\":[\"document-edit\"]}",
+                testRunBody(",\"target\":{\"type\":\"paragraph\",\"start_line\":1,\"end_line\":2}"),
+                testRunBody(",\"target\":{\"type\":\"selection\",\"start_line\":0,\"end_line\":2}"))) {
+            mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/test-run")
+                            .header("Authorization", bearer())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest());
+        }
+        org.mockito.Mockito.verifyNoInteractions(skillTestRunService);
+    }
+
+    @Test
+    void testRun_missingAiEndpointUsesDedicatedUnavailableCode() throws Exception {
+        when(skillTestRunService.testRun(eq(WORKSPACE_ID), eq(USER_ID),
+                any(fruition.core.skill.dto.SkillTestRunRequest.class), anyString()))
+                .thenThrow(new PipelineSkillException("Skill 테스트 실행을 아직 사용할 수 없습니다.", 503, null,
+                        "SKILL_TEST_RUN_UNAVAILABLE"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/test-run")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(testRunBody("")))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error.code").value("SKILL_TEST_RUN_UNAVAILABLE"));
+    }
+
+    @Test
+    void testRun_requiresAuthentication() throws Exception {
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/test-run")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(testRunBody("")))
+                .andExpect(status().isUnauthorized());
+        org.mockito.Mockito.verifyNoInteractions(skillTestRunService);
+    }
+
+    private String testRunBody(String extra) {
+        return "{\"name\":\"research-summary\",\"description\":\"연구 요약\",\"instructions_markdown\":\"지침\","
+                + "\"capabilities\":[\"document-edit\"],\"document_id\":\"doc_1\"" + extra + "}";
     }
 
     @Test

@@ -11,6 +11,7 @@ import fruition.core.aihistory.exception.OperationPayloadConflictException;
 import fruition.core.aihistory.exception.OperationNotFoundException;
 import fruition.core.aihistory.exception.RestorePreviewStaleException;
 import fruition.core.aihistory.exception.WikiObjectReadException;
+import fruition.core.skill.exception.InvalidSkillTestRunException;
 import fruition.core.skill.exception.PipelineSkillException;
 import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
 import fruition.core.wikimaintenance.exception.PipelineWikiMaintenanceException;
@@ -95,9 +96,16 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
             return ResponseEntity.status(e.getHttpStatus())
                     .body(ErrorResponse.of(code, e.getMessage()));
         }
-        logHandled(e, e.getHttpStatus(), "SKILL_AI_UNAVAILABLE");
+        String code = e.getCode() == null ? "SKILL_AI_UNAVAILABLE" : e.getCode();
+        logHandled(e, e.getHttpStatus(), code);
         return ResponseEntity.status(e.getHttpStatus())
-                .body(ErrorResponse.of("SKILL_AI_UNAVAILABLE", e.getMessage()));
+                .body(ErrorResponse.of(code, e.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidSkillTestRunException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidSkillTestRun(InvalidSkillTestRunException e) {
+        logHandled(e, HttpStatus.BAD_REQUEST, "INVALID_REQUEST");
+        return ResponseEntity.badRequest().body(ErrorResponse.of("INVALID_REQUEST", e.getMessage()));
     }
 
     @ExceptionHandler(SkillReferenceDocumentTooLargeException.class)

@@ -4343,6 +4343,83 @@ paths:
       summary: Skill 게시
       tags:
       - Skills
+  /api/workspaces/{workspace_id}/skills/test-run:
+    post:
+      description: "게시 전 Skill 정의를 문서 하나에 저장하지 않고 적용해 섹션별 변경 전/후를 반환합니다. 문서·Skill·Agent run을 만들거나 바꾸지 않으며, LLM을 호출하므로 크레딧을 차감합니다."
+      operationId: testRun
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: query
+        name: run_id
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillTestRunRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/SkillTestRunResponse"
+          description: "실행 완료(status=completed) 또는 안전 검토에서 막힘(status=blocked, changes=[], issues[])"
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "잘못된 요청(INVALID_REQUEST: 형식, Markdown 아닌 문서, 적용 범위 오류), SKILL_TEST_RUN_UNSUPPORTED(테스트 실행을 지원하지 않는 capability), 그 밖의 AI 거절(SKILL_REQUEST_REJECTED)"
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스 또는 문서를 찾을 수 없음
+        "409":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 같은 run_id로 다른 요청을 보냄
+        "413":
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/JsonNode"
+                - $ref: "#/components/schemas/ErrorResponse"
+          description: 요청 본문이 너무 큼
+        "422":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Skill 요청 검증 실패
+        "503":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: llmPipeline 사용 불가(SKILL_AI_UNAVAILABLE) 또는 AI가 테스트 실행을 아직 지원하지 않음(SKILL_TEST_RUN_UNAVAILABLE)
+      summary: Skill 테스트 실행
+      tags:
+      - Skills
   /api/workspaces/{workspace_id}/skills/{skill_id}:
     delete:
       description: "개인 Skill은 소유자, 워크스페이스 Skill은 OWNER 또는 `skill.author` 보유자만 삭제할 수 있습니다. 버전은 함께 삭제하고 과거 실행 기록은 보존합니다."
@@ -9087,6 +9164,117 @@ components:
       - slug
       - status
       - workspace_id
+    SkillTestRunChange:
+      type: object
+      properties:
+        after:
+          type: string
+          description: 변경 후
+        before:
+          type: string
+          description: 변경 전
+        end_line:
+          type: integer
+          format: int32
+          description: "원문 기준 끝 줄(1부터, 포함)"
+          example: 6
+        section:
+          type: string
+          description: 섹션 제목
+          example: 연구 개요
+        start_line:
+          type: integer
+          format: int32
+          description: 원문 기준 시작 줄(1부터)
+          example: 1
+      required:
+      - after
+      - before
+      - end_line
+      - section
+      - start_line
+    SkillTestRunRequest:
+      type: object
+      description: 저장하지 않는 Skill 테스트 실행 요청. 게시 전 정의를 문서 하나에 적용해 본다.
+      properties:
+        capabilities:
+          type: array
+          description: Skill capability. Tool 허용 목록은 AI가 이 값으로 계산한다.
+          items:
+            type: string
+            minLength: 1
+          maxItems: 2147483647
+          minItems: 1
+        description:
+          type: string
+          description: Skill 설명(500자 이하)
+          maxLength: 500
+          minLength: 0
+        document_id:
+          type: string
+          description: 테스트할 문서 ID. 읽기 권한이 있어야 한다.
+          example: doc_123
+          minLength: 1
+        instructions_markdown:
+          type: string
+          description: Skill 지침 Markdown(30000자 이하)
+          maxLength: 30000
+          minLength: 0
+        markdown:
+          type: string
+          description: 에디터의 저장 안 된 본문. 생략하면 저장된 최신 본문을 쓴다.
+        name:
+          type: string
+          description: Skill 이름. 소문자·숫자로 시작하고 하이픈을 쓸 수 있다(1~63자).
+          example: research-summary
+          minLength: 1
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        target:
+          $ref: "#/components/schemas/Target"
+          description: 적용 범위. 생략하면 문서 전체다.
+      required:
+      - capabilities
+      - description
+      - document_id
+      - instructions_markdown
+      - name
+    SkillTestRunResponse:
+      type: object
+      properties:
+        changes:
+          type: array
+          description: "섹션별 변경. 문서 생성형 capability이거나 blocked면 []이다."
+          items:
+            $ref: "#/components/schemas/SkillTestRunChange"
+            description: "섹션별 변경. 문서 생성형 capability이거나 blocked면 []이다."
+        issues:
+          type: array
+          description: 안전 검토 issue. /author의 blocked와 같은 형식이다.
+          items: {}
+        result_markdown:
+          type: string
+          description: 적용 결과 전체 Markdown. 문서 생성형이면 만들어질 문서다. blocked면 없을 수 있다.
+        run_id:
+          type: string
+          description: 사용량·취소에 쓰는 실행 ID
+          example: skill_test_3f2a
+        status:
+          type: string
+          description: "completed는 실행함, blocked는 안전 검토에서 막혀 실행하지 않음"
+          enum:
+          - completed
+          - blocked
+        untouched_sections:
+          type: array
+          description: 바뀌지 않은 섹션 제목
+          items:
+            type: string
+      required:
+      - changes
+      - issues
+      - run_id
+      - status
+      - untouched_sections
     SkillUpdateRequest:
       type: object
       description: 이미 게시된 Skill의 내용 수정 요청. scope_type은 바꿀 수 없다.
@@ -9248,15 +9436,15 @@ components:
           type: string
     Target:
       type: object
-      description: 편집 대상 범위(1-based 줄 번호)
+      description: 적용 범위(1-based 줄 번호). Agent 턴 editor_snapshot.target과 같은 형식이다.
       properties:
-        endLine:
+        end_line:
           type: integer
           format: int32
           description: "끝 줄 번호(1부터, 포함)"
           example: 24
           minimum: 1
-        startLine:
+        start_line:
           type: integer
           format: int32
           description: 시작 줄 번호(1부터)
@@ -9265,8 +9453,13 @@ components:
         type:
           type: string
           description: 범위 종류
+          enum:
+          - selection
+          - current_section
+          - whole_document
           example: selection
           minLength: 1
+          pattern: selection|current_section|whole_document
       required:
       - type
     TraversalPath:

@@ -25,6 +25,7 @@ class PipelineSkillRequesterTest {
     private final AtomicReference<String> uri = new AtomicReference<>();
     private final AtomicReference<String> body = new AtomicReference<>();
     private final AtomicReference<String> token = new AtomicReference<>();
+    private final AtomicReference<String> requestId = new AtomicReference<>();
     private int responseStatus = 200;
     private long responseDelayMillis = 0;
     private String responseBody = "{\"status\":\"proposal_ready\"}";
@@ -37,6 +38,7 @@ class PipelineSkillRequesterTest {
             uri.set(exchange.getRequestURI().toString());
             body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             token.set(exchange.getRequestHeaders().getFirst("X-Agent-Service-Token"));
+            requestId.set(exchange.getRequestHeaders().getFirst("X-Request-Id"));
             if (responseDelayMillis > 0) {
                 try { Thread.sleep(responseDelayMillis); } catch (InterruptedException ignored) { }
             }
@@ -141,6 +143,99 @@ class PipelineSkillRequesterTest {
                 new SkillUpdateRequest("meeting-notes", "회의록 작성", "# 작성 절차", null, null),
                 new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-update");
         assertThat(body.get()).doesNotContain("targets", "result_mode");
+    }
+
+    @Test
+    void testRun_postsDraftDefinitionAndDocumentWithRequestIdAndReturnsRunId() throws Exception {
+        var cancellation = org.mockito.Mockito.mock(fruition.core.aitask.service.AiTaskCancellationService.class);
+        responseBody = "{\"status\":\"completed\",\"changes\":[],\"untouched_sections\":[],\"issues\":[]}";
+
+        var result = requester(org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class),
+                cancellation, 5).testRun("ws_1", "user_1", testRunRequest(), 7, "# 연구 개요\n본문",
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "skill_test_1");
+
+        assertThat(uri.get()).isEqualTo("/skills/test-run");
+        assertThat(token.get()).isEqualTo("agent-token");
+        assertThat(requestId.get()).isEqualTo("skill_test_1");
+        var sent = new com.fasterxml.jackson.databind.ObjectMapper().readTree(body.get());
+        assertThat(sent.path("workspace_id").asText()).isEqualTo("ws_1");
+        assertThat(sent.path("user_id").asText()).isEqualTo("user_1");
+        assertThat(sent.path("provider").asText()).isEqualTo("openai");
+        assertThat(sent.path("model").asText()).isEqualTo("gpt-6-luna");
+        assertThat(sent.path("definition").path("instructions_markdown").asText()).isEqualTo("'연구 개요' 섹션만 고친다.");
+        assertThat(sent.path("definition").path("capabilities").get(0).asText()).isEqualTo("document-edit");
+        assertThat(sent.path("definition").has("allowed_tools")).isFalse();
+        assertThat(sent.path("document").path("document_id").asText()).isEqualTo("doc_1");
+        assertThat(sent.path("document").path("base_version").asLong()).isEqualTo(7);
+        assertThat(sent.path("document").path("markdown").asText()).isEqualTo("# 연구 개요\n본문");
+        assertThat(sent.path("target").path("type").asText()).isEqualTo("selection");
+        assertThat(sent.path("target").path("start_line").asInt()).isEqualTo(1);
+        assertThat(sent.path("target").path("end_line").asInt()).isEqualTo(2);
+        assertThat(result.path("run_id").asText()).isEqualTo("skill_test_1");
+        assertThat(result.path("status").asText()).isEqualTo("completed");
+
+        // 실행 기록(크레딧 예약·취소용)에는 문서 본문 대신 해시만 남긴다.
+        var command = org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
+        var order = org.mockito.Mockito.inOrder(cancellation);
+        order.verify(cancellation).register(command.capture());
+        order.verify(cancellation).finish("skill_test_1");
+        assertThat(command.getValue().path("kind").asText()).isEqualTo("skill_test_run");
+        assertThat(command.getValue().path("payload").path("document").has("markdown")).isFalse();
+        assertThat(command.getValue().path("payload").path("document").path("markdown_sha256").asText()).hasSize(64);
+    }
+
+    @Test
+    void testRun_omitsTargetWhenWholeDocument() {
+        requester().testRun("ws_1", "user_1", new fruition.core.skill.dto.SkillTestRunRequest("research-summary",
+                        "연구 요약", "지침", List.of("document-edit"), "doc_1", null, null), 1, "본문",
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "skill_test_1");
+
+        assertThat(body.get()).doesNotContain("target");
+    }
+
+    @Test
+    void testRun_mapsMissingAiEndpointToUnavailableAndUnsupportedCapabilityToClientCode() {
+        var usageCharges = org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class);
+        responseStatus = 404;
+        responseBody = "{\"detail\":\"Not Found\"}";
+        var missing = org.assertj.core.api.Assertions.catchThrowableOfType(
+                fruition.core.skill.exception.PipelineSkillException.class,
+                () -> requester(usageCharges).testRun("ws_1", "user_1", testRunRequest(), 1, "본문\n둘",
+                        new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "skill_test_404"));
+        assertThat(missing.getHttpStatus()).isEqualTo(503);
+        assertThat(missing.getCode()).isEqualTo("SKILL_TEST_RUN_UNAVAILABLE");
+        org.mockito.Mockito.verify(usageCharges).failRun("skill_test_404");
+        org.mockito.Mockito.verify(usageCharges).enqueue("skill_test_404");
+
+        responseStatus = 400;
+        responseBody = "{\"detail\":{\"code\":\"test_run_unsupported\",\"message\":\"x\"}}";
+        var unsupported = org.assertj.core.api.Assertions.catchThrowableOfType(
+                fruition.core.skill.exception.PipelineSkillException.class,
+                () -> requester().testRun("ws_1", "user_1", testRunRequest(), 1, "본문\n둘",
+                        new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "skill_test_400"));
+        assertThat(unsupported.getHttpStatus()).isEqualTo(400);
+        assertThat(unsupported.getCode()).isEqualTo("SKILL_TEST_RUN_UNSUPPORTED");
+    }
+
+    @Test
+    void testRun_timeoutRequestsAiCancellationForTheRun() {
+        var cancellation = org.mockito.Mockito.mock(fruition.core.aitask.service.AiTaskCancellationService.class);
+        responseDelayMillis = 2500;
+
+        var exception = org.assertj.core.api.Assertions.catchThrowableOfType(
+                fruition.core.skill.exception.PipelineSkillException.class,
+                () -> requester(org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class),
+                        cancellation, 1).testRun("ws_1", "user_1", testRunRequest(), 1, "본문\n둘",
+                        new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "skill_test_timeout"));
+
+        assertThat(exception.getHttpStatus()).isEqualTo(503);
+        org.mockito.Mockito.verify(cancellation).cancel("skill_test_timeout", "ws_1", "user_1");
+    }
+
+    private fruition.core.skill.dto.SkillTestRunRequest testRunRequest() {
+        return new fruition.core.skill.dto.SkillTestRunRequest("research-summary", "연구 요약",
+                "'연구 개요' 섹션만 고친다.", List.of("document-edit"), "doc_1", null,
+                new fruition.core.skill.dto.SkillTestRunRequest.Target("selection", 1, 2));
     }
 
     @Test
