@@ -6,6 +6,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.util.List;
+
 @Schema(description = "이미 게시된 Skill의 내용 수정 요청. scope_type은 바꿀 수 없다.")
 public record SkillUpdateRequest(
         @NotBlank
@@ -23,5 +25,15 @@ public record SkillUpdateRequest(
         @NotBlank
         @Size(max = 30000)
         @Schema(description = "Skill 지침 Markdown(30000자 이하)", maxLength = 30000)
-        String instructionsMarkdown
+        String instructionsMarkdown,
+
+        @Size(max = 2)
+        @Schema(description = "실행 대상. 문서 Skill에서만 의미가 있다. 생략하면 기존 값을 유지한다.")
+        List<@NotBlank @Pattern(regexp = "current_document|selection") String> targets,
+
+        @JsonProperty("result_mode")
+        @Pattern(regexp = "create|edit|auto")
+        @Schema(description = "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 기존 값을 유지한다.",
+                allowableValues = {"create", "edit", "auto"}, example = "auto")
+        String resultMode
 ) {}
