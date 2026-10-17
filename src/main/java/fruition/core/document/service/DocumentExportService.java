@@ -32,6 +32,8 @@ import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -41,6 +43,8 @@ public class DocumentExportService {
     private static final int MAX_ASSETS = 100;
     private static final long MAX_ASSET_BYTES = 100L * 1024 * 1024;
     private static final List<String> AI_SOURCES = List.of("agent", "meeting_notes");
+    private static final Pattern FRONT_MATTER =
+            Pattern.compile("\\A---\\r?\\n.*?\\r?\\n---[ \\t]*(?:\\r?\\n|\\z)", Pattern.DOTALL);
     private static final ZoneId NOTICE_ZONE = ZoneId.of("Asia/Seoul");
     /** 법률 문구는 운영 결정 뒤 확정한다(#135). 그때 APP_EXPORT_AI_NOTICE_MARKDOWN으로 바꾼다. */
     static final String DEFAULT_AI_NOTICE =
@@ -118,13 +122,22 @@ public class DocumentExportService {
                 rewrittenMarkdown, source.assets(), entryNames, aiGenerated);
     }
 
-    /** 서비스 밖으로 나가는 AI 결과물에 사람이 알아볼 안내 블록을 본문 맨 앞에 붙인다. 설정이 비면 붙이지 않는다. */
+    /**
+     * 서비스 밖으로 나가는 AI 결과물에 사람이 알아볼 안내 블록을 본문 맨 앞에 붙인다. 설정이 비면 붙이지 않는다.
+     * YAML front matter가 있으면 그 뒤에 붙인다. 앞에 붙이면 front matter로 읽히지 않는다.
+     */
     private String withAiNotice(String markdown) {
         if (aiNoticeMarkdown == null || aiNoticeMarkdown.isBlank()) {
             return markdown;
         }
         String notice = aiNoticeMarkdown.replace("{date}", LocalDate.now(clock.withZone(NOTICE_ZONE)).toString());
-        return notice + "\n\n" + markdown;
+        Matcher frontMatter = FRONT_MATTER.matcher(markdown);
+        if (!frontMatter.find()) {
+            return notice + "\n\n" + markdown;
+        }
+        String head = frontMatter.group();
+        return head + (head.endsWith("\n") ? "" : "\n") + "\n" + notice + "\n\n"
+                + markdown.substring(frontMatter.end()).stripLeading();
     }
 
     private Document loadEditableDocument(String workspaceId, String userId, String documentId) {
