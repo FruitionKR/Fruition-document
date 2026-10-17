@@ -7,6 +7,7 @@ import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.config.SecurityConfig;
 import fruition.core.skill.dto.SkillAuthoringRequest;
+import fruition.core.skill.dto.SkillPublishRequest;
 import fruition.core.skill.exception.PipelineSkillException;
 import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
 import fruition.core.skill.repository.PipelineSkillRequester;
@@ -31,6 +32,7 @@ import java.net.InetSocketAddress;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -96,6 +98,36 @@ class SkillControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("proposal_ready"))
                 .andExpect(jsonPath("$.name").value("meeting-notes"));
+    }
+
+    @Test
+    void publish_acceptsMissingAllowedTools() throws Exception {
+        when(skillService.publish(eq(WORKSPACE_ID), eq(USER_ID), any(SkillPublishRequest.class), anyString()))
+                .thenReturn(objectMapper.readTree("{\"status\":\"published\",\"allowed_tools\":[\"create_document\"]}"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/author/publish")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"scope_type\":\"personal\",\"name\":\"meeting-notes\",\"description\":\"회의록 작성\","
+                                + "\"instructions_markdown\":\"# 작성 절차\",\"capabilities\":[\"document-create\"]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.allowed_tools[0]").value("create_document"));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(SkillPublishRequest.class);
+        org.mockito.Mockito.verify(skillService).publish(eq(WORKSPACE_ID), eq(USER_ID), captor.capture(), anyString());
+        assertThat(captor.getValue().allowedTools()).isNull();
+    }
+
+    @Test
+    void publish_rejectsBlankAllowedToolEntry() throws Exception {
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/author/publish")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"scope_type\":\"personal\",\"name\":\"meeting-notes\",\"description\":\"회의록 작성\","
+                                + "\"instructions_markdown\":\"# 작성 절차\",\"capabilities\":[\"document-create\"],"
+                                + "\"allowed_tools\":[\"\"]}"))
+                .andExpect(status().is4xxClientError());
+        org.mockito.Mockito.verifyNoInteractions(skillService);
     }
 
     @Test

@@ -97,6 +97,20 @@ class PipelineSkillRequesterTest {
     }
 
     @Test
+    void publish_omitsAllowedToolsWhenMissingOrEmptySoAiComputesThem() {
+        java.util.Arrays.asList(null, List.<String>of()).forEach(allowedTools -> {
+            requester().publish("ws_1", "user_1",
+                    new SkillPublishRequest("personal", "meeting-notes", "회의록 작성", "# 작성 절차",
+                            List.of("document-create"), allowedTools),
+                    new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-publish");
+
+            assertThat(body.get()).as(String.valueOf(allowedTools))
+                    .contains("\"capabilities\":[\"document-create\"]")
+                    .doesNotContain("allowed_tools");
+        });
+    }
+
+    @Test
     void list_usesWorkspaceAndUserQueryParameters() {
         requester().list("ws_1", "user_1");
 

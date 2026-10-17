@@ -432,6 +432,13 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 }
 ```
 
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `capabilities` | 예 | 1개 이상 |
+| `allowed_tools` | 아니요 | 생략하거나 `[]`이면 Backend가 ai-svc payload에서 키를 빼고, ai-svc가 `capabilities`의 canonical Tool 집합으로 계산한다. 보내면 지금처럼 ai-svc가 검증만 한다. 응답 `allowed_tools`는 확정된 값이다. 빈 문자열 항목은 `400 INVALID_REQUEST`. |
+
+> 배포 순서: 생략 계산은 ai-svc가 맡는다(FruitionKR/Fruition-ai#116). 그 전의 ai-svc는 `allowed_tools`를 필수로 받아 생략하면 `422 SKILL_REQUEST_REJECTED`가 되므로, 클라이언트는 ai-svc 배포를 확인한 뒤 필드를 뺀다. 값을 보내는 기존 요청은 배포 순서와 관계없이 그대로 동작한다.
+
 #### 5. Response body
 
 - HTTP `200`: 게시 성공
@@ -503,7 +510,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills/author/publish" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"allowed_tools":["list_root_items"],"capabilities":["document-create"],"description":"<value>","instructions_markdown":"<value>","name":"meeting-notes","scope_type":"personal"}'
+  --data '{"capabilities":["document-create"],"description":"<value>","instructions_markdown":"<value>","name":"meeting-notes","scope_type":"personal"}'
 ```
 
 ```json
