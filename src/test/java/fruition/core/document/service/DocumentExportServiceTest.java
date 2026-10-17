@@ -12,6 +12,7 @@ import fruition.core.document.domain.DocumentAssetReference;
 import fruition.core.document.exception.DocumentAssetExportException;
 import fruition.core.document.repository.DocumentAssetReferenceRepository;
 import fruition.core.document.repository.DocumentAssetRepository;
+import fruition.core.document.repository.DocumentContentVersionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -54,6 +55,7 @@ class DocumentExportServiceTest {
     @Mock DocumentAssetRepository assetRepository;
     @Mock DocumentAssetObjectStorage objectStorage;
     @Mock TransactionTemplate transactionTemplate;
+    @Mock DocumentContentVersionRepository contentVersionRepository;
 
     DocumentExportService exportService;
 
@@ -64,7 +66,8 @@ class DocumentExportServiceTest {
                 editStateInitializer,
                 workspaceAccessGuard,
                 referenceRepository, assetRepository, objectStorage,
-                transactionTemplate);
+                transactionTemplate, contentVersionRepository, DocumentExportService.DEFAULT_AI_NOTICE,
+                java.time.Clock.fixed(java.time.Instant.parse("2026-10-15T16:00:00Z"), java.time.ZoneOffset.UTC));
         doAnswer(invocation -> ((TransactionCallback<?>) invocation.getArgument(0)).doInTransaction(null))
                 .when(transactionTemplate).execute(any());
     }
@@ -91,6 +94,7 @@ class DocumentExportServiceTest {
         assertThat(result.filename()).isEqualTo("회의 결과.md");
         assertThat(new String(readAll(result.content()), StandardCharsets.UTF_8))
                 .isEqualTo("# 최신 회의 결과\n한글 본문");
+        assertThat(result.aiGenerated()).isFalse();  // 사람이 만든 문서는 그대로 내보낸다
         assertThat(document.getCurrentVersion()).isEqualTo(versionBefore);
         assertThat(document.getUpdatedAt()).isEqualTo(updatedAtBefore);
         var order = inOrder(workspaceAccessGuard, documentRepository, editStateInitializer, transactionTemplate);
@@ -186,6 +190,60 @@ class DocumentExportServiceTest {
                 .isInstanceOf(DocumentAssetExportException.class)
                 .hasMessageContaining("100MB");
         verify(objectStorage, never()).get(org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void exportMarkdown_aiCreatedDocumentStartsWithNoticeDatedInKst() throws Exception {
+        Document document = editableDocument("doc_ai", "AI 회의록");
+        document.markAiOrigin(Document.MEETING_NOTES_ORIGIN);
+        stubDocument(document, new DocumentEditState(document.getId(), "# 회의록\n본문", "hash", 1));
+        when(referenceRepository.findAllByIdDocumentId(document.getId())).thenReturn(List.of());
+
+        DocumentExportResult result = exportService.exportMarkdown(WORKSPACE_ID, USER_ID, document.getId());
+
+        assertThat(result.aiGenerated()).isTrue();
+        // 고정 시각 2026-10-15T16:00Z는 KST로 10-16이다.
+        assertThat(new String(readAll(result.content()), StandardCharsets.UTF_8)).isEqualTo(
+                "> 이 문서에는 생성형 AI가 만든 내용이 포함되어 있습니다. (Fruition, 2026-10-16 내보냄)\n\n# 회의록\n본문");
+    }
+
+    @Test
+    void exportMarkdown_aiEditedDocumentZipPutsNoticeInMarkdownEntry() throws Exception {
+        Document document = editableDocument("doc_ai_zip", "편집 문서");
+        UUID assetId = UUID.randomUUID();
+        stubDocument(document, new DocumentEditState(document.getId(),
+                "![그림](/api/workspaces/%s/assets/%s/content)".formatted(WORKSPACE_ID, assetId), "hash", 3));
+        when(referenceRepository.findAllByIdDocumentId(document.getId())).thenReturn(List.of(
+                new DocumentAssetReference(document.getId(), assetId, java.time.Instant.now())));
+        when(assetRepository.findAllByIdInAndWorkspaceId(List.of(assetId), WORKSPACE_ID))
+                .thenReturn(List.of(asset(assetId, "a.png", "key", 1)));
+        when(objectStorage.get("key")).thenReturn(new ByteArrayInputStream(new byte[]{1}));
+        when(contentVersionRepository.existsByIdDocumentIdAndSourceIn(
+                document.getId(), List.of("agent", "meeting_notes"))).thenReturn(true);
+
+        DocumentExportResult result = exportService.exportMarkdown(WORKSPACE_ID, USER_ID, document.getId());
+
+        assertThat(result.aiGenerated()).isTrue();
+        assertThat(new String(unzip(readAll(result.content())).get("편집 문서.md"), StandardCharsets.UTF_8))
+                .startsWith("> 이 문서에는 생성형 AI가 만든 내용이 포함되어 있습니다.")
+                .endsWith("\n\n![그림](./assets/a.png)");
+    }
+
+    @Test
+    void exportMarkdown_blankNoticeSettingKeepsAiDocumentBodyAsIs() throws Exception {
+        exportService = new DocumentExportService(
+                documentRepository, editStateRepository, editStateInitializer, workspaceAccessGuard,
+                referenceRepository, assetRepository, objectStorage, transactionTemplate,
+                contentVersionRepository, "", java.time.Clock.systemUTC());
+        Document document = editableDocument("doc_ai_off", "AI 문서");
+        document.markAiOrigin(Document.AGENT_ORIGIN);
+        stubDocument(document, new DocumentEditState(document.getId(), "# 본문", "hash", 1));
+        when(referenceRepository.findAllByIdDocumentId(document.getId())).thenReturn(List.of());
+
+        DocumentExportResult result = exportService.exportMarkdown(WORKSPACE_ID, USER_ID, document.getId());
+
+        assertThat(result.aiGenerated()).isTrue();
+        assertThat(new String(readAll(result.content()), StandardCharsets.UTF_8)).isEqualTo("# 본문");
     }
 
     private Document editableDocument(String id, String displayName) {

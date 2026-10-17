@@ -8,9 +8,11 @@ import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.DocumentAssetExportException;
 import fruition.core.document.repository.DocumentAssetReferenceRepository;
 import fruition.core.document.repository.DocumentAssetRepository;
+import fruition.core.document.repository.DocumentContentVersionRepository;
 import fruition.core.document.repository.DocumentEditStateRepository;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -20,6 +22,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,6 +40,11 @@ public class DocumentExportService {
 
     private static final int MAX_ASSETS = 100;
     private static final long MAX_ASSET_BYTES = 100L * 1024 * 1024;
+    private static final List<String> AI_SOURCES = List.of("agent", "meeting_notes");
+    private static final ZoneId NOTICE_ZONE = ZoneId.of("Asia/Seoul");
+    /** 법률 문구는 운영 결정 뒤 확정한다(#135). 그때 APP_EXPORT_AI_NOTICE_MARKDOWN으로 바꾼다. */
+    static final String DEFAULT_AI_NOTICE =
+            "> 이 문서에는 생성형 AI가 만든 내용이 포함되어 있습니다. (Fruition, {date} 내보냄)";
 
     private final DocumentRepository documentRepository;
     private final DocumentEditStateRepository editStateRepository;
@@ -44,6 +54,9 @@ public class DocumentExportService {
     private final DocumentAssetRepository assetRepository;
     private final DocumentAssetObjectStorage objectStorage;
     private final TransactionTemplate transactionTemplate;
+    private final DocumentContentVersionRepository contentVersionRepository;
+    private final String aiNoticeMarkdown;
+    private final Clock clock;
 
     public DocumentExportService(
             DocumentRepository documentRepository,
@@ -53,7 +66,10 @@ public class DocumentExportService {
             DocumentAssetReferenceRepository referenceRepository,
             DocumentAssetRepository assetRepository,
             DocumentAssetObjectStorage objectStorage,
-            TransactionTemplate transactionTemplate
+            TransactionTemplate transactionTemplate,
+            DocumentContentVersionRepository contentVersionRepository,
+            @Value("${app.export.ai-notice-markdown:" + DEFAULT_AI_NOTICE + "}") String aiNoticeMarkdown,
+            Clock clock
     ) {
         this.documentRepository = documentRepository;
         this.editStateRepository = editStateRepository;
@@ -63,6 +79,9 @@ public class DocumentExportService {
         this.assetRepository = assetRepository;
         this.objectStorage = objectStorage;
         this.transactionTemplate = transactionTemplate;
+        this.contentVersionRepository = contentVersionRepository;
+        this.aiNoticeMarkdown = aiNoticeMarkdown;
+        this.clock = clock;
     }
 
     /**
@@ -79,21 +98,33 @@ public class DocumentExportService {
         editStateInitializer.initializeIfNeeded(document);
         ExportSource source = transactionTemplate.execute(
                 status -> loadSourceSnapshot(workspaceId, documentId, safeDocumentName(document.getDisplayName())));
+        boolean aiGenerated = document.getAiOrigin() != null
+                || contentVersionRepository.existsByIdDocumentIdAndSourceIn(documentId, AI_SOURCES);
+        String markdown = aiGenerated ? withAiNotice(source.markdown()) : source.markdown();
 
         if (source.assets().isEmpty()) {
             return DocumentExportResult.markdown(
-                    source.baseName() + ".md", source.markdown().getBytes(StandardCharsets.UTF_8));
+                    source.baseName() + ".md", markdown.getBytes(StandardCharsets.UTF_8), aiGenerated);
         }
 
         Map<UUID, String> entryNames = createEntryNames(source.assets());
-        String rewrittenMarkdown = source.markdown();
+        String rewrittenMarkdown = markdown;
         for (Map.Entry<UUID, String> entry : entryNames.entrySet()) {
             rewrittenMarkdown = rewrittenMarkdown.replace(
                     "/api/workspaces/" + workspaceId + "/assets/" + entry.getKey() + "/content",
                     "./" + entry.getValue());
         }
         return createZip(source.baseName() + ".zip", source.baseName() + ".md",
-                rewrittenMarkdown, source.assets(), entryNames);
+                rewrittenMarkdown, source.assets(), entryNames, aiGenerated);
+    }
+
+    /** 서비스 밖으로 나가는 AI 결과물에 사람이 알아볼 안내 블록을 본문 맨 앞에 붙인다. 설정이 비면 붙이지 않는다. */
+    private String withAiNotice(String markdown) {
+        if (aiNoticeMarkdown == null || aiNoticeMarkdown.isBlank()) {
+            return markdown;
+        }
+        String notice = aiNoticeMarkdown.replace("{date}", LocalDate.now(clock.withZone(NOTICE_ZONE)).toString());
+        return notice + "\n\n" + markdown;
     }
 
     private Document loadEditableDocument(String workspaceId, String userId, String documentId) {
@@ -158,7 +189,8 @@ public class DocumentExportService {
             String markdownFilename,
             String markdown,
             List<ExportAsset> assets,
-            Map<UUID, String> entryNames
+            Map<UUID, String> entryNames,
+            boolean aiGenerated
     ) {
         Map<UUID, String> storageKeys = new LinkedHashMap<>();
         assets.forEach(asset -> storageKeys.put(asset.id(), asset.storageKey()));
@@ -181,7 +213,7 @@ public class DocumentExportService {
             // stream이 닫힐 때 임시 파일도 함께 지워진다. 응답을 다 쓴 뒤 컨테이너가 닫아 준다.
             long contentLength = Files.size(temporaryZip);
             InputStream content = Files.newInputStream(temporaryZip, StandardOpenOption.DELETE_ON_CLOSE);
-            return DocumentExportResult.zip(zipFilename, contentLength, content);
+            return DocumentExportResult.zip(zipFilename, contentLength, content, aiGenerated);
         } catch (Exception exception) {
             deleteQuietly(temporaryZip);
             throw new DocumentAssetExportException("이미지 ZIP을 완성하지 못했습니다.", exception);

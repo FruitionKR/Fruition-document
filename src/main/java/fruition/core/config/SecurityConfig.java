@@ -1,6 +1,7 @@
 package fruition.core.config;
 
 import fruition.core.agent.security.AgentServiceTokenFilter;
+import fruition.core.document.controller.DocumentController;
 import fruition.shared.logging.HttpRequestLoggingFilter;
 import fruition.shared.security.JwtAuthenticationFilter;
 import jakarta.servlet.DispatcherType;
@@ -49,7 +50,9 @@ public class SecurityConfig {
         configuration.setAllowedHeaders(List.of("*"));
         // 요청 추적 ID는 브라우저 클라이언트가 읽어야 서버 로그와 대조할 수 있다.
         // ETag는 폴링 클라이언트가 읽어 다음 요청의 If-None-Match로 보낸다.
-        configuration.setExposedHeaders(List.of(HttpRequestLoggingFilter.REQUEST_ID_HEADER, HttpHeaders.ETAG));
+        // AI 생성 표시는 문서 내보내기 직후 프론트가 읽어 안내를 띄운다.
+        configuration.setExposedHeaders(List.of(HttpRequestLoggingFilter.REQUEST_ID_HEADER, HttpHeaders.ETAG,
+                DocumentController.AI_GENERATED_HEADER));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", configuration);
