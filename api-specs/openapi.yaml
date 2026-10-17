@@ -3194,6 +3194,60 @@ paths:
       tags:
       - Folders
   /api/workspaces/{workspace_id}/meetings:
+    get:
+      description: "내가 만든 회의를 최근 생성 순으로 반환합니다. 새로고침 뒤 진행 중이던 회의를 다시 여는 데 씁니다. 전사 구간 같은 무거운 내용은 넣지 않으므로 GET /{meeting_id}로 이어서 조회합니다."
+      operationId: listMeetings
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - description: "쉼표로 구분한 상태(open, awaiting_upload, transcribing, failed). 생략하면 전부"
+        example: "transcribing,open"
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+      - description: 이전 응답의 next_cursor. 생략하면 첫 페이지
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+      - description: "페이지 크기. 기본 20, 최대 100"
+        example: 20
+        in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/MeetingListResponse"
+          description: 조회 성공
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 허용하지 않는 status 또는 잘못된 cursor
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+      summary: 회의 목록
+      tags:
+      - Meetings
     post:
       description: "받아쓰기 회의를 만듭니다. document_id를 주면 그 문서를 회의록 저장 대상으로 기억하며, 사용자가 편집할 수 있는 자기 Markdown 문서여야 합니다."
       operationId: createMeeting
@@ -7681,6 +7735,52 @@ components:
           - live
           - upload
           example: live
+    MeetingListItem:
+      type: object
+      description: 회의 한 건 요약
+      properties:
+        created_at:
+          type: string
+          format: date-time
+        display_name:
+          type: string
+          example: 출시 회의
+        has_notes:
+          type: boolean
+          description: 만들어졌거나 저장된 회의록 초안이 있는지
+        has_recording:
+          type: boolean
+          description: 녹음 원본이 있는지
+        meeting_id:
+          type: string
+          example: mtg_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        source:
+          type: string
+          enum:
+          - live
+          - upload
+        status:
+          type: string
+          enum:
+          - open
+          - awaiting_upload
+          - transcribing
+          - failed
+        updated_at:
+          type: string
+          format: date-time
+          description: 상태가 바뀌거나 녹음 원본을 저장한 시각. 받아쓰기·회의록 초안으로는 바뀌지 않는다.
+    MeetingListResponse:
+      type: object
+      description: 내 회의 목록. 최근 생성 순이다.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MeetingListItem"
+        next_cursor:
+          type: string
+          description: 다음 페이지 cursor. 마지막 페이지면 null
     MeetingLiveTicketResponse:
       type: object
       description: 실시간 받아쓰기 일회용 접속권
