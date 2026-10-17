@@ -7769,6 +7769,7 @@ components:
         updated_at:
           type: string
           format: date-time
+          description: 상태가 바뀌거나 녹음 원본을 저장한 시각. 받아쓰기·회의록 초안으로는 바뀌지 않는다.
     MeetingListResponse:
       type: object
       description: 내 회의 목록. 최근 생성 순이다.

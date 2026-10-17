@@ -21,5 +21,7 @@ public record MeetingListResponse(
             @JsonProperty("has_recording") @Schema(description = "녹음 원본이 있는지") boolean hasRecording,
             @JsonProperty("has_notes") @Schema(description = "만들어졌거나 저장된 회의록 초안이 있는지") boolean hasNotes,
             @JsonProperty("created_at") Instant createdAt,
-            @JsonProperty("updated_at") Instant updatedAt) {}
+            @JsonProperty("updated_at")
+            @Schema(description = "상태가 바뀌거나 녹음 원본을 저장한 시각. 받아쓰기·회의록 초안으로는 바뀌지 않는다.")
+            Instant updatedAt) {}
 }

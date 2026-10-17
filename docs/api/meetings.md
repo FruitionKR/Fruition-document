@@ -224,6 +224,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 - Content-Type: `application/json` (`MeetingListResponse`)
 - 정렬: `created_at` 내림차순(같으면 `meeting_id` 내림차순).
 - `has_recording`: 녹음 원본이 있는지. `has_notes`: 만들어졌거나(`ready`) 저장된(`applied`) 회의록 초안이 있는지.
+- `updated_at`: 회의 상태가 바뀌거나 녹음 원본을 저장한 시각. 받아쓰기 구간 추가나 회의록 초안 생성·저장으로는 바뀌지 않으므로 "마지막 활동 시각"으로 쓰지 않는다.
 - 전사 구간(`segments`)·연결 기록(`streams`)은 넣지 않는다. 필요하면 `GET /{meeting_id}`로 조회한다.
 
 ```json
