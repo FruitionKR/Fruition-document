@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
@@ -62,6 +63,31 @@ public class MeetingController {
             @RequestBody CreateRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.create(
                 workspaceId, userId, idempotencyKey, request.displayName(), request.source(), request.documentId()));
+    }
+
+    @Operation(operationId = "listMeetings", summary = "회의 목록",
+            description = "내가 만든 회의를 최근 생성 순으로 반환합니다. 새로고침 뒤 진행 중이던 회의를 다시 여는 데 씁니다. "
+                    + "전사 구간 같은 무거운 내용은 넣지 않으므로 GET /{meeting_id}로 이어서 조회합니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "조회 성공",
+            content = @Content(schema = @Schema(implementation = MeetingListResponse.class))),
+        @ApiResponse(responseCode = "400", description = "허용하지 않는 status 또는 잘못된 cursor",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "404", description = "워크스페이스를 찾을 수 없음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @GetMapping
+    public MeetingListResponse list(
+            @AuthenticationPrincipal String userId,
+            @PathVariable("workspace_id") String workspaceId,
+            @Parameter(description = "쉼표로 구분한 상태(open, awaiting_upload, transcribing, failed). 생략하면 전부",
+                    example = "transcribing,open")
+            @RequestParam(value = "status", required = false) String status,
+            @Parameter(description = "이전 응답의 next_cursor. 생략하면 첫 페이지")
+            @RequestParam(value = "cursor", required = false) String cursor,
+            @Parameter(description = "페이지 크기. 기본 20, 최대 100", example = "20")
+            @RequestParam(value = "limit", required = false) Integer limit) {
+        return service.list(workspaceId, userId, status, cursor, limit);
     }
 
     @Operation(operationId = "getMeeting", summary = "회의 조회", description = "회의 상태, 받아쓰기 연결 기록, 발화 순서대로 정렬된 전사 구간을 반환합니다.")

@@ -21,6 +21,9 @@ import java.util.UUID;
 public class MeetingService {
     static final Duration TICKET_TTL = Duration.ofSeconds(60);
     private static final String DEFAULT_NAME = "회의록";
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 100;
+    private static final List<String> STATUSES = List.of("open", "awaiting_upload", "transcribing", "failed");
 
     public record Ticket(String userId, String workspaceId, String meetingId) {}
 
@@ -75,6 +78,49 @@ public class MeetingService {
     @Transactional(readOnly = true)
     public MeetingResponse get(String workspaceId, String userId, String meetingId) {
         return toResponse(requireOwned(workspaceId, userId, meetingId));
+    }
+
+    /** 만든 사람의 회의만 최근 생성 순으로 준다. status는 쉼표로 여러 개를 고를 수 있다. */
+    @Transactional(readOnly = true)
+    public MeetingListResponse list(String workspaceId, String userId, String status, String cursor, Integer limit) {
+        accessGuard.requireMember(workspaceId, userId);
+        List<String> statuses = parseStatuses(status);
+        int size = limit == null || limit < 1 ? DEFAULT_PAGE_SIZE : Math.min(limit, MAX_PAGE_SIZE);
+        Instant cursorCreatedAt = null;
+        String cursorId = null;
+        if (cursor != null && !cursor.isBlank()) {
+            int separator = cursor.indexOf(',');
+            try {
+                cursorCreatedAt = Instant.parse(cursor.substring(0, separator));
+                cursorId = cursor.substring(separator + 1);
+            } catch (RuntimeException e) {
+                throw new MeetingException(HttpStatus.BAD_REQUEST, "INVALID_MEETING", "cursor 형식이 올바르지 않습니다.");
+            }
+        }
+        // 한 건 더 읽어 다음 페이지가 있는지 본다.
+        List<MeetingRepository.Summary> found =
+                repository.findOwnedPage(workspaceId, userId, statuses, cursorCreatedAt, cursorId, size + 1);
+        boolean hasMore = found.size() > size;
+        List<MeetingRepository.Summary> page = hasMore ? found.subList(0, size) : found;
+        String nextCursor = hasMore ? page.get(size - 1).createdAt() + "," + page.get(size - 1).id() : null;
+        return new MeetingListResponse(page.stream()
+                .map(meeting -> new MeetingListResponse.Item(meeting.id(), meeting.displayName(), meeting.source(),
+                        meeting.status(), meeting.hasRecording(), meeting.hasNotes(), meeting.createdAt(),
+                        meeting.updatedAt()))
+                .toList(), nextCursor);
+    }
+
+    private static List<String> parseStatuses(String status) {
+        if (status == null || status.isBlank()) {
+            return List.of();
+        }
+        List<String> statuses = java.util.Arrays.stream(status.split(",")).map(String::strip)
+                .filter(value -> !value.isEmpty()).distinct().toList();
+        if (!STATUSES.containsAll(statuses)) {
+            throw new MeetingException(HttpStatus.BAD_REQUEST, "INVALID_MEETING",
+                    "status는 " + String.join(", ", STATUSES) + " 중에서 고릅니다.");
+        }
+        return statuses;
     }
 
     public LiveTicket issueTicket(String workspaceId, String userId, String meetingId) {

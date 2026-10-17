@@ -56,6 +56,43 @@ public class MeetingRepository {
                 (rs, n) -> meeting(rs), id, workspaceId, userId).stream().findFirst();
     }
 
+    /** 목록 한 줄. 전사 구간 같은 무거운 내용은 읽지 않는다. */
+    public record Summary(String id, String displayName, String source, String status,
+                          boolean hasRecording, boolean hasNotes, Instant createdAt, Instant updatedAt) {}
+
+    /**
+     * 만든 사람의 회의를 최근 생성 순으로 읽는다. {@code cursorCreatedAt}이 있으면 그 (created_at, id)보다 뒤의 것만 준다.
+     * 회의록은 초안이 만들어졌거나(ready) 저장된(applied) 버전이 있으면 있는 것으로 본다.
+     */
+    public List<Summary> findOwnedPage(String workspaceId, String userId, List<String> statuses,
+                                       Instant cursorCreatedAt, String cursorId, int limit) {
+        StringBuilder sql = new StringBuilder("""
+                SELECT m.id, m.display_name, m.source, m.status, m.recording_key IS NOT NULL AS has_recording,
+                       EXISTS (SELECT 1 FROM meeting_notes n
+                               WHERE n.meeting_id = m.id AND n.status IN ('ready', 'applied')) AS has_notes,
+                       m.created_at, m.updated_at
+                FROM meetings m
+                WHERE m.workspace_id = ? AND m.created_by = ?
+                """);
+        List<Object> args = new java.util.ArrayList<>(List.of(workspaceId, userId));
+        if (!statuses.isEmpty()) {
+            sql.append(" AND m.status IN (").append(String.join(", ", java.util.Collections.nCopies(statuses.size(), "?")))
+                    .append(')');
+            args.addAll(statuses);
+        }
+        if (cursorCreatedAt != null) {
+            sql.append(" AND (m.created_at, m.id) < (?, ?)");
+            args.add(Timestamp.from(cursorCreatedAt));
+            args.add(cursorId);
+        }
+        sql.append(" ORDER BY m.created_at DESC, m.id DESC LIMIT ?");
+        args.add(limit);
+        return jdbc.query(sql.toString(), (rs, n) -> new Summary(rs.getString("id"), rs.getString("display_name"),
+                rs.getString("source"), rs.getString("status"), rs.getBoolean("has_recording"),
+                rs.getBoolean("has_notes"), rs.getTimestamp("created_at").toInstant(),
+                rs.getTimestamp("updated_at").toInstant()), args.toArray());
+    }
+
     public Optional<Meeting> findById(String id) {
         return jdbc.query("SELECT * FROM meetings WHERE id = ?", (rs, n) -> meeting(rs), id).stream().findFirst();
     }
