@@ -212,14 +212,14 @@ class DocumentExportServiceTest {
         Document document = editableDocument("doc_ai_front", "머리말 문서");
         document.markAiOrigin(Document.AGENT_ORIGIN);
         stubDocument(document, new DocumentEditState(document.getId(),
-                "---\ntitle: 출시\n---\n# 본문", "hash", 1));
+                "---\ntitle: 출시\n---\n\n    들여쓴 코드", "hash", 1));
         when(referenceRepository.findAllByIdDocumentId(document.getId())).thenReturn(List.of());
 
         DocumentExportResult result = exportService.exportMarkdown(WORKSPACE_ID, USER_ID, document.getId());
 
         assertThat(new String(readAll(result.content()), StandardCharsets.UTF_8)).isEqualTo(
                 "---\ntitle: 출시\n---\n\n> 이 문서에는 생성형 AI가 만든 내용이 포함되어 있습니다. (Fruition, 2026-10-16 내보냄)"
-                        + "\n\n# 본문");
+                        + "\n\n    들여쓴 코드");
     }
 
     @Test

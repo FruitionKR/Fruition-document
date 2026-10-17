@@ -137,7 +137,8 @@ public class DocumentExportService {
         }
         String head = frontMatter.group();
         return head + (head.endsWith("\n") ? "" : "\n") + "\n" + notice + "\n\n"
-                + markdown.substring(frontMatter.end()).stripLeading();
+                // 빈 줄만 지운다. 첫 줄 들여쓰기(코드 블록 등)는 본문이라 남긴다.
+                + markdown.substring(frontMatter.end()).replaceFirst("^(\\r?\\n)+", "");
     }
 
     private Document loadEditableDocument(String workspaceId, String userId, String documentId) {
