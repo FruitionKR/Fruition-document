@@ -8988,7 +8988,7 @@ components:
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
         result_mode:
           type: string
-          description: "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 null로 저장된다."
+          description: "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 키를 보내지 않는다(기본값은 AI가 정함)."
           enum:
           - create
           - edit

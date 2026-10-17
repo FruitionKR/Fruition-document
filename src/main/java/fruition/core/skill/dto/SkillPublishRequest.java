@@ -49,7 +49,7 @@ public record SkillPublishRequest(
 
         @JsonProperty("result_mode")
         @Pattern(regexp = "create|edit|auto")
-        @Schema(description = "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 null로 저장된다.",
+        @Schema(description = "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 키를 보내지 않는다(기본값은 AI가 정함).",
                 allowableValues = {"create", "edit", "auto"}, example = "auto")
         String resultMode
 ) {}
