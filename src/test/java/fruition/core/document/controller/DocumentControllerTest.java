@@ -122,7 +122,7 @@ class DocumentControllerTest {
         byte[] bytes = "# 최신 본문\n한글".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         when(documentExportService.exportMarkdown(
                 WORKSPACE_ID, USER_ID, "doc_export"))
-                .thenReturn(DocumentExportResult.markdown("회의 결과.md", bytes));
+                .thenReturn(DocumentExportResult.markdown("회의 결과.md", bytes, false));
 
         mockMvc.perform(get(
                         "/api/workspaces/" + WORKSPACE_ID + "/documents/doc_export/export")
@@ -133,7 +133,8 @@ class DocumentControllerTest {
                 .andExpect(header().string(
                         HttpHeaders.CONTENT_DISPOSITION, containsString("attachment")))
                 .andExpect(header().string(
-                        HttpHeaders.CONTENT_DISPOSITION, containsString("filename*=")));
+                        HttpHeaders.CONTENT_DISPOSITION, containsString("filename*=")))
+                .andExpect(header().string("X-Fruition-AI-Generated", "false"));
     }
 
     @Test
@@ -141,13 +142,18 @@ class DocumentControllerTest {
         byte[] bytes = new byte[]{1, 2, 3};
         when(documentExportService.exportMarkdown(WORKSPACE_ID, USER_ID, "doc_zip"))
                 .thenReturn(DocumentExportResult.zip(
-                        "이미지 문서.zip", bytes.length, new java.io.ByteArrayInputStream(bytes)));
+                        "이미지 문서.zip", bytes.length, new java.io.ByteArrayInputStream(bytes), true));
 
         mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/documents/doc_zip/export")
-                        .header("Authorization", bearerToken()))
+                        .header("Authorization", bearerToken())
+                        .header(HttpHeaders.ORIGIN, "http://localhost:3000"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType("application/zip"))
-                .andExpect(content().bytes(bytes));
+                .andExpect(content().bytes(bytes))
+                .andExpect(header().string("X-Fruition-AI-Generated", "true"))
+                // 브라우저가 다른 origin에서도 읽을 수 있어야 한다.
+                .andExpect(header().string(
+                        HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, containsString("X-Fruition-AI-Generated")));
     }
 
     @Test

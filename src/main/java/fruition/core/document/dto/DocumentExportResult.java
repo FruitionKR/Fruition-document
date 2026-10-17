@@ -11,14 +11,17 @@ public record DocumentExportResult(
         String filename,
         String contentType,
         long contentLength,
-        InputStream content
+        InputStream content,
+        /** AI 결과물 문서인지. X-Fruition-AI-Generated 응답 헤더로 내려간다. */
+        boolean aiGenerated
 ) {
-    public static DocumentExportResult markdown(String filename, byte[] bytes) {
-        return new DocumentExportResult(
-                filename, "text/markdown;charset=UTF-8", bytes.length, new ByteArrayInputStream(bytes));
+    public static DocumentExportResult markdown(String filename, byte[] bytes, boolean aiGenerated) {
+        return new DocumentExportResult(filename, "text/markdown;charset=UTF-8", bytes.length,
+                new ByteArrayInputStream(bytes), aiGenerated);
     }
 
-    public static DocumentExportResult zip(String filename, long contentLength, InputStream content) {
-        return new DocumentExportResult(filename, "application/zip", contentLength, content);
+    public static DocumentExportResult zip(String filename, long contentLength, InputStream content,
+                                           boolean aiGenerated) {
+        return new DocumentExportResult(filename, "application/zip", contentLength, content, aiGenerated);
     }
 }

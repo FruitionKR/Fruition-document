@@ -26,6 +26,7 @@ import fruition.core.document.exception.InvalidDocumentVersionException;
 import fruition.core.document.service.DocumentAssetContentService;
 import fruition.core.document.exception.InvalidMarkdownContentException;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.headers.Header;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -52,6 +53,9 @@ import java.util.Set;
 @RequestMapping("/api/workspaces/{workspace_id}/documents")
 @Tag(name = "Documents", description = "Markdown 편집 문서와 업로드 원본 관리 API")
 public class DocumentController {
+
+    /** 내보낸 파일이 AI 결과물인지(true | false). 프론트가 다운로드 직후 안내를 띄우는 데 쓴다. */
+    public static final String AI_GENERATED_HEADER = "X-Fruition-AI-Generated";
 
     // 사용자 파일이 HTML로 열려도 스크립트가 돌지 않게 한다. Chrome은 sandbox 문서의 PDF 뷰어를 막으므로 PDF에는 붙이지 않는다.
     static final String SANDBOX_CSP = "sandbox; default-src 'none'";
@@ -220,10 +224,13 @@ public class DocumentController {
 
     @Operation(
         summary = "Markdown 원문 내보내기",
-        description = "최신 Markdown 편집본을 내보냅니다. 관리 이미지가 있으면 이미지와 Markdown을 ZIP으로 반환합니다."
+        description = "최신 Markdown 편집본을 내보냅니다. 관리 이미지가 있으면 이미지와 Markdown을 ZIP으로 반환합니다. "
+                + "AI 결과물(ai_origin 또는 last_ai_change가 있는 문서)이면 Markdown 맨 앞에 AI 생성 안내 블록을 넣습니다."
     )
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "Markdown 다운로드"),
+        @ApiResponse(responseCode = "200", description = "Markdown 다운로드",
+            headers = @Header(name = AI_GENERATED_HEADER,
+                description = "AI 결과물이면 true, 아니면 false", schema = @Schema(type = "string", allowableValues = {"true", "false"}))),
         @ApiResponse(responseCode = "404", description = "workspace, Markdown 문서 또는 편집 상태를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
@@ -242,6 +249,7 @@ public class DocumentController {
                 .contentType(MediaType.parseMediaType(result.contentType()))
                 .contentLength(result.contentLength())
                 .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition.toString())
+                .header(AI_GENERATED_HEADER, String.valueOf(result.aiGenerated()))
                 .body(new InputStreamResource(result.content()));
     }
 

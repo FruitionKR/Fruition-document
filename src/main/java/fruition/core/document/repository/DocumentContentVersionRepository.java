@@ -83,6 +83,9 @@ public interface DocumentContentVersionRepository
             """)
     List<AiChange> findLatestAiChanges(@Param("documentIds") Collection<String> documentIds);
 
+    /** 이 문서에 해당 경로로 저장한 버전이 있는지. 내보내기의 AI 결과물 판단에 쓴다. */
+    boolean existsByIdDocumentIdAndSourceIn(String documentId, Collection<String> sources);
+
     /** 이력 목록. markdown 본문을 제외한 메타데이터만 최신 버전 순으로 반환한다. */
     @Query("""
             SELECT v.id.version AS version, v.contentHash AS contentHash,
