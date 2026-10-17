@@ -116,7 +116,8 @@ public class PipelineSkillRequester {
         ObjectNode recorded = body.deepCopy();
         ((ObjectNode) recorded.path("document")).remove("markdown");
         ((ObjectNode) recorded.path("document")).put("markdown_sha256", sha256(markdown));
-        return tracked(runId, command(runId, "skill_test_run", workspaceId, userId, recorded), () -> {
+        // AI 테스트 실행은 run_id로 중복을 막지 않아 같은 run_id 재요청은 등록 단계에서 거절한다.
+        return tracked(runId, command(runId, "skill_test_run", workspaceId, userId, recorded), true, () -> {
             try {
                 JsonNode result = post("/test-run", body, runId, true);
                 return result.isObject() ? ((ObjectNode) result.deepCopy()).put("run_id", runId) : result;
@@ -156,7 +157,7 @@ public class PipelineSkillRequester {
     private JsonNode task(String runId, String kind, String workspaceId, String userId, String skillId, Object payload) {
         var command = command(runId, kind, workspaceId, userId, mapper.valueToTree(payload));
         if (skillId != null) command.put("skill_id", skillId);
-        return tracked(runId, command, () -> post("/tasks", command, runId, false));
+        return tracked(runId, command, false, () -> post("/tasks", command, runId, false));
     }
 
     private ObjectNode command(String runId, String kind, String workspaceId, String userId, JsonNode payload) {
@@ -166,9 +167,13 @@ public class PipelineSkillRequester {
         return command;
     }
 
-    /** 실행을 등록(크레딧 예약)하고 AI를 호출한 뒤 완료·실패를 기록한다. 결과와 관계없이 사용 금액을 수집한다. */
-    private JsonNode tracked(String runId, ObjectNode command, java.util.function.Supplier<JsonNode> call) {
-        cancellation.register(command);
+    /**
+     * 실행을 등록(크레딧 예약)하고 AI를 호출한 뒤 완료·실패를 기록한다. 결과와 관계없이 사용 금액을 수집한다.
+     * requireNewRun이면 이미 등록된 run_id를 거절한다. 거절은 실행 전이라 실패·정산 기록을 남기지 않는다.
+     */
+    private JsonNode tracked(String runId, ObjectNode command, boolean requireNewRun,
+                             java.util.function.Supplier<JsonNode> call) {
+        if (requireNewRun) cancellation.registerNew(command); else cancellation.register(command);
         try {
             JsonNode result = call.get();
             cancellation.finish(runId);

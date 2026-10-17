@@ -4396,7 +4396,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 같은 run_id로 다른 요청을 보냄
+          description: 이미 사용한 run_id. 테스트 실행은 run_id마다 한 번만 실행하므로 재시도도 새 run_id로 보낸다
         "413":
           content:
             application/json:
@@ -4404,7 +4404,7 @@ paths:
                 oneOf:
                 - $ref: "#/components/schemas/JsonNode"
                 - $ref: "#/components/schemas/ErrorResponse"
-          description: 요청 본문이 너무 큼
+          description: 본문이 UTF-8 기준 5MB를 넘음(MARKDOWN_CONTENT_TOO_LARGE) 또는 AI가 요청 본문을 거절
         "422":
           content:
             '*/*':

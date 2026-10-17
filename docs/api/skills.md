@@ -592,7 +592,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 | 입력 | **Path** — `workspace_id`: `string`<br>**Query** — `run_id`: `string`(선택)<br>**Body** — `SkillTestRunRequest` |
 | 출력 | `200` — `SkillTestRunResponse` (`status`: `completed` \| `blocked`) |
 | 조건 | 인증 필요<br>path의 `workspace_id` 활성 멤버십과 `document_id` 읽기 권한(같은 워크스페이스의 삭제되지 않은 문서)을 검증한다.<br>팀 Skill 게시 권한(`skill.author`)은 요구하지 않는다(저장하지 않음). |
-| 주요 오류 | `400` 형식·Markdown 아닌 문서·적용 범위 오류(`INVALID_REQUEST`), `SKILL_TEST_RUN_UNSUPPORTED`<br>`402` `INSUFFICIENT_CREDIT`<br>`404` 워크스페이스 또는 문서 없음<br>`409` 같은 `run_id`로 다른 요청<br>`503` `SKILL_AI_UNAVAILABLE`, `SKILL_TEST_RUN_UNAVAILABLE` |
+| 주요 오류 | `400` 형식·Markdown 아닌 문서·적용 범위 오류(`INVALID_REQUEST`), `SKILL_TEST_RUN_UNSUPPORTED`<br>`402` `INSUFFICIENT_CREDIT`<br>`404` 워크스페이스 또는 문서 없음<br>`409` 이미 사용한 `run_id`<br>`413` 본문 5MB 초과<br>`503` `SKILL_AI_UNAVAILABLE`, `SKILL_TEST_RUN_UNAVAILABLE` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -611,6 +611,7 @@ Figma "스킬 만들기" 시트의 "테스트 실행" 카드용. 게시 전 정�
 - 문서·Skill·Agent run 어느 것도 만들거나 바꾸지 않는다. 문서 버전이 오르지 않고 이벤트도 발행하지 않는다.
 - LLM을 호출하므로 게시와 같이 과금한다. 실행은 `ai_task_runs`에 `kind=skill_test_run`으로 등록돼 크레딧을 예약하고(`app.billing.enforce`면 최저 비용 미만일 때 `402`), ai-svc가 `X-Request-Id`(=`run_id`)로 기록한 사용량을 정산한다. 실행 기록에는 문서 본문 대신 `markdown_sha256`만 남긴다. 반복 테스트 횟수 제한은 두지 않는다.
 - 타임아웃(`app.skill.timeout-seconds`)·취소는 다른 Skill 작업과 같다. `run_id`를 미리 정하면 [공통 취소 API](tasks.md)로 취소할 수 있다.
+- 다른 Skill 작업과 달리 **`run_id`는 한 번만 쓸 수 있다.** ai-svc 테스트 실행은 `run_id`로 중복 실행을 막지 않으므로, 같은 `run_id` 재요청은 크레딧 사전 확인 없이 다시 실행되지 않게 `409`로 거절한다.
 
 #### 3. Auth 필요 여부
 
@@ -622,13 +623,13 @@ Figma "스킬 만들기" 시트의 "테스트 실행" 카드용. 게시 전 정�
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | `workspace_id` | `string` | 예 | - |
-| query | `run_id` | `string` | 아니요 | 생략하면 `skill_test_<uuid>`. `[a-zA-Z0-9:_-]{1,120}` |
+| query | `run_id` | `string` | 아니요 | 생략하면 `skill_test_<uuid>`. `[a-zA-Z0-9:_-]{1,120}`. 한 번만 쓸 수 있다 |
 | body | `name` | `string` | 예 | 게시와 같은 형식 |
 | body | `description` | `string` | 예 | 500자 이하 |
 | body | `instructions_markdown` | `string` | 예 | 30000자 이하 |
 | body | `capabilities` | `string[]` | 예 | 1개 이상. Tool 허용 목록은 ai-svc가 계산한다 |
 | body | `document_id` | `string` | 예 | 테스트할 문서 |
-| body | `markdown` | `string` | 아니요 | 에디터의 저장 안 된 본문. 생략하면 저장된 최신 본문 |
+| body | `markdown` | `string` | 아니요 | 에디터의 저장 안 된 본문(UTF-8 5MB 이하). 생략하면 저장된 최신 본문 |
 | body | `target` | `object` | 아니요 | `{type, start_line, end_line}`. `type`은 `selection` \| `current_section` \| `whole_document`, 1-based 줄(끝 포함). 생략하면 문서 전체. 줄 범위는 실제로 쓰는 본문 기준으로 검사한다 |
 
 ```json
@@ -685,7 +686,8 @@ ai-svc로는 다음을 보낸다(`X-Agent-Service-Token`, `X-Request-Id: <run_id
 | `400` | `SKILL_REQUEST_REJECTED` | 그 밖의 AI 거절 |
 | `402` | `INSUFFICIENT_CREDIT` | 크레딧 부족 |
 | `404` | `WORKSPACE_NOT_FOUND`, `DOCUMENT_NOT_FOUND` | 멤버가 아니거나 문서가 없음(다른 워크스페이스 문서 포함) |
-| `409` | - | 같은 `run_id`로 다른 내용을 보냄 |
+| `409` | - | 이미 사용한 `run_id`. 테스트 실행은 `run_id`마다 한 번만 실행한다(재시도도 새 `run_id`) |
+| `413` | `MARKDOWN_CONTENT_TOO_LARGE` | 쓰려는 본문(요청 `markdown` 또는 저장본)이 UTF-8 기준 5MB 초과 |
 | `503` | `SKILL_AI_UNAVAILABLE` | AI 장애·타임아웃 |
 | `503` | `SKILL_TEST_RUN_UNAVAILABLE` | ai-svc에 테스트 실행 API가 아직 없음(ai `404`). ai#114 배포 전 |
 

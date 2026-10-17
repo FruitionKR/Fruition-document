@@ -82,6 +82,16 @@ class SkillTestRunServiceTest {
     }
 
     @Test
+    void testRun_rejectsMarkdownOverFiveMegabytesBeforeCallingAi() {
+        givenEditableDocument("# 저장본", 1);
+
+        assertThatThrownBy(() -> service.testRun("ws_1", "user_1",
+                request("가".repeat(5 * 1024 * 1024 / 3 + 1), null), "run_1"))
+                .isInstanceOf(fruition.core.document.exception.MarkdownContentTooLargeException.class);
+        verifyNoInteractions(requester);
+    }
+
+    @Test
     void testRun_rejectsOriginalDocument() {
         when(document.getDocumentRole()).thenReturn(DocumentRole.ORIGINAL);
         when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_1", "ws_1"))

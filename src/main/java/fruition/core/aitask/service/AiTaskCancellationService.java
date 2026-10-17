@@ -53,12 +53,28 @@ public class AiTaskCancellationService {
     }
 
     public void register(JsonNode command) {
+        register(command, false);
+    }
+
+    /**
+     * 같은 run_id를 다시 받지 않는 작업용 등록. AI가 run_id로 중복 실행을 막지 않는 작업(Skill 테스트 실행)은
+     * 재요청이 크레딧 예약을 이미 있는 것으로 보고 사전 승인 없이 다시 실행되므로, 이미 등록된 run_id면 409로 거절한다.
+     * INSERT 결과로 판정해 동시에 들어온 같은 run_id도 하나만 통과한다.
+     */
+    public void registerNew(JsonNode command) {
+        register(command, true);
+    }
+
+    private void register(JsonNode command, boolean requireNew) {
         String id = command.path("run_id").asText();
         if (!id.matches("[a-zA-Z0-9:_-]{1,120}")) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "작업 ID가 올바르지 않습니다.");
         transaction.executeWithoutResult(tx -> {
-            jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, command) VALUES (?, ?, ?, ?, CAST(? AS jsonb)) "
+            int inserted = jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, command) VALUES (?, ?, ?, ?, CAST(? AS jsonb)) "
                     + "ON CONFLICT (id) DO NOTHING", id, command.path("workspace_id").asText(), command.path("user_id").asText(),
                     command.path("kind").asText(), command.toString());
+            if (requireNew && inserted == 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 사용한 작업 ID입니다. 새 run_id로 다시 요청해 주세요.");
+            }
             var matching = jdbc.queryForList("SELECT id FROM ai_task_runs WHERE id = ? AND command = CAST(? AS jsonb)",
                     String.class, id, command.toString());
             if (matching.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "작업 ID의 요청 내용이 다릅니다.");

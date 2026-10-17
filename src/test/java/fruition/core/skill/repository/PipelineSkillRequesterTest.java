@@ -177,11 +177,40 @@ class PipelineSkillRequesterTest {
         // 실행 기록(크레딧 예약·취소용)에는 문서 본문 대신 해시만 남긴다.
         var command = org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
         var order = org.mockito.Mockito.inOrder(cancellation);
-        order.verify(cancellation).register(command.capture());
+        order.verify(cancellation).registerNew(command.capture());
         order.verify(cancellation).finish("skill_test_1");
         assertThat(command.getValue().path("kind").asText()).isEqualTo("skill_test_run");
         assertThat(command.getValue().path("payload").path("document").has("markdown")).isFalse();
         assertThat(command.getValue().path("payload").path("document").path("markdown_sha256").asText()).hasSize(64);
+    }
+
+    @Test
+    void testRun_reusedRunIdIsRejectedBeforeCallingAiOrClosingTheEarlierRun() {
+        var cancellation = org.mockito.Mockito.mock(fruition.core.aitask.service.AiTaskCancellationService.class);
+        var usageCharges = org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class);
+        org.mockito.Mockito.doThrow(new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.CONFLICT, "이미 사용한 작업 ID입니다."))
+                .when(cancellation).registerNew(org.mockito.ArgumentMatchers.any());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> requester(usageCharges, cancellation, 5)
+                        .testRun("ws_1", "user_1", testRunRequest(), 1, "본문\n둘",
+                                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "skill_test_1"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+
+        assertThat(uri.get()).isNull();
+        org.mockito.Mockito.verifyNoInteractions(usageCharges);
+    }
+
+    @Test
+    void tasksKeepIdempotentRegistrationBecauseAiDeduplicatesByRunId() {
+        var cancellation = org.mockito.Mockito.mock(fruition.core.aitask.service.AiTaskCancellationService.class);
+        requester(org.mockito.Mockito.mock(fruition.core.usage.service.UsageChargeService.class), cancellation, 5)
+                .author("ws_1", "user_1", new SkillAuthoringRequest(
+                        "personal", "meeting-notes", null, "회의록을 작성해줘", "enhance", List.of()),
+                        new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-author");
+
+        org.mockito.Mockito.verify(cancellation).register(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(cancellation, org.mockito.Mockito.never()).registerNew(org.mockito.ArgumentMatchers.any());
     }
 
     @Test

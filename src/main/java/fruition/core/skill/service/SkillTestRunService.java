@@ -6,6 +6,7 @@ import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.exception.DocumentNotFoundException;
+import fruition.core.document.exception.MarkdownContentTooLargeException;
 import fruition.core.document.repository.DocumentEditStateRepository;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.service.DocumentEditStateInitializer;
@@ -21,6 +22,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class SkillTestRunService {
+
+    /** 문서 편집 본문 상한(DocumentEditingRules.MAX_MARKDOWN_BYTES)과 같다. 크레딧 예약 전에 거절한다. */
+    private static final int MAX_MARKDOWN_BYTES = 5 * 1024 * 1024;
 
     private final WorkspaceAccessGuard workspaceAccessGuard;
     private final DocumentRepository documentRepository;
@@ -52,6 +56,9 @@ public class SkillTestRunService {
         DocumentEditState state = editStateRepository.findById(document.getId())
                 .orElseThrow(() -> new DocumentNotFoundException(request.documentId()));
         String markdown = request.markdown() != null ? request.markdown() : state.getMarkdown();
+        if (markdown.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_MARKDOWN_BYTES) {
+            throw new MarkdownContentTooLargeException("Markdown 본문은 UTF-8 기준 5MB 이하여야 합니다.");
+        }
         validateTarget(request.target(), markdown);
         return requester.testRun(workspaceId, userId, request, state.getRevision(), markdown,
                 workspaceAiModelClient.get(workspaceId), runId);
