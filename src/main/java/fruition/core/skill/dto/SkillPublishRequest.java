@@ -40,8 +40,6 @@ public record SkillPublishRequest(
         List<String> capabilities,
 
         @JsonProperty("allowed_tools")
-        @NotNull
-        @Size(min = 1)
-        @Schema(description = "사용자가 승인한 초안의 Tool 허용 목록")
-        List<String> allowedTools
+        @Schema(description = "사용자가 승인한 초안의 Tool 허용 목록. 생략하거나 []이면 AI가 capabilities로 계산한다.")
+        List<@NotBlank String> allowedTools
 ) {}

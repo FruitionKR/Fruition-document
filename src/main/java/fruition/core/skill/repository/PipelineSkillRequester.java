@@ -221,7 +221,9 @@ public class PipelineSkillRequester {
             String description,
             @JsonProperty("instructions_markdown") String instructionsMarkdown,
             java.util.List<String> capabilities,
-            @JsonProperty("allowed_tools") java.util.List<String> allowedTools,
+            // 비어 있으면 키를 빼서 AI가 capabilities로 계산하게 한다(#145).
+            @JsonProperty("allowed_tools") @com.fasterxml.jackson.annotation.JsonInclude(
+                    com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY) java.util.List<String> allowedTools,
             String provider,
             String model) {}
 
