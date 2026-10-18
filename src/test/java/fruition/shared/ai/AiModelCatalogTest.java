@@ -7,36 +7,68 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AiModelCatalogTest {
     @Test
-    void enabledModels_returnsSeveralModelsPerProvider() {
+    void enabledModels_keepsOnlyCheapestModelPerProvider() {
         AiModelCatalog catalog = new AiModelCatalog("openai,gemini,claude");
 
-        assertThat(catalog.enabledModels()).hasSize(28);
-        assertThat(catalog.enabledModels()).filteredOn(model -> model.provider().equals("openai")).hasSize(14);
-        assertThat(catalog.enabledModels()).filteredOn(model -> model.provider().equals("gemini")).hasSize(5);
-        assertThat(catalog.enabledModels()).filteredOn(model -> model.provider().equals("claude")).hasSize(9);
-        assertThat(catalog.enabledModels()).extracting(AiModelCatalog.AiModel::model)
-                .contains("gpt-6-luna", "gpt-6.1-sol", "gemini-3.5-flash-lite", "gemini-3.8-flash",
-                        "claude-sonnet-5", "claude-opus-5-5", "claude-haiku-4-5-20251001")
-                .doesNotContain("gpt-5-nano", "gpt-5", "gpt-5-mini", "gpt-5.4-nano", "gpt-4.1-nano", "o3", "o4-mini",
-                        "gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.5-flash")
-                .doesNotHaveDuplicates();
-        assertThat(catalog.enabledModels().get(0).model()).isEqualTo("gpt-6-luna");
+        assertThat(catalog.enabledModels()).extracting(AiModelCatalog.AiModel::provider, AiModelCatalog.AiModel::model)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("openai", "gpt-6-luna"),
+                        org.assertj.core.groups.Tuple.tuple("gemini", "gemini-3.5-flash-lite"),
+                        org.assertj.core.groups.Tuple.tuple("claude", "claude-haiku-4-5-20251001"));
     }
 
     @Test
     void resolve_rejectsRemovedModels() {
         AiModelCatalog catalog = new AiModelCatalog("openai,gemini,claude");
 
-        for (String model : new String[]{"gpt-5-nano", "gpt-5", "gpt-5-mini", "gpt-5.4-nano", "gpt-4.1-nano", "o3", "o4-mini"}) {
+        for (String model : new String[]{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.4-mini",
+                "gpt-4.1", "gpt-4o-mini", "gpt-5-nano", "o3"}) {
             assertThatThrownBy(() -> catalog.resolve("openai", model))
                     .isInstanceOf(InvalidAiModelException.class)
                     .hasMessage("선택할 수 없는 AI 모델입니다.");
         }
-        for (String model : new String[]{"gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.5-flash"}) {
+        for (String model : new String[]{"gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.1-pro-preview",
+                "gemini-3-flash-preview", "gemini-3.1-flash-lite"}) {
             assertThatThrownBy(() -> catalog.resolve("gemini", model))
                     .isInstanceOf(InvalidAiModelException.class)
                     .hasMessage("선택할 수 없는 AI 모델입니다.");
         }
+        for (String model : new String[]{"claude-sonnet-5", "claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1",
+                "claude-opus-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"}) {
+            assertThatThrownBy(() -> catalog.resolve("claude", model))
+                    .isInstanceOf(InvalidAiModelException.class)
+                    .hasMessage("선택할 수 없는 AI 모델입니다.");
+        }
+    }
+
+    @Test
+    void resolve_allowsClaudeHaikuForChat() {
+        assertThat(new AiModelCatalog("openai,gemini,claude").resolve("claude", "claude-haiku-4-5-20251001"))
+                .isEqualTo(new AiModelCatalog.AiModel("claude", "claude-haiku-4-5-20251001", "Claude Haiku 4.5"));
+    }
+
+    @Test
+    void resolveForWorkspace_rejectsClaude() {
+        AiModelCatalog catalog = new AiModelCatalog("openai,gemini,claude");
+
+        assertThat(catalog.resolveForWorkspace("gemini", "gemini-3.5-flash-lite").model()).isEqualTo("gemini-3.5-flash-lite");
+        assertThat(catalog.resolveForWorkspace("openai", "gpt-6-luna").model()).isEqualTo("gpt-6-luna");
+        assertThatThrownBy(() -> catalog.resolveForWorkspace("claude", "claude-haiku-4-5-20251001"))
+                .isInstanceOf(InvalidAiModelException.class)
+                .hasMessage("Claude 모델은 채팅에서 직접 선택할 때만 사용할 수 있습니다.");
+        assertThatThrownBy(() -> catalog.resolveForWorkspace("openai", "gpt-6-sol"))
+                .isInstanceOf(InvalidAiModelException.class);
+    }
+
+    @Test
+    void isWorkspaceModel_allowsOnlyOpenaiAndGeminiCatalogModels() {
+        assertThat(AiModelCatalog.isWorkspaceModel("openai", "gpt-6-luna")).isTrue();
+        assertThat(AiModelCatalog.isWorkspaceModel("gemini", "gemini-3.5-flash-lite")).isTrue();
+        assertThat(AiModelCatalog.isWorkspaceModel("claude", "claude-haiku-4-5-20251001")).isFalse();
+        assertThat(AiModelCatalog.isWorkspaceModel("gemini", "gemini-3.8-flash")).isFalse();
+        assertThat(AiModelCatalog.isWorkspaceModel(null, null)).isFalse();
+        assertThat(AiModelCatalog.isWorkspaceModel(AiModelCatalog.WORKSPACE_DEFAULT_PROVIDER,
+                AiModelCatalog.WORKSPACE_DEFAULT_MODEL)).isTrue();
     }
 
     @Test
@@ -47,7 +79,7 @@ class AiModelCatalogTest {
         assertThat(new AiModelCatalog("gemini,claude").enabledModels().get(0).model())
                 .isEqualTo("gemini-3.5-flash-lite");
         assertThat(new AiModelCatalog("claude").enabledModels().get(0).model())
-                .isEqualTo("claude-sonnet-5");
+                .isEqualTo("claude-haiku-4-5-20251001");
     }
 
     @Test
@@ -58,7 +90,7 @@ class AiModelCatalogTest {
                 .containsOnly("gemini");
         assertThat(catalog.resolve("gemini", "gemini-3.5-flash-lite"))
                 .isEqualTo(new AiModelCatalog.AiModel("gemini", "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"));
-        assertThatThrownBy(() -> catalog.resolve("openai", "gpt-6.1-sol"))
+        assertThatThrownBy(() -> catalog.resolve("openai", "gpt-6-luna"))
                 .isInstanceOf(InvalidAiModelException.class);
     }
 

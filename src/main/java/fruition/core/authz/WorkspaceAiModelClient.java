@@ -1,7 +1,10 @@
 package fruition.core.authz;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import fruition.shared.ai.AiModelCatalog;
 import io.swagger.v3.oas.annotations.media.Schema;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -14,6 +17,8 @@ import java.time.Duration;
 
 @Component
 public class WorkspaceAiModelClient {
+
+    private static final Logger log = LoggerFactory.getLogger(WorkspaceAiModelClient.class);
 
     // timeout 없는 client는 access-svc가 응답하지 않을 때 요청 스레드를 무한히 붙잡는다.
     // 같은 패키지의 AccessUserClient와 같은 값을 쓴다.
@@ -54,7 +59,15 @@ public class WorkspaceAiModelClient {
         if (response == null || response.ingestLint() == null) {
             throw new IllegalStateException("워크스페이스 AI 모델 설정 응답이 비어 있습니다.");
         }
-        return response.ingestLint();
+        AiModelSelection selection = response.ingestLint();
+        // 카탈로그에서 빠졌거나 채팅 전용(claude)인 값이 남아 있으면 워크스페이스 기본 모델로 실행한다.
+        if (!AiModelCatalog.isWorkspaceModel(selection.provider(), selection.model())) {
+            log.warn("[워크스페이스 AI 모델 대체] workspaceId={} stored={}/{} fallback={}/{}", workspaceId,
+                    selection.provider(), selection.model(),
+                    AiModelCatalog.WORKSPACE_DEFAULT_PROVIDER, AiModelCatalog.WORKSPACE_DEFAULT_MODEL);
+            return new AiModelSelection(AiModelCatalog.WORKSPACE_DEFAULT_PROVIDER, AiModelCatalog.WORKSPACE_DEFAULT_MODEL);
+        }
+        return selection;
     }
 
     public AiModelSelection update(String workspaceId, String provider, String model) {
@@ -77,7 +90,7 @@ public class WorkspaceAiModelClient {
     // WorkspaceAiModelSettingsController의 동명 record와 겹치지 않도록 스키마 이름을 분리한다.
     @Schema(name = "AiModelSelectionResponse", description = "현재 설정된 provider와 model 조합")
     public record AiModelSelection(
-            @Schema(description = "LLM provider", allowableValues = {"openai", "gemini", "claude"},
+            @Schema(description = "LLM provider", allowableValues = {"openai", "gemini"},
                     example = "openai")
             String provider,
 

@@ -58,3 +58,17 @@ document와 access 카탈로그는 같아야 하고, ai-svc는 사용자가 고�
 - 비용 변화: OpenAI 기본값은 `gpt-5-nano` 대비 입력 ×2, 출력 ×1.25, Gemini 기본값은 입력 ×1.2, 출력 ×1.67이다. 공식 대체보다 작지만 비용은 오른다.
 - 품질(JSON 응답 안정성 등)은 실제 호출로 확인하지 않은 채 결정했다. 문제가 확인되면 같은 등급 안에서 다시 고른다.
 - 같은 판단(종료일 공지·자동 전환 → 제거, 같은 등급의 가장 싼 현행 모델로 이관)을 다음 교체에도 그대로 쓴다.
+
+## 후속 결정: 저가 모델 정책 (2026-10-18)
+
+비용 때문에 카탈로그를 provider마다 가장 싼 모델 하나로 줄였다. 위 "같은 등급 유지" 이관 규칙은 이번 교체에 쓰지 않는다.
+
+| provider | 남긴 모델 | 쓸 수 있는 곳 |
+|---|---|---|
+| openai | `gpt-6-luna` (채팅 기본값) | 채팅 질의·Agent, 워크스페이스 설정(`ingest_lint`) |
+| gemini | `gemini-3.5-flash-lite` (워크스페이스 기본값) | 채팅 질의·Agent, 워크스페이스 설정(`ingest_lint`) |
+| claude | `claude-haiku-4-5-20251001` | 채팅 질의·Agent만 |
+
+- 워크스페이스 공용 설정 `ingest_lint`(ingest, wiki lint, 스킬 작성·게시, 회의록, 변환 repair가 공유)에 claude를 저장하면 400 `INVALID_AI_MODEL`이다. 설정을 읽어 쓰는 `WorkspaceAiModelClient.get`은 허용 목록 밖 값을 `gemini-3.5-flash-lite`로 바꾼다.
+- 이관: openai → `gpt-6-luna`, gemini → `gemini-3.5-flash-lite`, claude → gemini `gemini-3.5-flash-lite`. 미발행 `ai_command_outbox`는 V79가 옮기고, 채팅 질의·Agent command(`kind` = `query`·`agent`)의 `claude-haiku-4-5-20251001`은 그대로 둔다. access `workspaces` 값은 access 마이그레이션이 옮긴다.
+- 뺀 모델의 단가 행(`ai_model_prices`)은 과거 청구 기록용으로 남긴다.

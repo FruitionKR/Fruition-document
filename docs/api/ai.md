@@ -13,7 +13,7 @@
 |---|---|
 | [`GET /api/ai-models`](#summary-get-api-ai-models) | 선택할 수 있는 provider/model 조합을 반환합니다. API key는 노출하지 않습니다. |
 | [`GET /api/workspaces/{workspace_id}/ai-model-settings`](#summary-get-api-workspaces-workspace-id-ai-model-settings) | ingest·lint 작업에 쓰는 provider/model 설정을 반환합니다. OWNER와 MEMBER 모두 조회할 수 있습니다. |
-| [`PUT /api/workspaces/{workspace_id}/ai-model-settings`](#summary-put-api-workspaces-workspace-id-ai-model-settings) | ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있고, 활성 model catalog에 있는 조합만 허용합니다. |
+| [`PUT /api/workspaces/{workspace_id}/ai-model-settings`](#summary-put-api-workspaces-workspace-id-ai-model-settings) | ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있고, 활성 model catalog에 있는 openai·gemini 조합만 허용합니다. Claude는 채팅에서 직접 고를 때만 쓸 수 있어 400을 반환합니다. |
 | [`GET /api/workspaces/{workspace_id}/ai-operation-logs`](#summary-get-api-workspaces-workspace-id-ai-operation-logs) | 최신순으로 반환합니다. 바꾼 것이 없는 성공 작업은 제외하고, 문서 편집은 실제 변경에 성공한 작업만 포함하며, status를 생략하면 진행 중인 작업과 반영에 실패한 작업은 제외합니다. status=processing 명시 조회는 활성 작업 탐지에, status=failed와 status=conflict 명시 조회는 실패 감지에 사용할 수 있습니다. 로그 테이블만 읽고 diff를 계산하지 않습니다. |
 | [`GET /api/workspaces/{workspace_id}/ai-operation-logs/{operation_id}`](#summary-get-api-workspaces-workspace-id-ai-operation-logs-operation-id) | ingest·lint는 생성·삭제된 Wiki의 제목과 page_type(concept/source)을 반환하며 본문·diff는 계산하거나 전달하지 않습니다. 그 외 작업은 리소스별 변경분을 반환합니다. |
 | [`POST /api/workspaces/{workspace_id}/ai-operation-logs/{operation_id}/restore`](#summary-post-api-workspaces-workspace-id-ai-operation-logs-operation-id-restore) | 복구 대상에 따라 처리 방식이 다릅니다. 문서 편집 복구는 즉시 완료되어 200을 반환하고, Wiki 복구는 queued 상태로 등록되어 202를 반환합니다. 미리보기와 같은 계산을 다시 하고 Wiki에 반영합니다. 받치는 기여가 남지 않은 페이지는 삭제합니다. Source는 마지막 남은 ingest의 본문으로 복원하고, Concept는 과거 버전 유무와 관계없이 남은 활성 기여를 llmPipeline에 전달해 재작성합니다. 재작성이 있으면 status가 rebuilding으로 돌아오며 결과는 로그 상세로 확인합니다. ingest 되돌리기는 Wiki만 되돌리고 원문 문서는 건드리지 않습니다. |
@@ -73,25 +73,22 @@
       "provider": "openai"
     },
     {
-      "display_name": "GPT-6.1 Sol",
-      "model": "gpt-6.1-sol",
-      "provider": "openai"
-    },
-    {
-      "display_name": "Gemini 3.1 Flash-Lite",
+      "display_name": "Gemini 3.5 Flash-Lite",
       "model": "gemini-3.5-flash-lite",
       "provider": "gemini"
     },
     {
-      "display_name": "Claude Sonnet 5",
-      "model": "claude-sonnet-5",
+      "display_name": "Claude Haiku 4.5",
+      "model": "claude-haiku-4-5-20251001",
       "provider": "claude"
     }
   ]
 }
 ```
 
-- provider마다 여러 모델을 반환한다(2026-10-10 기준 OpenAI 14개, Gemini 5개, Claude 9개). 순서는 provider별로 묶여 있다. 각 provider의 첫 항목은 기존 기본 모델(`gpt-6-luna`, `gemini-3.5-flash-lite`, `claude-sonnet-5`)이고, 그 뒤로 최신 모델부터 온다. 프론트는 저장된 선택이 없으면 첫 항목을 고르므로 기본 선택이 바뀌지 않는다. 위 예시는 일부만 보여준다.
+- 저가 모델 정책(2026-10-18)에 따라 provider마다 가장 싼 모델 하나씩, 위 예시의 3개만 반환한다. 첫 항목은 기본 모델 `gpt-6-luna`다. 프론트는 저장된 선택이 없으면 첫 항목을 고른다.
+- `claude-haiku-4-5-20251001`은 사용자가 요청마다 직접 고르는 채팅 질의·Agent turn에서만 쓸 수 있다. 워크스페이스 공용 설정(`PUT /api/workspaces/{workspace_id}/ai-model-settings`)에는 openai·gemini만 저장할 수 있다.
+- 목록에서 뺀 모델(`gpt-6.1-sol`, `gemini-3.8-flash`, `claude-sonnet-5` 등)을 요청하면 `400 INVALID_AI_MODEL`이다. 과거 청구 기록을 위해 그 모델의 단가 행(`ai_model_prices`)은 남긴다.
 - 목록은 `AiModelCatalog`의 정적 화이트리스트다. 실제 호출에서 JSON 응답을 확인한 텍스트 생성 모델만 넣는다. 폐기·종료 예정 모델(`gpt-5-nano`, `o4-mini`, `gemini-3.1-flash-lite` 등, `gpt-5-chat-latest`, `gemini-2.5-*` 등), JSON 모드를 지원하지 않는 모델(`gpt-4`), image·tts·audio·embedding 계열은 넣지 않는다.
 - `app.ai.enabled-providers`에서 비활성화한 provider의 모델은 빠진다. 같은 목록이 질의·Agent 요청과 워크스페이스 모델 설정의 `provider`/`model` 검증에도 쓰인다.
 - 이 목록이 기준이다. Fruition-access에도 같은 목록이 있고, access CI가 이 저장소 `dev`의 목록과 비교해 다르면 실패한다(#45, Fruition-access#8). 목록을 바꿀 때는 이 저장소 PR을 먼저 `dev`에 머지한 뒤 access를 맞춘다.
@@ -126,18 +123,13 @@ curl -X GET "$DOCUMENT/api/ai-models" \
       "provider": "openai"
     },
     {
-      "display_name": "GPT-6.1 Sol",
-      "model": "gpt-6.1-sol",
-      "provider": "openai"
-    },
-    {
-      "display_name": "Gemini 3.1 Flash-Lite",
+      "display_name": "Gemini 3.5 Flash-Lite",
       "model": "gemini-3.5-flash-lite",
       "provider": "gemini"
     },
     {
-      "display_name": "Claude Sonnet 5",
-      "model": "claude-sonnet-5",
+      "display_name": "Claude Haiku 4.5",
+      "model": "claude-haiku-4-5-20251001",
       "provider": "claude"
     }
   ]
@@ -199,6 +191,7 @@ ingest·lint 작업에 쓰는 provider/model 설정을 반환합니다. OWNER와
 - HTTP `200`: 조회 성공
 - Content-Type: `*/*` (`SettingsResponse`)
 - `can_update`: 호출자가 이 설정을 변경할 수 있는지(워크스페이스 OWNER 여부). MEMBER는 `false`를 받고 UI는 읽기 전용으로 표시한다.
+- access에 저장된 값이 카탈로그에서 빠졌거나 Claude이면 워크스페이스 기본값 `gemini` / `gemini-3.5-flash-lite`로 바꿔 반환한다. ingest·lint·스킬·회의록·변환 repair가 설정을 읽을 때도 같은 대체를 거친다(`WorkspaceAiModelClient.get`).
 
 ```json
 {
@@ -269,11 +262,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있고, 활성 model catalog에 있는 조합만 허용합니다. |
+| 목적 | ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있고, 활성 model catalog에 있는 openai·gemini 조합만 허용합니다. Claude는 채팅에서 직접 고를 때만 쓸 수 있어 400을 반환합니다. |
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `SettingsRequest` |
 | 출력 | `200` 변경 성공 — `SettingsResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다.<br>그 밖의 조건은 상세 권한 규칙 참고 |
-| 주요 오류 | `400` catalog에 없는 provider/model 조합 — `ErrorResponse`<br>`403` OWNER가 아님 — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
+| 주요 오류 | `400` catalog에 없거나 Claude인 provider/model 조합 — `ErrorResponse`<br>`403` OWNER가 아님 — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -287,7 +280,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-mod
 
 #### 2. 목적
 
-ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있고, 활성 model catalog에 있는 조합만 허용합니다.
+ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있고, 활성 model catalog에 있는 openai·gemini 조합만 허용합니다. Claude는 채팅에서 직접 고를 때만 쓸 수 있어 400을 반환합니다.
 
 #### 3. Auth 필요 여부
 
@@ -330,7 +323,7 @@ ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있�
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
-| `400` | catalog에 없는 provider/model 조합 | `ErrorResponse` |
+| `400` | catalog에 없거나 Claude인 provider/model 조합(`INVALID_AI_MODEL`) | `ErrorResponse` |
 | `403` | OWNER가 아님 | `ErrorResponse` |
 | `404` | 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 
