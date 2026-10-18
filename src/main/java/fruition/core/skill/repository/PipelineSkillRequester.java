@@ -72,7 +72,7 @@ public class PipelineSkillRequester {
                             WorkspaceAiModelClient.AiModelSelection aiModel, String runId) {
         return task(runId, "skill_publish", workspaceId, userId, null, new PublishPayload(workspaceId, userId, request.scopeType(), request.name(),
                 request.description(), request.instructionsMarkdown(), request.capabilities(), request.allowedTools(),
-                aiModel.provider(), aiModel.model()));
+                request.targets(), request.resultMode(), aiModel.provider(), aiModel.model()));
     }
 
     public JsonNode list(String workspaceId, String userId) {
@@ -94,7 +94,8 @@ public class PipelineSkillRequester {
     public JsonNode update(String workspaceId, String userId, String skillId, SkillUpdateRequest request,
                            WorkspaceAiModelClient.AiModelSelection aiModel, String runId) {
         return task(runId, "skill_update", workspaceId, userId, skillId, new UpdatePayload(workspaceId, userId, request.name(),
-                request.description(), request.instructionsMarkdown(), aiModel.provider(), aiModel.model()));
+                request.description(), request.instructionsMarkdown(), request.targets(), request.resultMode(),
+                aiModel.provider(), aiModel.model()));
     }
 
     public JsonNode setEnabled(String workspaceId, String userId, String skillId, boolean enabled) {
@@ -224,6 +225,12 @@ public class PipelineSkillRequester {
             // 비어 있으면 키를 빼서 AI가 capabilities로 계산하게 한다(#145).
             @JsonProperty("allowed_tools") @com.fasterxml.jackson.annotation.JsonInclude(
                     com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY) java.util.List<String> allowedTools,
+            // 생략하면 키를 빼서 targets·result_mode를 모르는 AI에도 기존 요청과 같게 보낸다(#144).
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            java.util.List<String> targets,
+            @JsonProperty("result_mode")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String resultMode,
             String provider,
             String model) {}
 
@@ -233,6 +240,12 @@ public class PipelineSkillRequester {
             String name,
             String description,
             @JsonProperty("instructions_markdown") String instructionsMarkdown,
+            // 생략하면 키를 빼서 targets·result_mode를 모르는 AI에도 기존 요청과 같게 보낸다(#144).
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            java.util.List<String> targets,
+            @JsonProperty("result_mode")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String resultMode,
             String provider,
             String model) {}
 

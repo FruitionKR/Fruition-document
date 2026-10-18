@@ -83,7 +83,7 @@ class PipelineSkillRequesterTest {
         requester().publish("ws_1", "user_1",
                 new SkillPublishRequest("team", "meeting-notes", "회의록 작성", "# 작성 절차",
                         List.of("document-create"),
-                        List.of("list_root_items", "list_folder_children", "create_document")),
+                        List.of("list_root_items", "list_folder_children", "create_document"), null, null),
                 new WorkspaceAiModelClient.AiModelSelection("claude", "claude-sonnet-5"), "run-publish");
 
         assertThat(method.get()).isEqualTo("POST");
@@ -101,13 +101,46 @@ class PipelineSkillRequesterTest {
         java.util.Arrays.asList(null, List.<String>of()).forEach(allowedTools -> {
             requester().publish("ws_1", "user_1",
                     new SkillPublishRequest("personal", "meeting-notes", "회의록 작성", "# 작성 절차",
-                            List.of("document-create"), allowedTools),
+                            List.of("document-create"), allowedTools, null, null),
                     new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-publish");
 
             assertThat(body.get()).as(String.valueOf(allowedTools))
                     .contains("\"capabilities\":[\"document-create\"]")
                     .doesNotContain("allowed_tools");
         });
+    }
+
+    @Test
+    void publishAndUpdate_forwardTargetsAndResultMode() {
+        requester().publish("ws_1", "user_1",
+                new SkillPublishRequest("personal", "research-summary", "연구 요약", "# 절차",
+                        List.of("document-create", "document-edit"), null,
+                        List.of("current_document", "selection"), "auto"),
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-publish");
+        assertThat(body.get())
+                .contains("\"targets\":[\"current_document\",\"selection\"]")
+                .contains("\"result_mode\":\"auto\"");
+
+        requester().update("ws_1", "user_1", "skill_1",
+                new SkillUpdateRequest("research-summary", "연구 요약", "# 절차", List.of("selection"), "edit"),
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-update");
+        assertThat(body.get())
+                .contains("\"targets\":[\"selection\"]")
+                .contains("\"result_mode\":\"edit\"");
+    }
+
+    @Test
+    void publishAndUpdate_omitTargetsAndResultModeWhenMissingSoAiKeepsExistingBehavior() {
+        requester().publish("ws_1", "user_1",
+                new SkillPublishRequest("personal", "meeting-notes", "회의록 작성", "# 작성 절차",
+                        List.of("document-create"), List.of("create_document"), null, null),
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-publish");
+        assertThat(body.get()).doesNotContain("targets", "result_mode");
+
+        requester().update("ws_1", "user_1", "skill_1",
+                new SkillUpdateRequest("meeting-notes", "회의록 작성", "# 작성 절차", null, null),
+                new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-update");
+        assertThat(body.get()).doesNotContain("targets", "result_mode");
     }
 
     @Test
@@ -121,7 +154,7 @@ class PipelineSkillRequesterTest {
     @Test
     void update_usesSkillPathAndScopePayload() {
         requester().update("ws_1", "user_1", "skill_1",
-                new SkillUpdateRequest("meeting-notes", "회의록 작성", "# 작성 절차"),
+                new SkillUpdateRequest("meeting-notes", "회의록 작성", "# 작성 절차", null, null),
                 new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-update");
 
         assertThat(method.get()).isEqualTo("POST");
