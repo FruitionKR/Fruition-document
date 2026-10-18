@@ -62,11 +62,12 @@ public class WorkspaceAiModelSettingsController {
     @Operation(
         summary = "워크스페이스 AI 모델 설정 변경",
         description = "ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있고, "
-                + "활성 model catalog에 있는 조합만 허용합니다.")
+                + "활성 model catalog에 있는 openai·gemini 조합만 허용합니다. "
+                + "Claude는 채팅에서 직접 고를 때만 쓸 수 있어 400을 반환합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "변경 성공",
             content = @Content(schema = @Schema(implementation = SettingsResponse.class))),
-        @ApiResponse(responseCode = "400", description = "catalog에 없는 provider/model 조합",
+        @ApiResponse(responseCode = "400", description = "catalog에 없거나 Claude인 provider/model 조합",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "OWNER가 아님",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -85,7 +86,7 @@ public class WorkspaceAiModelSettingsController {
         if (!"OWNER".equals(role)) {
             throw new WorkspaceAiModelForbiddenException();
         }
-        AiModelCatalog.AiModel selected = catalog.resolve(
+        AiModelCatalog.AiModel selected = catalog.resolveForWorkspace(
                 request.ingestLint().provider(), request.ingestLint().model());
         // 여기까지 왔으면 호출자는 OWNER이므로 can_update는 항상 true다.
         return ResponseEntity.ok(new SettingsResponse(
@@ -101,11 +102,11 @@ public class WorkspaceAiModelSettingsController {
     // WorkspaceAiModelClient의 동명 record와 단순 이름이 겹쳐 명세에서 한쪽이 덮인다. 요청은
     // 필수·제약이 있고 응답은 없으므로 합쳐지면 계약이 틀어진다 — 스키마 이름을 분리한다.
     @Schema(name = "AiModelSelectionRequest",
-            description = "설정할 provider와 model 조합. 활성 catalog에 있는 짝만 허용된다.")
+            description = "설정할 provider와 model 조합. 활성 catalog에 있는 openai·gemini 짝만 허용된다.")
     public record AiModelSelection(
             @NotBlank
-            @Schema(description = "LLM provider", allowableValues = {"openai", "gemini", "claude"},
-                    example = "openai")
+            @Schema(description = "LLM provider. claude는 채팅 전용이라 받지 않는다.",
+                    allowableValues = {"openai", "gemini"}, example = "openai")
             String provider,
 
             @NotBlank

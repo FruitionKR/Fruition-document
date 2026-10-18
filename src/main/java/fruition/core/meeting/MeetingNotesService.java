@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import fruition.core.aitask.service.AiTaskCancellationService;
 import fruition.core.authz.WorkspaceAiModelClient;
+import fruition.core.document.domain.Document;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.exception.DocumentLockedException;
 import fruition.core.document.exception.DocumentNotFoundException;
@@ -371,11 +372,11 @@ public class MeetingNotesService {
             if ("create".equals(note.applyMode())) {
                 documentId = documentService.createMarkdown(workspaceId, userId, saveKey,
                         new MarkdownDocumentCreateRequest(note.applyDisplayName(), note.applyMarkdown(),
-                                note.applyFolderId())).id();
+                                note.applyFolderId()), Document.MEETING_NOTES_ORIGIN).id();
             } else {
-                // Agent 적용 표·source를 쓰지 않는다. 사용자가 수락한 본문 저장 경로다.
-                documentService.saveContent(workspaceId, userId, note.applyDocumentId(), note.applyMarkdown(),
-                        note.applyBaseRevision(), saveKey, null);
+                // Agent 적용 표를 쓰지 않는다. 사용자가 수락한 본문 저장 경로다.
+                documentService.saveMeetingNotesContent(workspaceId, userId, note.applyDocumentId(),
+                        note.applyMarkdown(), note.applyBaseRevision(), saveKey);
                 documentId = note.applyDocumentId();
             }
         } catch (RuntimeException e) {

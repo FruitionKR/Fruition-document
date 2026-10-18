@@ -55,6 +55,23 @@ class WorkspaceAiModelClientTest {
         server.verify();
     }
 
+    // 카탈로그에서 빠진 모델이나 채팅 전용 claude가 저장돼 있어도 워크스페이스 기본 모델로 실행한다(저가 모델 정책).
+    @Test
+    void get_fallsBackToWorkspaceDefaultWhenStoredModelIsNotAllowed() {
+        for (String stored : new String[]{
+                "{\"ingest_lint\":{\"provider\":\"claude\",\"model\":\"claude-haiku-4-5-20251001\"}}",
+                "{\"ingest_lint\":{\"provider\":\"openai\",\"model\":\"gpt-6-sol\"}}",
+                "{\"ingest_lint\":{\"provider\":\"gemini\",\"model\":\"gemini-3.8-flash\"}}"}) {
+            server.expect(requestTo(URL)).andRespond(withSuccess(stored, MediaType.APPLICATION_JSON));
+        }
+
+        for (int i = 0; i < 3; i++) {
+            assertThat(client.get(WS))
+                    .isEqualTo(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
+        }
+        server.verify();
+    }
+
     // 빈 응답을 성공으로 오해하면 provider/model이 null인 설정이 흘러간다.
     @Test
     void get_rejectsEmptyResponse() {

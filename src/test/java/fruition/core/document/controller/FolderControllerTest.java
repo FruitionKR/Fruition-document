@@ -105,7 +105,8 @@ class FolderControllerTest {
                 .thenReturn(new FolderChildrenResponse(List.of(
                         FolderChildrenResponse.Item.folder(
                                 "33333333-3333-3333-3333-333333333333", "하위", 0, 2, false),
-                        FolderChildrenResponse.Item.document("doc_1", "메모", 1, 3))));
+                        FolderChildrenResponse.Item.document("doc_1", "메모", 1, 3,
+                                Instant.parse("2026-10-01T09:12:00Z"), Instant.parse("2026-10-03T02:11:09Z")))));
 
         mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/folders/" + FOLDER_ID + "/children")
                         .header("Authorization", bearer()))
@@ -114,7 +115,11 @@ class FolderControllerTest {
                 .andExpect(jsonPath("$.items[1].type").value("document"))
                 .andExpect(jsonPath("$.items[1].id").value("doc_1"))
                 .andExpect(jsonPath("$.items[0].current_version").value(2))
-                .andExpect(jsonPath("$.items[1].current_version").value(3));
+                .andExpect(jsonPath("$.items[1].current_version").value(3))
+                .andExpect(jsonPath("$.items[1].created_at").value("2026-10-01T09:12:00Z"))
+                .andExpect(jsonPath("$.items[1].updated_at").value("2026-10-03T02:11:09Z"))
+                .andExpect(jsonPath("$.items[0].created_at").doesNotExist())
+                .andExpect(jsonPath("$.items[0].updated_at").doesNotExist());
     }
 
     @Test
@@ -145,6 +150,17 @@ class FolderControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.deleted").value(false))
                 .andExpect(jsonPath("$.current_version").value(5));
+    }
+
+    @Test
+    void children_malformedFolderIdReturns400InsteadOf500() throws Exception {
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/folders/not-a-uuid/children")
+                        .header("Authorization", bearer()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.error.message").value("요청 형식이 올바르지 않습니다."))
+                .andExpect(jsonPath("$.error.details[0].field").value("folder_id"))
+                .andExpect(jsonPath("$.error.details[0].reason").value("값의 형식이 올바르지 않습니다."));
     }
 
     private String bearer() {

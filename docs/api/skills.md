@@ -5,7 +5,7 @@
 Skill 작성·게시·설정 Gateway와 내부 참조 문서 읽기 API다. 공개 요청은 Backend가 권한과
 workspace AI 모델을 확인한 뒤 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 9
+- API 수: 10
 
 작성·게시·수정 요청은 선택 query parameter `run_id`를 받고 응답에도 `run_id`를 반환한다.
 호출자가 ID를 미리 지정하면 HTTP 응답을 기다리는 중에도 [공통 취소 API](tasks.md)를
@@ -20,6 +20,7 @@ workspace AI 모델을 확인한 뒤 ai-svc 내부 HTTP로 전달한다.
 | [`GET /api/workspaces/{workspace_id}/skills`](#summary-get-api-workspaces-workspace-id-skills) | 현재 사용자가 사용할 수 있는 워크스페이스 Skill 목록을 반환합니다. |
 | [`POST /api/workspaces/{workspace_id}/skills/author`](#summary-post-api-workspaces-workspace-id-skills-author) | 자연어 요구를 바탕으로 저장 전 Skill 초안을 생성합니다. |
 | [`POST /api/workspaces/{workspace_id}/skills/author/publish`](#summary-post-api-workspaces-workspace-id-skills-author-publish) | 작성된 Skill 정의를 검토 후 게시합니다. |
+| [`POST /api/workspaces/{workspace_id}/skills/test-run`](#summary-post-api-workspaces-workspace-id-skills-test-run) | 게시 전 Skill 정의를 문서 하나에 저장하지 않고 적용해 봅니다. |
 | [`GET /api/workspaces/{workspace_id}/skills/{skill_id}`](#summary-get-api-workspaces-workspace-id-skills-skill-id) | Skill의 현재 정의와 실행 설정을 반환합니다. |
 | [`PATCH /api/workspaces/{workspace_id}/skills/{skill_id}`](#summary-patch-api-workspaces-workspace-id-skills-skill-id) | Skill의 정의를 수정합니다. |
 | [`DELETE /api/workspaces/{workspace_id}/skills/{skill_id}`](#delete-skill) | Skill과 버전을 삭제하고 실행 기록을 보존합니다. |
@@ -88,7 +89,11 @@ workspace AI 모델을 확인한 뒤 ai-svc 내부 HTTP로 전달한다.
       "lint_result": {
       },
       "name": "meeting-notes",
+      "result_mode": "auto",
       "status": "published",
+      "targets": [
+        "current_document"
+      ],
       "version": 3
     },
     "id": "string",
@@ -105,7 +110,11 @@ workspace AI 모델을 확인한 뒤 ai-svc 내부 HTTP로 전달한다.
       "lint_result": {
       },
       "name": "meeting-notes",
+      "result_mode": "auto",
       "status": "published",
+      "targets": [
+        "current_document"
+      ],
       "version": 3
     },
     "owner_user_id": "string",
@@ -168,7 +177,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
       "lint_result": {
       },
       "name": "meeting-notes",
+      "result_mode": "auto",
       "status": "published",
+      "targets": [
+        "current_document"
+      ],
       "version": 3
     },
     "id": "string",
@@ -185,7 +198,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
       "lint_result": {
       },
       "name": "meeting-notes",
+      "result_mode": "auto",
       "status": "published",
+      "targets": [
+        "current_document"
+      ],
       "version": 3
     },
     "owner_user_id": "string",
@@ -278,10 +295,14 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
   "issues": [],
   "name": "string",
   "question": "string",
+  "result_mode": "auto",
   "scope_type": "string",
   "skill_id": "string",
   "skill_markdown": "string",
   "status": "string",
+  "targets": [
+    "current_document"
+  ],
   "version_id": "string"
 }
 ```
@@ -359,10 +380,14 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
   "issues": [],
   "name": "string",
   "question": "string",
+  "result_mode": "auto",
   "scope_type": "string",
   "skill_id": "string",
   "skill_markdown": "string",
   "status": "string",
+  "targets": [
+    "current_document"
+  ],
   "version_id": "string"
 }
 ```
@@ -432,6 +457,17 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 }
 ```
 
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `capabilities` | 예 | 1개 이상 |
+| `allowed_tools` | 아니요 | 생략하거나 `[]`이면 Backend가 ai-svc payload에서 키를 빼고, ai-svc가 `capabilities`의 canonical Tool 집합으로 계산한다. 보내면 지금처럼 ai-svc가 검증만 한다. 응답 `allowed_tools`는 확정된 값이다. 빈 문자열 항목은 `400 INVALID_REQUEST`. |
+| `targets` | 아니요 | 실행 대상 `current_document` \| `selection`, 최대 2개. 생략하면 키를 보내지 않고 ai-svc 기본값(`["current_document"]`)을 쓴다. 중복 검사는 ai-svc가 한다. |
+| `result_mode` | 아니요 | 결과 방식 `create`(새 문서) \| `edit`(현재 문서 수정) \| `auto`(상황에 맞게). `capabilities`와 맞는지는 ai-svc가 검증해 어긋나면 `400`. 생략하면 키를 보내지 않는다. |
+
+> `targets`·`result_mode` 저장·검증은 ai-svc가 맡는다(FruitionKR/Fruition-ai#115). 그 전의 ai-svc는 모르는 필드를 `422`로 거절하므로, 두 필드는 ai-svc 배포 뒤에 보낸다. 생략한 요청은 배포 순서와 관계없이 지금과 같다.
+>
+> 배포 순서: 생략 계산은 ai-svc가 맡는다(FruitionKR/Fruition-ai#116). 그 전의 ai-svc는 `allowed_tools`를 필수로 받아 생략하면 `422 SKILL_REQUEST_REJECTED`가 되므로, 클라이언트는 ai-svc 배포를 확인한 뒤 필드를 뺀다. 값을 보내는 기존 요청은 배포 순서와 관계없이 그대로 동작한다.
+
 #### 5. Response body
 
 - HTTP `200`: 게시 성공
@@ -450,10 +486,14 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
   "issues": [],
   "name": "string",
   "question": "string",
+  "result_mode": "auto",
   "scope_type": "string",
   "skill_id": "string",
   "skill_markdown": "string",
   "status": "string",
+  "targets": [
+    "current_document"
+  ],
   "version_id": "string"
 }
 ```
@@ -503,7 +543,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills/author/publish" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"allowed_tools":["list_root_items"],"capabilities":["document-create"],"description":"<value>","instructions_markdown":"<value>","name":"meeting-notes","scope_type":"personal"}'
+  --data '{"capabilities":["document-create"],"description":"<value>","instructions_markdown":"<value>","name":"meeting-notes","scope_type":"personal"}'
 ```
 
 ```json
@@ -519,10 +559,14 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
   "issues": [],
   "name": "string",
   "question": "string",
+  "result_mode": "auto",
   "scope_type": "string",
   "skill_id": "string",
   "skill_markdown": "string",
   "status": "string",
+  "targets": [
+    "current_document"
+  ],
   "version_id": "string"
 }
 ```
@@ -536,6 +580,146 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-skills-author-publish)
+
+</details>
+
+<a id="summary-post-api-workspaces-workspace-id-skills-test-run"></a>
+### `POST /api/workspaces/{workspace_id}/skills/test-run`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 게시 전 Skill 정의를 문서 하나에 저장하지 않고 적용해 섹션별 변경 전/후를 반환합니다. |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Query** — `run_id`: `string`(선택)<br>**Body** — `SkillTestRunRequest` |
+| 출력 | `200` — `SkillTestRunResponse` (`status`: `completed` \| `blocked`) |
+| 조건 | 인증 필요<br>path의 `workspace_id` 활성 멤버십과 `document_id` 읽기 권한(같은 워크스페이스의 삭제되지 않은 문서)을 검증한다.<br>팀 Skill 게시 권한(`skill.author`)은 요구하지 않는다(저장하지 않음). |
+| 주요 오류 | `400` 형식·Markdown 아닌 문서·적용 범위 오류(`INVALID_REQUEST`), `SKILL_TEST_RUN_UNSUPPORTED`<br>`402` `INSUFFICIENT_CREDIT`<br>`404` 워크스페이스 또는 문서 없음<br>`409` 이미 사용한 `run_id`<br>`413` 본문 5MB 초과<br>`503` `SKILL_AI_UNAVAILABLE`, `SKILL_TEST_RUN_UNAVAILABLE` |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-api-workspaces-workspace-id-skills-test-run"></a>
+### `POST /api/workspaces/{workspace_id}/skills/test-run` 상세
+
+#### 1. Method + Path
+
+`POST /api/workspaces/{workspace_id}/skills/test-run?run_id=`
+
+#### 2. 목적
+
+Figma "스킬 만들기" 시트의 "테스트 실행" 카드용. 게시 전 정의(`name`, `description`, `instructions_markdown`, `capabilities`)를 문서 하나에 적용한 결과를 돌려준다. 안전 검토와 편집 생성은 ai-svc가 하고(FruitionKR/Fruition-ai#114), Backend는 권한·문서 본문·워크스페이스 모델을 확인해 ai-svc 내부 `POST /skills/test-run`에 전달한다.
+
+- 문서·Skill·Agent run 어느 것도 만들거나 바꾸지 않는다. 문서 버전이 오르지 않고 이벤트도 발행하지 않는다.
+- LLM을 호출하므로 게시와 같이 과금한다. 실행은 `ai_task_runs`에 `kind=skill_test_run`으로 등록돼 크레딧을 예약하고(`app.billing.enforce`면 최저 비용 미만일 때 `402`), ai-svc가 `X-Request-Id`(=`run_id`)로 기록한 사용량을 정산한다. 실행 기록에는 문서 본문 대신 `markdown_sha256`만 남긴다. 반복 테스트 횟수 제한은 두지 않는다.
+- 타임아웃(`app.skill.timeout-seconds`)·취소는 다른 Skill 작업과 같다. `run_id`를 미리 정하면 [공통 취소 API](tasks.md)로 취소할 수 있다.
+- 다른 Skill 작업과 달리 **`run_id`는 한 번만 쓸 수 있다.** ai-svc 테스트 실행은 `run_id`로 중복 실행을 막지 않으므로, 같은 `run_id` 재요청은 크레딧 사전 확인 없이 다시 실행되지 않게 `409`로 거절한다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| query | `run_id` | `string` | 아니요 | 생략하면 `skill_test_<uuid>`. `[a-zA-Z0-9:_-]{1,120}`. 한 번만 쓸 수 있다 |
+| body | `name` | `string` | 예 | 게시와 같은 형식 |
+| body | `description` | `string` | 예 | 500자 이하 |
+| body | `instructions_markdown` | `string` | 예 | 30000자 이하 |
+| body | `capabilities` | `string[]` | 예 | 1개 이상. Tool 허용 목록은 ai-svc가 계산한다 |
+| body | `document_id` | `string` | 예 | 테스트할 문서 |
+| body | `markdown` | `string` | 아니요 | 에디터의 저장 안 된 본문(UTF-8 5MB 이하). 생략하면 저장된 최신 본문 |
+| body | `target` | `object` | 아니요 | `{type, start_line, end_line}`. `type`은 `selection` \| `current_section` \| `whole_document`, 1-based 줄(끝 포함). 생략하면 문서 전체. 줄 범위는 실제로 쓰는 본문 기준으로 검사한다 |
+
+```json
+{
+  "name": "research-summary",
+  "description": "연구 문서의 개요를 핵심 문장 3개로 정리합니다.",
+  "instructions_markdown": "'연구 개요' 섹션만 고친다. 다른 섹션은 바꾸지 않는다.",
+  "capabilities": ["document-edit"],
+  "document_id": "doc_123",
+  "target": { "type": "selection", "start_line": 10, "end_line": 24 }
+}
+```
+
+ai-svc로는 다음을 보낸다(`X-Agent-Service-Token`, `X-Request-Id: <run_id>`). `base_version`은 저장된 본문의 편집 revision이다.
+
+```json
+{
+  "workspace_id": "ws_123",
+  "user_id": "user_123",
+  "provider": "openai",
+  "model": "gpt-6-luna",
+  "definition": { "name": "research-summary", "description": "...", "instructions_markdown": "...", "capabilities": ["document-edit"] },
+  "document": { "document_id": "doc_123", "base_version": 7, "markdown": "# 연구 개요\n..." },
+  "target": { "type": "selection", "start_line": 10, "end_line": 24 }
+}
+```
+
+#### 5. Response body
+
+- HTTP `200`: ai-svc 응답에 `run_id`를 붙여 그대로 반환한다.
+
+```json
+{
+  "run_id": "skill_test_3f2a",
+  "status": "completed",
+  "changes": [
+    { "section": "연구 개요", "start_line": 1, "end_line": 6, "before": "...", "after": "..." }
+  ],
+  "untouched_sections": ["방법", "결과"],
+  "result_markdown": "# 연구 개요\n...",
+  "issues": []
+}
+```
+
+- 안전 검토에서 막히면 실행하지 않고 `200 {"status": "blocked", "changes": [], "issues": [...]}`(`/author`의 `blocked`와 같은 issue 형식).
+- 문서 생성형 capability(`document-create`, `template`)는 `changes` 없이 만들어질 문서를 `result_markdown`으로만 준다.
+
+#### 6. Error response
+
+| HTTP 상태 | code | 설명 |
+|---|---|---|
+| `400` | `INVALID_REQUEST` | 요청 형식, Markdown이 아닌 원본 문서, 문서 줄 수를 벗어난 `target` |
+| `400` | `SKILL_TEST_RUN_UNSUPPORTED` | 테스트 실행을 지원하지 않는 capability(`folder-organize`). ai code `test_run_unsupported` |
+| `400` | `SKILL_REQUEST_REJECTED` | 그 밖의 AI 거절 |
+| `402` | `INSUFFICIENT_CREDIT` | 크레딧 부족 |
+| `404` | `WORKSPACE_NOT_FOUND`, `DOCUMENT_NOT_FOUND` | 멤버가 아니거나 문서가 없음(다른 워크스페이스 문서 포함) |
+| `409` | - | 이미 사용한 `run_id`. 테스트 실행은 `run_id`마다 한 번만 실행한다(재시도도 새 `run_id`) |
+| `413` | `MARKDOWN_CONTENT_TOO_LARGE` | 쓰려는 본문(요청 `markdown` 또는 저장본)이 UTF-8 기준 5MB 초과 |
+| `503` | `SKILL_AI_UNAVAILABLE` | AI 장애·타임아웃 |
+| `503` | `SKILL_TEST_RUN_UNAVAILABLE` | ai-svc에 테스트 실행 API가 아직 없음(ai `404`). ai#114 배포 전 |
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 인증된 사용자만 호출할 수 있다.
+- path의 `workspace_id` 활성 멤버십을 검증한다. 멤버는 모든 문서를 읽을 수 있으므로(문서·폴더 `view` 설정은 쓰기만 막는다) `document_id`가 같은 워크스페이스의 삭제되지 않은 문서이면 읽기 권한이 있다.
+- 저장하지 않으므로 `skill.author`는 요구하지 않는다. 팀 Skill 게시는 게시 API에서 따로 검사한다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills/test-run?run_id=skill_test_3f2a" \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Content-Type: application/json' \
+  --data '{"name":"research-summary","description":"<value>","instructions_markdown":"<value>","capabilities":["document-edit"],"document_id":"doc_123"}'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/skill/controller/SkillController.java`
+- 서비스: `src/main/java/fruition/core/skill/service/SkillTestRunService.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: testRun`)
+- 하위 호출: ai-svc `POST ${SKILL_ENDPOINT}/test-run` (`PipelineSkillRequester.testRun`), access-svc `WorkspaceAiModelClient`, `AiTaskCancellationService`로 작업 등록
+- 배선 상태: document 배선됨, ai-svc 미구현(FruitionKR/Fruition-ai#114)
+
+[↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-skills-test-run)
 
 </details>
 
@@ -598,7 +782,11 @@ Skill의 현재 정의와 실행 설정을 반환합니다.
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "id": "string",
@@ -615,7 +803,11 @@ Skill의 현재 정의와 실행 설정을 반환합니다.
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "owner_user_id": "string",
@@ -676,7 +868,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "id": "string",
@@ -693,7 +889,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "owner_user_id": "string",
@@ -759,9 +959,20 @@ Skill의 정의를 수정합니다.
 {
   "description": "string",
   "instructions_markdown": "string",
-  "name": "meeting-notes"
+  "name": "meeting-notes",
+  "result_mode": "auto",
+  "targets": [
+    "current_document"
+  ]
 }
 ```
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `targets` | 아니요 | 게시와 같은 값·검증. 생략하면 키를 보내지 않아 ai-svc가 기존 값을 유지한다. |
+| `result_mode` | 아니요 | 게시와 같은 값·검증. 생략하면 기존 값을 유지한다. |
+
+두 필드는 ai-svc(FruitionKR/Fruition-ai#115) 배포 뒤에 보낸다. 응답·`GET /skills`·`GET /skills/{skill_id}`의 버전 객체에는 ai-svc가 저장한 `targets`·`result_mode`가 그대로 내려오며, ai-svc 배포 전에는 없다.
 
 #### 5. Response body
 
@@ -777,10 +988,14 @@ Skill의 정의를 수정합니다.
   "issues": [],
   "name": "string",
   "question": "string",
+  "result_mode": "auto",
   "scope_type": "string",
   "skill_id": "string",
   "skill_markdown": "string",
   "status": "string",
+  "targets": [
+    "current_document"
+  ],
   "version_id": "string"
 }
 ```
@@ -842,10 +1057,14 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skil
   "issues": [],
   "name": "string",
   "question": "string",
+  "result_mode": "auto",
   "scope_type": "string",
   "skill_id": "string",
   "skill_markdown": "string",
   "status": "string",
+  "targets": [
+    "current_document"
+  ],
   "version_id": "string"
 }
 ```
@@ -921,7 +1140,11 @@ Skill을 Agent 실행 대상에서 제외합니다.
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "id": "string",
@@ -938,7 +1161,11 @@ Skill을 Agent 실행 대상에서 제외합니다.
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "owner_user_id": "string",
@@ -1001,7 +1228,11 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "id": "string",
@@ -1018,7 +1249,11 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "owner_user_id": "string",
@@ -1100,7 +1335,11 @@ Skill을 Agent 실행 대상에 포함합니다.
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "id": "string",
@@ -1117,7 +1356,11 @@ Skill을 Agent 실행 대상에 포함합니다.
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "owner_user_id": "string",
@@ -1180,7 +1423,11 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "id": "string",
@@ -1197,7 +1444,11 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
     "lint_result": {
     },
     "name": "meeting-notes",
+    "result_mode": "auto",
     "status": "published",
+    "targets": [
+      "current_document"
+    ],
     "version": 3
   },
   "owner_user_id": "string",

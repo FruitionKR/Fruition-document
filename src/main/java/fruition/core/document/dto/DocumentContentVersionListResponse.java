@@ -39,6 +39,15 @@ public record DocumentContentVersionListResponse(
             @JsonProperty("restored_from_version")
             @Schema(description = "버전 복원으로 만든 버전이면 복원 대상 버전 번호. 일반 저장·AI 적용·기록 이전 버전은 null",
                     example = "2", nullable = true)
-            Long restoredFromVersion
+            Long restoredFromVersion,
+
+            @Schema(description = "이 버전을 저장한 경로. 기록 이전 버전은 null", nullable = true,
+                    allowableValues = {"user", "agent", "meeting_notes", "restore"}, example = "agent")
+            String source,
+
+            @JsonProperty("operation_id")
+            @Schema(description = "Agent 편집으로 만든 버전이면 AI 작업 ID. 그 밖의 저장은 null", nullable = true,
+                    example = "op_7c2e4b1a9d3f4e6c8b0a2d5f7e9c1b3a")
+            String operationId
     ) {}
 }

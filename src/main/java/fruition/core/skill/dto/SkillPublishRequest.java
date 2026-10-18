@@ -40,8 +40,16 @@ public record SkillPublishRequest(
         List<String> capabilities,
 
         @JsonProperty("allowed_tools")
-        @NotNull
-        @Size(min = 1)
-        @Schema(description = "사용자가 승인한 초안의 Tool 허용 목록")
-        List<String> allowedTools
+        @Schema(description = "사용자가 승인한 초안의 Tool 허용 목록. 생략하거나 []이면 AI가 capabilities로 계산한다.")
+        List<@NotBlank String> allowedTools,
+
+        @Size(max = 2)
+        @Schema(description = "실행 대상. 문서 Skill에서만 의미가 있다. 생략하면 AI 기본값([\"current_document\"])을 쓴다.")
+        List<@NotBlank @Pattern(regexp = "current_document|selection") String> targets,
+
+        @JsonProperty("result_mode")
+        @Pattern(regexp = "create|edit|auto")
+        @Schema(description = "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 키를 보내지 않는다(기본값은 AI가 정함).",
+                allowableValues = {"create", "edit", "auto"}, example = "auto")
+        String resultMode
 ) {}

@@ -15,6 +15,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
 import java.util.List;
 
 import static org.mockito.Mockito.when;
@@ -39,7 +40,8 @@ class NavigationControllerTest {
                 .thenReturn(new FolderChildrenResponse(List.of(
                         FolderChildrenResponse.Item.folder(
                                 "33333333-3333-3333-3333-333333333333", "자료", 0, 2, true),
-                        FolderChildrenResponse.Item.document("doc_1", "메모", 1, 3))));
+                        FolderChildrenResponse.Item.document("doc_1", "메모", 1, 3,
+                                Instant.parse("2026-10-01T09:12:00Z"), Instant.parse("2026-10-03T02:11:09Z")))));
 
         mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/navigation")
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))

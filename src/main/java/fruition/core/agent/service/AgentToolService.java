@@ -199,7 +199,8 @@ public class AgentToolService {
                 request.workspaceId(), request.userId(), request.idempotencyKey(),
                 new MarkdownDocumentCreateRequest(
                         text(arguments, "display_name"), artifact.markdown(),
-                        nullableUuid(arguments, "folder_id")));
+                        nullableUuid(arguments, "folder_id")),
+                Document.AGENT_ORIGIN);
     }
 
     private Object applyDocumentEdit(AgentToolExecuteRequest request) {

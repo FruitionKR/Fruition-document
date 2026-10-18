@@ -740,7 +740,7 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | 최신 Markdown 편집본을 내보냅니다. 관리 이미지가 있으면 이미지와 Markdown을 ZIP으로 반환합니다. |
+| 목적 | 최신 Markdown 편집본을 내보냅니다. 관리 이미지가 있으면 이미지와 Markdown을 ZIP으로 반환합니다. AI 결과물이면 맨 앞에 AI 생성 안내 블록을 넣습니다. |
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string` |
 | 출력 | `200` Markdown 다운로드 — `string` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
@@ -782,6 +782,19 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 ```text
 <binary>
 ```
+
+- 응답 헤더 `X-Fruition-AI-Generated`: AI 결과물이면 `true`, 아니면 `false`. CORS `Access-Control-Expose-Headers`에 들어 있어 브라우저가 읽을 수 있다. 안내 문구 설정(`APP_EXPORT_AI_NOTICE_MARKDOWN`)을 비워 파일에 안내를 넣지 않을 때도 AI 결과물이면 `true`다. 이 헤더는 "AI 결과물인가"를 뜻하고 "안내를 넣었는가"를 뜻하지 않는다.
+- AI 결과물은 [AI 출처 표시](README.md#ai-출처-표시)의 `ai_origin`이나 `last_ai_change`가 있는 문서다(Agent 생성·편집, 회의록 적용, 채팅 원문 저장, 그 복제본).
+- AI 결과물이면 `.md` 본문 맨 앞, ZIP이면 ZIP 안 Markdown 맨 앞에 안내 블록과 빈 줄을 넣는다(「인공지능 기본법」 제31조②). 본문이 YAML front matter(`---`로 감싼 머리말이고 첫 줄이 `key: value`)로 시작하면 그 뒤에 넣는다. 첫 줄이 `key:`가 아니면 수평선으로 보고 맨 앞에 넣는다.
+
+  ```markdown
+  > 이 문서에는 생성형 AI가 만든 내용이 포함되어 있습니다. (Fruition, 2026-10-15 내보냄)
+
+  # 원래 제목 ...
+  ```
+
+- 안내 문구는 환경변수 `APP_EXPORT_AI_NOTICE_MARKDOWN`(`app.export.ai-notice-markdown`)으로 바꾼다. `{date}`는 내보낸 날짜(KST)로 바뀐다. 빈 값이면 넣지 않는다. 법률 문구는 운영 결정 뒤 확정한다.
+- 사람이 만든 문서는 본문을 바꾸지 않고 그대로 내보낸다.
 
 #### 6. Error response
 

@@ -4,8 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import fruition.shared.util.ErrorResponse;
 import fruition.core.skill.dto.SkillAuthoringRequest;
 import fruition.core.skill.dto.SkillPublishRequest;
+import fruition.core.skill.dto.SkillTestRunRequest;
 import fruition.core.skill.dto.SkillUpdateRequest;
 import fruition.core.skill.service.SkillService;
+import fruition.core.skill.service.SkillTestRunService;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -32,9 +34,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class SkillController {
 
     private final SkillService skillService;
+    private final SkillTestRunService skillTestRunService;
 
-    public SkillController(SkillService skillService) {
+    public SkillController(SkillService skillService, SkillTestRunService skillTestRunService) {
         this.skillService = skillService;
+        this.skillTestRunService = skillTestRunService;
     }
 
     @Operation(summary = "Skill 초안 작성", description = "자연어 요구를 바탕으로 저장 전 Skill 초안을 생성합니다.")
@@ -103,6 +107,38 @@ public class SkillController {
             @org.springframework.web.bind.annotation.RequestParam(value = "run_id", required = false) String runId) {
         runId = runId == null ? "skill_" + java.util.UUID.randomUUID() : runId;
         return ResponseEntity.ok(skillService.publish(workspaceId, userId, request, runId));
+    }
+
+    @Operation(summary = "Skill 테스트 실행",
+            description = "게시 전 Skill 정의를 문서 하나에 저장하지 않고 적용해 섹션별 변경 전/후를 반환합니다. "
+                    + "문서·Skill·Agent run을 만들거나 바꾸지 않으며, LLM을 호출하므로 크레딧을 차감합니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "실행 완료(status=completed) 또는 안전 검토에서 막힘(status=blocked, changes=[], issues[])",
+            content = @Content(schema = @Schema(implementation = SkillTestRunResponseSchema.class))),
+        @ApiResponse(responseCode = "400", description = "잘못된 요청(INVALID_REQUEST: 형식, Markdown 아닌 문서, 적용 범위 오류), "
+                + "SKILL_TEST_RUN_UNSUPPORTED(테스트 실행을 지원하지 않는 capability), 그 밖의 AI 거절(SKILL_REQUEST_REJECTED)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "404", description = "워크스페이스 또는 문서를 찾을 수 없음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "409", description = "이미 사용한 run_id. 테스트 실행은 run_id마다 한 번만 실행하므로 재시도도 새 run_id로 보낸다",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "413", description = "본문이 UTF-8 기준 5MB를 넘음(MARKDOWN_CONTENT_TOO_LARGE) 또는 AI가 요청 본문을 거절",
+            content = @Content(mediaType = "application/json", schema = @Schema(oneOf = {JsonNode.class, ErrorResponse.class}))),
+        @ApiResponse(responseCode = "422", description = "Skill 요청 검증 실패",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "503", description = "llmPipeline 사용 불가(SKILL_AI_UNAVAILABLE) 또는 AI가 테스트 실행을 아직 지원하지 않음(SKILL_TEST_RUN_UNAVAILABLE)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PostMapping("/test-run")
+    public ResponseEntity<JsonNode> testRun(
+            @PathVariable("workspace_id") String workspaceId,
+            @AuthenticationPrincipal String userId,
+            @Valid @RequestBody SkillTestRunRequest request,
+            @org.springframework.web.bind.annotation.RequestParam(value = "run_id", required = false) String runId) {
+        runId = runId == null ? "skill_test_" + java.util.UUID.randomUUID() : runId;
+        return ResponseEntity.ok(skillTestRunService.testRun(workspaceId, userId, request, runId));
     }
 
     @Operation(summary = "Skill 목록 조회", description = "현재 사용자가 사용할 수 있는 워크스페이스 Skill 목록을 반환합니다.")
@@ -289,10 +325,47 @@ public class SkillController {
         public java.util.List<String> capabilities;
         @Schema(description = "이 Skill이 쓸 수 있는 도구 목록")
         public java.util.List<String> allowed_tools;
+        @ArraySchema(arraySchema = @Schema(description = "실행 대상. 문서 Skill이 아니면 []이다. AI가 저장하기 전 버전에는 없을 수 있다."),
+                schema = @Schema(allowableValues = {"current_document", "selection"}))
+        public java.util.List<String> targets;
+        @Schema(description = "결과 방식. 문서 Skill이 아니거나 지정하지 않았으면 null이다.",
+                allowableValues = {"create", "edit", "auto"}, nullable = true)
+        public String result_mode;
         @Schema(description = "게시 전 점검 결과. 항목별 통과 여부가 담긴다.")
         public java.util.Map<String, Object> lint_result;
         @Schema(description = "버전 상태", example = "published")
         public String status;
+    }
+
+    @Schema(name = "SkillTestRunResponse", requiredProperties = {"run_id", "status", "changes", "untouched_sections", "issues"})
+    private static final class SkillTestRunResponseSchema {
+        @Schema(description = "사용량·취소에 쓰는 실행 ID", example = "skill_test_3f2a")
+        public String run_id;
+        @Schema(description = "completed는 실행함, blocked는 안전 검토에서 막혀 실행하지 않음", allowableValues = {"completed", "blocked"})
+        public String status;
+        @ArraySchema(arraySchema = @Schema(description = "섹션별 변경. 문서 생성형 capability이거나 blocked면 []이다."),
+                schema = @Schema(implementation = SkillTestRunChangeSchema.class))
+        public java.util.List<Object> changes;
+        @Schema(description = "바뀌지 않은 섹션 제목")
+        public java.util.List<String> untouched_sections;
+        @Schema(description = "적용 결과 전체 Markdown. 문서 생성형이면 만들어질 문서다. blocked면 없을 수 있다.", nullable = true)
+        public String result_markdown;
+        @Schema(description = "안전 검토 issue. /author의 blocked와 같은 형식이다.")
+        public java.util.List<Object> issues;
+    }
+
+    @Schema(name = "SkillTestRunChange", requiredProperties = {"section", "start_line", "end_line", "before", "after"})
+    private static final class SkillTestRunChangeSchema {
+        @Schema(description = "섹션 제목", example = "연구 개요")
+        public String section;
+        @Schema(description = "원문 기준 시작 줄(1부터)", example = "1")
+        public int start_line;
+        @Schema(description = "원문 기준 끝 줄(1부터, 포함)", example = "6")
+        public int end_line;
+        @Schema(description = "변경 전")
+        public String before;
+        @Schema(description = "변경 후")
+        public String after;
     }
 
     @Schema(name = "SkillAuthoringResponse", requiredProperties = "status")
@@ -308,6 +381,11 @@ public class SkillController {
         public String skill_markdown;
         public java.util.List<String> capabilities;
         public java.util.List<String> allowed_tools;
+        @ArraySchema(arraySchema = @Schema(description = "실행 대상"),
+                schema = @Schema(allowableValues = {"current_document", "selection"}))
+        public java.util.List<String> targets;
+        @Schema(description = "결과 방식", allowableValues = {"create", "edit", "auto"}, nullable = true)
+        public String result_mode;
         public java.util.List<Object> issues;
     }
 }

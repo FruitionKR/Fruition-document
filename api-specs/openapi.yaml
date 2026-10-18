@@ -608,7 +608,7 @@ paths:
       tags:
       - AI Models
     put:
-      description: "ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있고, 활성 model catalog에 있는 조합만 허용합니다."
+      description: "ingest·lint에 쓸 provider/model을 바꿉니다. OWNER만 호출할 수 있고, 활성 model catalog에 있는 openai·gemini 조합만 허용합니다. Claude는 채팅에서 직접 고를 때만 쓸 수 있어 400을 반환합니다."
       operationId: update
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -636,7 +636,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: catalog에 없는 provider/model 조합
+          description: catalog에 없거나 Claude인 provider/model 조합
         "403":
           content:
             '*/*':
@@ -2291,7 +2291,7 @@ paths:
       - Document Edit Lock
   /api/workspaces/{workspace_id}/documents/{document_id}/export:
     get:
-      description: 최신 Markdown 편집본을 내보냅니다. 관리 이미지가 있으면 이미지와 Markdown을 ZIP으로 반환합니다.
+      description: 최신 Markdown 편집본을 내보냅니다. 관리 이미지가 있으면 이미지와 Markdown을 ZIP으로 반환합니다. AI 결과물(ai_origin 또는 last_ai_change가 있는 문서)이면 Markdown 맨 앞에 AI 생성 안내 블록을 넣습니다.
       operationId: export
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -2314,6 +2314,15 @@ paths:
                 type: string
                 format: binary
           description: Markdown 다운로드
+          headers:
+            X-Fruition-AI-Generated:
+              description: "AI 결과물이면 true, 아니면 false"
+              schema:
+                type: string
+                enum:
+                - "true"
+                - "false"
+              style: simple
         "404":
           content:
             '*/*':
@@ -3194,6 +3203,60 @@ paths:
       tags:
       - Folders
   /api/workspaces/{workspace_id}/meetings:
+    get:
+      description: "내가 만든 회의를 최근 생성 순으로 반환합니다. 새로고침 뒤 진행 중이던 회의를 다시 여는 데 씁니다. 전사 구간 같은 무거운 내용은 넣지 않으므로 GET /{meeting_id}로 이어서 조회합니다."
+      operationId: listMeetings
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - description: "쉼표로 구분한 상태(open, awaiting_upload, transcribing, failed). 생략하면 전부"
+        example: "transcribing,open"
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+      - description: 이전 응답의 next_cursor. 생략하면 첫 페이지
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+      - description: "페이지 크기. 기본 20, 최대 100"
+        example: 20
+        in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/MeetingListResponse"
+          description: 조회 성공
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 허용하지 않는 status 또는 잘못된 cursor
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+      summary: 회의 목록
+      tags:
+      - Meetings
     post:
       description: "받아쓰기 회의를 만듭니다. document_id를 주면 그 문서를 회의록 저장 대상으로 기억하며, 사용자가 편집할 수 있는 자기 Markdown 문서여야 합니다."
       operationId: createMeeting
@@ -4278,6 +4341,83 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
           description: llmPipeline 사용 불가
       summary: Skill 게시
+      tags:
+      - Skills
+  /api/workspaces/{workspace_id}/skills/test-run:
+    post:
+      description: "게시 전 Skill 정의를 문서 하나에 저장하지 않고 적용해 섹션별 변경 전/후를 반환합니다. 문서·Skill·Agent run을 만들거나 바꾸지 않으며, LLM을 호출하므로 크레딧을 차감합니다."
+      operationId: testRun
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: query
+        name: run_id
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillTestRunRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/SkillTestRunResponse"
+          description: "실행 완료(status=completed) 또는 안전 검토에서 막힘(status=blocked, changes=[], issues[])"
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "잘못된 요청(INVALID_REQUEST: 형식, Markdown 아닌 문서, 적용 범위 오류), SKILL_TEST_RUN_UNSUPPORTED(테스트 실행을 지원하지 않는 capability), 그 밖의 AI 거절(SKILL_REQUEST_REJECTED)"
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT). app.billing.enforce가 true일 때 가용 잔액이 최저 비용보다 작으면 작업을 시작하지 않음
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스 또는 문서를 찾을 수 없음
+        "409":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 이미 사용한 run_id. 테스트 실행은 run_id마다 한 번만 실행하므로 재시도도 새 run_id로 보낸다
+        "413":
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/JsonNode"
+                - $ref: "#/components/schemas/ErrorResponse"
+          description: 본문이 UTF-8 기준 5MB를 넘음(MARKDOWN_CONTENT_TOO_LARGE) 또는 AI가 요청 본문을 거절
+        "422":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Skill 요청 검증 실패
+        "503":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: llmPipeline 사용 불가(SKILL_AI_UNAVAILABLE) 또는 AI가 테스트 실행을 아직 지원하지 않음(SKILL_TEST_RUN_UNAVAILABLE)
+      summary: Skill 테스트 실행
       tags:
       - Skills
   /api/workspaces/{workspace_id}/skills/{skill_id}:
@@ -5687,7 +5827,7 @@ components:
           example: completed
     AiModelSelectionRequest:
       type: object
-      description: 설정할 provider와 model 조합. 활성 catalog에 있는 짝만 허용된다.
+      description: 설정할 provider와 model 조합. 활성 catalog에 있는 openai·gemini 짝만 허용된다.
       properties:
         model:
           type: string
@@ -5696,11 +5836,10 @@ components:
           minLength: 1
         provider:
           type: string
-          description: LLM provider
+          description: LLM provider. claude는 채팅 전용이라 받지 않는다.
           enum:
           - openai
           - gemini
-          - claude
           example: openai
           minLength: 1
       required:
@@ -5720,7 +5859,6 @@ components:
           enum:
           - openai
           - gemini
-          - claude
           example: openai
     BreadcrumbNode:
       type: object
@@ -6151,6 +6289,31 @@ components:
           format: int64
         user_id:
           type: string
+    DocumentAiChange:
+      type: object
+      description: 현재 본문 이력 중 가장 최근 AI 적용
+      properties:
+        changed_at:
+          type: string
+          format: date-time
+          description: 저장 시각(ISO-8601 UTC)
+          example: 2026-10-15T02:11:09Z
+        operation_id:
+          type: string
+          description: "GET /ai-operation-logs/{operation_id}로 여는 AI 작업 ID. 작업 로그가 없는 회의록 적용이면 null이다."
+          example: op_7c2e4b1a9d3f4e6c8b0a2d5f7e9c1b3a
+        source:
+          type: string
+          description: 저장 경로
+          enum:
+          - agent
+          - meeting_notes
+          example: agent
+        version:
+          type: integer
+          format: int64
+          description: AI가 저장한 본문 버전
+          example: 3
     DocumentAttachmentSaveResponse:
       type: object
       description: 본문 저장과 함께 등록된 이미지 asset
@@ -6309,11 +6472,24 @@ components:
           type: string
           description: 저장한 사용자 ID
           example: user_3f1c8a6b52d7411e9c04ab5d2e7f6081
+        operation_id:
+          type: string
+          description: Agent 편집으로 만든 버전이면 AI 작업 ID. 그 밖의 저장은 null
+          example: op_7c2e4b1a9d3f4e6c8b0a2d5f7e9c1b3a
         restored_from_version:
           type: integer
           format: int64
           description: 버전 복원으로 만든 버전이면 복원 대상 버전 번호. 일반 저장·AI 적용·기록 이전 버전은 null
           example: 2
+        source:
+          type: string
+          description: 이 버전을 저장한 경로. 기록 이전 버전은 null
+          enum:
+          - user
+          - agent
+          - meeting_notes
+          - restore
+          example: agent
         version:
           type: integer
           format: int64
@@ -6368,6 +6544,13 @@ components:
       type: object
       description: 문서 상세. 값이 없는 필드는 키 자체가 빠지므로 존재 여부로 확인한다.
       properties:
+        ai_origin:
+          type: string
+          description: "문서를 처음 만든 경로가 AI면 그 종류(agent: Agent 문서 생성, meeting_notes: 회의록 적용, chat_export: 채팅 답변 원문 저장). 사용자가 직접 만들거나 올린 문서는 null이다."
+          enum:
+          - agent
+          - meeting_notes
+          - chat_export
         byte_size:
           type: integer
           format: int64
@@ -6430,6 +6613,9 @@ components:
           type: string
           description: 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        last_ai_change:
+          $ref: "#/components/schemas/DocumentAiChange"
+          description: 현재 본문 이력 중 가장 최근 AI 적용(Agent 편집·회의록 덧붙이기). 없으면 null이다.
         markdown:
           type: string
           description: 편집 가능 문서의 전체 Markdown 본문
@@ -6694,6 +6880,13 @@ components:
       type: object
       description: 값이 없는 필드는 키 자체가 빠진다. null 체크가 아니라 존재 여부로 확인한다.
       properties:
+        ai_origin:
+          type: string
+          description: "문서를 처음 만든 경로가 AI면 그 종류(agent: Agent 문서 생성, meeting_notes: 회의록 적용, chat_export: 채팅 답변 원문 저장). 사용자가 직접 만들거나 올린 문서는 null이다."
+          enum:
+          - agent
+          - meeting_notes
+          - chat_export
         area:
           type: string
           description: 문서가 속한 영역
@@ -6758,6 +6951,9 @@ components:
           type: string
           description: 트리에서의 항목 종류
           example: document
+        last_ai_change:
+          $ref: "#/components/schemas/DocumentAiChange"
+          description: 현재 본문 이력 중 가장 최근 AI 적용(Agent 편집·회의록 덧붙이기). 없으면 null이다.
         mime_type:
           type: string
           description: 파일 MIME 타입
@@ -7293,6 +7489,11 @@ components:
       type: object
       description: 폴더 바로 아래 항목. 트리와 달리 children을 담지 않는다.
       properties:
+        created_at:
+          type: string
+          format: date-time
+          description: 문서가 처음 만들어지거나 업로드된 시각(ISO-8601 UTC). 폴더에는 없다.
+          example: 2026-10-01T09:12:00Z
         current_version:
           type: integer
           format: int64
@@ -7321,6 +7522,11 @@ components:
           - folder
           - document
           example: document
+        updated_at:
+          type: string
+          format: date-time
+          description: 문서를 마지막으로 바꾼 시각(ISO-8601 UTC). 폴더에는 없다.
+          example: 2026-10-03T02:11:09Z
     FolderChildrenResponse:
       type: object
       properties:
@@ -7613,6 +7819,52 @@ components:
           - live
           - upload
           example: live
+    MeetingListItem:
+      type: object
+      description: 회의 한 건 요약
+      properties:
+        created_at:
+          type: string
+          format: date-time
+        display_name:
+          type: string
+          example: 출시 회의
+        has_notes:
+          type: boolean
+          description: 만들어졌거나 저장된 회의록 초안이 있는지
+        has_recording:
+          type: boolean
+          description: 녹음 원본이 있는지
+        meeting_id:
+          type: string
+          example: mtg_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        source:
+          type: string
+          enum:
+          - live
+          - upload
+        status:
+          type: string
+          enum:
+          - open
+          - awaiting_upload
+          - transcribing
+          - failed
+        updated_at:
+          type: string
+          format: date-time
+          description: 상태가 바뀌거나 녹음 원본을 저장한 시각. 받아쓰기·회의록 초안으로는 바뀌지 않는다.
+    MeetingListResponse:
+      type: object
+      description: 내 회의 목록. 최근 생성 순이다.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MeetingListItem"
+        next_cursor:
+          type: string
+          description: 다음 페이지 cursor. 마지막 페이지면 null
     MeetingLiveTicketResponse:
       type: object
       description: 실시간 받아쓰기 일회용 접속권
@@ -8739,6 +8991,13 @@ components:
           type: string
         question:
           type: string
+        result_mode:
+          type: string
+          description: 결과 방식
+          enum:
+          - create
+          - edit
+          - auto
         scope_type:
           type: string
         skill_id:
@@ -8747,6 +9006,14 @@ components:
           type: string
         status:
           type: string
+        targets:
+          type: array
+          description: 실행 대상
+          items:
+            type: string
+            enum:
+            - current_document
+            - selection
         version_id:
           type: string
       required:
@@ -8767,11 +9034,10 @@ components:
       properties:
         allowed_tools:
           type: array
-          description: 사용자가 승인한 초안의 Tool 허용 목록
+          description: "사용자가 승인한 초안의 Tool 허용 목록. 생략하거나 []이면 AI가 capabilities로 계산한다."
           items:
             type: string
-          maxItems: 2147483647
-          minItems: 1
+            minLength: 1
         capabilities:
           type: array
           description: 사용자가 승인한 초안의 capability
@@ -8795,6 +9061,15 @@ components:
           example: meeting-notes
           minLength: 1
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        result_mode:
+          type: string
+          description: "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 키를 보내지 않는다(기본값은 AI가 정함)."
+          enum:
+          - create
+          - edit
+          - auto
+          example: auto
+          pattern: create|edit|auto
         scope_type:
           type: string
           description: Skill 공개 범위
@@ -8804,8 +9079,16 @@ components:
           example: personal
           minLength: 1
           pattern: personal|team
+        targets:
+          type: array
+          description: "실행 대상. 문서 Skill에서만 의미가 있다. 생략하면 AI 기본값([\"current_document\"])을 쓴다."
+          items:
+            type: string
+            minLength: 1
+            pattern: current_document|selection
+          maxItems: 2
+          minItems: 0
       required:
-      - allowed_tools
       - capabilities
       - description
       - instructions_markdown
@@ -8879,6 +9162,117 @@ components:
       - slug
       - status
       - workspace_id
+    SkillTestRunChange:
+      type: object
+      properties:
+        after:
+          type: string
+          description: 변경 후
+        before:
+          type: string
+          description: 변경 전
+        end_line:
+          type: integer
+          format: int32
+          description: "원문 기준 끝 줄(1부터, 포함)"
+          example: 6
+        section:
+          type: string
+          description: 섹션 제목
+          example: 연구 개요
+        start_line:
+          type: integer
+          format: int32
+          description: 원문 기준 시작 줄(1부터)
+          example: 1
+      required:
+      - after
+      - before
+      - end_line
+      - section
+      - start_line
+    SkillTestRunRequest:
+      type: object
+      description: 저장하지 않는 Skill 테스트 실행 요청. 게시 전 정의를 문서 하나에 적용해 본다.
+      properties:
+        capabilities:
+          type: array
+          description: Skill capability. Tool 허용 목록은 AI가 이 값으로 계산한다.
+          items:
+            type: string
+            minLength: 1
+          maxItems: 2147483647
+          minItems: 1
+        description:
+          type: string
+          description: Skill 설명(500자 이하)
+          maxLength: 500
+          minLength: 0
+        document_id:
+          type: string
+          description: 테스트할 문서 ID. 읽기 권한이 있어야 한다.
+          example: doc_123
+          minLength: 1
+        instructions_markdown:
+          type: string
+          description: Skill 지침 Markdown(30000자 이하)
+          maxLength: 30000
+          minLength: 0
+        markdown:
+          type: string
+          description: 에디터의 저장 안 된 본문. 생략하면 저장된 최신 본문을 쓴다.
+        name:
+          type: string
+          description: Skill 이름. 소문자·숫자로 시작하고 하이픈을 쓸 수 있다(1~63자).
+          example: research-summary
+          minLength: 1
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        target:
+          $ref: "#/components/schemas/Target"
+          description: 적용 범위. 생략하면 문서 전체다.
+      required:
+      - capabilities
+      - description
+      - document_id
+      - instructions_markdown
+      - name
+    SkillTestRunResponse:
+      type: object
+      properties:
+        changes:
+          type: array
+          description: "섹션별 변경. 문서 생성형 capability이거나 blocked면 []이다."
+          items:
+            $ref: "#/components/schemas/SkillTestRunChange"
+            description: "섹션별 변경. 문서 생성형 capability이거나 blocked면 []이다."
+        issues:
+          type: array
+          description: 안전 검토 issue. /author의 blocked와 같은 형식이다.
+          items: {}
+        result_markdown:
+          type: string
+          description: 적용 결과 전체 Markdown. 문서 생성형이면 만들어질 문서다. blocked면 없을 수 있다.
+        run_id:
+          type: string
+          description: 사용량·취소에 쓰는 실행 ID
+          example: skill_test_3f2a
+        status:
+          type: string
+          description: "completed는 실행함, blocked는 안전 검토에서 막혀 실행하지 않음"
+          enum:
+          - completed
+          - blocked
+        untouched_sections:
+          type: array
+          description: 바뀌지 않은 섹션 제목
+          items:
+            type: string
+      required:
+      - changes
+      - issues
+      - run_id
+      - status
+      - untouched_sections
     SkillUpdateRequest:
       type: object
       description: 이미 게시된 Skill의 내용 수정 요청. scope_type은 바꿀 수 없다.
@@ -8899,6 +9293,24 @@ components:
           example: meeting-notes
           minLength: 1
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        result_mode:
+          type: string
+          description: "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 기존 값을 유지한다."
+          enum:
+          - create
+          - edit
+          - auto
+          example: auto
+          pattern: create|edit|auto
+        targets:
+          type: array
+          description: 실행 대상. 문서 Skill에서만 의미가 있다. 생략하면 기존 값을 유지한다.
+          items:
+            type: string
+            minLength: 1
+            pattern: current_document|selection
+          maxItems: 2
+          minItems: 0
       required:
       - description
       - instructions_markdown
@@ -8934,10 +9346,25 @@ components:
           type: string
           description: Skill 이름
           example: meeting-notes
+        result_mode:
+          type: string
+          description: 결과 방식. 문서 Skill이 아니거나 지정하지 않았으면 null이다.
+          enum:
+          - create
+          - edit
+          - auto
         status:
           type: string
           description: 버전 상태
           example: published
+        targets:
+          type: array
+          description: "실행 대상. 문서 Skill이 아니면 []이다. AI가 저장하기 전 버전에는 없을 수 있다."
+          items:
+            type: string
+            enum:
+            - current_document
+            - selection
         version:
           type: integer
           format: int32
@@ -9007,15 +9434,15 @@ components:
           type: string
     Target:
       type: object
-      description: 편집 대상 범위(1-based 줄 번호)
+      description: 적용 범위(1-based 줄 번호). Agent 턴 editor_snapshot.target과 같은 형식이다.
       properties:
-        endLine:
+        end_line:
           type: integer
           format: int32
           description: "끝 줄 번호(1부터, 포함)"
           example: 24
           minimum: 1
-        startLine:
+        start_line:
           type: integer
           format: int32
           description: 시작 줄 번호(1부터)
@@ -9024,8 +9451,13 @@ components:
         type:
           type: string
           description: 범위 종류
+          enum:
+          - selection
+          - current_section
+          - whole_document
           example: selection
           minLength: 1
+          pattern: selection|current_section|whole_document
       required:
       - type
     TraversalPath:

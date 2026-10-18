@@ -25,6 +25,35 @@
 - **삭제와 휴지통 복구는 문서 소유자와 OWNER만** 한다.
 - 목록·트리·상세 응답의 `can_edit`, `can_delete`로 화면이 읽기 전용 여부를 정하고, `permission`은 문서에 직접 건 설정(없으면 `null`), `updated_by`는 마지막으로 본문을 저장한 사용자다.
 
+### AI 출처 표시
+
+목록·트리·상세 응답은 문서가 AI 결과물인지를 함께 준다. 화면은 이 값으로 "AI가 생성한 내용" 라벨을 붙이고 AI 변경 이력으로 이동한다(Fruition-frontend#131).
+
+| 필드 | 값 |
+|---|---|
+| `ai_origin` | 문서를 처음 만든 경로가 AI면 `agent`(Agent 문서 생성), `meeting_notes`(회의록 적용 `mode=create`), `chat_export`(채팅 답변 원문 저장). 복제본은 원본 값을 물려받는다. 사용자가 직접 만들거나 올린 문서는 `null` |
+| `last_ai_change` | 본문 이력 중 가장 최근 AI 저장. 없으면 `null` |
+| `last_ai_change.version` | AI가 저장한 본문 버전 |
+| `last_ai_change.source` | `agent`(Agent 편집 적용) 또는 `meeting_notes`(회의록 덧붙이기 `mode=append`) |
+| `last_ai_change.operation_id` | `GET /ai-operation-logs/{operation_id}`로 여는 AI 작업 ID. 작업 로그가 없는 회의록 적용이면 `null` |
+| `last_ai_change.changed_at` | 저장 시각(ISO-8601 UTC) |
+
+```json
+{
+  "id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+  "ai_origin": null,
+  "last_ai_change": {
+    "version": 3,
+    "source": "agent",
+    "operation_id": "op_7c2e4b1a9d3f4e6c8b0a2d5f7e9c1b3a",
+    "changed_at": "2026-10-15T02:11:09Z"
+  }
+}
+```
+
+- `last_ai_change`는 버전 이력에서 읽는다. AI 저장 뒤 사람이 고쳤거나 이전 버전으로 복원해도 그 AI 저장을 가리킨다.
+- 이 필드를 추가하기 전(V78)에 만든 문서는 `ai_origin`이 `null`이다. 그 전 버전은 Agent 편집(`operation_id`가 있는 버전)만 `last_ai_change`로 잡히고 회의록 덧붙이기는 잡히지 않는다.
+
 | API | 권한 | 동작 |
 |---|---|---|
 | `PUT /api/workspaces/{workspace_id}/documents/{document_id}/permission` | 문서 소유자, OWNER | 본문 `{"access": "edit" \| "view" \| null}`. `null`이면 설정을 지운다. 응답 `200 {"access": ...}` |

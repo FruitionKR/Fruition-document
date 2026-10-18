@@ -13,6 +13,7 @@
 | API | 목적 |
 |---|---|
 | [`POST /api/workspaces/{workspace_id}/meetings`](#summary-post-api-workspaces-workspace-id-meetings) | 받아쓰기 회의를 만듭니다. document_id를 주면 그 문서를 회의록 저장 대상으로 기억합니다. |
+| [`GET /api/workspaces/{workspace_id}/meetings`](#summary-get-api-workspaces-workspace-id-meetings) | 내가 만든 회의를 최근 생성 순으로 반환합니다. 새로고침 뒤 진행 중이던 회의를 다시 엽니다. |
 | [`GET /api/workspaces/{workspace_id}/meetings/{meeting_id}`](#summary-get-api-workspaces-workspace-id-meetings-meeting-id) | 회의 상태, 받아쓰기 연결 기록, 발화 순서대로 정렬된 전사 구간을 반환합니다. |
 | [`POST /api/workspaces/{workspace_id}/meetings/{meeting_id}/live-tickets`](#summary-post-api-workspaces-workspace-id-meetings-meeting-id-live-tickets) | 실시간 받아쓰기 WebSocket 접속에 쓰는 60초짜리 일회용 ticket을 발급합니다. |
 | [`DELETE .../meetings/{meeting_id}`](#meeting-delete) | 회의·전사·회의록 초안·녹음 원본을 삭제합니다. |
@@ -38,6 +39,7 @@
 | API | 호출자 | 하위 호출 | 배선 |
 |---|---|---|---|
 | `POST .../meetings` | 없음 | 권한 확인 외 없음 | **미배선** |
+| `GET .../meetings` | 없음 | 권한 확인 외 없음 | **미배선** |
 | `GET .../meetings/{meeting_id}` | 없음 | 권한 확인 외 없음 | **미배선** |
 | `POST .../meetings/{meeting_id}/live-tickets` | 없음 | 티켓만 발급. 티켓을 쓰는 WebSocket 중계(`MeetingLiveHandler`)가 ai-svc `${SPEECH_LIVE_ENDPOINT}`에 연결한다 | **미배선** |
 | `DELETE .../meetings/{meeting_id}` | 없음 | 객체 저장소(MinIO/S3) 녹음 원본 삭제 | **미배선** |
@@ -172,6 +174,110 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 - 배선 상태: **미배선 — 호출자 없음**
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-meetings)
+
+</details>
+
+<a id="summary-get-api-workspaces-workspace-id-meetings"></a>
+### `GET /api/workspaces/{workspace_id}/meetings`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 내가 만든 회의를 최근 생성 순으로 반환합니다. 새로고침이나 채팅 패널을 닫은 뒤 진행 중이던 회의(전사 중 등)를 다시 여는 데 씁니다. |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Query** — `status`(선택), `cursor`(선택), `limit`(선택) |
+| 출력 | `200` 조회 성공 — `MeetingListResponse` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>회의를 만든 사람의 회의만 보인다. |
+| 주요 오류 | `400` 허용하지 않는 `status` 또는 잘못된 `cursor`(`INVALID_MEETING`) — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-get-api-workspaces-workspace-id-meetings"></a>
+### `GET /api/workspaces/{workspace_id}/meetings` 상세
+
+#### 1. Method + Path
+
+`GET /api/workspaces/{workspace_id}/meetings`
+
+#### 2. 목적
+
+프론트는 회의 ID를 화면 상태로만 들고 있어, 새로고침하면 녹음 업로드 전사(수 분~수십 분)나 받아쓰기 회의를 다시 열 수 없었다. 이 목록에서 회의를 골라 `GET /{meeting_id}`로 이어서 조회한다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| query | `status` | `string` | 아니오 | 쉼표로 구분한 상태(`open`, `awaiting_upload`, `transcribing`, `failed`). 생략하면 전부 |
+| query | `cursor` | `string` | 아니오 | 이전 응답의 `next_cursor`. 생략하면 첫 페이지 |
+| query | `limit` | `integer` | 아니오 | 기본 20, 최대 100. 100보다 크면 100, 1보다 작으면 20으로 본다 |
+
+- Body: 없음
+
+#### 5. Response body
+
+- HTTP `200`: 조회 성공
+- Content-Type: `application/json` (`MeetingListResponse`)
+- 정렬: `created_at` 내림차순(같으면 `meeting_id` 내림차순).
+- `has_recording`: 녹음 원본이 있는지. `has_notes`: 만들어졌거나(`ready`) 저장된(`applied`) 회의록 초안이 있는지.
+- `updated_at`: 회의 상태가 바뀌거나 녹음 원본을 저장한 시각. 받아쓰기 구간 추가나 회의록 초안 생성·저장으로는 바뀌지 않으므로 "마지막 활동 시각"으로 쓰지 않는다.
+- 전사 구간(`segments`)·연결 기록(`streams`)은 넣지 않는다. 필요하면 `GET /{meeting_id}`로 조회한다.
+
+```json
+{
+  "items": [
+    {
+      "created_at": "2026-10-15T01:23:45Z",
+      "display_name": "출시 회의",
+      "has_notes": false,
+      "has_recording": true,
+      "meeting_id": "mtg_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+      "source": "upload",
+      "status": "transcribing",
+      "updated_at": "2026-10-15T01:40:00Z"
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+#### 6. Error response
+
+| HTTP 상태 | 설명 | 응답 스키마 |
+|---|---|---|
+| `400` | 허용하지 않는 `status` 또는 잘못된 `cursor`(`INVALID_MEETING`) | `ErrorResponse` |
+| `404` | 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: cursor 방식. `next_cursor`가 `null`이면 마지막 페이지다.
+- 필터링: `status`
+
+#### 8. 권한 규칙
+
+- path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 회의를 만든 사람의 회의만 돌려준다. 같은 워크스페이스라도 다른 사용자의 회의는 보이지 않는다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meetings?status=transcribing,open&limit=20" \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/meeting/MeetingController.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: listMeetings`)
+- 호출자: 없음 — 프론트는 이 API가 생기면 "진행 중인 회의 이어 보기"를 붙인다(Fruition-frontend#173, #170)
+- 하위 호출: 권한 확인(access-svc `GET /internal/authz/workspaces/{id}/users/{id}`, Redis 캐시 miss에만 발생) 외 없음
+- 배선 상태: **미배선 — 호출자 없음**
+
+[↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-meetings)
 
 </details>
 

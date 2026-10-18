@@ -141,6 +141,18 @@ public record DocumentListResponse(
             @JsonProperty("updated_by")
             @JsonInclude(JsonInclude.Include.ALWAYS)
             @Schema(description = "마지막으로 본문을 저장한 사용자 ID. 업로드 뒤 저장한 적이 없으면 null이다.", nullable = true)
-            String updatedBy
+            String updatedBy,
+
+            @JsonProperty("ai_origin")
+            @JsonInclude(JsonInclude.Include.ALWAYS)
+            @Schema(description = "문서를 처음 만든 경로가 AI면 그 종류(agent: Agent 문서 생성, meeting_notes: 회의록 적용, "
+                    + "chat_export: 채팅 답변 원문 저장). 사용자가 직접 만들거나 올린 문서는 null이다.",
+                    nullable = true, allowableValues = {"agent", "meeting_notes", "chat_export"})
+            String aiOrigin,
+
+            @JsonProperty("last_ai_change")
+            @JsonInclude(JsonInclude.Include.ALWAYS)
+            @Schema(description = "현재 본문 이력 중 가장 최근 AI 적용(Agent 편집·회의록 덧붙이기). 없으면 null이다.", nullable = true)
+            DocumentAiChange lastAiChange
     ) {}
 }
