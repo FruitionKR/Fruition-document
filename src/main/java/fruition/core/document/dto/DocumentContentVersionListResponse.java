@@ -48,6 +48,12 @@ public record DocumentContentVersionListResponse(
             @JsonProperty("operation_id")
             @Schema(description = "Agent 편집으로 만든 버전이면 AI 작업 ID. 그 밖의 저장은 null", nullable = true,
                     example = "op_7c2e4b1a9d3f4e6c8b0a2d5f7e9c1b3a")
-            String operationId
+            String operationId,
+
+            @JsonProperty("merge_status")
+            @Schema(description = "자동 병합 결과. merged: 다른 저장과 줄 단위로 합친 버전, overwritten: 겹쳐서 요청 본으로 덮어쓴 버전"
+                    + "(직전 버전이 덮어쓰기 전 본문), conflict_archived: 자동 병합 도입 때 닫은 편집 충돌 본문을 옮겨 둔 버전. 그 밖에는 null",
+                    nullable = true, allowableValues = {"merged", "overwritten", "conflict_archived"}, example = "merged")
+            String mergeStatus
     ) {}
 }

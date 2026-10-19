@@ -189,7 +189,7 @@ class MeetingNotesIntegrationTest {
     }
 
     @Test
-    void append_mergesOnceAndRejectsChangedDocument() throws Exception {
+    void append_mergesOnceEvenAfterDocumentChanged() throws Exception {
         String documentId = createDocument("# 주간 회의\n\n- 기존 본문");
         String meetingId = meetingWithTranscript(documentId, "finished");
         generated(meetingId, "k1");
@@ -199,17 +199,13 @@ class MeetingNotesIntegrationTest {
         long base = preview.path("base_revision").asLong();
         assertThat(preview.path("markdown").asText()).startsWith("# 주간 회의\n\n- 기존 본문\n\n# 출시 회의\n");
 
-        // 미리보기 이후 다른 곳에서 문서가 바뀌면 저장하지 않는다.
+        // 미리보기 이후 다른 곳에서 문서가 바뀌어도 거절하지 않고 지금 본문 끝에 덧붙인다(자동 병합, ADR 0032).
         saveContent(documentId, "# 주간 회의\n\n- 다른 곳에서 수정", base);
-        apply(meetingId, 1, "a1", appendBody(base)).andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.code").value("DOCUMENT_REVISION_CHANGED"));
-
-        long fresh = json(mockMvc.perform(post(notesUrl(meetingId) + "/1/append-preview")
-                .header("Authorization", bearer()))).path("base_revision").asLong();
-        apply(meetingId, 1, "a2", appendBody(fresh)).andExpect(status().isOk())
+        long fresh = base + 1;
+        apply(meetingId, 1, "a1", appendBody(base)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.applied.mode").value("append"));
-        apply(meetingId, 1, "a2", appendBody(fresh)).andExpect(status().isOk());  // 같은 요청 재시도
-        apply(meetingId, 1, "a2", "{\"mode\":\"append\",\"base_revision\":" + fresh + ",\"markdown\":\"# 다른 회의록\"}")
+        apply(meetingId, 1, "a1", appendBody(base)).andExpect(status().isOk());  // 같은 요청 재시도
+        apply(meetingId, 1, "a1", "{\"mode\":\"append\",\"base_revision\":" + base + ",\"markdown\":\"# 다른 회의록\"}")
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_CONFLICT"));
 
         String saved = markdownOf(documentId);

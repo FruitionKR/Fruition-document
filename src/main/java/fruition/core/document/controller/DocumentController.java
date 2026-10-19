@@ -386,9 +386,11 @@ public class DocumentController {
 
     @Operation(
         summary = "Markdown 본문 저장",
-        description = "전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision과 일치할 때만 반영하며 revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다.")
+        description = "전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision보다 오래되었으면 서버가 base_revision 스냅샷 기준으로 줄 단위 3-way merge합니다."
+            + " 겹치지 않으면 합친 본을(merge.status=merged), 겹치거나 기준 스냅샷이 없으면 요청 본을 저장하고(merge.status=overwritten) 덮어쓴 서버 본의 버전을 merge.overwritten_version에 담습니다."
+            + " merged·overwritten이면 markdown에 저장된 최종 본문이 옵니다. revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다.")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "저장 성공 또는 동일 본문 no-op",
+        @ApiResponse(responseCode = "200", description = "저장 성공(자동 병합 포함) 또는 동일 본문 no-op",
             content = @Content(schema = @Schema(implementation = DocumentContentSaveResponse.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 Markdown, base_revision 또는 revision_write_id",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -396,7 +398,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "편집 revision 또는 revision_write_id 충돌. revision 충돌(DOCUMENT_VERSION_CONFLICT)은 error.current_revision에 서버 현재 revision을 담는다",
+        @ApiResponse(responseCode = "409", description = "revision_write_id 충돌(IDEMPOTENCY_KEY_CONFLICT), 또는 base_revision이 서버 현재 revision보다 큼(DOCUMENT_VERSION_CONFLICT, error.current_revision에 서버 현재 revision). 오래된 base_revision은 409가 아니라 자동 병합된다",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "413", description = "Markdown 5MB 또는 이미지 제한 초과",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

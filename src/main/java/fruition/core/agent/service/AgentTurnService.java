@@ -16,7 +16,6 @@ import fruition.core.chat.service.ChatSessionService;
 import fruition.core.chat.service.ChatTurnRecorder;
 import fruition.core.document.repository.AiCommandOutboxWriter;
 import fruition.core.document.dto.DocumentDetailResponse;
-import fruition.core.document.exception.DocumentVersionConflictException;
 import fruition.core.document.service.DocumentEditLockService;
 import fruition.shared.ai.AiModelCatalog;
 import fruition.core.document.service.DocumentService;
@@ -99,12 +98,8 @@ public class AgentTurnService {
             }
             // 다른 사용자가 편집 중이면 pipeline 호출 전에 423으로 거절한다.
             editLockService.requireWritable(request.documentId(), userId);
-            // 오래된 snapshot(baseVersion)이면 pipeline 호출 전에 충돌로 거절해 LLM 낭비를 막는다.
-            // 본문 편집 기준 version은 edit_revision이다(없으면 current_version과 같다).
-            if (document.editRevision() != request.baseVersion()) {
-                throw new DocumentVersionConflictException(
-                        "문서가 이미 변경되어 오래된 버전으로 편집을 요청할 수 없습니다.");
-            }
+            // 오래된 snapshot(baseVersion)이어도 거절하지 않는다. 적용 저장이 baseVersion 스냅샷 기준으로
+            // 그 사이 변경과 자동 병합한다(ADR 0032).
             validateTarget(request.editorSnapshot());
         } else {
             workspaceAccessGuard.requireMember(workspaceId, userId);

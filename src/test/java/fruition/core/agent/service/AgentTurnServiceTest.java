@@ -13,7 +13,6 @@ import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.authz.WorkspaceNotFoundException;
 import fruition.core.document.domain.DocumentStatus;
 import fruition.core.document.dto.DocumentDetailResponse;
-import fruition.core.document.exception.DocumentVersionConflictException;
 import fruition.core.document.repository.AiCommandOutboxWriter;
 import fruition.core.agent.repository.PipelineAgentRunStatusRequester;
 import fruition.core.document.service.DocumentEditLockService;
@@ -498,13 +497,18 @@ class AgentTurnServiceTest {
     }
 
     @Test
-    void turn_rejectsStaleBaseVersionBeforeQueue() {
+    void turn_staleBaseVersionStillQueuesBecauseApplySaveAutoMerges() {
         when(documentService.findById("ws_1", "user_1", "doc_1"))
                 .thenReturn(document("note.md", "text/markdown", 9));
+        when(applyOperationStore.newOperationId()).thenReturn("op_apply_1");
 
-        assertThatThrownBy(() -> service.turn("ws_1", "user_1", request("whole_document", 1, 2)))
-                .isInstanceOf(DocumentVersionConflictException.class);
-        verify(outboxWriter, never()).enqueue(anyString(), anyString(), anyString(), any());
+        var response = service.turn("ws_1", "user_1", request("whole_document", 1, 2));
+
+        assertThat(response.status()).isEqualTo("queued");
+        // 적용 저장은 요청의 baseVersion(7) 스냅샷 기준으로 그 사이 변경(9)과 자동 병합한다.
+        verify(runRepository).create(anyString(), org.mockito.ArgumentMatchers.eq("ws_1"),
+                org.mockito.ArgumentMatchers.eq("user_1"), org.mockito.ArgumentMatchers.eq("doc_1"),
+                org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq("op_apply_1"));
     }
 
     @Test

@@ -317,11 +317,9 @@ public class MeetingNotesService {
                 throw new MeetingException(HttpStatus.BAD_REQUEST, "INVALID_MEETING_NOTES_APPLY", "base_revision이 필요합니다.");
             }
             documentEditRules.requireEditable(workspaceId, userId, target);
+            // 미리보기 이후 문서가 바뀌었어도 거절하지 않는다. 지금 본문 끝에 덧붙인 본으로 저장하고,
+            // 저장 경로가 기준 revision 스냅샷과 자동 병합한다(ADR 0032).
             DocumentEditState state = editState(target);
-            if (state.getRevision() != request.baseRevision()) {
-                throw new MeetingException(HttpStatus.CONFLICT, "DOCUMENT_REVISION_CHANGED",
-                        "미리보기 이후 문서가 바뀌었습니다. 새 미리보기를 확인해 주세요.");
-            }
             claim(note, requestId, mode, target, request.baseRevision(), null, null,
                     merge(state.getMarkdown(), body(note, request.markdown())));
         } else {

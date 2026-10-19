@@ -60,7 +60,7 @@ public class DocumentAssetContentService {
             if (!saved.changed()) storageCoordinator.compensate(stored.values());
             return new DocumentContentSaveResponse(
                     saved.documentId(), saved.currentVersion(), saved.contentHash(), saved.updatedAt(),
-                    saved.changed(), saved.markdown(), attachmentResponses(workspaceId, stored));
+                    saved.changed(), saved.markdown(), attachmentResponses(workspaceId, stored), saved.merge());
         } catch (RuntimeException exception) {
             storageCoordinator.compensate(stored.values());
             throw exception;

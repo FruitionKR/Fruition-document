@@ -106,6 +106,7 @@ import java.util.Arrays; import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -1654,7 +1655,7 @@ public class DocumentService {
     ) {
         String versionSource = applyOperationId != null && !applyOperationId.isBlank() ? "agent" : "user";
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                versionSource, applyOperationId, false, null);
+                versionSource, applyOperationId, false, null, true);
     }
 
     /** 사용자가 수락한 회의록을 기존 문서에 덧붙인다. 버전 이력에 meeting_notes로 남는다. */
@@ -1667,7 +1668,7 @@ public class DocumentService {
             String revisionWriteId
     ) {
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                "meeting_notes", null, false, null);
+                "meeting_notes", null, false, null, true);
     }
 
     private DocumentContentSaveResponse saveContent(
@@ -1680,13 +1681,14 @@ public class DocumentService {
             String versionSource,
             String applyOperationId,
             boolean applyOperationClaimed,
-            Long restoredFromVersion
+            Long restoredFromVersion,
+            boolean autoMerge
     ) {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
         try {
             return executeWithSaveRetry(() -> saveTransaction.execute(status -> saveContentInTransaction(
                     workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                    versionSource, applyOperationId, applyOperationClaimed, restoredFromVersion)));
+                    versionSource, applyOperationId, applyOperationClaimed, restoredFromVersion, autoMerge)));
         } catch (DocumentVersionConflictException conflict) {
             if (applyOperationId != null && !applyOperationId.isBlank()) {
                 recordConflictInIndependentTransaction(
@@ -1713,12 +1715,30 @@ public class DocumentService {
             String revisionWriteId,
             String versionSource
     ) {
+        return saveContentInCurrentTransaction(
+                workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId, versionSource, false);
+    }
+
+    /**
+     * @param autoMerge true면 기준 revision이 지나간 저장을 자동 병합한다(ADR 0032). 버전 복원처럼 정확히 그 본문이어야
+     *                  하는 저장은 false로 두어 기존처럼 409로 거절한다.
+     */
+    public DocumentContentSaveResponse saveContentInCurrentTransaction(
+            String workspaceId,
+            String userId,
+            String documentId,
+            String markdown,
+            Long baseRevision,
+            String revisionWriteId,
+            String versionSource,
+            boolean autoMerge
+    ) {
         if (!TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("현재 PostgreSQL transaction 안에서 호출해야 합니다.");
         }
         return saveContentInTransaction(
                 workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                versionSource, null, false, null);
+                versionSource, null, false, null, autoMerge);
     }
 
     private DocumentContentSaveResponse saveContentInTransaction(
@@ -1731,7 +1751,8 @@ public class DocumentService {
             String versionSource,
             String applyOperationId,
             boolean applyOperationClaimed,
-            Long restoredFromVersion
+            Long restoredFromVersion,
+            boolean autoMerge
     ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         if (applyOperationId != null && !applyOperationId.isBlank()
@@ -1761,28 +1782,30 @@ public class DocumentService {
                     baseRevision, content.markdown(), applyOperationId);
         }
         editStateInitializer.initializeIfNeeded(document);
-        PostgresDocumentEditSaveResult result;
-        result = hasApplyOperation
-                    ? postgresDocumentEditStore.save(
-                            workspaceId, documentId, content.markdown(), content.contentHash(), baseRevision,
-                            revisionWriteId, userId, applyOperationId)
-                    : postgresDocumentEditStore.save(
-                            workspaceId, documentId, content.markdown(), content.contentHash(), baseRevision,
-                            revisionWriteId, userId, null);
+        // 기준 버전이 지나간 저장은 409 대신 서버에서 자동 병합한다(ADR 0032). 버전 복원·충돌 해결처럼
+        // 정확히 그 본문이어야 하는 내부 저장은 병합하지 않고 기존처럼 충돌로 거절한다.
+        ContentSaveMerge merge = autoMerge
+                ? new ContentSaveMerge(contentVersionRepository, documentId, baseRevision, content.markdown())
+                : null;
+        PostgresDocumentEditSaveResult result = postgresDocumentEditStore.save(
+                workspaceId, documentId, content.markdown(), content.contentHash(), baseRevision,
+                revisionWriteId, userId, hasApplyOperation ? applyOperationId : null, merge);
         if (result.replayed()) {
-            return new DocumentContentSaveResponse(
-                    documentId, result.revision(), result.contentHash(), result.updatedAt(), result.changed());
+            return replayedSave(documentId, baseRevision, content, result);
         }
+        String savedMarkdown = merge != null ? merge.savedMarkdown() : content.markdown();
+        DocumentContentSaveResponse.Merge mergeOutcome =
+                merge != null ? merge.outcome() : DocumentContentSaveResponse.Merge.NONE;
         if (hasApplyOperation) {
             transactionTemplate.execute(status -> {
-                projectContentVersions(documentId, content.markdown(), result, lastAuthor(document));
+                projectContentVersions(documentId, savedMarkdown, result, lastAuthor(document));
                 if (result.changed()) {
                     int linked = contentVersionRepository.linkOperation(documentId, result.revision(), applyOperationId);
                     if (linked == 1) {
                         operationRecorder.recordDocumentEdit(applyOperationId, workspaceId, userId, documentId,
                                 document.getDisplayName(),
                                 result.baseRevision(), result.revision(), result.baseMarkdown(),
-                                content.markdown(), result.updatedAt());
+                                savedMarkdown, result.updatedAt());
                     } else if (!contentVersionRepository.findById(
                             new DocumentContentVersionId(documentId, result.revision()))
                             .map(version -> applyOperationId.equals(version.getOperationId()))
@@ -1797,7 +1820,7 @@ public class DocumentService {
                 return null;
             });
         } else {
-            projectContentVersions(documentId, content.markdown(), result, lastAuthor(document));
+            projectContentVersions(documentId, savedMarkdown, result, lastAuthor(document));
         }
         if (result.changed()) {
             if (restoredFromVersion != null) {
@@ -1806,21 +1829,44 @@ public class DocumentService {
             if (versionSource != null) {
                 contentVersionRepository.markSource(documentId, result.revision(), versionSource);
             }
+            if (mergeOutcome.applied()) {
+                contentVersionRepository.markMergeStatus(documentId, result.revision(), mergeOutcome.status());
+            }
             // 재ingest 필요 판단용 projection: 목록 API가 PG만으로 현재 편집본 해시를 비교할 수 있게 한다.
             documentRepository.updateCurrentContentHash(documentId, result.contentHash(), result.updatedAt(), userId);
             // 이미지를 첨부하지 않는 저장에서도 본문에 남은 관리 이미지를 기준으로 참조를 맞춘다.
             // 그러지 않으면 본문에서 지운 이미지가 참조된 상태로 남아 정리 대상이 되지 않는다.
             assetReferenceSynchronizer.synchronize(
-                    documentId, workspaceId, assetReferenceParser.parse(content.markdown()));
+                    documentId, workspaceId, assetReferenceParser.parse(savedMarkdown));
         }
 
-        return new DocumentContentSaveResponse(
+        DocumentContentSaveResponse response = new DocumentContentSaveResponse(
                 documentId,
                 result.revision(),
                 result.contentHash(),
                 result.updatedAt(),
                 result.changed()
         );
+        return mergeOutcome.applied() ? response.withMerge(savedMarkdown, mergeOutcome) : response;
+    }
+
+    /**
+     * 같은 revision_write_id 재전송. 처음 저장이 자동 병합으로 요청과 다른 본문을 남겼으면(해시가 다르면)
+     * 그 버전 스냅샷을 merged로 돌려줘 클라이언트가 실제 저장본으로 맞추게 한다.
+     */
+    private DocumentContentSaveResponse replayedSave(String documentId, Long baseRevision,
+                                                     DocumentEditingRules.MarkdownContent content,
+                                                     PostgresDocumentEditSaveResult result) {
+        DocumentContentSaveResponse response = new DocumentContentSaveResponse(
+                documentId, result.revision(), result.contentHash(), result.updatedAt(), result.changed());
+        if (Objects.equals(result.contentHash(), content.contentHash())) {
+            return response;
+        }
+        return contentVersionRepository.findById(new DocumentContentVersionId(documentId, result.revision()))
+                .map(saved -> response.withMerge(saved.getMarkdown(), new DocumentContentSaveResponse.Merge(
+                        DocumentContentSaveResponse.Merge.STATUS_MERGED, baseRevision,
+                        result.changed() ? result.revision() - 1 : result.revision(), null)))
+                .orElse(response);
     }
 
     private void validateRevisionWriteId(String revisionWriteId) {
@@ -1935,7 +1981,7 @@ public class DocumentService {
                 assetRepository.saveAll(assets);
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),
-                        baseVersion, revisionWriteId, null, applyOperationId, false, null);
+                        baseVersion, revisionWriteId, null, applyOperationId, false, null, true);
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
                     assetRepository.deleteAllInBatch(assets);
@@ -1952,7 +1998,8 @@ public class DocumentService {
         }
         return new DocumentContentSaveResponse(
                 saved.documentId(), saved.currentVersion(), saved.contentHash(), saved.updatedAt(),
-                saved.changed(), content.markdown(), List.of());
+                saved.changed(), saved.markdown() != null ? saved.markdown() : content.markdown(), List.of(),
+                saved.merge());
     }
 
     private void recordContentVersion(String documentId, long version, String markdown,
@@ -2027,7 +2074,7 @@ public class DocumentService {
         List<DocumentContentVersionListResponse.Item> items = contentVersionRepository.findSummaries(documentId).stream()
                 .map(s -> new DocumentContentVersionListResponse.Item(
                         s.getVersion(), s.getContentHash(), s.getCreatedBy(), s.getCreatedAt(),
-                        s.getRestoredFromVersion(), s.getSource(), s.getOperationId()))
+                        s.getRestoredFromVersion(), s.getSource(), s.getOperationId(), s.getMergeStatus()))
                 .toList();
         return new DocumentContentVersionListResponse(documentId, editRevision, items);
     }
@@ -2080,7 +2127,8 @@ public class DocumentService {
                 "restore",
                 null,
                 false,
-                version
+                version,
+                false
         );
     }
 

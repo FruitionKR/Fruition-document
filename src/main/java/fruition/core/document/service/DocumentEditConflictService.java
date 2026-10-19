@@ -3,6 +3,7 @@ package fruition.core.document.service;
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.document.domain.Document;
 import fruition.core.document.domain.DocumentRole;
+import fruition.core.document.dto.DocumentContentSaveResponse;
 import fruition.core.document.dto.DocumentEditConflictListResponse;
 import fruition.core.document.dto.DocumentEditConflictRequest;
 import fruition.core.document.dto.DocumentEditConflictResolveRequest;
@@ -29,11 +30,11 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 편집 충돌. 같은 revision에서 갈라진 저장이 409를 받으면 클라이언트가 자기 본문을 충돌로 올려 보존하고,
- * 워크스페이스 OWNER가 서버 본·충돌 본·직접 합친 본 중 하나를 골라 해결한다.
+ * 편집 충돌(deprecated, ADR 0032). 본문 저장이 서버에서 자동 병합되면서 새 클라이언트는 충돌을 등록하지 않는다.
  *
- * <p>해결해도 충돌 행은 지우지 않는다. 서버 본은 이미 버전 이력에 있고, 고르지 않은 충돌 본은 이 행에 남는다.
- * 등록하면 OWNER에게, 해결하면 등록한 작성자에게 같은 트랜잭션에서 앱 안 알림을 남긴다.
+ * <p>구 데스크톱 호환을 위해 등록 API는 남기되, 받은 본문을 곧바로 자동 병합 저장 경로로 반영하고 해결된 충돌로 기록한다.
+ * OWNER에게 {@code edit_conflict_registered} 알림을 보내지 않는다. 목록·해결 API는 자동 병합 도입 전에 열린 충돌을 위해
+ * 남겨 두지만, V80 마이그레이션이 열린 충돌을 모두 버전 이력으로 옮겨 닫으므로 새로 쓸 일이 없다.
  */
 @Service
 public class DocumentEditConflictService {
@@ -64,7 +65,10 @@ public class DocumentEditConflictService {
         this.notificationService = notificationService;
     }
 
-    /** 그 문서를 편집할 수 있는 사람만 등록한다. 같은 client_conflict_id 재전송은 기존 충돌을 돌려준다. */
+    /**
+     * 그 문서를 편집할 수 있는 사람만 등록한다. 본문은 자동 병합 저장 경로로 곧바로 반영하고 해결된 충돌로 남긴다
+     * (병합되면 merged, 충돌 본 그대로 저장되면 conflict). 같은 client_conflict_id 재전송은 기존 충돌을 돌려준다.
+     */
     @Transactional
     public DocumentEditConflictResponse register(String workspaceId, String userId, String documentId,
                                                  DocumentEditConflictRequest request) {
@@ -72,31 +76,40 @@ public class DocumentEditConflictService {
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
         documentAccessPolicy.requireEdit(document, userId);
-        // 원본(PDF)은 본문 상태가 없어 목록에 안 보이고 server로 해결할 수도 없다.
+        // 원본(PDF)은 본문 상태가 없어 저장할 수 없다.
         if (document.getDocumentRole() != DocumentRole.EDITABLE) {
             throw new InvalidMarkdownContentException("편집 가능한 Markdown 문서만 충돌을 등록할 수 있습니다.");
         }
         DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(request.markdown());
+        DocumentEditConflictResponse existing = findByClientConflictId(documentId, request.clientConflictId());
+        if (existing != null) {
+            return existing;
+        }
 
-        int inserted = jdbc.update("""
+        DocumentContentSaveResponse saved = documentService.saveContentInCurrentTransaction(workspaceId, userId,
+                documentId, content.markdown(), request.baseRevision(),
+                "conflict-register:" + request.clientConflictId(), "user", true);
+        String resolution = DocumentContentSaveResponse.Merge.STATUS_MERGED.equals(saved.merge().status())
+                ? "merged" : "conflict";
+        Instant now = Instant.now();
+        jdbc.update("""
                 INSERT INTO document_edit_conflicts(
-                    id, workspace_id, document_id, base_revision, markdown, content_hash, author_user_id, client_conflict_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    id, workspace_id, document_id, base_revision, markdown, content_hash, author_user_id,
+                    client_conflict_id, status, resolution, resolved_by, resolved_revision, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'resolved', ?, ?, ?, ?)
                 ON CONFLICT (document_id, client_conflict_id) DO NOTHING
                 """, UUID.randomUUID(), workspaceId, documentId, request.baseRevision(), content.markdown(),
-                content.contentHash(), userId, request.clientConflictId());
-        DocumentEditConflictResponse conflict = jdbc.queryForObject("SELECT " + CONFLICT_COLUMNS
+                content.contentHash(), userId, request.clientConflictId(), resolution, userId,
+                saved.currentVersion(), Timestamp.from(now));
+        log.info("[편집 충돌 등록 → 자동 병합] workspaceId={} documentId={} userId={} baseRevision={} merge={} revision={}",
+                workspaceId, documentId, userId, request.baseRevision(), saved.merge().status(), saved.currentVersion());
+        return findByClientConflictId(documentId, request.clientConflictId());
+    }
+
+    private DocumentEditConflictResponse findByClientConflictId(String documentId, String clientConflictId) {
+        return jdbc.query("SELECT " + CONFLICT_COLUMNS
                         + " FROM document_edit_conflicts c WHERE c.document_id = ? AND c.client_conflict_id = ?",
-                CONFLICT_MAPPER, documentId, request.clientConflictId());
-        // 재전송으로 기존 충돌을 돌려줄 때는 알림을 다시 만들지 않는다.
-        if (inserted == 1) {
-            log.info("[편집 충돌 등록] workspaceId={} documentId={} userId={} baseRevision={}",
-                    workspaceId, documentId, userId, request.baseRevision());
-            notificationService.notifyWorkspaceOwners(workspaceId, NotificationService.TYPE_EDIT_CONFLICT_REGISTERED,
-                    Map.of("conflict_id", conflict.id(), "document_id", documentId,
-                            "document_name", document.getDisplayName(), "author_user_id", userId));
-        }
-        return conflict;
+                CONFLICT_MAPPER, documentId, clientConflictId).stream().findFirst().orElse(null);
     }
 
     /** OWNER에게 미해결 충돌과 서버 현재 본문을 함께 보여준다. 휴지통 문서의 충돌은 뺀다. */

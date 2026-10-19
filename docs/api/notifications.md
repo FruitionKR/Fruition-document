@@ -12,8 +12,8 @@
 
 | type | 대상 | 생기는 때 | payload |
 |---|---|---|---|
-| `edit_conflict_registered` | OWNER | [편집 충돌](documents/README.md#편집-충돌)을 새로 등록 | `conflict_id`, `document_id`, `document_name`, `author_user_id` |
-| `edit_conflict_resolved` | 충돌을 등록한 작성자 | OWNER가 충돌을 해결 | `conflict_id`, `document_id`, `choice`(`server`/`conflict`/`merged`), `resolved_by` |
+| `edit_conflict_registered` | OWNER | 더 만들지 않는다(자동 병합 도입, [ADR 0032](../adr/0032-document-content-auto-merge.md)). 이전에 쌓인 알림만 남아 있다 | `conflict_id`, `document_id`, `document_name`, `author_user_id` |
+| `edit_conflict_resolved` | 충돌을 등록한 작성자 | OWNER가 자동 병합 도입 전에 열린 충돌을 해결(deprecated) | `conflict_id`, `document_id`, `choice`(`server`/`conflict`/`merged`), `resolved_by` |
 
 ## API
 
@@ -24,4 +24,4 @@
 | `POST /api/workspaces/{workspace_id}/notifications/read-all` | 지금 나에게 보이는 알림을 모두 읽음 처리하고 `204` |
 
 진입점: `src/main/java/fruition/core/notification/controller/NotificationController.java`, 처리: `NotificationService.java`.
-알림 생성은 `DocumentEditConflictService`가 충돌 등록·해결과 같은 트랜잭션에서 한다.
+알림 생성은 `DocumentEditConflictService`가 충돌 해결과 같은 트랜잭션에서 한다. 충돌 등록은 알림을 만들지 않는다.

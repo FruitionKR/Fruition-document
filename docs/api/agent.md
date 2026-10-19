@@ -485,7 +485,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `AgentTurnRequest` |
 | 출력 | `202` Agent 실행이 대기열에 등록됨 — `AgentTurnResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`409` 문서 version 충돌 — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -534,7 +534,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | body | `session_id` | `string` | 예 | 이 턴을 남길 채팅 세션 ID |
 | body | `message` | `string` | 예 | 사용자 지시문 |
 | body | `documentId` | `string` | 아니오 | 편집 대상 문서. 생략하면 `baseVersion`·`editorSnapshot`도 함께 생략한다 |
-| body | `baseVersion` | `integer` | 아니오 | 편집 기준 문서 버전 |
+| body | `baseVersion` | `integer` | 아니오 | 편집 기준 문서 버전. 현재 버전보다 오래되어도 거절하지 않고, 적용 저장이 이 버전 스냅샷 기준으로 그 사이 변경과 자동 병합한다([자동 병합](documents/content.md#자동-병합)) |
 | body | `editorSnapshot` | `object` | 아니오 | 편집 시작 시점의 에디터 상태 |
 | body | `allow_web_search` | `boolean` | 아니오 | Query와 웹 근거 기반 새 문서 생성에서 웹 검색을 허용할지. 편집·Skill 갈래에는 영향이 없다 |
 | body | `conversationContext.selected_pair_ids` | `string[]` | 아니오 | 맥락으로 쓸 문답 ID(최대 20개). 비우면 세션의 최근 완결 문답을 쓴다 |
@@ -619,7 +619,6 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | `400` | 잘못된 요청 | `ErrorResponse` |
 | `402` | 크레딧 부족(`app.billing.enforce`, `INSUFFICIENT_CREDIT`) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `409` | 문서 version 충돌 | `ErrorResponse` |
 | `423` | 다른 사용자가 문서를 편집 중 | `ErrorResponse` |
 
 ```json

@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 
-@Tag(name = "Document Edit Conflicts", description = "같은 revision에서 갈라진 편집을 OWNER가 골라 해결")
+@Tag(name = "Document Edit Conflicts", description = "(deprecated) 본문 저장이 서버에서 자동 병합되어 더 쓰지 않는다. 구 데스크톱 호환용으로 남긴다")
 @RestController
 @RequestMapping("/api/workspaces/{workspace_id}")
 public class DocumentEditConflictController {
@@ -36,8 +36,10 @@ public class DocumentEditConflictController {
         this.conflictService = conflictService;
     }
 
-    @Operation(summary = "편집 충돌 등록",
-            description = "본문 저장이 409 DOCUMENT_VERSION_CONFLICT로 막혔을 때 내 본문을 충돌로 올려 보존합니다."
+    @Operation(summary = "편집 충돌 등록 (deprecated)", deprecated = true,
+            description = "본문 저장이 자동 병합으로 바뀌어 새 클라이언트는 호출하지 않습니다. 구 데스크톱 호환용으로,"
+                    + " 받은 본문을 본문 저장과 같은 자동 병합 경로로 곧바로 저장하고 해결된 충돌(status=resolved,"
+                    + " resolution=merged|conflict)로 돌려줍니다. OWNER 알림은 만들지 않습니다."
                     + " 그 문서를 편집할 수 있어야 합니다. 같은 client_conflict_id로 다시 보내면 기존 충돌을 돌려줍니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "201", description = "등록 또는 멱등 재요청",
@@ -49,8 +51,11 @@ public class DocumentEditConflictController {
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "413", description = "Markdown 5MB 초과",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "423", description = "다른 사용자가 편집 잠금을 보유 중",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
+    @Deprecated
     @PostMapping("/documents/{document_id}/conflicts")
     public ResponseEntity<DocumentEditConflictResponse> registerConflict(
             @PathVariable("workspace_id") String workspaceId,
@@ -61,8 +66,8 @@ public class DocumentEditConflictController {
                 .body(conflictService.register(workspaceId, userId, documentId, request));
     }
 
-    @Operation(summary = "미해결 편집 충돌 목록",
-            description = "충돌 본과 서버 현재 본문·revision·마지막 수정자를 함께 반환합니다. OWNER만 호출할 수 있습니다.")
+    @Operation(summary = "미해결 편집 충돌 목록 (deprecated)", deprecated = true,
+            description = "자동 병합 도입 후에는 새 충돌이 열리지 않아 비어 있습니다. 충돌 본과 서버 현재 본문·revision·마지막 수정자를 함께 반환합니다. OWNER만 호출할 수 있습니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "조회 성공"),
         @ApiResponse(responseCode = "403", description = "OWNER가 아님",
@@ -70,6 +75,7 @@ public class DocumentEditConflictController {
         @ApiResponse(responseCode = "404", description = "워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
+    @Deprecated
     @GetMapping("/conflicts")
     public ResponseEntity<DocumentEditConflictListResponse> listConflicts(
             @PathVariable("workspace_id") String workspaceId,
@@ -77,8 +83,8 @@ public class DocumentEditConflictController {
         return ResponseEntity.ok(conflictService.listOpen(workspaceId, userId));
     }
 
-    @Operation(summary = "편집 충돌 해결",
-            description = "server는 본문을 그대로 두고, conflict·merged는 그 본문으로 새 revision을 저장합니다."
+    @Operation(summary = "편집 충돌 해결 (deprecated)", deprecated = true,
+            description = "자동 병합 도입 후에는 해결할 열린 충돌이 없습니다. server는 본문을 그대로 두고, conflict·merged는 그 본문으로 새 revision을 저장합니다."
                     + " 고르지 않은 본문은 버전 이력과 충돌 기록에 남습니다. OWNER만 호출할 수 있고, 먼저 해결한 요청만 반영됩니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "해결 완료",
@@ -94,6 +100,7 @@ public class DocumentEditConflictController {
         @ApiResponse(responseCode = "423", description = "다른 사용자가 편집 잠금을 보유 중",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
+    @Deprecated
     @PostMapping("/conflicts/{conflict_id}/resolve")
     public ResponseEntity<DocumentEditConflictResponse> resolveConflict(
             @PathVariable("workspace_id") String workspaceId,

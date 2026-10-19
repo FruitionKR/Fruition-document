@@ -68,9 +68,29 @@ public class PostgresDocumentEditStore {
             String actorUserId,
             String applyOperationId
     ) {
+        return save(workspaceId, documentId, markdown, contentHash, baseRevision,
+                revisionWriteId, actorUserId, applyOperationId, null);
+    }
+
+    /**
+     * @param staleBaseResolver 기준 revision이 현재와 다를 때 저장할 본문을 정한다. null이거나 null을 돌려주면
+     *                          {@link DocumentVersionConflictException}으로 거절한다. 멱등 판정(request hash)은
+     *                          병합 전 요청 본문으로 하므로 같은 요청의 재전송은 처음 결과를 그대로 돌려받는다.
+     */
+    public PostgresDocumentEditSaveResult save(
+            String workspaceId,
+            String documentId,
+            String markdown,
+            String contentHash,
+            long baseRevision,
+            String revisionWriteId,
+            String actorUserId,
+            String applyOperationId,
+            StaleBaseResolver staleBaseResolver
+    ) {
         return transactionTemplate.execute(status -> saveInTransaction(
                 workspaceId, documentId, markdown, contentHash, baseRevision,
-                revisionWriteId, actorUserId, applyOperationId));
+                revisionWriteId, actorUserId, applyOperationId, staleBaseResolver));
     }
 
     private PostgresDocumentEditSaveResult saveInTransaction(
@@ -81,7 +101,8 @@ public class PostgresDocumentEditStore {
             long baseRevision,
             String revisionWriteId,
             String actorUserId,
-            String applyOperationId
+            String applyOperationId,
+            StaleBaseResolver staleBaseResolver
     ) {
         Map<String, Object> state = jdbcTemplate.query("""
                 SELECT markdown, content_hash, revision
@@ -115,25 +136,36 @@ public class PostgresDocumentEditStore {
         long currentRevision = (long) state.get("revision");
         String baseMarkdown = (String) state.get("markdown");
         String baseContentHash = (String) state.get("contentHash");
+        long expectedRevision = baseRevision;
+        String savedMarkdown = markdown;
+        String savedContentHash = contentHash;
         if (currentRevision != baseRevision) {
-            throw new DocumentVersionConflictException("문서 편집 버전이 일치하지 않습니다.", currentRevision);
+            Resolution resolution = staleBaseResolver == null
+                    ? null : staleBaseResolver.resolve(currentRevision, baseMarkdown);
+            if (resolution == null) {
+                throw new DocumentVersionConflictException("문서 편집 버전이 일치하지 않습니다.", currentRevision);
+            }
+            expectedRevision = currentRevision;
+            savedMarkdown = resolution.markdown();
+            savedContentHash = resolution.contentHash();
         }
 
         Instant writeAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
-        boolean changed = !Objects.equals(baseContentHash, contentHash);
-        long resultRevision = changed ? baseRevision + 1 : baseRevision;
+        boolean changed = !Objects.equals(baseContentHash, savedContentHash);
+        long resultRevision = changed ? expectedRevision + 1 : expectedRevision;
         beforeStateWrite.run(changed);
         int updated = changed
                 ? jdbcTemplate.update("""
                         UPDATE document_edit_states
                         SET markdown = ?, content_hash = ?, revision = ?, updated_at = ?
                         WHERE document_id = ? AND revision = ?
-                        """, markdown, contentHash, resultRevision, Timestamp.from(writeAt), documentId, baseRevision)
+                        """, savedMarkdown, savedContentHash, resultRevision, Timestamp.from(writeAt), documentId,
+                        expectedRevision)
                 : jdbcTemplate.update("""
                         UPDATE document_edit_states
                         SET updated_at = updated_at
                         WHERE document_id = ? AND revision = ? AND content_hash = ?
-                        """, documentId, baseRevision, contentHash);
+                        """, documentId, expectedRevision, savedContentHash);
         if (updated != 1) {
             existing = jdbcTemplate.query("""
                     SELECT request_hash, result_revision, result_content_hash, result_updated_at,
@@ -160,7 +192,7 @@ public class PostgresDocumentEditStore {
                         result_content_hash, result_updated_at, actor_user_id, changed, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, documentId, revisionWriteId, requestHash, resultRevision,
-                    contentHash, Timestamp.from(writeAt), actorUserId, changed, Timestamp.from(writeAt));
+                    savedContentHash, Timestamp.from(writeAt), actorUserId, changed, Timestamp.from(writeAt));
         if (changed) {
             jdbcTemplate.update("""
                         INSERT INTO document_edit_outbox(
@@ -168,11 +200,11 @@ public class PostgresDocumentEditStore {
                             event_type, schema_version, created_at, published
                         ) VALUES (?, ?, ?, ?, ?, 'document.edit.saved.v1', 1, ?, false)
                         """, eventId(documentId, revisionWriteId), documentId, workspaceId,
-                        resultRevision, contentHash, Timestamp.from(writeAt));
+                        resultRevision, savedContentHash, Timestamp.from(writeAt));
         }
         return new PostgresDocumentEditSaveResult(
-                baseRevision, baseMarkdown, baseContentHash, resultRevision,
-                contentHash, changed ? writeAt : jdbcTemplate.queryForObject(
+                expectedRevision, baseMarkdown, baseContentHash, resultRevision,
+                savedContentHash, changed ? writeAt : jdbcTemplate.queryForObject(
                         "SELECT updated_at FROM document_edit_states WHERE document_id = ?",
                         Instant.class, documentId), actorUserId, changed, false);
     }
@@ -208,6 +240,15 @@ public class PostgresDocumentEditStore {
             throw new IllegalStateException("편집 요청 hash를 계산하지 못했습니다.", exception);
         }
     }
+
+    /** 기준 revision이 지나간 저장을 어떻게 반영할지 정한다. null을 돌려주면 충돌로 거절한다. */
+    @FunctionalInterface
+    public interface StaleBaseResolver {
+        Resolution resolve(long currentRevision, String currentMarkdown);
+    }
+
+    /** 실제로 저장할 본문과 그 해시. */
+    public record Resolution(String markdown, String contentHash) {}
 
     @FunctionalInterface
     interface BeforeStateWrite {
