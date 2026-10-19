@@ -248,8 +248,49 @@ public class AgentTurnService {
     public JsonNode approve(String workspaceId, String userId, String runId,
                             AgentRunApproveRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return rerun(workspaceId, userId, runId, () -> statusRequester.approve(workspaceId, userId, runId,
-                request.planVersion(), request.operationHash()));
+        // 고른 작업은 예약하기 전에 검사한다. 잘못된 선택이면 크레딧을 건드리지 않고 400으로 끝난다.
+        return rerun(workspaceId, userId, runId, current -> {
+            List<String> operationIds = selectedOperationIds(current, request.operationIds());
+            return () -> operationIds == null
+                    ? statusRequester.approve(workspaceId, userId, runId, request.planVersion(), request.operationHash())
+                    : statusRequester.approve(workspaceId, userId, runId, request.planVersion(),
+                    request.operationHash(), operationIds);
+        });
+    }
+
+    /**
+     * 부분 승인할 작업 ID를 현재 계획에 비춰 검사한다. null이면 전체 승인이다.
+     * 계획의 모든 작업을 골랐으면 전체 승인과 같으므로 null을 돌려 기존 요청 모양으로 보낸다.
+     * 고른 작업이 고르지 않은 작업의 결과에 기대면(depends_on) 실행할 수 없으므로 거절한다.
+     */
+    private static List<String> selectedOperationIds(JsonNode run, List<String> requested) {
+        if (requested == null) {
+            return null;
+        }
+        Set<String> selected = new java.util.LinkedHashSet<>(requested);
+        if (selected.size() != requested.size()) {
+            throw new InvalidAgentTurnRequestException("operation_ids에 중복된 작업이 있습니다.");
+        }
+        JsonNode operations = run == null ? null : run.path("plan").path("operations");
+        if (operations == null || !operations.isArray() || operations.isEmpty()) {
+            throw new InvalidAgentTurnRequestException("선택해 승인할 계획이 없습니다.");
+        }
+        Set<String> planned = new HashSet<>();
+        for (JsonNode operation : operations) {
+            planned.add(operation.path("id").asText());
+        }
+        if (!planned.containsAll(selected)) {
+            throw new InvalidAgentTurnRequestException("계획에 없는 작업을 승인할 수 없습니다.");
+        }
+        for (JsonNode operation : operations) {
+            if (!selected.contains(operation.path("id").asText())) continue;
+            for (JsonNode dependency : operation.path("depends_on")) {
+                if (!selected.contains(dependency.asText())) {
+                    throw new InvalidAgentTurnRequestException("선택한 작업이 선택하지 않은 작업에 의존합니다.");
+                }
+            }
+        }
+        return selected.size() == planned.size() ? null : List.copyOf(selected);
     }
 
     public JsonNode reject(String workspaceId, String userId, String runId) {
@@ -269,7 +310,7 @@ public class AgentTurnService {
                            AgentRunReviseRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         return rerun(workspaceId, userId, runId,
-                () -> statusRequester.revise(workspaceId, userId, runId, request.instruction()));
+                current -> () -> statusRequester.revise(workspaceId, userId, runId, request.instruction()));
     }
 
     /**
@@ -279,8 +320,11 @@ public class AgentTurnService {
      * 닫지 않아 다음 시도가 잔액을 다시 확인한다. 실행의 종료는 AgentRun 응답의 상태로 알아챈다({@link #closeIfTerminal}).
      * enforce가 꺼져 있으면 아무것도 하지 않는다(#102).
      */
-    private JsonNode rerun(String workspaceId, String userId, String runId, java.util.function.Supplier<JsonNode> forward) {
+    private JsonNode rerun(String workspaceId, String userId, String runId,
+                           java.util.function.Function<JsonNode, java.util.function.Supplier<JsonNode>> prepare) {
         JsonNode current = statusRequester.getAutonomousRun(workspaceId, userId, runId);
+        // 현재 run으로 요청을 검사·준비한다(예약 전). 전달은 아래에서 한다.
+        java.util.function.Supplier<JsonNode> forward = prepare.apply(current);
         if (usageCharges.isAutonomousTerminal(current)) {  // 이미 끝난 실행은 ai-svc가 거절한다. 예약하지 않는다.
             closeIfTerminal(runId, current);
             return forward.get();

@@ -709,6 +709,62 @@ class AgentTurnServiceTest {
         verify(statusRequester, never()).approve(anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt(), anyString());
     }
 
+    /** 세 작업 계획. op_2는 op_1(폴더 만들기)의 결과에 기댄다. */
+    private static JsonNode planWithThreeOperations(String runId) throws Exception {
+        return new ObjectMapper().readTree("""
+                {"id":"%s","status":"awaiting_approval","plan":{"id":"plan-1","version":1,"operations":[
+                  {"id":"op_1","depends_on":[]},
+                  {"id":"op_2","depends_on":["op_1"]},
+                  {"id":"op_3","depends_on":[]}]}}
+                """.formatted(runId));
+    }
+
+    @Test
+    void approve_forwardsSelectedOperationsOnly() throws Exception {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(planWithThreeOperations(runId));
+
+        service.approve("ws_1", "user_1", runId,
+                new AgentRunApproveRequest(1, "a".repeat(64), List.of("op_1", "op_2")));
+
+        verify(statusRequester).approve("ws_1", "user_1", runId, 1, "a".repeat(64), List.of("op_1", "op_2"));
+    }
+
+    @Test
+    void approve_allOperationsSelectedIsSentAsFullApproval() throws Exception {
+        // 모두 고르면 전체 승인과 같다. operation_ids를 모르는 AI에도 같은 요청이 가도록 키를 싣지 않는다.
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(planWithThreeOperations(runId));
+
+        service.approve("ws_1", "user_1", runId,
+                new AgentRunApproveRequest(1, "a".repeat(64), List.of("op_3", "op_1", "op_2")));
+
+        verify(statusRequester).approve("ws_1", "user_1", runId, 1, "a".repeat(64));
+    }
+
+    @Test
+    void approve_rejectsInvalidSelectionBeforeReserving() throws Exception {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(planWithThreeOperations(runId));
+
+        // 고르지 않은 작업(op_1)에 의존한다.
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId,
+                new AgentRunApproveRequest(1, "a".repeat(64), List.of("op_2"))))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+        // 계획에 없는 작업.
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId,
+                new AgentRunApproveRequest(1, "a".repeat(64), List.of("op_9"))))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+        // 중복.
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId,
+                new AgentRunApproveRequest(1, "a".repeat(64), List.of("op_3", "op_3"))))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+
+        verify(usageCharges, never()).reserveAutonomousRun(anyString(), anyString(), anyString());
+        verify(statusRequester, never()).approve(anyString(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.anyInt(), anyString(), org.mockito.ArgumentMatchers.any());
+    }
+
     @Test
     void failedForwardReleasesOnlyThisAttemptAndKeepsRunOpen() {
         String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";

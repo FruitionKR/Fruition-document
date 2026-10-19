@@ -66,7 +66,14 @@ public class PipelineAgentRunStatusRequester {
 
     public JsonNode approve(String workspaceId, String userId, String runId,
                             int planVersion, String operationHash) {
-        return postAutonomous(runId, new ApproveRequest(workspaceId, userId, planVersion, operationHash), "/approve");
+        return approve(workspaceId, userId, runId, planVersion, operationHash, null);
+    }
+
+    /** operationIds가 null이면 계획 전체 승인이다. 그때는 키를 싣지 않아 기존 요청과 같다. */
+    public JsonNode approve(String workspaceId, String userId, String runId,
+                            int planVersion, String operationHash, java.util.List<String> operationIds) {
+        return postAutonomous(runId,
+                new ApproveRequest(workspaceId, userId, planVersion, operationHash, operationIds), "/approve");
     }
 
     public JsonNode reject(String workspaceId, String userId, String runId) {
@@ -169,7 +176,10 @@ public class PipelineAgentRunStatusRequester {
             @JsonProperty("workspace_id") String workspaceId,
             @JsonProperty("user_id") String userId,
             @JsonProperty("plan_version") int planVersion,
-            @JsonProperty("operation_hash") String operationHash
+            @JsonProperty("operation_hash") String operationHash,
+            @JsonProperty("operation_ids")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            java.util.List<String> operationIds
     ) {}
 
     private record ReviseRequest(

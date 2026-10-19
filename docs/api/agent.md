@@ -136,6 +136,12 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 
 현재 AgentRun 계획을 승인합니다.
 
+`operation_ids`를 보내면 고른 작업(`plan.operations[].id`)만 실행한다(부분 적용). 생략하면 계획 전체다.
+document-svc는 현재 계획을 조회해 다음을 먼저 검사하고, 어긋나면 크레딧을 예약하지 않고 `400`으로 거절한다.
+빈 배열·중복, 계획에 없는 ID, 고른 작업이 고르지 않은 작업에 의존(`depends_on`)하는 경우다.
+모든 작업을 고르면 전체 승인과 같으므로 ai-svc에 `operation_ids` 없이 보낸다.
+부분 승인은 ai-svc approve 요청의 `operation_ids`로 그대로 전달하며, 고르지 않은 작업을 건너뛰는 실행은 ai-svc가 맡는다.
+
 #### 3. Auth 필요 여부
 
 - 필요
@@ -147,12 +153,19 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 |---|---|---|---|---|
 | path | `workspace_id` | `string` | 예 | - |
 | path | `run_id` | `string` | 예 | - |
+| body | `plan_version` | `integer` | 예 | 승인 대상 plan 버전 |
+| body | `operation_hash` | `string` | 예 | 승인 대상 편집안 해시(64자) |
+| body | `operation_ids` | `string[]` | 아니오 | 실행할 작업 ID(1~20개). 생략하면 계획 전체 |
 
 - Content-Type: `application/json` (`AgentRunApproveRequest`)
 
 ```json
 {
   "operation_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "operation_ids": [
+    "op_1",
+    "op_3"
+  ],
   "plan_version": 1
 }
 ```
@@ -169,7 +182,12 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 
 #### 6. Error response
 
-- 명세에 별도 오류 응답이 정의되어 있지 않다.
+| HTTP 상태 | 설명 | 응답 스키마 |
+|---|---|---|
+| `400` | 잘못된 요청(`operation_ids` 빈 배열·중복·계획에 없는 ID·의존 작업 누락 포함) | `ErrorResponse` |
+| `402` | 크레딧 부족 | `ErrorResponse` |
+| `404` | AgentRun 없음 | `ErrorResponse` |
+| `409` | ai-svc가 거절(계획 버전·해시 불일치 등, `AGENT_REQUEST_REJECTED`) | `ErrorResponse` |
 
 #### 7. Pagination / filtering
 

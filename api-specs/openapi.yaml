@@ -5633,6 +5633,14 @@ components:
           description: 승인 대상 편집안의 해시(64자). 내용이 바뀌면 값이 달라져 잘못된 승인을 막는다.
           maxLength: 64
           minLength: 64
+        operation_ids:
+          type: array
+          description: "실행할 작업(plan.operations[].id)만 고를 때 보낸다. 생략하면 계획 전체를 실행한다. 계획에 없는 ID·중복이 있거나, 고른 작업이 고르지 않은 작업에 의존(depends_on)하면 거절된다. 계획의 모든 작업을 고르면 생략과 같다."
+          items:
+            type: string
+            minLength: 1
+          maxItems: 20
+          minItems: 1
         plan_version:
           type: integer
           format: int32

@@ -226,6 +226,29 @@ class AgentTurnControllerTest {
     }
 
     @Test
+    void approve_acceptsOperationIdsAndRejectsEmptySelection() throws Exception {
+        String runId = "run-autonomous";
+        when(agentTurnService.approve(eq(WORKSPACE_ID), eq(USER_ID), eq(runId), any(AgentRunApproveRequest.class)))
+                .thenReturn(new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode().put("id", runId));
+        String path = "/api/workspaces/" + WORKSPACE_ID + "/agent/runs/" + runId + "/approve";
+        String auth = "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com");
+
+        mockMvc.perform(post(path).header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"plan_version\":1,\"operation_hash\":\"" + "a".repeat(64)
+                                + "\",\"operation_ids\":[\"op_1\",\"op_3\"]}"))
+                .andExpect(status().isOk());
+        ArgumentCaptor<AgentRunApproveRequest> captured = ArgumentCaptor.forClass(AgentRunApproveRequest.class);
+        verify(agentTurnService).approve(eq(WORKSPACE_ID), eq(USER_ID), eq(runId), captured.capture());
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().operationIds()).containsExactly("op_1", "op_3");
+
+        // 빈 선택은 승인할 것이 없으므로 거절한다(전체 승인은 키를 생략한다).
+        mockMvc.perform(post(path).header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"plan_version\":1,\"operation_hash\":\"" + "a".repeat(64)
+                                + "\",\"operation_ids\":[]}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void getRun_providerFailureReturnsUnavailableErrorEnvelope() throws Exception {
         String runId = "run-autonomous";
         when(agentTurnService.getRun(WORKSPACE_ID, USER_ID, runId))
