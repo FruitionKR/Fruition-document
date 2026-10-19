@@ -45,11 +45,21 @@ public record AgentTurnResponse(
 
         @JsonProperty("error_message")
         @Schema(description = "실패 코드에 대응하는 사용자용 한국어 문구. 성공이면 null이다.", nullable = true)
-        String errorMessage
+        String errorMessage,
+
+        @JsonProperty("folder_id")
+        @Schema(description = "요청한 작업 대상 폴더 ID(요청의 folder_id). 새 문서로 만드는 결과는 이 폴더에 둔다. "
+                + "null이면 최상위(루트)다.", format = "uuid", nullable = true)
+        String folderId
 ) {
     public AgentTurnResponse(String documentId, Long baseVersion, String requestId, String applyOperationId,
                              String status, JsonNode result, String error) {
+        this(documentId, baseVersion, requestId, applyOperationId, status, result, error, (String) null);
+    }
+
+    public AgentTurnResponse(String documentId, Long baseVersion, String requestId, String applyOperationId,
+                             String status, JsonNode result, String error, String folderId) {
         this(documentId, baseVersion, requestId, applyOperationId, status, result, error,
-                error == null ? null : AiErrorMessages.agent(error));
+                error == null ? null : AiErrorMessages.agent(error), folderId);
     }
 }

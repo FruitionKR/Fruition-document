@@ -16,6 +16,8 @@ import fruition.core.chat.service.ChatSessionService;
 import fruition.core.chat.service.ChatTurnRecorder;
 import fruition.core.document.repository.AiCommandOutboxWriter;
 import fruition.core.document.dto.DocumentDetailResponse;
+import fruition.core.document.exception.HierarchyItemNotFoundException;
+import fruition.core.document.repository.FolderRepository;
 import fruition.core.document.service.DocumentEditLockService;
 import fruition.shared.ai.AiModelCatalog;
 import fruition.core.document.service.DocumentService;
@@ -53,6 +55,7 @@ public class AgentTurnService {
     private final fruition.core.aitask.service.AiTaskCancellationService cancellation;
     private final com.fasterxml.jackson.databind.ObjectMapper mapper;
     private final fruition.core.usage.service.UsageChargeService usageCharges;
+    private final FolderRepository folderRepository;
 
     public AgentTurnService(DocumentService documentService,
                             DocumentEditLockService editLockService,
@@ -68,7 +71,8 @@ public class AgentTurnService {
                             @Value("${app.agent.command-topic}") String commandTopic,
                             fruition.core.aitask.service.AiTaskCancellationService cancellation,
                             com.fasterxml.jackson.databind.ObjectMapper mapper,
-                            fruition.core.usage.service.UsageChargeService usageCharges) {
+                            fruition.core.usage.service.UsageChargeService usageCharges,
+                            FolderRepository folderRepository) {
         this.documentService = documentService;
         this.editLockService = editLockService;
         this.workspaceAccessGuard = workspaceAccessGuard;
@@ -84,6 +88,7 @@ public class AgentTurnService {
         this.cancellation = cancellation;
         this.mapper = mapper;
         this.usageCharges = usageCharges;
+        this.folderRepository = folderRepository;
     }
 
     @Transactional
@@ -105,6 +110,7 @@ public class AgentTurnService {
         } else {
             workspaceAccessGuard.requireMember(workspaceId, userId);
         }
+        UUID folderId = targetFolderId(workspaceId, request.folderId());
         AiModelCatalog.AiModel selectedModel = aiModelCatalog.resolve(request.provider(), request.model());
         List<CanonicalSkillDraftSource> skillDraftSources = canonicalSkillDraftSources(
                 workspaceId, userId, request.skillDraftSources());
@@ -115,7 +121,7 @@ public class AgentTurnService {
         // 적용할 문서가 없으면 표도 만들지 않는다.
         String applyOperationId = request.hasDocumentContext() ? applyOperationStore.newOperationId() : null;
         runRepository.create(runId, workspaceId, userId, request.documentId(),
-                request.baseVersion(), applyOperationId);
+                request.baseVersion(), applyOperationId, folderId);
         // 질의와 같은 방식으로 말풍선을 먼저 만들고 결과가 오면 채운다. command와 같은 트랜잭션이라
         // 발행에 실패하면 메시지도 남지 않는다.
         AgentMessageContext messageContext = new AgentMessageContext(
@@ -140,7 +146,8 @@ public class AgentTurnService {
                         request.skillDraftUserDirectives(), request.skillDraftExcludedLiterals(),
                         request.skillScopeType(),
                         CommandEditorSnapshot.from(request.editorSnapshot()),
-                        request.mode()));
+                        request.mode(),
+                        folderId == null ? null : folderId.toString()));
         return new AgentTurnResponse(
                 request.documentId(),
                 request.baseVersion(),
@@ -148,8 +155,25 @@ public class AgentTurnService {
                 applyOperationId,
                 "queued",
                 null,
-                null
+                null,
+                folderId == null ? null : folderId.toString()
         );
+    }
+
+    /** 대상 폴더는 이 워크스페이스의 살아 있는 폴더여야 한다. 생략하면 지정하지 않은 것(루트)이다. */
+    private UUID targetFolderId(String workspaceId, String folderId) {
+        if (folderId == null) {
+            return null;
+        }
+        UUID parsed;
+        try {
+            parsed = UUID.fromString(folderId);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidAgentTurnRequestException("folder_id 형식이 올바르지 않습니다.");
+        }
+        folderRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(parsed, workspaceId)
+                .orElseThrow(() -> new HierarchyItemNotFoundException("대상 폴더를 찾을 수 없습니다."));
+        return parsed;
     }
 
     private static List<String> selectedPairIds(AgentTurnRequest request) {
@@ -196,25 +220,24 @@ public class AgentTurnService {
             return new AgentTurnResponse(null, null, runId, null, (String) row.get("status"), null, (String) row.get("error_code"));
         }
         var aiRun = statusRequester.find(workspaceId, userId, runId);
+        // 대상 폴더는 document만 기록하므로 AI 상태로 답할 때도 projection에서 읽는다.
+        var projection = runRepository.find(workspaceId, userId, runId);
+        String folderId = projection.map(AgentRunCommandRepository.RunView::folderId).orElse(null);
         if (aiRun.isPresent()) {
             var run = aiRun.get();
-            if ("completed".equals(run.status())) {
-                var projection = runRepository.find(workspaceId, userId, runId);
-                if (projection.isPresent()) {
-                    var core = projection.get();
-                    return new AgentTurnResponse(core.documentId(), core.baseVersion(), core.runId(),
-                            core.applyOperationId(), publicStatus(core.status()),
-                            core.result(), core.error());
-                }
+            if ("completed".equals(run.status()) && projection.isPresent()) {
+                var core = projection.get();
+                return new AgentTurnResponse(core.documentId(), core.baseVersion(), core.runId(),
+                        core.applyOperationId(), publicStatus(core.status()),
+                        core.result(), core.error(), folderId);
             }
             return new AgentTurnResponse(run.documentId(), run.baseVersion(), run.id(),
-                    run.applyOperationId(), run.status(), run.result(), run.errorCode());
+                    run.applyOperationId(), run.status(), run.result(), run.errorCode(), folderId);
         }
-        var projection = runRepository.find(workspaceId, userId, runId)
-                .orElseThrow(() -> new AgentRunNotFoundException(runId));
-        return new AgentTurnResponse(projection.documentId(), projection.baseVersion(), projection.runId(),
-                projection.applyOperationId(), publicStatus(projection.status()),
-                projection.result(), projection.error());
+        var core = projection.orElseThrow(() -> new AgentRunNotFoundException(runId));
+        return new AgentTurnResponse(core.documentId(), core.baseVersion(), core.runId(),
+                core.applyOperationId(), publicStatus(core.status()),
+                core.result(), core.error(), folderId);
     }
 
     public JsonNode getRun(String workspaceId, String userId, String runId) {
@@ -380,7 +403,11 @@ public class AgentTurnService {
             @com.fasterxml.jackson.annotation.JsonProperty("editor_snapshot") CommandEditorSnapshot editorSnapshot,
             // 작업 탭 턴이면 "task". 기존 턴은 command 모양을 바꾸지 않도록 키 자체를 싣지 않는다.
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-            String mode
+            String mode,
+            // 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 지정하지 않은 턴은 command 모양을 바꾸지 않도록 키를 싣지 않는다.
+            @com.fasterxml.jackson.annotation.JsonProperty("folder_id")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String folderId
     ) {}
 
     record CanonicalSkillDraftSource(

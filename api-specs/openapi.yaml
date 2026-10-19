@@ -5734,6 +5734,11 @@ components:
         editorSnapshot:
           $ref: "#/components/schemas/EditorSnapshot"
           description: 편집 시작 시점의 에디터 상태. documentId와 함께 생략한다.
+        folder_id:
+          type: string
+          format: uuid
+          description: "작업 대상 폴더 ID. 폴더 정리의 범위이자 새 문서를 둘 위치다. 생략(null)하면 대상 폴더를 정하지 않은 것으로, 새 문서는 최상위(루트)에 두고 폴더 정리는 워크스페이스 전체를 범위로 본다(기존 동작). 이 워크스페이스의 삭제되지 않은 폴더여야 한다(없으면 404). 문서 없이도 보낼 수 있다."
+          example: 44444444-4444-4444-4444-444444444444
         message:
           type: string
           description: 사용자 지시문
@@ -5824,6 +5829,10 @@ components:
         error_message:
           type: string
           description: 실패 코드에 대응하는 사용자용 한국어 문구. 성공이면 null이다.
+        folder_id:
+          type: string
+          format: uuid
+          description: 요청한 작업 대상 폴더 ID(요청의 folder_id). 새 문서로 만드는 결과는 이 폴더에 둔다. null이면 최상위(루트)다.
         requestId:
           type: string
           description: 이 턴의 run ID. 상태 조회에 쓴다.

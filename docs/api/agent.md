@@ -516,6 +516,14 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 달라는 `clarify`가 나온다. `mode`를 생략하면 기존 동작이며, `task` 외의 값은 `400`이다.
 document-svc는 `mode`를 ai command의 `mode` 키로 그대로 전달한다(생략 시 키 자체를 싣지 않는다).
 
+작업 대상 폴더는 `folder_id`로 보낸다. 폴더 정리의 범위이자 새 문서를 둘 위치다. 생략하면 대상 폴더를
+정하지 않은 것으로, 새 문서는 최상위(루트)에 두고 폴더 정리는 워크스페이스 전체를 범위로 본다(기존 동작).
+이 워크스페이스의 삭제되지 않은 폴더가 아니면 `404`, UUID 형식이 아니면 `400`이다. 문서 없이도 보낼 수 있어
+결과 방식이 "새 문서로 만들기"인 Skill을 기준 문서 없이(루트 포함) 실행할 수 있다.
+document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 시 키 자체를 싣지 않는다), 턴 기록
+(`agent_apply_projections.folder_id`)에 남겨 턴 생성·조회 응답의 `folder_id`로 돌려준다.
+새 문서 초안(`markdown_create`)은 클라이언트가 이 `folder_id`로 문서를 만든다.
+
 열린 문서에서 저장·반영을 명시한 편집 요청은 `workspace_workflow` AgentRun으로 전환한다.
 이때 편집 대상 문서와 기준 버전을 계획에 고정하고,
 사용자가 그 계획을 승인해야 실제 문서에 반영한다. 저장을 명시하지 않은 편집 요청은 기존처럼
@@ -544,6 +552,7 @@ document-svc는 `mode`를 ai command의 `mode` 키로 그대로 전달한다(생
 | body | `baseVersion` | `integer` | 아니오 | 편집 기준 문서 버전. 현재 버전보다 오래되어도 거절하지 않고, 적용 저장이 이 버전 스냅샷 기준으로 그 사이 변경과 자동 병합한다([자동 병합](documents/content.md#자동-병합)) |
 | body | `editorSnapshot` | `object` | 아니오 | 편집 시작 시점의 에디터 상태 |
 | body | `mode` | `string` | 아니오 | `task`(작업 탭 턴)만 허용. 생략하면 기존 동작 |
+| body | `folder_id` | `string(uuid)` | 아니오 | 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 생략하면 루트·워크스페이스 전체 |
 | body | `allow_web_search` | `boolean` | 아니오 | Query와 웹 근거 기반 새 문서 생성에서 웹 검색을 허용할지. 편집·Skill 갈래에는 영향이 없다 |
 | body | `conversationContext.selected_pair_ids` | `string[]` | 아니오 | 맥락으로 쓸 문답 ID(최대 20개). 비우면 세션의 최근 완결 문답을 쓴다 |
 
@@ -613,6 +622,7 @@ document-svc는 `mode`를 ai command의 `mode` 키로 그대로 전달한다(생
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
   "error_message": "string",
+  "folder_id": null,
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -626,7 +636,7 @@ document-svc는 `mode`를 ai command의 `mode` 키로 그대로 전달한다(생
 |---|---|---|
 | `400` | 잘못된 요청 | `ErrorResponse` |
 | `402` | 크레딧 부족(`app.billing.enforce`, `INSUFFICIENT_CREDIT`) | `ErrorResponse` |
-| `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
+| `404` | 문서·대상 폴더(`folder_id`) 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `423` | 다른 사용자가 문서를 편집 중 | `ErrorResponse` |
 
 ```json
@@ -670,6 +680,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
   "error_message": "string",
+  "folder_id": null,
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -714,6 +725,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 
 워크스페이스의 Agent 실행 결과를 조회합니다.
 
+`folder_id`는 턴을 만들 때 지정한 작업 대상 폴더다(지정하지 않았으면 `null`). AI 진행 중에도 같은 값을 돌려준다.
+
 #### 3. Auth 필요 여부
 
 - 필요
@@ -742,6 +755,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
   "error_message": "string",
+  "folder_id": "44444444-4444-4444-4444-444444444444",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -796,6 +810,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
   "error_message": "string",
+  "folder_id": "44444444-4444-4444-4444-444444444444",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },

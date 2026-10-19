@@ -121,6 +121,30 @@ class AgentTurnControllerTest {
     }
 
     @Test
+    void turn_targetFolderReachesServiceAndIsEchoed() throws Exception {
+        when(agentTurnService.turn(eq(WORKSPACE_ID), eq(USER_ID), any(AgentTurnRequest.class)))
+                .thenReturn(new AgentTurnResponse(null, null, "agent_request_1", null, "queued", null, null,
+                        "44444444-4444-4444-4444-444444444444"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"session_id":"session_1","message":"회의록 만들어줘","mode":"task",
+                                 "skill_mode":"explicit","skill_id":"skill-1",
+                                 "folder_id":"44444444-4444-4444-4444-444444444444"}
+                                """))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.folder_id").value("44444444-4444-4444-4444-444444444444"));
+
+        ArgumentCaptor<AgentTurnRequest> captured = ArgumentCaptor.forClass(AgentTurnRequest.class);
+        verify(agentTurnService).turn(eq(WORKSPACE_ID), eq(USER_ID), captured.capture());
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().folderId())
+                .isEqualTo("44444444-4444-4444-4444-444444444444");
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().hasDocumentContext()).isFalse();
+    }
+
+    @Test
     void turn_rejectsUnknownMode() throws Exception {
         mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
