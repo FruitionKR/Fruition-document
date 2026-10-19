@@ -648,7 +648,7 @@ AI가 오디오를 S3에서 읽어 시간 단위로 나눠 전사하고 `ai.task
 - 헤더 `Idempotency-Key` 필수. 같은 키 재시도는 처음 기록한 대상·본문으로 같은 저장을 반복해 같은 결과를 돌려준다(문서 중복 생성·회의록 중복 추가 없음). 문서 저장은 됐는데 회의 상태 기록이 실패한 경우도 같은 재시도로 복구된다.
 - `create`는 기존 Markdown 문서 생성, `append`는 기존 본문 저장(`base_revision`, `revision_write_id`)을 그대로 쓴다. 문서 권한·편집 잠금·revision·이름 검증을 우회하지 않으며 Agent 적용 표·`source`를 쓰지 않는다.
 - 사용자가 본 버전이 마지막 성공 초안이 아니면 `409 MEETING_NOTES_OUTDATED`. 한 버전은 한 번 저장하며 다른 키로 다시 저장하면 `409 MEETING_NOTES_ALREADY_APPLIED`.
-- `append`에서 미리보기 이후 문서가 바뀌었으면 `409 DOCUMENT_REVISION_CHANGED`(저장하지 않음). revision 충돌·권한·잠금·본문 검증·이름 중복처럼 문서가 바뀌지 않은 거절은 저장 선점을 풀어 새 키로 다시 시도할 수 있다.
+- `append`에서 미리보기 이후 문서가 바뀌었어도 거절하지 않는다. 저장 시점의 본문 끝에 덧붙인 본을 `base_revision` 기준으로 [자동 병합](documents/content.md#자동-병합) 저장한다(`DOCUMENT_REVISION_CHANGED`는 더 내지 않는다). 권한·잠금·본문 검증·이름 중복처럼 문서가 바뀌지 않은 거절은 저장 선점을 풀어 새 키로 다시 시도할 수 있다.
 - 회의록 본문(초안 또는 사용자가 수정한 `markdown`)은 미리보기·저장 전에 거른다. 원시 HTML 중 서식 태그(`<u>`, `<span>` 등)는 태그만 지우고 글자를 남기며, 줄·칸을 나누던 태그(`<br>`, `<td>` 등)는 공백으로, 실행·삽입 태그(`<script>`, `<img>` 등)는 지우고, 그 밖의 태그는 글자로 보이게 escape한다. HTML 주석은 남긴다. 외부 주소(scheme이 있거나 `//`·`/\`로 시작)의 이미지는 `외부 이미지(host)`, 링크는 `텍스트 (host)` 글자로 바꾼다(`mailto` 포함). 상대 경로·`#anchor`·png·jpeg·gif·webp `data:` 이미지는 남긴다. 코드 블록과 인라인 코드는 바꾸지 않는다.
 - 응답 `200`: `MeetingNotesResponse`(`status: "applied"`, `applied` 채움).
 

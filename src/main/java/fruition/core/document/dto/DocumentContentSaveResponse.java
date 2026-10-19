@@ -1,5 +1,6 @@
 package fruition.core.document.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 
@@ -30,11 +31,59 @@ public record DocumentContentSaveResponse(
         String markdown,
 
         @Schema(description = "본문과 함께 저장된 이미지 asset 목록")
-        List<DocumentAttachmentSaveResponse> attachments
+        List<DocumentAttachmentSaveResponse> attachments,
+
+        @Schema(description = "기준 버전이 지나간 저장을 서버가 어떻게 반영했는지. status가 merged·overwritten이면 "
+                + "markdown에 저장된 최종 본문이 담긴다.")
+        Merge merge
 ) {
     public DocumentContentSaveResponse(
             String documentId, long currentVersion, String contentHash, Instant updatedAt, boolean changed
     ) {
-        this(documentId, currentVersion, contentHash, updatedAt, changed, null, List.of());
+        this(documentId, currentVersion, contentHash, updatedAt, changed, null, List.of(), Merge.NONE);
+    }
+
+    public DocumentContentSaveResponse(
+            String documentId, long currentVersion, String contentHash, Instant updatedAt, boolean changed,
+            String markdown, List<DocumentAttachmentSaveResponse> attachments
+    ) {
+        this(documentId, currentVersion, contentHash, updatedAt, changed, markdown, attachments, Merge.NONE);
+    }
+
+    /** 이 응답에 다른 저장과의 병합 결과를 붙인다. */
+    public DocumentContentSaveResponse withMerge(String finalMarkdown, Merge value) {
+        return new DocumentContentSaveResponse(documentId, currentVersion, contentHash, updatedAt, changed,
+                finalMarkdown, attachments, value);
+    }
+
+    @Schema(name = "DocumentContentSaveMerge", description = "자동 병합 결과")
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Merge(
+            @Schema(description = "none: 기준 버전이 현재 버전이라 그대로 저장. merged: 다른 저장과 겹치지 않아 줄 단위로 합쳐 저장. "
+                    + "overwritten: 겹쳐서(또는 기준 버전 스냅샷이 없어) 요청 본으로 저장하고 직전 서버 본은 overwritten_version에 남김",
+                    allowableValues = {STATUS_NONE, STATUS_MERGED, STATUS_OVERWRITTEN}, example = "merged")
+            String status,
+
+            @JsonProperty("base_version")
+            @Schema(description = "요청이 기준으로 삼은 버전(base_revision). status가 none이면 생략", example = "10", nullable = true)
+            Long baseVersion,
+
+            @JsonProperty("server_version")
+            @Schema(description = "병합 직전 서버 버전. status가 none이면 생략", example = "12", nullable = true)
+            Long serverVersion,
+
+            @JsonProperty("overwritten_version")
+            @Schema(description = "overwritten일 때 덮어쓰기 전 서버 본이 남은 버전 번호. 버전 복원 API로 되살릴 수 있다. 그 밖에는 생략",
+                    example = "12", nullable = true)
+            Long overwrittenVersion
+    ) {
+        public static final String STATUS_NONE = "none";
+        public static final String STATUS_MERGED = "merged";
+        public static final String STATUS_OVERWRITTEN = "overwritten";
+        public static final Merge NONE = new Merge(STATUS_NONE, null, null, null);
+
+        public boolean applied() {
+            return !STATUS_NONE.equals(status);
+        }
     }
 }

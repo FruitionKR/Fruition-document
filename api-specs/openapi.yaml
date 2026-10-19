@@ -18,7 +18,7 @@ tags:
   name: Chat Sessions
 - description: Markdown 문서 이미지 asset 조회 API
   name: Document Assets
-- description: 같은 revision에서 갈라진 편집을 OWNER가 골라 해결
+- description: (deprecated) 본문 저장이 서버에서 자동 병합되어 더 쓰지 않는다. 구 데스크톱 호환용으로 남긴다
   name: Document Edit Conflicts
 - description: 문서 편집 잠금(활성 편집 추적) API
   name: Document Edit Lock
@@ -476,12 +476,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 문서 또는 워크스페이스를 찾을 수 없음
-        "409":
-          content:
-            '*/*':
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-          description: 문서 version 충돌
         "423":
           content:
             '*/*':
@@ -1276,7 +1270,8 @@ paths:
       - Chat Sessions
   /api/workspaces/{workspace_id}/conflicts:
     get:
-      description: 충돌 본과 서버 현재 본문·revision·마지막 수정자를 함께 반환합니다. OWNER만 호출할 수 있습니다.
+      deprecated: true
+      description: 자동 병합 도입 후에는 새 충돌이 열리지 않아 비어 있습니다. 충돌 본과 서버 현재 본문·revision·마지막 수정자를 함께 반환합니다. OWNER만 호출할 수 있습니다.
       operationId: listConflicts
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1305,12 +1300,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 워크스페이스를 찾을 수 없음
-      summary: 미해결 편집 충돌 목록
+      summary: 미해결 편집 충돌 목록 (deprecated)
       tags:
       - Document Edit Conflicts
   /api/workspaces/{workspace_id}/conflicts/{conflict_id}/resolve:
     post:
-      description: "server는 본문을 그대로 두고, conflict·merged는 그 본문으로 새 revision을 저장합니다. 고르지 않은 본문은 버전 이력과 충돌 기록에 남습니다. OWNER만 호출할 수 있고, 먼저 해결한 요청만 반영됩니다."
+      deprecated: true
+      description: "자동 병합 도입 후에는 해결할 열린 충돌이 없습니다. server는 본문을 그대로 두고, conflict·merged는 그 본문으로 새 revision을 저장합니다. 고르지 않은 본문은 버전 이력과 충돌 기록에 남습니다. OWNER만 호출할 수 있고, 먼저 해결한 요청만 반영됩니다."
       operationId: resolveConflict
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1369,7 +1365,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 다른 사용자가 편집 잠금을 보유 중
-      summary: 편집 충돌 해결
+      summary: 편집 충돌 해결 (deprecated)
       tags:
       - Document Edit Conflicts
   /api/workspaces/{workspace_id}/document-tree:
@@ -1868,7 +1864,8 @@ paths:
       - Documents
   /api/workspaces/{workspace_id}/documents/{document_id}/conflicts:
     post:
-      description: 본문 저장이 409 DOCUMENT_VERSION_CONFLICT로 막혔을 때 내 본문을 충돌로 올려 보존합니다. 그 문서를 편집할 수 있어야 합니다. 같은 client_conflict_id로 다시 보내면 기존 충돌을 돌려줍니다.
+      deprecated: true
+      description: "본문 저장이 자동 병합으로 바뀌어 새 클라이언트는 호출하지 않습니다. 구 데스크톱 호환용으로, 받은 본문을 본문 저장과 같은 자동 병합 경로로 곧바로 저장하고 해결된 충돌(status=resolved, resolution=merged|conflict)로 돌려줍니다. OWNER 알림은 만들지 않습니다. 그 문서를 편집할 수 있어야 합니다. 같은 client_conflict_id로 다시 보내면 기존 충돌을 돌려줍니다."
       operationId: registerConflict
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1920,12 +1917,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: Markdown 5MB 초과
-      summary: 편집 충돌 등록
+        "423":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 다른 사용자가 편집 잠금을 보유 중
+      summary: 편집 충돌 등록 (deprecated)
       tags:
       - Document Edit Conflicts
   /api/workspaces/{workspace_id}/documents/{document_id}/content:
     put:
-      description: 전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision과 일치할 때만 반영하며 revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다.
+      description: "전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision보다 오래되었으면 서버가 base_revision 스냅샷 기준으로 줄 단위 3-way merge합니다. 겹치지 않으면 합친 본을(merge.status=merged), 겹치거나 기준 스냅샷이 없으면 요청 본을 저장하고(merge.status=overwritten) 덮어쓴 서버 본의 버전을 merge.overwritten_version에 담습니다. merged·overwritten이면 markdown에 저장된 최종 본문이 옵니다. revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다."
       operationId: saveContent
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1970,7 +1973,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/DocumentContentSaveResponse"
-          description: 저장 성공 또는 동일 본문 no-op
+          description: 저장 성공(자동 병합 포함) 또는 동일 본문 no-op
         "400":
           content:
             '*/*':
@@ -1994,7 +1997,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 편집 revision 또는 revision_write_id 충돌. revision 충돌(DOCUMENT_VERSION_CONFLICT)은 error.current_revision에 서버 현재 revision을 담는다
+          description: "revision_write_id 충돌(IDEMPOTENCY_KEY_CONFLICT), 또는 base_revision이 서버 현재 revision보다 큼(DOCUMENT_VERSION_CONFLICT, error.current_revision에 서버 현재 revision). 오래된 base_revision은 409가 아니라 자동 병합된다"
         "413":
           content:
             '*/*':
@@ -6431,6 +6434,33 @@ components:
           minimum: 1
       required:
       - base_version
+    DocumentContentSaveMerge:
+      type: object
+      description: 자동 병합 결과
+      properties:
+        base_version:
+          type: integer
+          format: int64
+          description: 요청이 기준으로 삼은 버전(base_revision). status가 none이면 생략
+          example: 10
+        overwritten_version:
+          type: integer
+          format: int64
+          description: overwritten일 때 덮어쓰기 전 서버 본이 남은 버전 번호. 버전 복원 API로 되살릴 수 있다. 그 밖에는 생략
+          example: 12
+        server_version:
+          type: integer
+          format: int64
+          description: 병합 직전 서버 버전. status가 none이면 생략
+          example: 12
+        status:
+          type: string
+          description: "none: 기준 버전이 현재 버전이라 그대로 저장. merged: 다른 저장과 겹치지 않아 줄 단위로 합쳐 저장. overwritten: 겹쳐서(또는 기준 버전 스냅샷이 없어) 요청 본으로 저장하고 직전 서버 본은 overwritten_version에 남김"
+          enum:
+          - none
+          - merged
+          - overwritten
+          example: merged
     DocumentContentSaveResponse:
       type: object
       properties:
@@ -6458,6 +6488,9 @@ components:
         markdown:
           type: string
           description: 서버가 정규화한 뒤의 Markdown 본문
+        merge:
+          $ref: "#/components/schemas/DocumentContentSaveMerge"
+          description: 기준 버전이 지나간 저장을 서버가 어떻게 반영했는지. status가 merged·overwritten이면 markdown에 저장된 최종 본문이 담긴다.
         updated_at:
           type: string
           format: date-time
@@ -6479,6 +6512,14 @@ components:
           type: string
           description: 저장한 사용자 ID
           example: user_3f1c8a6b52d7411e9c04ab5d2e7f6081
+        merge_status:
+          type: string
+          description: "자동 병합 결과. merged: 다른 저장과 줄 단위로 합친 버전, overwritten: 겹쳐서 요청 본으로 덮어쓴 버전(직전 버전이 덮어쓰기 전 본문), conflict_archived: 자동 병합 도입 때 닫은 편집 충돌 본문을 옮겨 둔 버전. 그 밖에는 null"
+          enum:
+          - merged
+          - overwritten
+          - conflict_archived
+          example: merged
         operation_id:
           type: string
           description: Agent 편집으로 만든 버전이면 AI 작업 ID. 그 밖의 저장은 null

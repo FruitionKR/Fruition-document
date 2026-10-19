@@ -25,6 +25,8 @@ import java.util.UUID;
 @Service
 public class NotificationService {
 
+    /** 자동 병합 도입(ADR 0032) 후로는 만들지 않는다. 이미 쌓인 알림을 읽는 클라이언트를 위해 이름만 남긴다. */
+    @Deprecated
     public static final String TYPE_EDIT_CONFLICT_REGISTERED = "edit_conflict_registered";
     public static final String TYPE_EDIT_CONFLICT_RESOLVED = "edit_conflict_resolved";
 

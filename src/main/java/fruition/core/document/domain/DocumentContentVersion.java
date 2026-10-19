@@ -38,6 +38,13 @@ public class DocumentContentVersion {
     @Column(length = 32)
     private String source;
 
+    /**
+     * 자동 병합 결과(merged | overwritten). 자동 병합 도입 때 닫은 편집 충돌 본문을 옮겨 둔 버전은 conflict_archived다.
+     * 그 밖의 저장이면 NULL이다.
+     */
+    @Column(name = "merge_status", length = 32)
+    private String mergeStatus;
+
     protected DocumentContentVersion() {}
 
     public DocumentContentVersion(String documentId, long version, String markdown,
@@ -58,4 +65,5 @@ public class DocumentContentVersion {
     public String getOperationId() { return operationId; }
     public Long getRestoredFromVersion() { return restoredFromVersion; }
     public String getSource() { return source; }
+    public String getMergeStatus() { return mergeStatus; }
 }

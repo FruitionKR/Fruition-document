@@ -575,11 +575,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | 전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision과 일치할 때만 반영하며 revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다. |
+| 목적 | 전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision보다 오래되었으면 서버가 자동 병합합니다([자동 병합](#자동-병합)). revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다. |
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Body** — `apply_operation_id`, `base_revision`, `markdown`, `metadata`, `revision_write_id`, `source` |
-| 출력 | `200` 저장 성공 또는 동일 본문 no-op — `DocumentContentSaveResponse` |
+| 출력 | `200` 저장 성공(자동 병합 포함) 또는 동일 본문 no-op — `DocumentContentSaveResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 Markdown, base_revision 또는 revision_write_id — `ErrorResponse`<br>`403` 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 편집 revision 충돌(`DOCUMENT_VERSION_CONFLICT`, `error.current_revision`에 서버 현재 revision) 또는 revision_write_id 충돌, PDF 변환 중인 문서(`DOCUMENT_ALREADY_PROCESSING`) — `ErrorResponse`<br>`413` Markdown 5MB 또는 이미지 제한 초과 — `ErrorResponse`<br>`415` 지원하지 않는 이미지 형식 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 Markdown, base_revision 또는 revision_write_id — `ErrorResponse`<br>`403` 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` revision_write_id 충돌, `base_revision`이 서버 현재 revision보다 큼(`DOCUMENT_VERSION_CONFLICT`, `error.current_revision`에 서버 현재 revision), PDF 변환 중인 문서(`DOCUMENT_ALREADY_PROCESSING`). 오래된 `base_revision`은 409가 아니라 자동 병합된다 — `ErrorResponse`<br>`413` Markdown 5MB 또는 이미지 제한 초과 — `ErrorResponse`<br>`415` 지원하지 않는 이미지 형식 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -639,9 +639,35 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
   "current_version": 4,
   "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "markdown": "string",
+  "merge": {
+    "status": "merged",
+    "base_version": 2,
+    "server_version": 3
+  },
   "updated_at": "2026-08-13T04:25:24.371948Z"
 }
 ```
+
+<a id="자동-병합"></a>
+#### 자동 병합
+
+`base_revision`이 서버 현재 revision(`server_version`)보다 오래되었으면 409 대신 서버가 줄 단위 3-way merge(diff3)를 한다([ADR 0032](../../adr/0032-document-content-auto-merge.md)).
+기준은 `base_revision`의 버전 스냅샷(base), 서버 현재 본(theirs), 요청 본(mine)이다. 사용자 저장·이미지 포함 저장·Agent 적용·회의록 덧붙이기가 모두 같은 경로를 탄다.
+
+| 경우 | 저장되는 본문 | `merge.status` | 응답 `markdown` |
+|---|---|---|---|
+| `base_revision` = 현재 revision | 요청 본 | `none` | 생략(기존 응답과 같다) |
+| 두 쪽 변경이 겹치지 않음 | 병합본 | `merged` | 병합본 |
+| 같은 줄을 다르게 바꿈(겹침) | 요청 본(last-writer-wins) | `overwritten` | 요청 본 |
+| `base_revision` 스냅샷이 없음 | 요청 본(last-writer-wins) | `overwritten` | 요청 본 |
+
+- `merge`: `status`(`none`/`merged`/`overwritten`), `base_version`(요청의 `base_revision`), `server_version`(병합 직전 서버 revision), `overwritten_version`(`overwritten`일 때 덮어쓰기 전 서버 본이 남은 버전). `none`이면 `status`만 온다.
+- 겹침: 두 쪽이 기준 본의 같은 줄을 바꾸거나 같은 위치에 끼워 넣은 경우다. 바로 이웃한 줄을 각각 바꾼 것은 겹치지 않는다. 두 쪽 결과가 같으면 겹쳐도 그대로 합친다.
+- 덮어쓴 서버 본은 항상 버전 이력에 남는다. `GET .../versions/{overwritten_version}`으로 보고 `POST .../versions/{overwritten_version}/restore`로 되살린다.
+- 병합·덮어쓰기로 만든 버전은 버전 목록의 `merge_status`가 `merged`/`overwritten`이다. `source`는 원래 경로(`user`/`agent`/`meeting_notes`) 그대로다.
+- 같은 `revision_write_id` 재전송은 처음 결과를 돌려준다. 처음 저장이 병합본을 남겼으면 `merge.status=merged`와 그 본문을 다시 준다.
+- 클라이언트는 `merged`·`overwritten`이면 편집기를 응답 `markdown`·`current_version`으로 맞추고 계속 편집한다. `merge`를 읽지 않는 구 클라이언트는 다음 저장의 `base_revision`이 오래되어도 다시 자동 병합되므로 저장이 막히지 않는다.
+- 버전 복원(`POST .../versions/{version}/restore`)은 병합하지 않는다. 그 본문 그대로여야 해서 `base_version`이 다르면 기존처럼 409다.
 
 #### 6. Error response
 
@@ -650,7 +676,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | `400` | 잘못된 Markdown, base_revision 또는 revision_write_id | `ErrorResponse` |
 | `403` | 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `409` | 편집 revision 충돌(`DOCUMENT_VERSION_CONFLICT`, `error.current_revision`에 서버 현재 revision) 또는 revision_write_id 충돌, PDF 변환 중인 문서(`DOCUMENT_ALREADY_PROCESSING`) | `ErrorResponse` |
+| `409` | revision_write_id 충돌, `base_revision`이 서버 현재 revision보다 큼(`DOCUMENT_VERSION_CONFLICT`, `error.current_revision`에 서버 현재 revision), PDF 변환 중인 문서(`DOCUMENT_ALREADY_PROCESSING`) | `ErrorResponse` |
 | `413` | Markdown 5MB 또는 이미지 제한 초과 | `ErrorResponse` |
 | `415` | 지원하지 않는 이미지 형식 | `ErrorResponse` |
 
@@ -669,8 +695,8 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 }
 ```
 
-편집 revision 충돌 응답은 서버 현재 revision을 함께 준다. 클라이언트는 이 값으로 최신 본문을 다시 읽거나,
-내 본문을 [편집 충돌](README.md#편집-충돌)로 등록해 OWNER가 고르게 한다.
+`base_revision`이 서버 현재 revision보다 큰 요청(병합할 기준이 없다)은 409이고 서버 현재 revision을 함께 준다.
+클라이언트는 이 값으로 최신 본문을 다시 읽는다. 오래된 `base_revision`은 위 [자동 병합](#자동-병합)으로 처리한다.
 
 ```json
 {
@@ -719,6 +745,11 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
   "current_version": 4,
   "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "markdown": "string",
+  "merge": {
+    "status": "merged",
+    "base_version": 2,
+    "server_version": 3
+  },
   "updated_at": "2026-08-13T04:25:24.371948Z"
 }
 ```
