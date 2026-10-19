@@ -15,7 +15,8 @@ import java.util.Map;
 import java.util.Set;
 
 @Schema(description = "Agent turn 요청. 접수되면 202로 돌아오고 결과는 비동기로 만들어진다. "
-        + "문서를 열지 않은 상태에서도 보낼 수 있으며, 그때는 편집 대신 답변·되물음만 나온다. "
+        + "문서를 열지 않은 상태에서도 보낼 수 있으며, 그때는 편집 대신 답변·되물음만 나온다"
+        + "(mode=task면 답변 대신 폴더 정리·워크플로·되물음이 나온다). "
         + "skill_* 필드는 snake_case이고 나머지는 camelCase다.")
 public record AgentTurnRequest(
         @JsonProperty("session_id") @NotBlank
@@ -80,7 +81,16 @@ public record AgentTurnRequest(
 
         @Valid
         @Schema(description = "편집 시작 시점의 에디터 상태. documentId와 함께 생략한다.", nullable = true)
-        EditorSnapshot editorSnapshot
+        EditorSnapshot editorSnapshot,
+
+        @Pattern(regexp = "task")
+        @Schema(description = "턴을 보낸 화면. 작업 탭이면 \"task\"를 보낸다. "
+                + "task면 AI가 위키 질문 답변(chat_answer)·대화 답변(conversation_reply)을 고르지 않고 "
+                + "문서 편집·폴더 정리·워크플로·Skill·되물음(clarify) 중에서만 고른다. "
+                + "열린 문서 없이도 받으며, 문서 편집이 필요하면 AI가 문서를 열어 달라고 되묻는다. "
+                + "생략하면 기존 동작이다.",
+                allowableValues = {"task"}, nullable = true, example = "task")
+        String mode
 ) {
     private static final int MAX_SKILL_ID_LENGTH = 128;
     /**
@@ -89,6 +99,8 @@ public record AgentTurnRequest(
      */
     private static final int MAX_SELECTED_PAIR_IDS = 20;
     private static final Set<String> SKILL_MODES = Set.of("auto", "explicit", "off");
+    /** 작업 탭에서 보낸 턴. 생략(null)이면 기존 동작이다. */
+    public static final String TASK_MODE = "task";
 
     /** 편집 대상이 정해진 요청인지. 셋은 함께 있거나 함께 없다. */
     public boolean hasDocumentContext() {
@@ -115,7 +127,25 @@ public record AgentTurnRequest(
                 editorSnapshot);
     }
 
+    /** mode 이전의 전체 필드 생성자. mode는 생략(기존 동작)이다. */
+    public AgentTurnRequest(String sessionId, String documentId, Long baseVersion, String message,
+                            String provider, String model, Boolean allowWebSearch,
+                            String skillMode, String skillId,
+                            ConversationContext conversationContext,
+                            List<SkillDraftSourceSelector> skillDraftSources,
+                            List<String> skillDraftUserDirectives,
+                            List<String> skillDraftExcludedLiterals,
+                            String skillScopeType,
+                            EditorSnapshot editorSnapshot) {
+        this(sessionId, documentId, baseVersion, message, provider, model, allowWebSearch, skillMode, skillId,
+                conversationContext, skillDraftSources, skillDraftUserDirectives, skillDraftExcludedLiterals,
+                skillScopeType, editorSnapshot, null);
+    }
+
     public AgentTurnRequest {
+        if (mode != null && !TASK_MODE.equals(mode)) {
+            throw new IllegalArgumentException("mode must be task or omitted");
+        }
         // 문서 셋은 함께 있거나 함께 없다. 하나만 오면 적용 경로가 반쯤 성립해 뒤에서 NPE로 터진다.
         boolean hasDocumentId = documentId != null && !documentId.isBlank();
         if (hasDocumentId != (baseVersion != null) || hasDocumentId != (editorSnapshot != null)) {

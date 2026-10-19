@@ -138,6 +138,49 @@ class AgentTurnServiceTest {
     }
 
     @Test
+    void turn_taskModeWithoutDocumentForwardsModeToAi() throws Exception {
+        // 작업 탭 턴은 열린 문서 없이도 받는다(폴더 정리·폴더 Skill). 문서 편집이 필요하면 AI가 되묻는다.
+        var request = new AgentTurnRequest("session_1", null, null, "회의록을 연도별 폴더로 정리해줘",
+                "openai", "gpt-6-luna", null, "auto", null, null,
+                java.util.List.of(), java.util.List.of(), java.util.List.of(), null, null, "task");
+
+        var response = service.turn("ws_1", "user_1", request);
+
+        assertThat(response.status()).isEqualTo("queued");
+        assertThat(response.applyOperationId()).isNull();
+        verify(workspaceAccessGuard).requireMember("ws_1", "user_1");
+        verifyNoInteractions(documentService, editLockService, applyOperationStore);
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(command.getValue().mode()).isEqualTo("task");
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue())).contains("\"mode\":\"task\"");
+    }
+
+    @Test
+    void turn_withoutModeKeepsLegacyCommandShape() throws Exception {
+        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-6-luna", null, null);
+
+        service.turn("ws_1", "user_1", request);
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(command.getValue().mode()).isNull();
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue())).doesNotContain("\"mode\"");
+    }
+
+    @Test
+    void request_rejectsUnknownMode() {
+        assertThatThrownBy(() -> new AgentTurnRequest("session_1", null, null, "정리해줘", "openai", "gpt-6-luna",
+                null, "auto", null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), null, null,
+                "chat"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void turn_buildsConversationContextOnServerFromSelectedPairs() {
         // 대화 내용은 클라이언트가 만든 문자열이 아니라 서버가 세션에서 읽은 값이어야 한다.
         org.mockito.Mockito.when(chatConversationReader.read("session_1", java.util.List.of("pair_9")))

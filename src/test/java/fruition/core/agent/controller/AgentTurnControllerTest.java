@@ -102,6 +102,37 @@ class AgentTurnControllerTest {
     }
 
     @Test
+    void turn_taskModeWithoutDocumentReachesService() throws Exception {
+        when(agentTurnService.turn(eq(WORKSPACE_ID), eq(USER_ID), any(AgentTurnRequest.class)))
+                .thenReturn(new AgentTurnResponse(null, null, "agent_request_1", null, "queued", null, null));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"session_id":"session_1","message":"회의록을 연도별 폴더로 정리해줘","mode":"task"}
+                                """))
+                .andExpect(status().isAccepted());
+
+        ArgumentCaptor<AgentTurnRequest> captured = ArgumentCaptor.forClass(AgentTurnRequest.class);
+        verify(agentTurnService).turn(eq(WORKSPACE_ID), eq(USER_ID), captured.capture());
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().mode()).isEqualTo("task");
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().hasDocumentContext()).isFalse();
+    }
+
+    @Test
+    void turn_rejectsUnknownMode() throws Exception {
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"session_id":"session_1","message":"정리해줘","mode":"chat"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
+    }
+
+    @Test
     void turn_rejectsInvalidSkillSelectionCombination() throws Exception {
         String token = "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com");
         for (String skillFields : new String[]{

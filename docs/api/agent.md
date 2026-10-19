@@ -509,6 +509,13 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 모두 생략하며, 적용할 대상이 없어 AI는 답변·되물음만 낸다. 셋은 함께 있거나 함께 없어야 하고
 하나만 오면 `400`이다.
 
+작업 탭에서 보내는 턴은 `"mode": "task"`를 넣는다. 이때 AI는 위키 질문 답변(`chat_answer`)·대화
+답변(`conversation_reply`)을 고르지 않고 문서 편집·새 문서·폴더 정리·워크플로·Skill·되물음(`clarify`)
+중에서만 고른다. 위키 질문처럼 보이면 채팅 탭에서 질문하라는 `clarify`를 돌려준다. 열린 문서가 없어도
+받으므로 폴더 정리·폴더 Skill은 문서 없이 실행되고, 문서 편집이 필요한데 문서가 없으면 문서를 열어
+달라는 `clarify`가 나온다. `mode`를 생략하면 기존 동작이며, `task` 외의 값은 `400`이다.
+document-svc는 `mode`를 ai command의 `mode` 키로 그대로 전달한다(생략 시 키 자체를 싣지 않는다).
+
 열린 문서에서 저장·반영을 명시한 편집 요청은 `workspace_workflow` AgentRun으로 전환한다.
 이때 편집 대상 문서와 기준 버전을 계획에 고정하고,
 사용자가 그 계획을 승인해야 실제 문서에 반영한다. 저장을 명시하지 않은 편집 요청은 기존처럼
@@ -536,6 +543,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | body | `documentId` | `string` | 아니오 | 편집 대상 문서. 생략하면 `baseVersion`·`editorSnapshot`도 함께 생략한다 |
 | body | `baseVersion` | `integer` | 아니오 | 편집 기준 문서 버전 |
 | body | `editorSnapshot` | `object` | 아니오 | 편집 시작 시점의 에디터 상태 |
+| body | `mode` | `string` | 아니오 | `task`(작업 탭 턴)만 허용. 생략하면 기존 동작 |
 | body | `allow_web_search` | `boolean` | 아니오 | Query와 웹 근거 기반 새 문서 생성에서 웹 검색을 허용할지. 편집·Skill 갈래에는 영향이 없다 |
 | body | `conversationContext.selected_pair_ids` | `string[]` | 아니오 | 맥락으로 쓸 문답 ID(최대 20개). 비우면 세션의 최근 완결 문답을 쓴다 |
 

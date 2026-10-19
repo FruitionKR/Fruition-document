@@ -92,6 +92,7 @@ public class AgentTurnService {
         chatSessionService.verifyOwnedSession(workspaceId, userId, request.sessionId());
         // 문서를 열지 않은 턴은 적용할 대상이 없어 편집 전제 검사를 하지 않는다.
         // AI는 이 경우 chat_answer·conversation_reply·clarify·reject만 낼 수 있다.
+        // 작업 탭 턴(mode=task)은 문서 없이 폴더 정리·워크플로를 낼 수 있고, 문서 편집이면 AI가 되묻는다.
         if (request.hasDocumentContext()) {
             DocumentDetailResponse document = documentService.findById(workspaceId, userId, request.documentId());
             if (!isMarkdown(document)) {
@@ -143,7 +144,8 @@ public class AgentTurnService {
                         skillDraftSources,
                         request.skillDraftUserDirectives(), request.skillDraftExcludedLiterals(),
                         request.skillScopeType(),
-                        CommandEditorSnapshot.from(request.editorSnapshot())));
+                        CommandEditorSnapshot.from(request.editorSnapshot()),
+                        request.mode()));
         return new AgentTurnResponse(
                 request.documentId(),
                 request.baseVersion(),
@@ -380,7 +382,10 @@ public class AgentTurnService {
             @com.fasterxml.jackson.annotation.JsonProperty("skill_draft_user_directives") List<String> skillDraftUserDirectives,
             @com.fasterxml.jackson.annotation.JsonProperty("skill_draft_excluded_literals") List<String> skillDraftExcludedLiterals,
             @com.fasterxml.jackson.annotation.JsonProperty("skill_scope_type") String skillScopeType,
-            @com.fasterxml.jackson.annotation.JsonProperty("editor_snapshot") CommandEditorSnapshot editorSnapshot
+            @com.fasterxml.jackson.annotation.JsonProperty("editor_snapshot") CommandEditorSnapshot editorSnapshot,
+            // 작업 탭 턴이면 "task". 기존 턴은 command 모양을 바꾸지 않도록 키 자체를 싣지 않는다.
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String mode
     ) {}
 
     record CanonicalSkillDraftSource(
