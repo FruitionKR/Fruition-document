@@ -7946,6 +7946,32 @@ components:
         ticket:
           type: string
           example: wst_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+    MeetingNoteActionItem:
+      type: object
+      description: "할 일과 담당자·기한, 근거 전사 구간"
+      properties:
+        due:
+          type: string
+          description: 발언으로 확인된 기한. 없으면 null
+        owner:
+          type: string
+          description: 발언으로 확인된 담당자. 없으면 null
+        source_segment_ids:
+          type: array
+          items:
+            type: string
+        text:
+          type: string
+    MeetingNoteDiscussionTopic:
+      type: object
+      description: 주요 논의의 주제 하나와 그 항목
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MeetingNoteItem"
+        topic:
+          type: string
     MeetingNoteItem:
       type: object
       description: 회의록 항목과 근거 전사 구간
@@ -8021,19 +8047,29 @@ components:
           - append
     MeetingNotesResponse:
       type: object
-      description: 회의록 초안. markdown은 document가 항목 배열로 만든 본문이며 근거 ID를 넣지 않는다.
+      description: "회의록 초안. markdown은 AI가 만든 시안 구성 본문(날짜·참석자, 회의 요약, 주요 논의, 결정 사항, 해야 할 일, 다음 일정)이며 근거 ID를 넣지 않는다. 이전 AI 응답으로 만든 초안은 document가 네 배열로 만든 옛 구성이다."
       properties:
         action_items:
           type: array
           items:
-            $ref: "#/components/schemas/MeetingNoteItem"
+            $ref: "#/components/schemas/MeetingNoteActionItem"
         applied:
           $ref: "#/components/schemas/MeetingNotesApplied"
           description: 저장 후 결과. 저장 전이면 null
+        attendees:
+          type: array
+          description: 참석자 이름. 확인되지 않았거나 이전 초안이면 빈 배열
+          items:
+            type: string
         decisions:
           type: array
           items:
             $ref: "#/components/schemas/MeetingNoteItem"
+        discussion:
+          type: array
+          description: 주요 논의의 주제별 묶음. 이전 초안이면 빈 배열
+          items:
+            $ref: "#/components/schemas/MeetingNoteDiscussionTopic"
         display_name:
           type: string
         error_code:
@@ -8045,10 +8081,19 @@ components:
           description: 최신 버전이 실패일 때 마지막으로 성공한 버전
         markdown:
           type: string
+        meeting_date:
+          type: string
+          description: "회의 날짜(예: 2026-10-19). 없거나 이전 초안이면 null"
         meeting_id:
           type: string
+        next_schedule:
+          type: array
+          description: 다음 일정. 이전 초안이면 빈 배열
+          items:
+            $ref: "#/components/schemas/MeetingNoteItem"
         open_questions:
           type: array
+          description: 미결 사항. 시안 본문에는 싣지 않지만 배열로 계속 돌려준다
           items:
             $ref: "#/components/schemas/MeetingNoteItem"
         partial:
