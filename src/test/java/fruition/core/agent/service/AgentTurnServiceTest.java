@@ -709,6 +709,21 @@ class AgentTurnServiceTest {
         verify(statusRequester, never()).approve(anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt(), anyString());
     }
 
+    /** 폴더 정리 계획 메타데이터는 ai-svc가 만든다. document는 필드를 고르지 않고 그대로 전달한다. */
+    @Test
+    void getRun_passesAiPlanMetadataThroughUnchanged() throws Exception {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        JsonNode aiRun = new ObjectMapper().readTree("""
+                {"id":"%s","target_folder_id":"44444444-4444-4444-4444-444444444444",
+                 "skill_rule_summary":"연도별 폴더로 묶는다",
+                 "plan":{"operations":[{"id":"op_1","suggested_selected":false,
+                   "warning":{"type":"duplicate","message":"같은 이름의 문서가 있습니다."}}]}}
+                """.formatted(runId));
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(aiRun);
+
+        assertThat(service.getRun("ws_1", "user_1", runId)).isEqualTo(aiRun);
+    }
+
     /** 세 작업 계획. op_2는 op_1(폴더 만들기)의 결과에 기댄다. */
     private static JsonNode planWithThreeOperations(String runId) throws Exception {
         return new ObjectMapper().readTree("""

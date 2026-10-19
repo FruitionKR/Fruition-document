@@ -49,6 +49,11 @@
 
 자율 AgentRun 계획과 실행 상태를 조회합니다.
 
+응답 본문은 ai-svc AgentRun 응답을 그대로 전달한다(document-svc는 필드를 고르거나 바꾸지 않는다).
+따라서 폴더 정리 계획의 메타데이터(`target_folder_id`, 스킬 규칙 요약, `plan.operations[].warning`·
+`suggested_selected` 등)는 ai-svc가 AgentRun 응답에 넣으면 이 API에 별도 변경 없이 그대로 실린다.
+승인(`approve`)·수정(`revise`)·거절·취소 응답도 같다.
+
 #### 3. Auth 필요 여부
 
 - 필요
