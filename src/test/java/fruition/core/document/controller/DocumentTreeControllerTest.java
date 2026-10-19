@@ -22,6 +22,7 @@ import java.util.List;
 
 import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -52,6 +53,7 @@ class DocumentTreeControllerTest {
                                 "자료",
                                 0,
                                 2,
+                                "view",
                                 List.of(DocumentTreeResponse.Item.document(
                                         "doc_1", "메모.md", 0, 3, documentItem()))))));
 
@@ -62,6 +64,7 @@ class DocumentTreeControllerTest {
                 .andExpect(jsonPath("$.items[0].type").value("folder"))
                 .andExpect(jsonPath("$.items[0].current_version").value(2))
                 .andExpect(jsonPath("$.items[0].has_children").value(true))
+                .andExpect(jsonPath("$.items[0].permission").value("view"))
                 .andExpect(jsonPath("$.items[0].children[0].id").value("doc_1"))
                 .andExpect(jsonPath("$.items[0].children[0].current_version").value(3))
                 // 문서 메타는 목록 조회와 같은 snake_case로 나간다.
@@ -72,7 +75,24 @@ class DocumentTreeControllerTest {
                         .value("2026-08-17T00:00:30Z"))
                 // 폴더에는 키 자체가 없어야 한다. doesNotExist()는 "document": null도 통과시키므로
                 // 키의 부재를 직접 본다.
-                .andExpect(jsonPath("$.items[0]").value(not(hasKey("document"))));
+                .andExpect(jsonPath("$.items[0]").value(not(hasKey("document"))))
+                // 문서에 직접 건 설정이 없으면 null이지만 키는 있다.
+                .andExpect(jsonPath("$.items[0].children[0]").value(hasKey("permission")))
+                .andExpect(jsonPath("$.items[0].children[0].permission").value(nullValue()));
+    }
+
+    /** 상위 설정을 따르는 폴더는 permission이 null이다. 키를 빼지 않고 null로 보낸다. */
+    @Test
+    void tree_folderWithoutOwnPermissionSendsNullPermission() throws Exception {
+        when(folderService.tree(WORKSPACE_ID, USER_ID))
+                .thenReturn(new DocumentTreeResponse(List.of(
+                        DocumentTreeResponse.Item.folder(
+                                "44444444-4444-4444-4444-444444444444", "상속", 0, 1, null, List.of()))));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/document-tree").header("Authorization", bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0]").value(hasKey("permission")))
+                .andExpect(jsonPath("$.items[0].permission").value(nullValue()));
     }
 
     /** 목록 조회가 주는 것과 같은 항목. 트리에도 그대로 실린다. */

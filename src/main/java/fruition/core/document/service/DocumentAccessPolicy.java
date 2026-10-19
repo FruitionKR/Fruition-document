@@ -95,6 +95,11 @@ public class DocumentAccessPolicy {
             return documentAccess.get(document.getId());
         }
 
+        /** 이 폴더에 직접 건 설정. 없으면 null(상위 폴더 또는 기본값을 따름). */
+        public String folderOverride(UUID folderId) {
+            return folderAccess.get(folderId);
+        }
+
         /** 실제로 적용되는 접근 수준. */
         public String access(Document document) {
             String own = documentAccess.get(document.getId());

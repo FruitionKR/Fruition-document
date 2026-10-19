@@ -60,7 +60,7 @@
 | `PUT /api/workspaces/{workspace_id}/folders/{folder_id}/permission` | OWNER | 같은 형식. 폴더 안 문서와 하위 폴더가 따른다 |
 
 오류: `400` access 값이 잘못됨, `403` 바꿀 권한 없음(`DOCUMENT_WRITE_FORBIDDEN`), `404` 문서·폴더 없음.
-권한 설정이 바뀌면 문서 트리의 ETag도 바뀐다. 진입점: `src/main/java/fruition/core/document/controller/DocumentPermissionController.java`, 판정: `DocumentAccessPolicy.java`.
+권한 설정이 바뀌면 문서 트리의 ETag도 바뀐다. 설정해 둔 값은 문서 트리의 항목마다 `permission`(폴더·문서 모두, 미설정이면 `null`)으로, 문서는 `document.permission`으로도 내려간다. 진입점: `src/main/java/fruition/core/document/controller/DocumentPermissionController.java`, 판정: `DocumentAccessPolicy.java`.
 
 ## 편집 충돌 (deprecated)
 

@@ -829,10 +829,15 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
 
 폴더 항목에는 `document` 키가 없다.
 
+`permission`은 그 항목에 직접 건 권한 설정(`edit` | `view`)이다. 설정이 없으면 `null`이고(키는 항상 있다),
+상위 폴더 설정이나 기본값(`edit`)을 따른다는 뜻이다. 폴더는 `PUT .../folders/{folder_id}/permission`으로 건 값,
+문서는 `document.permission`과 같은 값이다. 상속해 실제로 적용되는 값이 아니라 자기 설정만 준다.
+권한 설정은 트리를 조립할 때 워크스페이스 단위로 한 번에 읽는다(항목마다 조회하지 않음).
+
 **변경 감지(ETag/304)**: 응답에는 `ETag` 헤더가 붙는다. 폴링은 이 값을 `If-None-Match`로 보내고, 304를 받으면 갖고 있던 트리를 그대로 쓴다.
 서버는 트리에 실리는 문서·폴더 행과 편집 상태의 지문을 먼저 계산해 비교한다. 같으면 트리를 조립하지 않는다.
 처리 중 문서가 멈춤(`stalled`)으로 바뀌는 것처럼 시간이 지나 달라지는 값도 지문에 들어간다.
-`can_edit`·`can_delete`가 사용자마다 다르므로 ETag도 사용자마다 다르다.
+`can_edit`·`can_delete`가 사용자마다 다르므로 ETag도 사용자마다 다르다. 문서·폴더 권한 설정이 바뀌어도 지문이 바뀐다.
 지문은 트리를 조립하기 전에 계산하므로, 그 사이에 변경이 생기면 다음 요청에서 다시 200을 받는다.
 
 #### 3. Auth 필요 여부
@@ -865,6 +870,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
       "has_children": true,
       "id": "string",
       "name": "설계",
+      "permission": "view",
       "sort_order": 1024,
       "type": "folder"
     },
@@ -879,6 +885,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
       "has_children": false,
       "id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
       "name": "note.md",
+      "permission": null,
       "sort_order": 1024,
       "type": "document"
     }
@@ -935,6 +942,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
       "has_children": true,
       "id": "string",
       "name": "설계",
+      "permission": "view",
       "sort_order": 1024,
       "type": "folder"
     },
@@ -949,6 +957,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
       "has_children": false,
       "id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
       "name": "note.md",
+      "permission": null,
       "sort_order": 1024,
       "type": "document"
     }

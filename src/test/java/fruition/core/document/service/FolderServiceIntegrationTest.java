@@ -47,6 +47,7 @@ class FolderServiceIntegrationTest {
     @Autowired FolderService folderService;
     @Autowired DocumentPlacementService documentPlacementService;
     @Autowired DocumentService documentService;
+    @Autowired DocumentPermissionService documentPermissionService;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired DocumentRepository documentRepository;
     @Autowired StringRedisTemplate redisTemplate;
@@ -253,6 +254,47 @@ class FolderServiceIntegrationTest {
                 .findFirst().orElseThrow();
         assertThat(item.name()).isEqualTo("회의록.md");
         assertThat(item.document().displayName()).isEqualTo("회의록");
+    }
+
+    /**
+     * 트리 항목의 permission은 그 항목에 직접 건 설정만 준다. 폴더 권한 설정 API로 건 값이 그대로 나오고,
+     * 설정이 없는 하위 폴더는 상위를 따르므로 상속값이 아니라 null이다. 문서는 document.permission과 같다.
+     */
+    @Test
+    void tree_carriesOwnFolderAndDocumentPermission() {
+        FolderResponse parent = folderService.create(workspaceId, userId, "k_perm_parent",
+                new FolderCreateRequest("보기 전용", null));
+        FolderResponse child = folderService.create(workspaceId, userId, "k_perm_child",
+                new FolderCreateRequest("상속", parent.id()));
+        FolderResponse sibling = folderService.create(workspaceId, userId, "k_perm_sibling",
+                new FolderCreateRequest("편집", null));
+        insertDocumentInFolder("doc_perm_own", "직접.md", "EDITABLE", child.id(), 0);
+        insertDocumentInFolder("doc_perm_inherit", "상속.md", "EDITABLE", child.id(), 1);
+        documentPermissionService.setFolder(workspaceId, userId, parent.id(), "view");
+        documentPermissionService.setFolder(workspaceId, userId, sibling.id(), "edit");
+        documentPermissionService.setDocument(workspaceId, userId, "doc_perm_own", "edit");
+
+        DocumentTreeResponse tree = folderService.tree(workspaceId, userId);
+
+        DocumentTreeResponse.Item parentItem = findItem(tree.items(), parent.id().toString());
+        DocumentTreeResponse.Item childItem = findItem(parentItem.children(), child.id().toString());
+        assertThat(parentItem.permission()).isEqualTo("view");
+        assertThat(findItem(tree.items(), sibling.id().toString()).permission()).isEqualTo("edit");
+        assertThat(childItem.permission()).isNull();
+        DocumentTreeResponse.Item ownDocument = findItem(childItem.children(), "doc_perm_own");
+        DocumentTreeResponse.Item inheritingDocument = findItem(childItem.children(), "doc_perm_inherit");
+        assertThat(ownDocument.permission()).isEqualTo("edit").isEqualTo(ownDocument.document().permission());
+        assertThat(inheritingDocument.permission()).isNull();
+        assertThat(inheritingDocument.document().permission()).isNull();
+
+        // 설정을 지우면(null) 다시 상위 설정을 따른다.
+        documentPermissionService.setFolder(workspaceId, userId, parent.id(), null);
+        assertThat(findItem(folderService.tree(workspaceId, userId).items(), parent.id().toString()).permission())
+                .isNull();
+    }
+
+    private static DocumentTreeResponse.Item findItem(List<DocumentTreeResponse.Item> items, String id) {
+        return items.stream().filter(candidate -> id.equals(candidate.id())).findFirst().orElseThrow();
     }
 
     /** 폴더에는 문서 메타가 없다. 키 자체가 빠져야 화면이 종류를 헷갈리지 않는다. */

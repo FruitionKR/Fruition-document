@@ -45,7 +45,11 @@ public class DocumentItemAssembler {
 
     /** 편집 상태·권한 설정·AI 변경은 한 번에 읽는다. 문서마다 조회하면 N+1이 된다. */
     public List<DocumentListResponse.DocumentItem> assemble(String workspaceId, String userId, List<Document> documents) {
-        DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
+        return assemble(documentAccessPolicy.viewer(workspaceId, userId), documents);
+    }
+
+    /** 권한 설정을 이미 읽은 호출자(문서 트리는 폴더 권한도 함께 쓴다)가 같은 Viewer를 넘겨 다시 읽지 않게 한다. */
+    public List<DocumentListResponse.DocumentItem> assemble(DocumentAccessPolicy.Viewer viewer, List<Document> documents) {
         List<String> documentIds = documents.stream().map(Document::getId).toList();
         Set<String> editableDocumentIds = editStateRepository.findAllById(documentIds).stream()
                 .map(DocumentEditState::getDocumentId)

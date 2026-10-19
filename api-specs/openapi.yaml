@@ -7317,6 +7317,12 @@ components:
           type: string
           description: "트리에 보여줄 이름. 폴더는 폴더 이름, 문서는 확장자를 포함한 파일명이다. 문서가 사람에게 보이는 제목은 document.display_name에 있다."
           example: 설계
+        permission:
+          type: string
+          description: "이 항목에 직접 건 권한 설정(edit | view). null이면 상위 폴더 설정 또는 기본값(edit)을 따른다. 폴더는 폴더 권한 설정 API로 건 값, 문서는 document.permission과 같은 값이다."
+          enum:
+          - edit
+          - view
         sort_order:
           type: integer
           format: int64
