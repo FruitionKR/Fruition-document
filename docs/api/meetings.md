@@ -581,10 +581,14 @@ AI가 오디오를 S3에서 읽어 시간 단위로 나눠 전사하고 `ai.task
 ```json
 {"run_id": "<uuid>", "kind": "meeting_notes", "workspace_id": "ws_...", "user_id": "usr_...",
  "provider": "gemini", "model": "gemini-3.5-flash-lite", "meeting_id": "mtg_...", "display_name": "출시 회의",
+ "meeting_date": "2026-10-19", "attendees": ["김민수"],
  "segments": [{"id": "s1_a", "text": "..."}]}
 ```
 
-결과(`ai.task.event`): `kind=meeting_notes`, `run_id`, `status`(`succeeded` | `failed`). 성공의 `payload`는 초안(`display_name`, `summary`, `decisions`, `action_items`, `open_questions`)이고, 실패의 `error`는 코드 문자열이다. ai는 `MEETING_NOTES_INPUT_REJECTED`·`MEETING_NOTES_UNAVAILABLE`·`MEETING_NOTES_FAILED`만 보내며, core는 이 셋을 그대로 `error_code`에 남기고 그 밖의 값은 `MEETING_NOTES_FAILED`로 바꾼다(크레딧 부족은 발행 전에 `INSUFFICIENT_CREDIT`로 거른다). `request`는 되돌려 보내지 않는다. 결과는 `generating`인 자기 버전 행만 바꾸므로 재전달·늦은 이벤트는 무시된다. 크레딧 예약과 사용량 정산은 다른 AI 작업과 같이 `run_id`로 한다.
+- `meeting_date`: 회의를 만든 시각(`meetings.created_at`, 실시간은 받아쓰기 시작·파일은 업로드 시작)의 한국 날짜(`Asia/Seoul`, `YYYY-MM-DD`). 회의록 머리의 `- 날짜:`가 된다.
+- `attendees`: document가 확실히 아는 참석자만 싣는다. 실시간(`live`) 회의는 받아쓰기를 한 회의 소유자의 표시명(access 내부 사용자 조회, 실패·빈 값이면 생략), 파일(`upload`) 회의는 올린 사람이 참석했는지 알 수 없어 싣지 않는다. 워크스페이스 멤버는 회의 참석자가 아니라 보내지 않는다. 비어 있으면 필드를 빼며, ai는 전사에서 확인한 이름을 중복 없이 덧붙인다.
+
+결과(`ai.task.event`): `kind=meeting_notes`, `run_id`, `status`(`succeeded` | `failed`). 성공의 `payload`는 초안(`display_name`, `markdown`, `meeting_date`, `attendees`, `summary`, `discussion`, `decisions`, `action_items`(`owner`·`due` 포함), `next_schedule`, `open_questions`)이고, 실패의 `error`는 코드 문자열이다. ai는 `MEETING_NOTES_INPUT_REJECTED`·`MEETING_NOTES_UNAVAILABLE`·`MEETING_NOTES_FAILED`만 보내며, core는 이 셋을 그대로 `error_code`에 남기고 그 밖의 값은 `MEETING_NOTES_FAILED`로 바꾼다(크레딧 부족은 발행 전에 `INSUFFICIENT_CREDIT`로 거른다). `request`는 되돌려 보내지 않는다. 결과는 `generating`인 자기 버전 행만 바꾸므로 재전달·늦은 이벤트는 무시된다. 크레딧 예약과 사용량 정산은 다른 AI 작업과 같이 `run_id`로 한다.
 
 <a id="notes-latest"></a>
 ### `GET .../meetings/{meeting_id}/notes` — 최신 초안
@@ -596,10 +600,14 @@ AI가 오디오를 S3에서 읽어 시간 단위로 나눠 전사하고 `ai.task
   "status": "ready",
   "partial": false,
   "display_name": "출시 회의",
-  "markdown": "# 출시 회의\n\n## 요약\n- 출시는 다음 주 금요일로 확정되었습니다.\n\n## 결정 사항\n- 출시는 다음 주 금요일로 확정.\n\n## 할 일\n- 민수님을 배포 전 점검 담당자로 지정.\n\n## 미결 사항\n- 확인된 내용 없음",
+  "markdown": "# 출시 회의\n\n- 날짜: 2026-10-19\n- 참석자: 김민수, 이지은\n\n### 회의 요약\n- 출시는 다음 주 금요일로 확정되었습니다.\n\n### 주요 논의\n#### 출시 일정\n- QA 기간을 1주 늘리자는 의견이 나왔다.\n\n### 결정 사항\n- 출시는 다음 주 금요일로 확정.\n\n### 해야 할 일\n- [ ] 배포 전 점검 · 김민수 · 기한 미정\n\n### 다음 일정\n- 확인된 내용 없음",
+  "meeting_date": "2026-10-19",
+  "attendees": ["김민수", "이지은"],
   "summary": [{ "text": "출시는 다음 주 금요일로 확정되었습니다.", "source_segment_ids": ["s1_item_a1"] }],
+  "discussion": [{ "topic": "출시 일정", "items": [{ "text": "QA 기간을 1주 늘리자는 의견이 나왔다.", "source_segment_ids": ["s1_item_a1"] }] }],
   "decisions": [{ "text": "출시는 다음 주 금요일로 확정.", "source_segment_ids": ["s1_item_a1"] }],
-  "action_items": [{ "text": "민수님을 배포 전 점검 담당자로 지정.", "source_segment_ids": ["s1_item_a2"] }],
+  "action_items": [{ "text": "배포 전 점검", "owner": "김민수", "due": null, "source_segment_ids": ["s1_item_a2"] }],
+  "next_schedule": [],
   "open_questions": [],
   "applied": null,
   "error_code": null,
@@ -608,7 +616,9 @@ AI가 오디오를 S3에서 읽어 시간 단위로 나눠 전사하고 `ai.task
 ```
 
 - `status`: `generating` · `ready` · `failed` · `applied`. `partial`은 `allow_partial`로 만든 초안이다.
-- `markdown`은 document가 네 배열로 다시 만든 본문이다(`# 이름` → `## 요약` · `## 결정 사항` · `## 할 일` · `## 미결 사항`, 빈 항목은 `- 확인된 내용 없음`). AI 응답의 `markdown`은 항목마다 근거 ID를 붙이므로 쓰지 않는다. 근거는 `source_segment_ids`로만 준다.
+- `markdown`은 AI가 Figma 시안 구성으로 만든 본문을 그대로 준다(`# 이름` → `- 날짜:`·`- 참석자:` → `### 회의 요약` · `### 주요 논의`(주제마다 `####`) · `### 결정 사항` · `### 해야 할 일`(`- [ ] 할 일 · 담당자 · 기한`) · `### 다음 일정`). 근거 ID는 본문에 없고 `source_segment_ids`로만 준다. 저장할 때 원시 HTML·외부 링크를 거른다(아래 저장 규칙과 같다). 미리보기·저장의 기본 본문도 이 `markdown`이다.
+- 이전 AI 응답(`discussion` 배열이 없거나 `markdown`이 빈 응답, 이 변경 전에 만든 초안)은 AI 본문에 근거 ID가 붙어 있어 쓰지 않고, document가 네 배열로 옛 구성(`## 요약` · `## 결정 사항` · `## 할 일` · `## 미결 사항`, 빈 항목은 `- 확인된 내용 없음`)을 다시 만든다. 이때 `meeting_date`는 `null`, `attendees`·`discussion`·`next_schedule`은 빈 배열, `action_items[].owner`·`due`는 `null`이다.
+- `meeting_date`: 회의 날짜 또는 `null`. `attendees`: 참석자 이름 배열. `discussion`: `{topic, items: [{text, source_segment_ids}]}` 배열. `action_items[]`: `{text, owner, due, source_segment_ids}`(`owner`·`due`는 발언으로 확인된 경우만 문자열, 아니면 `null`). `next_schedule`: `{text, source_segment_ids}` 배열. `open_questions`(미결 사항)는 시안 본문에는 없지만 배열로 계속 준다. 근거 ID는 모든 배열에서 묶음 ID가 아니라 원래 구간 ID다.
 - 최신 버전이 `failed`면 `last_ready_version`에 마지막 성공 버전을 준다. `app.speech.meeting-notes-generation-timeout-minutes`(기본 30분) 넘게 `generating`인 버전은 `failed`(`MEETING_NOTES_TIMEOUT`)로 바뀐다. 이때 ai 작업 취소도 요청한다. 요청 스레드에서 ai를 호출하지 않고 같은 트랜잭션에서 `ai_task_runs`를 `cancel_requested`로만 바꾸며(`AiTaskCancellationService.requestCancel`, 멤버십·소유자 확인 없음), 기존 `resume()` 스케줄러가 파이프라인 취소·롤백·`cancelled` 전이·사용량 정산 큐 등록을 이어서 한다. 정리는 같은 워크스페이스의 조회·생성 요청(BUSY 확인 전)과, 1분마다 도는 `MeetingNotesService.sweepExpired`(모든 워크스페이스)가 한다. 아무도 조회하지 않아도 만료된다. 그 뒤 늦게 온 결과 이벤트는 반영하지 않는다.
 - 저장 후 `applied`: `{"mode":"append","document_id":"doc_...","applied_at":"..."}`.
 - 초안이 없으면 `404`(`MEETING_NOTES_NOT_FOUND`).
