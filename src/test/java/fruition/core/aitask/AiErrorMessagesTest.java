@@ -45,7 +45,7 @@ class AiErrorMessagesTest {
         assertThat(AiErrorMessages.transcription("provider_unavailable")).isEqualTo(AiErrorMessages.query("provider_unavailable"));
         assertThat(AiErrorMessages.transcription("MEETING_RECORDING_TOO_LONG")).contains("3시간");
         assertThat(AiErrorMessages.transcription("deadline_exceeded")).contains("녹음을 나눠");
-        assertThat(AiErrorMessages.transcription("internal_error")).isEqualTo("녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.");
+        assertThat(AiErrorMessages.transcription("internal_error")).isEqualTo("녹음 파일을 글로 옮기지 못했습니다. 다시 올려 주세요.");
     }
 
     @Test

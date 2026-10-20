@@ -143,18 +143,18 @@ public class MeetingNotesService {
             return toResponse(replay.get());
         }
         if (meeting.liveConnected()) {
-            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "받아쓰기가 끝난 뒤 회의록을 만들 수 있습니다.");
+            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "회의 녹음이 끝난 뒤 회의록을 만들 수 있습니다.");
         }
         List<Bundle> bundles = bundles(meeting.segments());
         List<Map<String, String>> segments = bundles.stream()
                 .map(bundle -> Map.of("id", bundle.id(), "text", bundle.text()))
                 .toList();
         if (segments.isEmpty()) {
-            throw new MeetingException(HttpStatus.UNPROCESSABLE_ENTITY, "MEETING_TRANSCRIPT_EMPTY", "확정된 전사가 없습니다.");
+            throw new MeetingException(HttpStatus.UNPROCESSABLE_ENTITY, "MEETING_TRANSCRIPT_EMPTY", "확정된 대화 내용이 없습니다.");
         }
         if (!meeting.transcriptComplete() && !allowPartial) {
             throw new MeetingException(HttpStatus.CONFLICT, "MEETING_TRANSCRIPT_INCOMPLETE",
-                    "누락되었거나 정상 종료되지 않은 녹음이 있습니다. 일부 전사로 만들려면 allow_partial=true로 요청하세요.");
+                    "누락되었거나 정상 종료되지 않은 녹음이 있습니다. 일부 대화 내용으로 만들려면 allow_partial=true로 요청하세요.");
         }
         boolean partial = !meeting.transcriptComplete();
         // 결과 이벤트에서 근거 ID를 원래 구간으로 되돌릴 수 있도록 묶음의 구간 ID도 스냅샷에 남긴다.

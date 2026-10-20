@@ -52,11 +52,11 @@ public class SpeechTranscriptionClient {
                     .header(UsageChargeService.RUN_ID_HEADER, runId).body(audio)
                     .retrieve().body(JsonNode.class);
             if (body == null || !body.path("text").isTextual()) {
-                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "음성을 전사하지 못했습니다.");
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "말한 내용을 글로 옮기지 못했습니다.");
             }
             return body.path("text").asText();
         } catch (ResourceAccessException e) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "음성 전사 서비스에 연결하지 못했습니다.", e);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "글로 옮기는 서비스에 연결하지 못했습니다.", e);
         } catch (RestClientResponseException e) {
             throw translate(e);
         }
@@ -66,11 +66,11 @@ public class SpeechTranscriptionClient {
     private static ResponseStatusException translate(RestClientResponseException e) {
         return switch (e.getStatusCode().value()) {
             case 403 -> new ResponseStatusException(HttpStatus.FORBIDDEN, "워크스페이스 접근 권한이 없습니다.", e);
-            case 413 -> new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "음성 파일은 24 MiB 이하로 보내주세요.", e);
+            case 413 -> new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "음성 파일은 24MB 이하로 보내주세요.", e);
             case 415 -> new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "WAV, MP3, M4A, WebM 음성을 보내주세요.", e);
             case 422 -> new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "음성을 인식할 수 없습니다.", e);
-            case 502 -> new ResponseStatusException(HttpStatus.BAD_GATEWAY, "음성을 전사하지 못했습니다.", e);
-            default -> new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "음성 전사 서비스를 사용할 수 없습니다.", e);
+            case 502 -> new ResponseStatusException(HttpStatus.BAD_GATEWAY, "말한 내용을 글로 옮기지 못했습니다.", e);
+            default -> new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "글로 옮기는 서비스를 사용할 수 없습니다.", e);
         };
     }
 }
