@@ -82,7 +82,7 @@ public class PipelineSkillRequester {
                             WorkspaceAiModelClient.AiModelSelection aiModel, String runId) {
         return task(runId, "skill_publish", workspaceId, userId, null, new PublishPayload(workspaceId, userId, request.scopeType(), request.name(),
                 request.description(), request.instructionsMarkdown(), request.capabilities(), request.allowedTools(),
-                request.targets(), request.resultMode(), aiModel.provider(), aiModel.model()));
+                request.targets(), request.resultMode(), request.requiresSource(), aiModel.provider(), aiModel.model()));
     }
 
     public JsonNode list(String workspaceId, String userId) {
@@ -105,7 +105,7 @@ public class PipelineSkillRequester {
                            WorkspaceAiModelClient.AiModelSelection aiModel, String runId) {
         return task(runId, "skill_update", workspaceId, userId, skillId, new UpdatePayload(workspaceId, userId, request.name(),
                 request.description(), request.instructionsMarkdown(), request.targets(), request.resultMode(),
-                aiModel.provider(), aiModel.model()));
+                request.requiresSource(), aiModel.provider(), aiModel.model()));
     }
 
     /**
@@ -289,6 +289,10 @@ public class PipelineSkillRequester {
             @JsonProperty("result_mode")
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
             String resultMode,
+            // 생략하면 키를 빼서 AI가 원문 필요 여부를 판단하게 한다.
+            @JsonProperty("requires_source")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            Boolean requiresSource,
             String provider,
             String model) {}
 
@@ -304,6 +308,10 @@ public class PipelineSkillRequester {
             @JsonProperty("result_mode")
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
             String resultMode,
+            // 생략하면 키를 빼서 AI가 원문 필요 여부를 판단하게 한다.
+            @JsonProperty("requires_source")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            Boolean requiresSource,
             String provider,
             String model) {}
 

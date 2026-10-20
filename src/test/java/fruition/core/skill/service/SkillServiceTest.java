@@ -80,8 +80,8 @@ class SkillServiceTest {
     void publish_andUpdate_forwardWorkspaceModelSnapshot() {
         var publish = new SkillPublishRequest("team", "meeting-notes", "회의록 작성", "# 작성 절차",
                 List.of("document-create"),
-                List.of("list_root_items", "list_folder_children", "create_document"), null, null);
-        var update = new SkillUpdateRequest("meeting-notes", "회의록 수정", "# 수정 절차", null, null);
+                List.of("list_root_items", "list_folder_children", "create_document"), null, null, null);
+        var update = new SkillUpdateRequest("meeting-notes", "회의록 수정", "# 수정 절차", null, null, null);
         when(requester.get("ws_1", "user_1", "skill_1")).thenReturn(skillOf("team"));
 
         service.publish("ws_1", "user_1", publish, "run");
@@ -153,7 +153,7 @@ class SkillServiceTest {
     void publish_team_requiresSkillAuthorPermission() {
         denySkillAuthor();
         var publish = new SkillPublishRequest("team", "meeting-notes", "회의록 작성", "# 작성 절차",
-                List.of("document-create"), List.of("list_root_items", "list_folder_children", "create_document"), null, null);
+                List.of("document-create"), List.of("list_root_items", "list_folder_children", "create_document"), null, null, null);
 
         assertThatThrownBy(() -> service.publish("ws_1", "user_1", publish, "run"))
                 .isInstanceOf(WorkspacePermissionRequiredException.class);
@@ -164,7 +164,7 @@ class SkillServiceTest {
     void updateDeleteEnableDisable_teamSkill_requireSkillAuthorPermission() {
         denySkillAuthor();
         when(requester.get("ws_1", "user_1", "skill_1")).thenReturn(skillOf("team"));
-        var update = new SkillUpdateRequest("meeting-notes", "회의록 수정", "# 수정 절차", null, null);
+        var update = new SkillUpdateRequest("meeting-notes", "회의록 수정", "# 수정 절차", null, null, null);
 
         assertThatThrownBy(() -> service.update("ws_1", "user_1", "skill_1", update, "run"))
                 .isInstanceOf(WorkspacePermissionRequiredException.class);

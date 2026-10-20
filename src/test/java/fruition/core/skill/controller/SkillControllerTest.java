@@ -8,6 +8,7 @@ import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.config.SecurityConfig;
 import fruition.core.skill.dto.SkillAuthoringRequest;
 import fruition.core.skill.dto.SkillPublishRequest;
+import fruition.core.skill.dto.SkillUpdateRequest;
 import fruition.core.skill.exception.PipelineSkillException;
 import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
 import fruition.core.skill.repository.PipelineSkillRequester;
@@ -148,6 +149,52 @@ class SkillControllerTest {
         org.mockito.Mockito.verify(skillService).publish(eq(WORKSPACE_ID), eq(USER_ID), captor.capture(), anyString());
         assertThat(captor.getValue().targets()).containsExactly("selection");
         assertThat(captor.getValue().resultMode()).isEqualTo("edit");
+    }
+
+    @Test
+    void publishAndUpdate_forwardRequiresSourceAndReturnItFromAi() throws Exception {
+        when(skillService.publish(eq(WORKSPACE_ID), eq(USER_ID), any(SkillPublishRequest.class), anyString()))
+                .thenReturn(objectMapper.readTree("{\"status\":\"published\",\"requires_source\":true}"));
+        when(skillService.update(eq(WORKSPACE_ID), eq(USER_ID), eq("skill_1"), any(SkillUpdateRequest.class), anyString()))
+                .thenReturn(objectMapper.readTree("{\"status\":\"published\",\"requires_source\":false}"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/author/publish")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(publishBody(",\"requires_source\":true")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requires_source").value(true));
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                                "/api/workspaces/" + WORKSPACE_ID + "/skills/skill_1")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"meeting-notes\",\"description\":\"회의록 작성\","
+                                + "\"instructions_markdown\":\"# 작성 절차\",\"requires_source\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requires_source").value(false));
+
+        var publishCaptor = org.mockito.ArgumentCaptor.forClass(SkillPublishRequest.class);
+        org.mockito.Mockito.verify(skillService).publish(eq(WORKSPACE_ID), eq(USER_ID), publishCaptor.capture(), anyString());
+        assertThat(publishCaptor.getValue().requiresSource()).isTrue();
+        var updateCaptor = org.mockito.ArgumentCaptor.forClass(SkillUpdateRequest.class);
+        org.mockito.Mockito.verify(skillService).update(eq(WORKSPACE_ID), eq(USER_ID), eq("skill_1"), updateCaptor.capture(), anyString());
+        assertThat(updateCaptor.getValue().requiresSource()).isFalse();
+    }
+
+    @Test
+    void publish_leavesRequiresSourceNullWhenOmitted() throws Exception {
+        when(skillService.publish(eq(WORKSPACE_ID), eq(USER_ID), any(SkillPublishRequest.class), anyString()))
+                .thenReturn(objectMapper.readTree("{\"status\":\"published\"}"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/author/publish")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(publishBody("")))
+                .andExpect(status().isOk());
+
+        var captor = org.mockito.ArgumentCaptor.forClass(SkillPublishRequest.class);
+        org.mockito.Mockito.verify(skillService).publish(eq(WORKSPACE_ID), eq(USER_ID), captor.capture(), anyString());
+        assertThat(captor.getValue().requiresSource()).isNull();
     }
 
     @Test
@@ -346,7 +393,7 @@ class SkillControllerTest {
                 .get("SkillVersionResponse");
 
         assertThat(skill.getProperties()).containsKeys("id", "workspace_id", "enabled_version", "latest_version");
-        assertThat(version.getProperties()).containsKeys("capabilities", "allowed_tools", "targets", "result_mode",
+        assertThat(version.getProperties()).containsKeys("capabilities", "allowed_tools", "targets", "result_mode", "requires_source",
                 "lint_result", "status");
         assertThat(skill.getRequired()).contains("id", "enabled_version", "latest_version");
         assertThat(version.getRequired()).containsExactlyInAnyOrder("id", "version", "name", "description",

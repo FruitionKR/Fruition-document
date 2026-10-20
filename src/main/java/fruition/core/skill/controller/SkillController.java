@@ -337,6 +337,8 @@ public class SkillController {
         @Schema(description = "결과 방식. 문서 Skill이 아니거나 지정하지 않았으면 null이다.",
                 allowableValues = {"create", "edit", "auto"}, nullable = true)
         public String result_mode;
+        @Schema(description = "원문 문서가 필요한 Skill인지 여부. AI가 저장하기 전 버전에는 없거나 null일 수 있다.", nullable = true)
+        public Boolean requires_source;
         @Schema(description = "게시 전 점검 결과. 항목별 통과 여부가 담긴다.")
         public java.util.Map<String, Object> lint_result;
         @Schema(description = "버전 상태", example = "published")
@@ -392,6 +394,8 @@ public class SkillController {
         public java.util.List<String> targets;
         @Schema(description = "결과 방식", allowableValues = {"create", "edit", "auto"}, nullable = true)
         public String result_mode;
+        @Schema(description = "원문 문서가 필요한 Skill인지 여부", nullable = true)
+        public Boolean requires_source;
         public java.util.List<Object> issues;
     }
 }

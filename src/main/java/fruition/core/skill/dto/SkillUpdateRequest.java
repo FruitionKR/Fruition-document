@@ -35,5 +35,10 @@ public record SkillUpdateRequest(
         @Pattern(regexp = "create|edit|auto")
         @Schema(description = "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 기존 값을 유지한다.",
                 allowableValues = {"create", "edit", "auto"}, example = "auto")
-        String resultMode
+        String resultMode,
+
+        @JsonProperty("requires_source")
+        @Schema(description = "원문 문서가 필요한 Skill인지 여부. 사용자가 명시한 값이다. 생략(null)하면 키를 보내지 않는다(기존 값 처리는 AI가 정함).",
+                nullable = true, example = "true")
+        Boolean requiresSource
 ) {}

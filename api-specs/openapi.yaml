@@ -9107,6 +9107,9 @@ components:
           type: string
         question:
           type: string
+        requires_source:
+          type: boolean
+          description: 원문 문서가 필요한 Skill인지 여부
         result_mode:
           type: string
           description: 결과 방식
@@ -9177,6 +9180,10 @@ components:
           example: meeting-notes
           minLength: 1
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        requires_source:
+          type: boolean
+          description: 원문 문서가 필요한 Skill인지 여부. 사용자가 명시한 값이다. 생략(null)하면 키를 보내지 않고 AI가 판단한다.
+          example: true
         result_mode:
           type: string
           description: "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 키를 보내지 않는다(기본값은 AI가 정함)."
@@ -9409,6 +9416,10 @@ components:
           example: meeting-notes
           minLength: 1
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        requires_source:
+          type: boolean
+          description: 원문 문서가 필요한 Skill인지 여부. 사용자가 명시한 값이다. 생략(null)하면 키를 보내지 않는다(기존 값 처리는 AI가 정함).
+          example: true
         result_mode:
           type: string
           description: "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 기존 값을 유지한다."
@@ -9462,6 +9473,9 @@ components:
           type: string
           description: Skill 이름
           example: meeting-notes
+        requires_source:
+          type: boolean
+          description: 원문 문서가 필요한 Skill인지 여부. AI가 저장하기 전 버전에는 없거나 null일 수 있다.
         result_mode:
           type: string
           description: 결과 방식. 문서 Skill이 아니거나 지정하지 않았으면 null이다.
