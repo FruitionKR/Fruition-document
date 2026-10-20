@@ -827,6 +827,10 @@ public class DocumentService {
     /** 목록에서 채팅에서 온 문서임을 알리는 이름 접두사. */
     private static final String CHAT_EXPORT_NAME_PREFIX = "[채팅] ";
 
+    /** 이름 앞에 이미 붙어 있는 접두사({@code [채팅]}, 괄호 안팎 공백 변형, 여러 번 반복 포함). */
+    private static final java.util.regex.Pattern EXISTING_CHAT_EXPORT_PREFIX =
+            java.util.regex.Pattern.compile("^(?:\\s*\\[\\s*채팅\\s*\\]\\s*)+");
+
     /** 파이프라인에 넘길 source block 1개. blockId가 {@code session_id:pair_id} provenance다. */
     public record PipelineSourceBlock(String blockId, String text) {}
 
@@ -860,6 +864,7 @@ public class DocumentService {
     /**
      * 채팅 export 문서 이름을 만든다. 채팅에서 온 문서임을 알리는 접두사를 붙이고, 같은 폴더의 기존 항목과
      * 겹치면 {@code (2)}를 더한다. export 시점과 이름 확정 시점이 모두 이 경로를 지나 접두사가 유지된다.
+     * Wiki 페이지 제목처럼 이미 접두사가 붙은 이름이 오면 떼고 하나만 붙인다({@code [채팅] [채팅]} 방지).
      *
      * <p>이름은 세션 제목이나 AI가 만든 페이지 제목에서 오므로 파일명에 못 쓰는 문자가 섞일 수 있어
      * 여기서 정제한다. 접두사가 늘 남으므로 정제 결과가 비는 일은 없다.
@@ -873,7 +878,10 @@ public class DocumentService {
                         java.text.Normalizer.normalize(excludedNormalizedFilename.trim(), java.text.Normalizer.Form.NFC)
                                 .toLowerCase(java.util.Locale.ROOT)))
                 .collect(Collectors.toSet());
-        String candidate = DocumentEditingRules.sanitizeDisplayName(CHAT_EXPORT_NAME_PREFIX + displayName);
+        // AI 제목이 NFD로 오면 "채팅"이 자모로 풀려 접두사 검사를 빠져나가므로 NFC로 맞춘 뒤 비교한다.
+        String baseName = displayName == null ? "" : EXISTING_CHAT_EXPORT_PREFIX.matcher(
+                java.text.Normalizer.normalize(displayName, java.text.Normalizer.Form.NFC)).replaceFirst("");
+        String candidate = DocumentEditingRules.sanitizeDisplayName(CHAT_EXPORT_NAME_PREFIX + baseName);
         return DocumentEditingRules.uniqueFilename(candidate, existingNames).filename();
     }
 
