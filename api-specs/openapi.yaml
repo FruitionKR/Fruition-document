@@ -5338,6 +5338,26 @@ paths:
           description: OK
       tags:
       - skill-reference-controller
+  /internal/agent/skill-execution/folder-sources/read:
+    post:
+      description: 폴더 바로 아래 Markdown 편집 문서 중 사용자가 읽을 수 있는 문서의 최신 본문을 최근 수정순으로 반환합니다.
+      operationId: readFolderSources
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillFolderSourceReadRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/SkillFolderSourceReadResponse"
+          description: OK
+      summary: Skill 폴더 원문 읽기
+      tags:
+      - skill-folder-source-controller
   /internal/agent/tools/execute/{tool_name}:
     post:
       operationId: execute
@@ -8608,6 +8628,9 @@ components:
         name:
           type: string
           description: 제안된 Skill 이름
+        requires_source:
+          type: boolean
+          description: 원문 문서·폴더가 필요한 Skill인지. 생략하면 AI가 게시 때 규칙으로 정한다.
         scope_type:
           type: string
           description: 제안된 Skill의 적용 범위 종류
@@ -9147,6 +9170,48 @@ components:
           minLength: 1
       required:
       - run_id
+    SkillFolderSourceItem:
+      type: object
+      properties:
+        display_name:
+          type: string
+        document_id:
+          type: string
+        markdown:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+    SkillFolderSourceReadRequest:
+      type: object
+      properties:
+        folder_id:
+          type: string
+          minLength: 1
+        max_documents:
+          type: integer
+          format: int32
+        user_id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+      required:
+      - folder_id
+      - max_documents
+      - user_id
+      - workspace_id
+    SkillFolderSourceReadResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillFolderSourceItem"
+        total_documents:
+          type: integer
+          format: int32
     SkillPublishRequest:
       type: object
       description: Skill 게시 요청. 게시하면 새 버전이 만들어진다.

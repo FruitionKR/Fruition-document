@@ -5,7 +5,7 @@
 사용자용 Agent 실행·승인과 내부 Tool 실행 API다. Agent turn은 Kafka `ai.agent.command`,
 계획 조회·승인·거절·취소·수정은 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 10
+- API 수: 11
 
 ## API 목차
 
@@ -19,6 +19,7 @@
 | [`POST /api/workspaces/{workspace_id}/agent/turn`](#summary-post-api-workspaces-workspace-id-agent-turn) | 사용자 요청을 비동기 Agent 실행 대기열에 등록합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/turn/{run_id}`](#summary-get-api-workspaces-workspace-id-agent-turn-run-id) | 워크스페이스의 Agent 실행 결과를 조회합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/turn/{run_id}/events`](#summary-get-api-workspaces-workspace-id-agent-turn-run-id-events) | Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. |
+| [`POST /internal/agent/skill-execution/folder-sources/read`](#summary-post-internal-agent-skill-execution-folder-sources-read) | Skill 실행 원문으로 쓸 폴더 바로 아래 문서의 최신 본문을 반환합니다. |
 | [`POST /internal/agent/tools/execute/{tool_name}`](#summary-post-internal-agent-tools-execute-tool-name) | 승인된 Agent Tool 변경 작업을 실행합니다. |
 | [`POST /internal/agent/tools/read/{tool_name}`](#summary-post-internal-agent-tools-read-tool-name) | 승인된 Agent Tool 읽기 작업을 실행합니다. |
 
@@ -578,6 +579,8 @@ document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 
 | body | `folder_id` | `string(uuid)` | 아니오 | 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 생략하면 루트·워크스페이스 전체 |
 | body | `allow_web_search` | `boolean` | 아니오 | Query와 웹 근거 기반 새 문서 생성에서 웹 검색을 허용할지. 편집·Skill 갈래에는 영향이 없다 |
 | body | `conversationContext.selected_pair_ids` | `string[]` | 아니오 | 맥락으로 쓸 문답 ID(최대 20개). 비우면 세션의 최근 완결 문답을 쓴다 |
+| body | `conversationContext.pendingSkillProposal` | `object` | 아니오 | 채팅에서 "게시"를 기다리는 Skill 제안. 필드는 snake_case(`scope_type`, `name`, `description`, `instructions_markdown`, `capabilities`, `allowed_tools`, `requires_source`)이고 ai command의 `conversation_context.pending_skill_proposal`로 그대로 옮긴다 |
+| body | `conversationContext.pendingSkillProposal.requires_source` | `boolean` | 아니오 | 원문 문서·폴더가 필요한 Skill인지. 생략(null)하면 ai command에서 키를 빼고 AI가 게시 때 규칙으로 정한다 |
 
 - Content-Type: `application/json` (`AgentTurnRequest`)
 
@@ -595,6 +598,7 @@ document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 
       "description": "string",
       "instructions_markdown": "string",
       "name": "string",
+      "requires_source": true,
       "scope_type": "string"
     },
     "referenceContext": {
@@ -964,6 +968,134 @@ string
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-turn-run-id-events)
+
+</details>
+
+<a id="summary-post-internal-agent-skill-execution-folder-sources-read"></a>
+### `POST /internal/agent/skill-execution/folder-sources/read`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | Skill 실행 원문으로 쓸 폴더 바로 아래 문서의 최신 본문을 반환합니다. |
+| 입력 | **Header** — `X-Agent-Service-Token`(필수, 인증 계층 검증): `string`<br>**Body** — `SkillFolderSourceReadRequest` |
+| 출력 | `200` 성공 — `SkillFolderSourceReadResponse` |
+| 조건 | 인증 필요<br>`X-Agent-Service-Token`을 `AgentServiceTokenFilter`가 검증한다(`/internal/agent/tools/**`와 같은 필터·토큰 `AGENT_INTERNAL_TOKEN`).<br>`user_id`가 워크스페이스 멤버이고 폴더·문서를 읽을 수 있어야 한다. |
+| 주요 오류 | `401` 서비스 토큰 누락·불일치, `403` 멤버 아님·폴더 읽기 권한 없음, `404` 폴더 없음·삭제됨·다른 워크스페이스, `400` 필수 필드 누락 |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-internal-agent-skill-execution-folder-sources-read"></a>
+### `POST /internal/agent/skill-execution/folder-sources/read` 상세
+
+#### 1. Method + Path
+
+`POST /internal/agent/skill-execution/folder-sources/read`
+
+#### 2. 목적
+
+원문이 필요한 Skill(`requires_source=true`)을 문서 없이 폴더만 골라 실행할 때, ai-svc가 그 폴더의 문서 본문을 원문으로 읽는다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `X-Agent-Service-Token`을 검증한다. 토큰이 없거나 다르면 서비스 계층에 닿기 전에 `401`이다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| header | `X-Agent-Service-Token` | `string` | 예 (인증 계층 검증) | - |
+| body | `workspace_id` | `string` | 예 | 워크스페이스 ID |
+| body | `user_id` | `string` | 예 | 실행한 사용자. 이 사용자의 읽기 권한으로 거른다 |
+| body | `folder_id` | `string(uuid)` | 예 | 원문 폴더. UUID가 아니면 `404` |
+| body | `max_documents` | `integer` | 예 | 돌려받을 최대 문서 수. 1..50 밖이면 그 범위로 맞춘다(0 → 1, 100 → 50) |
+
+```json
+{
+  "workspace_id": "ws_9d47a0e9a6324341b47562553b75f92a",
+  "user_id": "user_1",
+  "folder_id": "6b1f3c1e-9a2d-4c55-8e0b-2f7a1d9c4e10",
+  "max_documents": 20
+}
+```
+
+#### 5. Response body
+
+- HTTP `200`: OK
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `total_documents` | `integer` | 읽을 수 있는 대상 전체 수(`max_documents`로 자르기 전) |
+| `items[].document_id` | `string` | 문서 ID |
+| `items[].display_name` | `string` | 문서 표시 이름 |
+| `items[].updated_at` | `string(date-time)` | 문서 마지막 수정 시각(ISO-8601, UTC) |
+| `items[].markdown` | `string \| null` | 저장된 최신 본문(`document_edit_states`). 편집 상태가 없고 저장소 본문으로 만들지도 못하면 `null` |
+
+```json
+{
+  "total_documents": 3,
+  "items": [
+    {
+      "document_id": "doc_b",
+      "display_name": "주간 회의 10월 3주",
+      "updated_at": "2026-10-20T01:00:00Z",
+      "markdown": "# 주간 회의\n\n- 결정 사항 ..."
+    },
+    {
+      "document_id": "doc_a",
+      "display_name": "주간 회의 10월 2주",
+      "updated_at": "2026-10-13T01:00:00Z",
+      "markdown": null
+    }
+  ]
+}
+```
+
+- 대상: `folder_id` **바로 아래** 문서만(하위 폴더 안 문서는 제외). 삭제되지 않은 `EDITABLE`(Markdown 편집 가능) 문서만이며,
+  업로드 원본(`ORIGINAL`)과 스킬 참고 문서(`origin=skill_reference`)는 뺀다.
+- 정렬: `updated_at` 내림차순, 같으면 `document_id` 오름차순. 앞에서 `max_documents`개를 싣는다.
+
+#### 6. Error response
+
+| HTTP | code | 조건 |
+|---|---|---|
+| `401` | - | `X-Agent-Service-Token` 누락·불일치 |
+| `403` | `FOLDER_SOURCE_FORBIDDEN` | `user_id`가 워크스페이스 멤버가 아님(폴더 존재 여부를 알리지 않으려고 폴더 확인보다 먼저 본다), 또는 폴더를 읽을 권한 없음 |
+| `404` | `HIERARCHY_ITEM_NOT_FOUND` | 폴더가 없거나 삭제됐거나 다른 워크스페이스 폴더, `folder_id`가 UUID 아님 |
+| `400` | `INVALID_REQUEST` | 필수 필드 누락 |
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음(`max_documents` 상한만)
+- 필터링: 위 대상 규칙과 읽기 권한으로만 거른다
+
+#### 8. 권한 규칙
+
+- 멤버 확인: `WorkspaceAccessGuard.requireMember`. 멤버가 아니면 `403`.
+- 문서별 읽기: `DocumentAccessPolicy.viewer(workspace, user)`로 한 번 읽은 권한 설정으로 `Viewer.canReadFolder(folder)`와
+  문서마다 `Viewer.canRead(document)`를 본다. 워크스페이스 OWNER와 문서 소유자는 항상 읽고, 그 밖에는 적용되는 설정
+  (문서 설정 → 가장 가까운 상위 폴더 설정 → 기본값 `edit`)이 `edit` 또는 `view`일 때 읽는다. 알 수 없는 값은 읽지 못하는 것으로 본다.
+- 현재 권한 모델은 `edit`·`view`만 있어 멤버는 보기 전용 문서도 읽는다. 읽기를 막는 설정이 생기면 이 API도 그 판정을 따른다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X POST "$DOCUMENT/internal/agent/skill-execution/folder-sources/read" \
+  -H 'X-Agent-Service-Token: <value>' \
+  -H 'Content-Type: application/json' \
+  --data '{"workspace_id":"<value>","user_id":"<value>","folder_id":"<uuid>","max_documents":20}'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/skill/controller/SkillFolderSourceController.java`, 서비스 `src/main/java/fruition/core/skill/service/SkillFolderSourceService.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: readFolderSources`)
+- 호출자: ai-svc — `pipeline/app/modules/agent/infrastructure/backend_folder_source_reader.py`(`BackendFolderSourceReader.read`, `max_documents=20`). base URL은 `DOCUMENT_INTERNAL_BASE_URL`, 토큰은 `AGENT_INTERNAL_TOKEN`. `400`·`403`·`404`는 "이 폴더의 문서를 읽을 수 없어요" 안내로 바꾼다
+- 하위 호출: 없음(DB와, 편집 상태가 없는 예전 문서는 저장소 본문 읽기)
+- 배선 상태: 배선됨(ai-svc `Mireutale/ai-requires-source` 브랜치 기준)
+
+[↑ 요약으로 돌아가기](#summary-post-internal-agent-skill-execution-folder-sources-read)
 
 </details>
 

@@ -20,7 +20,10 @@ public class AgentServiceTokenFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().startsWith(request.getContextPath() + "/internal/agent/tools/");
+        String uri = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        return !uri.startsWith(contextPath + "/internal/agent/tools/")
+                && !uri.startsWith(contextPath + "/internal/agent/skill-execution/");
     }
 
     @Override

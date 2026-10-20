@@ -14,6 +14,7 @@ import fruition.core.aihistory.exception.WikiObjectReadException;
 import fruition.core.skill.exception.InvalidSkillTestRunException;
 import fruition.core.skill.exception.PipelineSkillException;
 import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
+import fruition.core.skill.exception.SkillFolderSourceForbiddenException;
 import fruition.core.wikimaintenance.exception.PipelineWikiMaintenanceException;
 import fruition.core.document.exception.ConflictAlreadyResolvedException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
@@ -115,6 +116,13 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         logHandled(e, HttpStatus.PAYLOAD_TOO_LARGE, "REFERENCE_DOCUMENT_TOO_LARGE");
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
                 .body(ErrorResponse.of("REFERENCE_DOCUMENT_TOO_LARGE", e.getMessage()));
+    }
+
+    @ExceptionHandler(SkillFolderSourceForbiddenException.class)
+    public ResponseEntity<ErrorResponse> handleSkillFolderSourceForbidden(SkillFolderSourceForbiddenException e) {
+        logHandled(e, HttpStatus.FORBIDDEN, "FOLDER_SOURCE_FORBIDDEN");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of("FOLDER_SOURCE_FORBIDDEN", e.getMessage()));
     }
 
     @ExceptionHandler(PipelineWikiPageException.class)

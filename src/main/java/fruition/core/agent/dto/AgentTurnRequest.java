@@ -237,7 +237,12 @@ public record AgentTurnRequest(
                 @NotNull
                 @Size(min = 1)
                 @Schema(description = "검토된 Tool 허용 목록")
-                List<String> allowedTools
+                List<String> allowedTools,
+
+                @JsonProperty("requires_source")
+                @Schema(description = "원문 문서·폴더가 필요한 Skill인지. 생략하면 AI가 게시 때 규칙으로 정한다.",
+                        nullable = true)
+                Boolean requiresSource
         ) {}
     }
 

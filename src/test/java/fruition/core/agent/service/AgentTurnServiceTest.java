@@ -83,7 +83,7 @@ class AgentTurnServiceTest {
                         new AgentTurnRequest.ConversationContext.PendingSkillProposal(
                                 "personal", "meeting-notes", "회의록을 작성합니다.", "# 정확한 원문 지침",
                                 java.util.List.of("document-create"),
-                                java.util.List.of("list_root_items", "list_folder_children", "create_document"))));
+                                java.util.List.of("list_root_items", "list_folder_children", "create_document"), true)));
         when(documentService.findById("ws_1", "user_1", "doc_1"))
                 .thenReturn(document("note.md", "text/markdown", 7));
         when(applyOperationStore.newOperationId()).thenReturn("op_apply_1");
@@ -116,7 +116,32 @@ class AgentTurnServiceTest {
                 .containsExactly("list_root_items", "list_folder_children", "create_document");
         assertThat(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(command.getValue()))
                 .contains("\"pending_skill_proposal\":{\"scope_type\":\"personal\"")
-                .contains("\"instructions_markdown\":\"# 정확한 원문 지침\"");
+                .contains("\"instructions_markdown\":\"# 정확한 원문 지침\"")
+                .contains("\"requires_source\":true");
+        assertThat(command.getValue().conversationContext().pendingSkillProposal().requiresSource()).isTrue();
+    }
+
+    @Test
+    void turn_omitsRequiresSourceWhenPendingSkillProposalLeavesItOut() throws Exception {
+        AgentTurnRequest request = request("whole_document", 1, 2,
+                new AgentTurnRequest.ConversationContext(
+                        java.util.List.of(), null,
+                        new AgentTurnRequest.ConversationContext.PendingSkillProposal(
+                                "personal", "meeting-notes", "회의록을 작성합니다.", "# 지침",
+                                java.util.List.of("document-create"), java.util.List.of("create_document"), null)));
+        when(documentService.findById("ws_1", "user_1", "doc_1"))
+                .thenReturn(document("note.md", "text/markdown", 7));
+        when(applyOperationStore.newOperationId()).thenReturn("op_apply_1");
+
+        service.turn("ws_1", "user_1", request);
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"pending_skill_proposal\":{\"scope_type\":\"personal\"")
+                .doesNotContain("requires_source");
     }
 
     @Test
@@ -586,7 +611,8 @@ class AgentTurnServiceTest {
                       "description": "회의록을 작성합니다.",
                       "instructions_markdown": "# 정확한 원문 지침",
                       "capabilities": ["document-create"],
-                      "allowed_tools": ["list_root_items", "list_folder_children", "create_document"]
+                      "allowed_tools": ["list_root_items", "list_folder_children", "create_document"],
+                      "requires_source": false
                     }
                   },
                   "editorSnapshot": {"markdown": "# 제목\\n본문"}
@@ -600,6 +626,7 @@ class AgentTurnServiceTest {
                 .isEqualTo("# 정확한 원문 지침");
         assertThat(request.conversationContext().pendingSkillProposal().capabilities())
                 .containsExactly("document-create");
+        assertThat(request.conversationContext().pendingSkillProposal().requiresSource()).isFalse();
     }
 
     @Test

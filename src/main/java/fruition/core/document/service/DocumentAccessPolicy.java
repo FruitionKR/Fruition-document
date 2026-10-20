@@ -82,6 +82,20 @@ public class DocumentAccessPolicy {
             return workspaceOwner || userId.equals(document.getUserId()) || EDIT.equals(access(document));
         }
 
+        /** 보기·편집 어느 쪽이든 읽을 수 있다. 알 수 없는 설정 값은 읽지 못하는 것으로 본다(fail-closed). */
+        public boolean canRead(Document document) {
+            return workspaceOwner || userId.equals(document.getUserId()) || readable(access(document));
+        }
+
+        /** 폴더 안 문서를 읽을 수 있는지. 판정은 {@link #canRead(Document)}와 같다. */
+        public boolean canReadFolder(UUID folderId) {
+            return workspaceOwner || readable(folderAccessOf(folderId));
+        }
+
+        private static boolean readable(String access) {
+            return EDIT.equals(access) || VIEW.equals(access);
+        }
+
         public boolean canDelete(Document document) {
             return workspaceOwner || userId.equals(document.getUserId());
         }

@@ -506,12 +506,17 @@ public class AgentTurnService {
             String description,
             @com.fasterxml.jackson.annotation.JsonProperty("instructions_markdown") String instructionsMarkdown,
             java.util.List<String> capabilities,
-            @com.fasterxml.jackson.annotation.JsonProperty("allowed_tools") java.util.List<String> allowedTools
+            @com.fasterxml.jackson.annotation.JsonProperty("allowed_tools") java.util.List<String> allowedTools,
+            // 생략(null)하면 키를 빼 AI가 판단하게 한다.
+            @com.fasterxml.jackson.annotation.JsonProperty("requires_source")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            Boolean requiresSource
     ) {
         static CommandPendingSkillProposal from(AgentTurnRequest.ConversationContext.PendingSkillProposal proposal) {
             return proposal == null ? null
                     : new CommandPendingSkillProposal(proposal.scopeType(), proposal.name(), proposal.description(),
-                    proposal.instructionsMarkdown(), proposal.capabilities(), proposal.allowedTools());
+                    proposal.instructionsMarkdown(), proposal.capabilities(), proposal.allowedTools(),
+                    proposal.requiresSource());
         }
     }
 
