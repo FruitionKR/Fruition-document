@@ -383,6 +383,63 @@ class AgentTurnServiceTest {
     }
 
     @Test
+    void turn_savesPendingChatPairBeforeRegisteringRunSoCancelRollbackKeepsIt() {
+        // 실행 등록(begin)이 켜는 복구 기록 밖에서 말풍선을 만들어야 취소 시 복구가 지우지 않고 취소로 닫을 수 있다.
+        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-6-luna", null, null);
+
+        var response = service.turn("ws_1", "user_1", request);
+
+        var order = org.mockito.Mockito.inOrder(chatTurnRecorder, outboxWriter);
+        order.verify(chatTurnRecorder).createPendingAgentPair(anyString(), anyString(), anyString(), anyString(),
+                anyString(), org.mockito.ArgumentMatchers.any(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.eq(response.requestId()));
+        order.verify(outboxWriter).begin(response.requestId(), "ws_1", "user_1", "agent");
+    }
+
+    @Test
+    void cancelTurn_requestsCancelAndReturnsCancellingStatus() {
+        String runId = "agent_00000000000000000000000000000001";
+        when(cancellation.requestAgentTurnCancel(runId, "ws_1", "user_1"))
+                .thenReturn(fruition.core.aitask.service.AiTaskCancellationService.AgentTurnCancel.REQUESTED);
+        when(cancellation.findStatus(runId, "ws_1", "user_1"))
+                .thenReturn(Optional.of(java.util.Map.of("status", "cancel_requested")));
+
+        var response = service.cancelTurn("ws_1", "user_1", runId);
+
+        verify(workspaceAccessGuard, org.mockito.Mockito.atLeastOnce()).requireMember("ws_1", "user_1");
+        assertThat(response.requestId()).isEqualTo(runId);
+        assertThat(response.status()).isEqualTo("cancel_requested");
+        verifyNoInteractions(statusRequester);
+    }
+
+    @Test
+    void cancelTurn_rejectsFinishedTurnWithConflict() {
+        String runId = "agent_00000000000000000000000000000001";
+        when(cancellation.requestAgentTurnCancel(runId, "ws_1", "user_1"))
+                .thenReturn(fruition.core.aitask.service.AiTaskCancellationService.AgentTurnCancel.FINISHED);
+
+        assertThatThrownBy(() -> service.cancelTurn("ws_1", "user_1", runId))
+                .isInstanceOf(fruition.core.agent.exception.AgentTurnAlreadyFinishedException.class);
+    }
+
+    @Test
+    void cancelTurn_unknownOrOthersTurnIsNotFound() {
+        String runId = "agent_00000000000000000000000000000001";
+        when(cancellation.requestAgentTurnCancel(runId, "ws_1", "user_1"))
+                .thenReturn(fruition.core.aitask.service.AiTaskCancellationService.AgentTurnCancel.NOT_FOUND);
+
+        assertThatThrownBy(() -> service.cancelTurn("ws_1", "user_1", runId))
+                .isInstanceOf(fruition.core.agent.exception.AgentRunNotFoundException.class);
+    }
+
+    @Test
+    void cancelTurn_rejectsMalformedRunIdBeforeTouchingCancellation() {
+        assertThatThrownBy(() -> service.cancelTurn("ws_1", "user_1", "../agent_x"))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+        verifyNoInteractions(cancellation);
+    }
+
+    @Test
     void turn_savesPendingChatPairAndCarriesMessageContextInCommand() {
         // 결과가 왔을 때 어느 말풍선을 채울지 알아야 하므로 ID를 command에 실어 되받는다.
         var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-6-luna", null, null);

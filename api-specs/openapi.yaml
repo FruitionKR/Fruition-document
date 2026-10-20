@@ -533,6 +533,52 @@ paths:
       summary: Agent turn 결과 조회
       tags:
       - Agent
+  /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel:
+    post:
+      description: "끝나지 않은 Agent turn을 취소합니다. 요청자 본인의 turn만 취소할 수 있습니다. 취소 요청이 확정되면 늦게 도착한 결과는 반영되지 않고, 세션의 처리 중 assistant 메시지는 status=cancelled로 닫힙니다. AI 중단·복구 확정은 비동기로 이어지며 응답의 status는 그 시점의 turn 상태(cancel_requested·rolling_back·cancelled, 복구 실패 시 rollback_failed)입니다. 이미 취소 중·취소된 turn에 다시 요청하면 현재 상태를 그대로 돌려줍니다."
+      operationId: cancelTurn
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - description: 취소할 Agent 실행 ID
+        in: path
+        name: run_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/AgentTurnResponse"
+          description: 취소 요청 접수 또는 이미 취소 중·취소됨
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Agent run ID 형식이 올바르지 않음(INVALID_REQUEST)
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: turn 또는 워크스페이스를 찾을 수 없음(AGENT_RUN_NOT_FOUND)
+        "409":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 이미 완료·실패로 끝난 turn(AGENT_TURN_ALREADY_FINISHED)
+      summary: Agent turn 취소
+      tags:
+      - Agent
   /api/workspaces/{workspace_id}/agent/turn/{run_id}/events:
     get:
       description: Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. 요청 확인·처리 유형 결정·편집안 작성 등 실제 처리 단계와 완료 이벤트를 전달합니다.

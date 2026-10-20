@@ -5,7 +5,7 @@
 사용자용 Agent 실행·승인과 내부 Tool 실행 API다. Agent turn은 Kafka `ai.agent.command`,
 계획 조회·승인·거절·취소·수정은 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 11
+- API 수: 12
 
 ## API 목차
 
@@ -18,6 +18,7 @@
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/revise`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-revise) | 현재 AgentRun에 새 계획을 요청합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/turn`](#summary-post-api-workspaces-workspace-id-agent-turn) | 사용자 요청을 비동기 Agent 실행 대기열에 등록합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/turn/{run_id}`](#summary-get-api-workspaces-workspace-id-agent-turn-run-id) | 워크스페이스의 Agent 실행 결과를 조회합니다. |
+| [`POST /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel`](#summary-post-api-workspaces-workspace-id-agent-turn-run-id-cancel) | 끝나지 않은 Agent turn을 취소합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/turn/{run_id}/events`](#summary-get-api-workspaces-workspace-id-agent-turn-run-id-events) | Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. |
 | [`POST /internal/agent/skill-execution/folder-sources/read`](#summary-post-internal-agent-skill-execution-folder-sources-read) | Skill 실행 원문으로 쓸 폴더 바로 아래 문서의 최신 본문을 반환합니다. |
 | [`POST /internal/agent/tools/execute/{tool_name}`](#summary-post-internal-agent-tools-execute-tool-name) | 승인된 Agent Tool 변경 작업을 실행합니다. |
@@ -854,6 +855,113 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-turn-run-id)
+
+</details>
+
+<a id="summary-post-api-workspaces-workspace-id-agent-turn-run-id-cancel"></a>
+### `POST /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 끝나지 않은 Agent turn을 취소합니다. |
+| 입력 | **Path** — `workspace_id`: `string`, `run_id`: `string` |
+| 출력 | `200` 취소 요청 접수 또는 이미 취소 중·취소됨 — `AgentTurnResponse` |
+| 조건 | 인증 필요<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다.<br>요청자 본인의 turn만 취소할 수 있다(결과 조회와 같은 범위). |
+| 주요 오류 | `400` Agent run ID 형식이 올바르지 않음(`INVALID_REQUEST`)<br>`404` turn 또는 워크스페이스를 찾을 수 없음(`AGENT_RUN_NOT_FOUND`)<br>`409` 이미 완료·실패로 끝난 turn(`AGENT_TURN_ALREADY_FINISHED`) |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-api-workspaces-workspace-id-agent-turn-run-id-cancel"></a>
+### `POST /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel` 상세
+
+#### 1. Method + Path
+
+`POST /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel`
+
+#### 2. 목적
+
+끝나지 않은 Agent turn(대기열에 있거나 AI가 처리 중인 turn)을 취소한다. 기존 AI 작업 취소 흐름
+(`ai_task_runs` → ai-svc `POST /internal/ai/tasks/{id}/cancel`)을 그대로 쓴다.
+
+- 취소 요청이 확정되는 순간(`cancel_requested`) 이후 도착한 결과·진행 이벤트는 반영되지 않는다.
+  상태 확인과 전이를 결과 반영과 같은 행 잠금 안에서 해 둘 중 하나만 이긴다.
+- 세션의 처리 중 assistant 메시지는 AI의 취소 확정을 기다리지 않고 바로 `status=cancelled`,
+  `error_message="Agent 작업이 취소되었습니다."`로 닫힌다. 메시지는 대화에 남지만 다음 turn 맥락에는 실리지 않는다.
+- AI 중단·복구 확정은 비동기로 이어진다. 응답의 `status`는 그 시점의 turn 상태다:
+  `cancel_requested` → `rolling_back` → `cancelled`(복구 실패 시 `rollback_failed`).
+  끝까지 기다리려면 `GET .../agent/turn/{run_id}`를 폴링하거나 `.../events`의 `query.cancelled` 종료 이벤트를 받는다.
+- 이미 취소 중·취소된 turn에 다시 요청하면 현재 상태를 그대로 돌려준다(멱등). `rollback_failed`면 취소를 다시 시도한다.
+- 대기열에 있던 turn은 AI가 command를 받기 전에 취소로 등록되어 실행되지 않는다. 처리 중인 turn은 다음 모델 호출 전
+  확인 지점에서 멈추고, 이미 진행 중인 모델 호출이 늦게 끝나도 결과를 남기지 않는다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| path | `run_id` | `string` | 예 | 취소할 Agent 실행 ID |
+
+- Body: 없음
+
+#### 5. Response body
+
+- HTTP `200`: 취소 요청 접수 또는 이미 취소 중·취소됨
+- Content-Type: `*/*` (`AgentTurnResponse`)
+
+```json
+{
+  "apply_operation_id": null,
+  "baseVersion": null,
+  "documentId": null,
+  "error": null,
+  "error_message": null,
+  "folder_id": null,
+  "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+  "result": null,
+  "status": "cancel_requested"
+}
+```
+
+#### 6. Error response
+
+| HTTP 상태 | 코드 | 설명 |
+|---|---|---|
+| `400` | `INVALID_REQUEST` | Agent run ID 형식이 올바르지 않음 |
+| `404` | `AGENT_RUN_NOT_FOUND` | turn이 없거나 다른 사용자의 turn, 또는 워크스페이스 멤버가 아님 |
+| `409` | `AGENT_TURN_ALREADY_FINISHED` | 결과가 이미 반영됐거나 실패로 끝난 turn |
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 인증된 사용자만 호출할 수 있다.
+- path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 요청자 본인의 turn만 취소한다. (`POST /api/workspaces/{workspace_id}/ai/tasks/{id}/cancel`은 OWNER가 다른 멤버 작업도 취소할 수 있다.)
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/turn/agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83/cancel" \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
+- 서비스: `AgentTurnService.cancelTurn` → `AiTaskCancellationService.requestAgentTurnCancel`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: cancelTurn`)
+- 하위 호출: ai-svc `POST /internal/ai/tasks/{id}/cancel`, `GET /internal/ai/tasks/{id}`, `POST /internal/ai/tasks/{id}/rollback-backend`
+
+[↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-agent-turn-run-id-cancel)
 
 </details>
 

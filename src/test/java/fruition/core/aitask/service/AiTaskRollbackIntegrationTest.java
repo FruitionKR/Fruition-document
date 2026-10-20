@@ -65,6 +65,85 @@ class AiTaskRollbackIntegrationTest {
     }
 
 
+    @Autowired AiTaskResultApplier applier;
+
+    @Test
+    void agentTurnCancelClosesPendingMessageRejectsLateResultAndKeepsConversation() throws Exception {
+        String id = "agent_" + UUID.randomUUID().toString().replace("-", "");
+        String workspace = "ws-" + id;
+        var command = mapper.createObjectNode().put("run_id", id).put("kind", "agent")
+                .put("workspace_id", workspace).put("user_id", "user");
+        jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, command) VALUES (?, ?, 'user', 'agent', CAST(? AS jsonb))",
+                id, workspace, command.toString());
+        jdbc.update("INSERT INTO chat_sessions(id, workspace_id, user_id, created_at, title) VALUES (?, ?, 'user', now(), '작업')", id, workspace);
+        // 말풍선은 실행 등록 전에 만들어 복구 기록에 없다(AgentTurnService.turn).
+        jdbc.update("INSERT INTO chat_messages(id, content, created_at, pair_id, role, status, session_id, run_id) "
+                + "VALUES (?, '', now(), 'pair', 'assistant', 'pending', ?, ?)", "assistant-" + id, id, id);
+        org.mockito.Mockito.when(pipeline.cancel(id, workspace, "user", command)).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "cancel_requested", null));
+
+        // 남의 turn은 없는 것과 같다.
+        assertThat(cancellation.requestAgentTurnCancel(id, workspace, "other"))
+                .isEqualTo(AiTaskCancellationService.AgentTurnCancel.NOT_FOUND);
+        assertThat(cancellation.requestAgentTurnCancel(id, workspace, "user"))
+                .isEqualTo(AiTaskCancellationService.AgentTurnCancel.REQUESTED);
+
+        // AI가 취소를 확정하기 전이라도 말풍선은 닫히고, 늦게 온 결과는 반영되지 않는다.
+        assertThat(jdbc.queryForMap("SELECT status, error_message FROM chat_messages WHERE id = ?", "assistant-" + id))
+                .containsEntry("status", "cancelled")
+                .containsEntry("error_message", "Agent 작업이 취소되었습니다.");
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, id))
+                .isEqualTo("rolling_back");
+        var late = mapper.createObjectNode().put("event_id", "agent:" + id + ":succeeded").put("run_id", id)
+                .put("kind", "agent").put("status", "succeeded");
+        assertThat(applier.applyAgent(late).applied()).isFalse();
+        // 다시 눌러도 같은 취소를 이어 갈 뿐이다.
+        assertThat(cancellation.requestAgentTurnCancel(id, workspace, "user"))
+                .isEqualTo(AiTaskCancellationService.AgentTurnCancel.REQUESTED);
+        org.mockito.Mockito.verify(pipeline, org.mockito.Mockito.times(1)).cancel(id, workspace, "user", command);
+
+        org.mockito.Mockito.when(pipeline.status(id, workspace, "user")).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "cancelled", null));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            for (long change : cancellation.changes(id, workspace, "user")) cancellation.undo(id, workspace, "user", change);
+            return null;
+        }).when(pipeline).rollbackBackend(id, workspace, "user", command);
+        cancellation.resume();
+
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, id)).isEqualTo("cancelled");
+        // 복구가 말풍선을 지우지 않아 대화에 취소로 남는다.
+        assertThat(jdbc.queryForObject("SELECT status FROM chat_messages WHERE id = ?", String.class, "assistant-" + id))
+                .isEqualTo("cancelled");
+    }
+
+    @Test
+    void agentTurnCancelRejectsFinishedTurnAndLeavesJournaledLegacyMessageToRollback() {
+        String done = "agent_" + UUID.randomUUID().toString().replace("-", "");
+        jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, status) VALUES (?, 'ws', 'user', 'agent', 'completed')", done);
+        assertThat(cancellation.requestAgentTurnCancel(done, "ws", "user"))
+                .isEqualTo(AiTaskCancellationService.AgentTurnCancel.FINISHED);
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, done)).isEqualTo("completed");
+
+        // 이 변경 전에 만든 turn은 말풍선이 복구 기록에 있다. 바꾸면 복구가 충돌하므로 복구가 지우게 둔다.
+        String legacy = "agent_" + UUID.randomUUID().toString().replace("-", "");
+        jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, command) VALUES (?, 'ws', 'user', 'agent', CAST(? AS jsonb))",
+                legacy, mapper.createObjectNode().put("run_id", legacy).put("kind", "agent")
+                        .put("workspace_id", "ws").put("user_id", "user").toString());
+        new TransactionTemplate(manager).executeWithoutResult(status -> {
+            jdbc.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, legacy);
+            jdbc.update("INSERT INTO chat_sessions(id, workspace_id, user_id, created_at, title) VALUES (?, 'ws', 'user', now(), '작업')", legacy);
+            jdbc.update("INSERT INTO chat_messages(id, content, created_at, pair_id, role, status, session_id, run_id) "
+                    + "VALUES (?, '', now(), 'pair', 'assistant', 'pending', ?, ?)", "assistant-" + legacy, legacy, legacy);
+        });
+        org.mockito.Mockito.when(pipeline.cancel(org.mockito.ArgumentMatchers.eq(legacy), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(legacy, "cancel_requested", null));
+        assertThat(cancellation.requestAgentTurnCancel(legacy, "ws", "user"))
+                .isEqualTo(AiTaskCancellationService.AgentTurnCancel.REQUESTED);
+        assertThat(jdbc.queryForObject("SELECT status FROM chat_messages WHERE id = ?", String.class, "assistant-" + legacy))
+                .isEqualTo("pending");
+    }
+
     @Test
     void ownerCanCancelAndReadAnotherMembersTaskButOtherMembersCannot() throws Exception {
         String id = "owner-cancel-" + UUID.randomUUID();

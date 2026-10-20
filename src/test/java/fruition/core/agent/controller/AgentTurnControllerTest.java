@@ -49,6 +49,43 @@ class AgentTurnControllerTest {
     @MockBean fruition.core.query.service.QueryEventBroker runEventBroker;
 
     @Test
+    void cancelTurn_returnsCurrentTurnStatus() throws Exception {
+        String runId = "agent_00000000000000000000000000000001";
+        when(agentTurnService.cancelTurn(WORKSPACE_ID, USER_ID, runId))
+                .thenReturn(new AgentTurnResponse(null, null, runId, null, "cancel_requested", null, null));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn/" + runId + "/cancel")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requestId").value(runId))
+                .andExpect(jsonPath("$.status").value("cancel_requested"));
+    }
+
+    @Test
+    void cancelTurn_finishedTurnReturnsConflict() throws Exception {
+        String runId = "agent_00000000000000000000000000000002";
+        when(agentTurnService.cancelTurn(WORKSPACE_ID, USER_ID, runId))
+                .thenThrow(new fruition.core.agent.exception.AgentTurnAlreadyFinishedException(runId));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn/" + runId + "/cancel")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("AGENT_TURN_ALREADY_FINISHED"));
+    }
+
+    @Test
+    void cancelTurn_unknownTurnReturnsNotFound() throws Exception {
+        String runId = "agent_00000000000000000000000000000003";
+        when(agentTurnService.cancelTurn(WORKSPACE_ID, USER_ID, runId))
+                .thenThrow(new AgentRunNotFoundException(runId));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn/" + runId + "/cancel")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("AGENT_RUN_NOT_FOUND"));
+    }
+
+    @Test
     void turn_authenticatedRequestReturnsPipelineResult() throws Exception {
         AgentTurnRequest request = request();
         AgentTurnResponse response = new AgentTurnResponse(

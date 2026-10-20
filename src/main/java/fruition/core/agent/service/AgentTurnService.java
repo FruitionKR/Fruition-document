@@ -6,6 +6,7 @@ import fruition.core.agent.dto.AgentTurnResponse;
 import fruition.core.agent.dto.AgentRunApproveRequest;
 import fruition.core.agent.dto.AgentRunReviseRequest;
 import fruition.core.agent.exception.AgentRunNotFoundException;
+import fruition.core.agent.exception.AgentTurnAlreadyFinishedException;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.core.agent.repository.AgentRunCommandRepository;
 import fruition.core.agent.repository.PipelineAgentRunStatusRequester;
@@ -116,14 +117,10 @@ public class AgentTurnService {
                 workspaceId, userId, request.skillDraftSources());
 
         String runId = "agent_" + UUID.randomUUID().toString().replace("-", "");
-        outboxWriter.begin(runId, workspaceId, userId, "agent");
-        // 편집안을 적용할 때 되돌려받을 표. source=agent 문자열 대신 이 값으로 AI 작업 여부를 가린다.
-        // 적용할 문서가 없으면 표도 만들지 않는다.
-        String applyOperationId = request.hasDocumentContext() ? applyOperationStore.newOperationId() : null;
-        runRepository.create(runId, workspaceId, userId, request.documentId(),
-                request.baseVersion(), applyOperationId, folderId);
         // 질의와 같은 방식으로 말풍선을 먼저 만들고 결과가 오면 채운다. command와 같은 트랜잭션이라
         // 발행에 실패하면 메시지도 남지 않는다.
+        // 실행 등록(begin) 전에 만들어 취소 복구 기록에 넣지 않는다. 취소하면 복구가 지우는 대신
+        // 말풍선을 취소로 닫아 대화에 남긴다(AiTaskCancellationService.requestAgentTurnCancel).
         AgentMessageContext messageContext = new AgentMessageContext(
                 UUID.randomUUID().toString(),
                 "chat_user_" + UUID.randomUUID(),
@@ -131,6 +128,12 @@ public class AgentTurnService {
         chatTurnRecorder.createPendingAgentPair(request.sessionId(), messageContext.pairId(),
                 messageContext.userMessageId(), messageContext.assistantMessageId(), request.message(),
                 java.time.Instant.now(), selectedModel.provider(), selectedModel.model(), runId);
+        outboxWriter.begin(runId, workspaceId, userId, "agent");
+        // 편집안을 적용할 때 되돌려받을 표. source=agent 문자열 대신 이 값으로 AI 작업 여부를 가린다.
+        // 적용할 문서가 없으면 표도 만들지 않는다.
+        String applyOperationId = request.hasDocumentContext() ? applyOperationStore.newOperationId() : null;
+        runRepository.create(runId, workspaceId, userId, request.documentId(),
+                request.baseVersion(), applyOperationId, folderId);
         // 질의와 같이 sessionId를 key로 쓴다. 두 갈래가 같은 세션에 쌓이고 세션 단위 누적 요약을
         // 함께 갱신하므로, 한 세션의 턴은 같은 파티션에서 보낸 순서대로 처리돼야 한다.
         outboxWriter.enqueue(runId, commandTopic, request.sessionId(),
@@ -238,6 +241,25 @@ public class AgentTurnService {
         return new AgentTurnResponse(core.documentId(), core.baseVersion(), core.runId(),
                 core.applyOperationId(), publicStatus(core.status()),
                 core.result(), core.error(), folderId);
+    }
+
+    /**
+     * 끝나지 않은 Agent turn을 취소한다. 조회와 같이 요청자 본인의 turn만 대상이다.
+     * 취소 요청이 확정되면 늦게 도착한 결과는 반영되지 않고 처리 중 말풍선은 바로 취소로 닫힌다.
+     * AI 쪽 중단·복구 확정은 기존 작업 취소 흐름이 이어서 처리하고, 응답은 그 시점의 turn 상태다
+     * (cancel_requested·rolling_back·cancelled 등).
+     */
+    public AgentTurnResponse cancelTurn(String workspaceId, String userId, String runId) {
+        workspaceAccessGuard.requireMember(workspaceId, userId);
+        if (!RUN_ID_PATTERN.matcher(runId).matches()) {
+            throw new InvalidAgentTurnRequestException("Agent run ID 형식이 올바르지 않습니다.");
+        }
+        switch (cancellation.requestAgentTurnCancel(runId, workspaceId, userId)) {
+            case NOT_FOUND -> throw new AgentRunNotFoundException(runId);
+            case FINISHED -> throw new AgentTurnAlreadyFinishedException(runId);
+            case REQUESTED -> { }
+        }
+        return get(workspaceId, userId, runId);
     }
 
     public JsonNode getRun(String workspaceId, String userId, String runId) {

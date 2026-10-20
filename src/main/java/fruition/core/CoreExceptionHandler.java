@@ -1,6 +1,7 @@
 package fruition.core;
 
 import fruition.core.agent.exception.AgentRunNotFoundException;
+import fruition.core.agent.exception.AgentTurnAlreadyFinishedException;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.core.agent.exception.PipelineAgentException;
 import fruition.core.ai.WorkspaceAiModelForbiddenException;
@@ -161,6 +162,13 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         logHandled(e, HttpStatus.NOT_FOUND, "AGENT_RUN_NOT_FOUND");
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("AGENT_RUN_NOT_FOUND", e.getMessage()));
+    }
+
+    @ExceptionHandler(AgentTurnAlreadyFinishedException.class)
+    public ResponseEntity<ErrorResponse> handleAgentTurnAlreadyFinished(AgentTurnAlreadyFinishedException e) {
+        logHandled(e, HttpStatus.CONFLICT, "AGENT_TURN_ALREADY_FINISHED");
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("AGENT_TURN_ALREADY_FINISHED", e.getMessage()));
     }
 
     @ExceptionHandler(PipelineWikiMaintenanceException.class)

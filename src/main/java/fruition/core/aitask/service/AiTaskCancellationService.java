@@ -96,9 +96,54 @@ public class AiTaskCancellationService {
             owned(id, workspaceId, taskUserId, true);
             jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
                     + "WHERE id = ? AND status NOT IN ('cancelled', 'rolling_back')", id);
+            cancelPendingAgentMessage(id);
         });
         advance(id);
         return status(id, workspaceId, userId);
+    }
+
+    /** Agent turn 취소 요청의 결과. */
+    public enum AgentTurnCancel { NOT_FOUND, FINISHED, REQUESTED }
+
+    /**
+     * 요청자 본인의 Agent turn을 끝나기 전에만 취소한다(결과 조회와 같은 소유 범위).
+     * 결과가 반영된(completed)·실패한(failed) turn은 건드리지 않는다. 상태 확인과 전이를 같은 행 잠금 안에서 해,
+     * 결과 반영({@code beginResult})과 겹쳐도 둘 중 하나만 이긴다. 취소가 이기면 늦게 온 결과는 반영되지 않는다.
+     * 이미 취소 중·취소된 turn은 다시 요청해도 그대로 둔다. AI 쪽 진행은 {@link #advance}·{@link #resume()}이 잇는다.
+     */
+    public AgentTurnCancel requestAgentTurnCancel(String id, String workspaceId, String userId) {
+        AgentTurnCancel outcome = transaction.execute(tx -> {
+            var states = jdbc.queryForList("SELECT status FROM ai_task_runs WHERE id = ? AND workspace_id = ? "
+                    + "AND user_id = ? AND kind = 'agent' FOR UPDATE", String.class, id, workspaceId, userId);
+            if (states.isEmpty()) return AgentTurnCancel.NOT_FOUND;
+            String status = states.getFirst();
+            if (List.of("completed", "failed").contains(status)) return AgentTurnCancel.FINISHED;
+            // rollback_failed는 기존 취소처럼 다시 요청해 재시도한다.
+            if (List.of("running", "rollback_failed").contains(status)) {
+                jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
+                        + "WHERE id = ?", id);
+            }
+            cancelPendingAgentMessage(id);
+            return AgentTurnCancel.REQUESTED;
+        });
+        if (outcome == AgentTurnCancel.REQUESTED) advance(id);
+        return outcome;
+    }
+
+    /**
+     * 취소를 요청한 Agent turn의 처리 중 말풍선을 취소로 닫는다. 취소 요청 뒤에는 결과가 반영되지 않으므로
+     * AI의 취소 확정을 기다리지 않고 바로 닫아 화면 잠금을 푼다.
+     * 복구 기록(ai_task_changes)에 남은 말풍선(이 변경 전에 만든 turn)은 복구가 지우므로 건드리지 않는다 —
+     * 여기서 바꾸면 복구가 "이후 변경과 충돌"로 실패한다.
+     */
+    private void cancelPendingAgentMessage(String id) {
+        jdbc.update("""
+                UPDATE chat_messages m SET status = 'cancelled', error_message = ?
+                WHERE m.run_id = ? AND m.role = 'assistant' AND m.status = 'pending'
+                  AND EXISTS (SELECT 1 FROM ai_task_runs r WHERE r.id = m.run_id AND r.kind = 'agent')
+                  AND NOT EXISTS (SELECT 1 FROM ai_task_changes c WHERE c.run_id = m.run_id
+                      AND c.table_name = 'chat_messages' AND NOT c.undone AND c.row_key->>'id' = m.id)
+                """, fruition.core.aitask.AiErrorMessages.agent("agent_turn_cancelled"), id);
     }
 
     /**
