@@ -140,16 +140,16 @@ public class DocumentItemAssembler {
         return document.getDocumentRole() == DocumentRole.EDITABLE ? "page" : "source_file";
     }
 
-    /**
-     * 마지막 ingest 스냅샷(content_hash)과 현재 편집본(current_content_hash)이 다르면 재분석이 필요하다.
-     * 스냅샷이 없는 문서(content_hash null)는 아직 한 번도 ingest되지 않은 것이므로 재분석 대상이다.
-     * 처리 중이면 이미 재분석이 진행 중이므로 제외한다. 실패(failed)는 기존 오류 표시가 담당한다.
-     */
     /** 진행 갱신이 이 시각보다 오래되면 멈춘 것으로 본다. 트리 지문도 같은 기준을 쓴다. */
     static Instant stalledBefore() {
         return Instant.now().minusSeconds(STALLED_THRESHOLD_SECONDS);
     }
 
+    /**
+     * 마지막 ingest 스냅샷(content_hash)과 현재 편집본(current_content_hash)이 다르면 재분석이 필요하다.
+     * 스냅샷이 없는 문서(content_hash null)는 아직 한 번도 ingest되지 않은 것이므로 재분석 대상이다.
+     * 처리 중이면 이미 재분석이 진행 중이므로 제외한다. 실패(failed)는 기존 오류 표시가 담당한다.
+     */
     static boolean needsReingest(Document document) {
         return document.getDocumentRole() == DocumentRole.EDITABLE
                 && document.getStatus() != DocumentStatus.processing
