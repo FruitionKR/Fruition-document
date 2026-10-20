@@ -84,6 +84,7 @@ public class SkillController {
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, "
                 + "수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), "
+                + "SKILL_CAPABILITIES_INVALID(허용되지 않는 capabilities 값 또는 조합), "
                 + "초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), "
                 + "SKILL_REQUEST_REJECTED(그 밖의 거절)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -194,6 +195,7 @@ public class SkillController {
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, "
                 + "수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), "
+                + "SKILL_CAPABILITIES_INVALID(허용되지 않는 capabilities 값 또는 조합), "
                 + "초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), "
                 + "SKILL_REQUEST_REJECTED(그 밖의 거절)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

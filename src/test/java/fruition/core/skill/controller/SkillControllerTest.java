@@ -219,6 +219,45 @@ class SkillControllerTest {
         org.mockito.Mockito.verifyNoInteractions(skillService);
     }
 
+    @Test
+    void update_forwardsCapabilitiesAndLeavesThemNullWhenOmitted() throws Exception {
+        when(skillService.update(eq(WORKSPACE_ID), eq(USER_ID), eq("skill_1"), any(SkillUpdateRequest.class), anyString()))
+                .thenReturn(objectMapper.readTree("{\"status\":\"published\"}"));
+        String base = "{\"name\":\"meeting-notes\",\"description\":\"회의록 작성\",\"instructions_markdown\":\"# 작성 절차\"";
+
+        for (String extra : List.of(",\"capabilities\":[\"document-edit\",\"document-create\"]", "")) {
+            mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                                    "/api/workspaces/" + WORKSPACE_ID + "/skills/skill_1")
+                            .header("Authorization", bearer())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(base + extra + "}"))
+                    .andExpect(status().isOk());
+        }
+
+        var captor = org.mockito.ArgumentCaptor.forClass(SkillUpdateRequest.class);
+        org.mockito.Mockito.verify(skillService, org.mockito.Mockito.times(2))
+                .update(eq(WORKSPACE_ID), eq(USER_ID), eq("skill_1"), captor.capture(), anyString());
+        assertThat(captor.getAllValues().get(0).capabilities()).containsExactly("document-edit", "document-create");
+        assertThat(captor.getAllValues().get(1).capabilities()).isNull();
+    }
+
+    @Test
+    void update_rejectsEmptyCapabilitiesLikePublish() throws Exception {
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/skills/author/publish")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(publishBody("").replace("[\"document-edit\"]", "[]")))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                                "/api/workspaces/" + WORKSPACE_ID + "/skills/skill_1")
+                        .header("Authorization", bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"meeting-notes\",\"description\":\"회의록 작성\","
+                                + "\"instructions_markdown\":\"# 작성 절차\",\"capabilities\":[]}"))
+                .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(skillService);
+    }
+
     private String publishBody(String extra) {
         return "{\"scope_type\":\"personal\",\"name\":\"meeting-notes\",\"description\":\"회의록 작성\","
                 + "\"instructions_markdown\":\"# 작성 절차\",\"capabilities\":[\"document-edit\"]" + extra + "}";

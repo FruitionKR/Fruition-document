@@ -4338,7 +4338,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, 수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), 초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), SKILL_REQUEST_REJECTED(그 밖의 거절)"
+          description: "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, 수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), SKILL_CAPABILITIES_INVALID(허용되지 않는 capabilities 값 또는 조합), 초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), SKILL_REQUEST_REJECTED(그 밖의 거절)"
         "402":
           content:
             '*/*':
@@ -4601,7 +4601,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, 수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), 초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), SKILL_REQUEST_REJECTED(그 밖의 거절)"
+          description: "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, 수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), SKILL_CAPABILITIES_INVALID(허용되지 않는 capabilities 값 또는 조합), 초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), SKILL_REQUEST_REJECTED(그 밖의 거절)"
         "402":
           content:
             '*/*':
@@ -9519,6 +9519,15 @@ components:
       type: object
       description: 이미 게시된 Skill의 내용 수정 요청. scope_type은 바꿀 수 없다.
       properties:
+        capabilities:
+          type: array
+          description: "Skill 종류를 바꿀 capability. 게시(publish)의 capabilities와 같은 값·조합 규칙을 쓴다(AI가 검증). 보내면 allowed_tools를 새 capabilities로 다시 계산하고, 생략(null)하면 키를 보내지 않아 기존 값을 유지한다."
+          example:
+          - document-edit
+          items:
+            type: string
+          maxItems: 2147483647
+          minItems: 1
         description:
           type: string
           description: Skill 설명(500자 이하)

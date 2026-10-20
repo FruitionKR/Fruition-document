@@ -40,5 +40,11 @@ public record SkillUpdateRequest(
         @JsonProperty("requires_source")
         @Schema(description = "원문 문서가 필요한 Skill인지 여부. 사용자가 명시한 값이다. 생략(null)하면 키를 보내지 않는다(기존 값 처리는 AI가 정함).",
                 nullable = true, example = "true")
-        Boolean requiresSource
+        Boolean requiresSource,
+
+        @Size(min = 1)
+        @Schema(description = "Skill 종류를 바꿀 capability. 게시(publish)의 capabilities와 같은 값·조합 규칙을 쓴다(AI가 검증). "
+                + "보내면 allowed_tools를 새 capabilities로 다시 계산하고, 생략(null)하면 키를 보내지 않아 기존 값을 유지한다.",
+                nullable = true, example = "[\"document-edit\"]")
+        List<String> capabilities
 ) {}

@@ -527,6 +527,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 |---|---|---|
 | `SKILL_RESULT_MODE_INVALID` | `result_mode`가 `capabilities`와 맞지 않음(`create`는 `document-create`, `edit`는 `document-edit`, `auto`는 둘 다 필요, 문서 Skill이 아니면 지정 불가). 수정에서 `result_mode`를 생략하면 기존 값을 이어받으므로, 새 `capabilities`와 기존 값이 어긋나도 이 code가 난다 | `invalid_result_mode` |
 | `SKILL_TARGETS_INVALID` | `targets` 중복이거나 문서 Skill(`document-create`/`document-edit`)이 아닌데 `targets` 지정 | `invalid_targets` |
+| `SKILL_CAPABILITIES_INVALID` | 허용되지 않는 `capabilities` 값 또는 조합(게시와 수정이 같은 규칙) | `invalid_capabilities` |
 | `SKILL_INTENT_AMBIGUOUS`, `SKILL_INTENT_UNSUPPORTED`, `SKILL_INSTRUCTION_INVALID` | 초안 작성(`POST /skills/author`)과 같음 | 같음 |
 | `SKILL_REQUEST_REJECTED` | 그 밖의 거절. AI가 사유 code를 주지 않거나 응답 형식이 다를 때 포함 | `skill_request_invalid`, 그 밖의 값 |
 
@@ -981,6 +982,9 @@ Skill의 정의를 수정합니다.
 
 ```json
 {
+  "capabilities": [
+    "document-edit"
+  ],
   "description": "string",
   "instructions_markdown": "string",
   "name": "meeting-notes",
@@ -994,6 +998,7 @@ Skill의 정의를 수정합니다.
 
 | 필드 | 필수 | 설명 |
 |---|---|---|
+| `capabilities` | 아니요 | Skill 종류. 게시와 같은 값·조합 규칙(검증은 ai-svc). 빈 배열은 `400`. 생략하거나 `null`이면 키를 보내지 않아 ai-svc가 기존 값을 이어받는다. 보내면 ai-svc가 `allowed_tools`를 새 값으로 다시 계산하고, 문서 Skill이 아니게 되면 `targets`·`result_mode`를 비운다(이때 함께 보낸 `targets`·`result_mode`는 `400 SKILL_TARGETS_INVALID`/`SKILL_RESULT_MODE_INVALID`). 허용되지 않는 값·조합은 `400 SKILL_CAPABILITIES_INVALID`. |
 | `targets` | 아니요 | 게시와 같은 값·검증. 생략하면 키를 보내지 않아 ai-svc가 기존 값을 유지한다. |
 | `result_mode` | 아니요 | 게시와 같은 값·검증. 생략하면 기존 값을 유지한다. |
 | `requires_source` | 아니요 | 게시와 같은 값. 생략하거나 `null`이면 키를 보내지 않으며, 기존 값 처리는 ai-svc가 정한다. |
@@ -1046,6 +1051,7 @@ Skill의 정의를 수정합니다.
 |---|---|---|
 | `SKILL_RESULT_MODE_INVALID` | `result_mode`가 `capabilities`와 맞지 않음(`create`는 `document-create`, `edit`는 `document-edit`, `auto`는 둘 다 필요, 문서 Skill이 아니면 지정 불가). 수정에서 `result_mode`를 생략하면 기존 값을 이어받으므로, 새 `capabilities`와 기존 값이 어긋나도 이 code가 난다 | `invalid_result_mode` |
 | `SKILL_TARGETS_INVALID` | `targets` 중복이거나 문서 Skill(`document-create`/`document-edit`)이 아닌데 `targets` 지정 | `invalid_targets` |
+| `SKILL_CAPABILITIES_INVALID` | 허용되지 않는 `capabilities` 값 또는 조합(게시와 수정이 같은 규칙) | `invalid_capabilities` |
 | `SKILL_INTENT_AMBIGUOUS`, `SKILL_INTENT_UNSUPPORTED`, `SKILL_INSTRUCTION_INVALID` | 초안 작성(`POST /skills/author`)과 같음 | 같음 |
 | `SKILL_REQUEST_REJECTED` | 그 밖의 거절. AI가 사유 code를 주지 않거나 응답 형식이 다를 때 포함 | `skill_request_invalid`, 그 밖의 값 |
 
