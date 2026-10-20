@@ -413,7 +413,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `SkillPublishRequest` |
 | 출력 | `200` 게시 성공 — `allowed_tools`, `capabilities`, `description`, `instructions_markdown`, `issues`, `name`, `question`, `scope_type`, … |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 Skill 정의 — `ErrorResponse`<br>`403` 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` 워크스페이스 또는 참조 문서를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 이름 또는 버전 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`413` 요청 본문이 너무 큼 — `JsonNode` / `ErrorResponse`<br>`422` Skill 요청 검증 실패 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 Skill 정의(`SKILL_RESULT_MODE_INVALID`, `SKILL_TARGETS_INVALID` 등) — `ErrorResponse`<br>`403` 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` 워크스페이스 또는 참조 문서를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 이름 또는 버전 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`413` 요청 본문이 너무 큼 — `JsonNode` / `ErrorResponse`<br>`422` Skill 요청 검증 실패 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -461,8 +461,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 |---|---|---|
 | `capabilities` | 예 | 1개 이상 |
 | `allowed_tools` | 아니요 | 생략하거나 `[]`이면 Backend가 ai-svc payload에서 키를 빼고, ai-svc가 `capabilities`의 canonical Tool 집합으로 계산한다. 보내면 지금처럼 ai-svc가 검증만 한다. 응답 `allowed_tools`는 확정된 값이다. 빈 문자열 항목은 `400 INVALID_REQUEST`. |
-| `targets` | 아니요 | 실행 대상 `current_document` \| `selection`, 최대 2개. 생략하면 키를 보내지 않고 ai-svc 기본값(`["current_document"]`)을 쓴다. 중복 검사는 ai-svc가 한다. |
-| `result_mode` | 아니요 | 결과 방식 `create`(새 문서) \| `edit`(현재 문서 수정) \| `auto`(상황에 맞게). `capabilities`와 맞는지는 ai-svc가 검증해 어긋나면 `400`. 생략하면 키를 보내지 않는다. |
+| `targets` | 아니요 | 실행 대상 `current_document` \| `selection`, 최대 2개. 생략하면 키를 보내지 않고 ai-svc 기본값(`["current_document"]`)을 쓴다. 중복 검사는 ai-svc가 하며, 중복이거나 문서 Skill이 아닌데 보내면 `400 SKILL_TARGETS_INVALID`. |
+| `result_mode` | 아니요 | 결과 방식 `create`(새 문서) \| `edit`(현재 문서 수정) \| `auto`(상황에 맞게). `capabilities`와 맞는지는 ai-svc가 검증해 어긋나면 `400 SKILL_RESULT_MODE_INVALID`. 생략하면 키를 보내지 않는다. |
 
 > `targets`·`result_mode` 저장·검증은 ai-svc가 맡는다(FruitionKR/Fruition-ai#115). 그 전의 ai-svc는 모르는 필드를 `422`로 거절하므로, 두 필드는 ai-svc 배포 뒤에 보낸다. 생략한 요청은 배포 순서와 관계없이 지금과 같다.
 >
@@ -510,6 +510,15 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 | `413` | 요청 본문이 너무 큼 | `없음` |
 | `422` | Skill 요청 검증 실패 | `ErrorResponse` |
 | `503` | llmPipeline 사용 불가 | `ErrorResponse` |
+
+`400`은 사유별 `code`로 반환합니다. `message`는 화면에 그대로 보여 줄 수 있는 한국어 문장입니다(ai-svc 영문 문장은 내보내지 않음).
+
+| code | 의미 | AI code |
+|---|---|---|
+| `SKILL_RESULT_MODE_INVALID` | `result_mode`가 `capabilities`와 맞지 않음(`create`는 `document-create`, `edit`는 `document-edit`, `auto`는 둘 다 필요, 문서 Skill이 아니면 지정 불가). 수정에서 `result_mode`를 생략하면 기존 값을 이어받으므로, 새 `capabilities`와 기존 값이 어긋나도 이 code가 난다 | `invalid_result_mode` |
+| `SKILL_TARGETS_INVALID` | `targets` 중복이거나 문서 Skill(`document-create`/`document-edit`)이 아닌데 `targets` 지정 | `invalid_targets` |
+| `SKILL_INTENT_AMBIGUOUS`, `SKILL_INTENT_UNSUPPORTED`, `SKILL_INSTRUCTION_INVALID` | 초안 작성(`POST /skills/author`)과 같음 | 같음 |
+| `SKILL_REQUEST_REJECTED` | 그 밖의 거절. AI가 사유 code를 주지 않거나 응답 형식이 다를 때 포함 | `skill_request_invalid`, 그 밖의 값 |
 
 ```json
 {
@@ -925,7 +934,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skills
 | 입력 | **Path** — `workspace_id`: `string`, `skill_id`: `string`<br>**Body** — `SkillUpdateRequest` |
 | 출력 | `200` 수정 성공 — `description`, `instructions_markdown`, `issues`, `name`, `question`, `scope_type`, `skill_id`, `skill_markdown`, … |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 Skill 정의 — `ErrorResponse`<br>`403` 대상이 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` Skill 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 이름 또는 버전 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`413` 요청 본문이 너무 큼 — `JsonNode` / `ErrorResponse`<br>`422` Skill 요청 검증 실패 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 Skill 정의(`SKILL_RESULT_MODE_INVALID`, `SKILL_TARGETS_INVALID` 등) — `ErrorResponse`<br>`403` 대상이 팀 Skill인데 `skill.author` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`) — `ErrorResponse`<br>`404` Skill 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Skill 이름 또는 버전 충돌 — `ErrorResponse`<br>`410` Skill이 더 이상 유효하지 않음 — `ErrorResponse`<br>`413` 요청 본문이 너무 큼 — `JsonNode` / `ErrorResponse`<br>`422` Skill 요청 검증 실패 — `ErrorResponse`<br>`503` llmPipeline 사용 불가 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1012,6 +1021,15 @@ Skill의 정의를 수정합니다.
 | `413` | 요청 본문이 너무 큼 | `없음` |
 | `422` | Skill 요청 검증 실패 | `ErrorResponse` |
 | `503` | llmPipeline 사용 불가 | `ErrorResponse` |
+
+`400`은 사유별 `code`로 반환합니다. `message`는 화면에 그대로 보여 줄 수 있는 한국어 문장입니다(ai-svc 영문 문장은 내보내지 않음).
+
+| code | 의미 | AI code |
+|---|---|---|
+| `SKILL_RESULT_MODE_INVALID` | `result_mode`가 `capabilities`와 맞지 않음(`create`는 `document-create`, `edit`는 `document-edit`, `auto`는 둘 다 필요, 문서 Skill이 아니면 지정 불가). 수정에서 `result_mode`를 생략하면 기존 값을 이어받으므로, 새 `capabilities`와 기존 값이 어긋나도 이 code가 난다 | `invalid_result_mode` |
+| `SKILL_TARGETS_INVALID` | `targets` 중복이거나 문서 Skill(`document-create`/`document-edit`)이 아닌데 `targets` 지정 | `invalid_targets` |
+| `SKILL_INTENT_AMBIGUOUS`, `SKILL_INTENT_UNSUPPORTED`, `SKILL_INSTRUCTION_INVALID` | 초안 작성(`POST /skills/author`)과 같음 | 같음 |
+| `SKILL_REQUEST_REJECTED` | 그 밖의 거절. AI가 사유 code를 주지 않거나 응답 형식이 다를 때 포함 | `skill_request_invalid`, 그 밖의 값 |
 
 ```json
 {

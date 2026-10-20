@@ -82,7 +82,10 @@ public class SkillController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "200", description = "게시 성공",
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
-        @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의",
+        @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, "
+                + "수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), "
+                + "초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), "
+                + "SKILL_REQUEST_REJECTED(그 밖의 거절)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -189,7 +192,10 @@ public class SkillController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "200", description = "수정 성공",
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
-        @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의",
+        @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, "
+                + "수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), "
+                + "초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), "
+                + "SKILL_REQUEST_REJECTED(그 밖의 거절)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

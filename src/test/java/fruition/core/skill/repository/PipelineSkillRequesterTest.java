@@ -325,6 +325,33 @@ class PipelineSkillRequesterTest {
     }
 
     @Test
+    void publishAndUpdate_mapExecutionOptionRejectionsToDedicatedCodes() {
+        java.util.Map<String, String> expected = java.util.Map.of(
+                "invalid_result_mode", "SKILL_RESULT_MODE_INVALID",
+                "invalid_targets", "SKILL_TARGETS_INVALID");
+        var aiModel = new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna");
+        responseStatus = 400;
+        expected.forEach((aiCode, code) -> {
+            responseBody = "{\"detail\":{\"code\":\"" + aiCode + "\",\"message\":\"result_mode edit does not match capabilities.\"}}";
+            var published = org.assertj.core.api.Assertions.catchThrowableOfType(
+                    fruition.core.skill.exception.PipelineSkillException.class,
+                    () -> requester().publish("ws_1", "user_1", new SkillPublishRequest("personal", "meeting-notes",
+                            "회의록 작성", "# 작성 절차", List.of("document-create"), List.of(), null, "edit"),
+                            aiModel, "run-publish-" + aiCode));
+            var updated = org.assertj.core.api.Assertions.catchThrowableOfType(
+                    fruition.core.skill.exception.PipelineSkillException.class,
+                    () -> requester().update("ws_1", "user_1", "skill_1",
+                            new SkillUpdateRequest("meeting-notes", "회의록 작성", "# 작성 절차", null, null),
+                            aiModel, "run-update-" + aiCode));
+            for (var exception : List.of(published, updated)) {
+                assertThat(exception.getHttpStatus()).as(aiCode).isEqualTo(400);
+                assertThat(exception.getCode()).as(aiCode).isEqualTo(code);
+                assertThat(exception.getMessage()).as(aiCode).doesNotContain("capabilities").matches(".*[가-힣].*");
+            }
+        });
+    }
+
+    @Test
     void author_keepsDefaultCodeForNonRejectionStatus() {
         responseStatus = 409;
         responseBody = "{\"detail\":{\"code\":\"intent_ambiguous\",\"message\":\"x\"}}";
