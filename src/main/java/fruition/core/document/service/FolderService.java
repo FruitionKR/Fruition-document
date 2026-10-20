@@ -22,6 +22,7 @@ import fruition.core.document.exception.TrashRetentionExpiredException;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.authz.WorkspacePermissions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -259,9 +260,12 @@ public class FolderService {
     @Transactional(readOnly = true)
     public String treeVersion(String workspaceId, String userId) {
         verifyMembership(workspaceId, userId);
-        // can_edit·can_delete가 역할과 문서 소유 여부에 따라 달라지므로 사용자·역할이 다르면 다른 버전이 되게 한다.
+        // can_edit·can_delete·can_convert가 역할·document.convert 권한·문서 소유 여부에 따라 달라지므로
+        // 사용자·역할·권한이 다르면 다른 버전이 되게 한다.
         return documentRepository.findTreeFingerprint(workspaceId, DocumentItemAssembler.stalledBefore())
-                + "-" + (workspaceAccessGuard.isOwner(workspaceId, userId) ? "o" : "m") + "-" + userId;
+                + "-" + (workspaceAccessGuard.isOwner(workspaceId, userId) ? "o" : "m")
+                + (workspaceAccessGuard.hasPermission(workspaceId, userId, WorkspacePermissions.DOCUMENT_CONVERT) ? "c" : "")
+                + "-" + userId;
     }
 
     @Transactional(readOnly = true)

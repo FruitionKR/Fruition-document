@@ -62,7 +62,7 @@ class SkillFolderSourceServiceTest {
         when(documentRepository.findChildDocuments("ws_1", FOLDER)).thenReturn(List.of(editable, viewOnly, hidden));
         // DB가 아직 허용하지 않는 값이라도 보기·편집이 아니면 읽지 못한다(fail-closed).
         when(documentAccessPolicy.viewer("ws_1", "user_1")).thenReturn(new DocumentAccessPolicy.Viewer(
-                "user_1", false, Map.of("doc_view", "view", "doc_hidden", "none"), Map.of(), Map.of()));
+                "user_1", false, false, Map.of("doc_view", "view", "doc_hidden", "none"), Map.of(), Map.of()));
         lenient().when(editStateRepository.findById(org.mockito.ArgumentMatchers.anyString()))
                 .thenAnswer(call -> Optional.of(new DocumentEditState(call.getArgument(0), "# 본문", "hash", 1)));
 
@@ -77,7 +77,7 @@ class SkillFolderSourceServiceTest {
         when(folderRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(FOLDER, "ws_1"))
                 .thenReturn(Optional.of(mock(Folder.class)));
         when(documentAccessPolicy.viewer("ws_1", "user_1")).thenReturn(new DocumentAccessPolicy.Viewer(
-                "user_1", false, Map.of(), Map.of(FOLDER, "none"), Map.of()));
+                "user_1", false, false, Map.of(), Map.of(FOLDER, "none"), Map.of()));
 
         assertThatThrownBy(() -> service.read("ws_1", "user_1", FOLDER.toString(), 20))
                 .isInstanceOf(SkillFolderSourceForbiddenException.class);
@@ -100,7 +100,7 @@ class SkillFolderSourceServiceTest {
         Document legacy = document("doc_legacy", Instant.parse("2026-01-01T00:00:00Z"));
         when(documentRepository.findChildDocuments("ws_1", FOLDER)).thenReturn(List.of(legacy));
         when(documentAccessPolicy.viewer("ws_1", "user_1")).thenReturn(new DocumentAccessPolicy.Viewer(
-                "user_1", false, Map.of(), Map.of(), Map.of()));
+                "user_1", false, false, Map.of(), Map.of(), Map.of()));
         doThrow(new RuntimeException("storage down")).when(editStateInitializer).initializeIfNeeded(legacy);
 
         var response = service.read("ws_1", "user_1", FOLDER.toString(), 20);

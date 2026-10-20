@@ -132,6 +132,11 @@ public record DocumentListResponse(
             @Schema(description = "현재 사용자가 삭제·휴지통 복구를 할 수 있는지. 문서 소유자와 OWNER만 true다.", example = "false")
             boolean canDelete,
 
+            @JsonProperty("can_convert")
+            @Schema(description = "현재 사용자가 이 문서를 PDF Markdown 변환(POST .../convert-markdown)할 수 있는지. 원본 파일이 있는 PDF이고 업로더 본인이거나 document.convert 권한자(OWNER 포함)면 true다. Markdown 등 변환 대상이 아닌 문서는 false다.",
+                    example = "false")
+            boolean canConvert,
+
             @JsonProperty("permission")
             @JsonInclude(JsonInclude.Include.ALWAYS)
             @Schema(description = "이 문서에 직접 건 권한 설정(edit | view). null이면 상위 폴더 설정 또는 기본값(edit)을 따른다.",

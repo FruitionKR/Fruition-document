@@ -105,6 +105,8 @@
   저장소 객체를 읽어 채우므로 그 전까지 `null`이다. 원본 객체가 없어 계산할 수 없는 문서도 `null`이다.
   (`content_hash`는 직접 업로드에서 저장소 ETag 기반 값이라 로컬 파일 해시와 비교할 수 없다.)
 - `ai_origin`·`last_ai_change`: 문서가 AI 결과물인지 나타낸다. [AI 출처 표시](README.md#ai-출처-표시)
+- `can_edit`·`can_delete`·`can_convert`: 현재 사용자가 편집·삭제·PDF Markdown 변환을 할 수 있는지. [공동 편집 권한](README.md#공동-편집-권한)
+  권한 설정과 사용자의 역할·`document.convert` 권한은 요청마다 한 번만 읽는다(문서마다 조회하지 않음).
 
 #### 6. Error response
 
@@ -990,6 +992,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 ```
 
 - `ai_origin`·`last_ai_change`: 목록과 같다. [AI 출처 표시](README.md#ai-출처-표시)
+- `can_edit`·`can_delete`·`can_convert`: 목록과 같다. [공동 편집 권한](README.md#공동-편집-권한)
 
 #### 6. Error response
 

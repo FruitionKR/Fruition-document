@@ -56,7 +56,6 @@ import fruition.core.document.dto.DocumentBlocksResponse;
 import fruition.core.document.dto.DocumentWikiPageRef;
 import fruition.core.document.domain.DocumentConvertQueue;
 import fruition.core.document.exception.DocumentConvertException;
-import fruition.core.document.exception.InvalidDocumentConvertRequestException;
 import fruition.core.document.repository.ConvertCommandOutbox;
 import fruition.core.document.repository.DocumentConvertBatchStore;
 import fruition.core.document.repository.DocumentConvertQueueRepository;
@@ -73,7 +72,6 @@ import fruition.core.aihistory.service.OperationRecorder;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.authz.WorkspaceAccessGuard;
-import fruition.core.authz.WorkspacePermissionRequiredException;
 import fruition.core.authz.WorkspacePermissions;
 import fruition.core.authz.WorkspaceSettingsClient;
 import io.minio.GetObjectArgs;
@@ -1000,17 +998,8 @@ public class DocumentService {
         validateIdempotencyKey(idempotencyKey);
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        if (!isPdf(source)) {
-            throw new InvalidDocumentConvertRequestException("PDF 원본 문서만 Markdown으로 변환할 수 있습니다.");
-        }
-        if (source.getSourceUri() == null) {
-            throw new InvalidDocumentConvertRequestException("원본 파일이 없는 문서는 변환할 수 없습니다.");
-        }
-        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다.
-        if (!userId.equals(source.getUserId())
-                && !workspaceAccessGuard.hasPermission(workspaceId, userId, WorkspacePermissions.DOCUMENT_CONVERT)) {
-            throw new WorkspacePermissionRequiredException(WorkspacePermissions.DOCUMENT_CONVERT);
-        }
+        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다. 목록의 can_convert와 같은 판정이다.
+        documentAccessPolicy.requireConvert(source, userId);
 
         String endpointScope = convertEndpointScope(workspaceId);
         String requestHash = requestHash(documentId, "convert-markdown", "");
@@ -1064,7 +1053,7 @@ public class DocumentService {
         verifyWorkspaceOwnership(workspaceId, userId);
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        if (!"aws".equals(storageProps.getCredentialsMode()) || !isPdf(document)) return null;
+        if (!"aws".equals(storageProps.getCredentialsMode()) || !DocumentAccessPolicy.isPdf(document)) return null;
         try {
             return minioClient.getPresignedObjectUrl(io.minio.GetPresignedObjectUrlArgs.builder()
                     .bucket(storageProps.getBucket()).object(normalizeObjectKey(document.getSourceUri()))
@@ -1073,11 +1062,6 @@ public class DocumentService {
                             "response-content-disposition", "inline"))
                     .build());
         } catch (Exception e) { throw new DocumentConvertException("원본 읽기 URL 발급 실패", e); }
-    }
-
-    private boolean isPdf(Document document) {
-        return "application/pdf".equals(document.getMimeType())
-                || document.getNormalizedFilename().endsWith(".pdf");
     }
 
     private String convertEndpointScope(String workspaceId) {
@@ -1625,6 +1609,7 @@ public class DocumentService {
                 doc.getFolderId(),
                 viewer.canEdit(doc),
                 viewer.canDelete(doc),
+                viewer.canConvert(doc),
                 viewer.override(doc),
                 doc.getUpdatedBy(),
                 doc.getAiOrigin(),

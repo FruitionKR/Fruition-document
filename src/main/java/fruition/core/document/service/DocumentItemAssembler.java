@@ -105,6 +105,7 @@ public class DocumentItemAssembler {
                 fileSha256Of(doc),
                 viewer.canEdit(doc),
                 viewer.canDelete(doc),
+                viewer.canConvert(doc),
                 viewer.override(doc),
                 doc.getUpdatedBy(),
                 doc.getAiOrigin(),
