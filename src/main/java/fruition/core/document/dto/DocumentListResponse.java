@@ -105,9 +105,12 @@ public record DocumentListResponse(
             @Schema(description = "마지막 변경 시각(ISO-8601 UTC)", example = "2026-08-13T04:25:24.371948Z")
             Instant updatedAt,
 
-            /** 마지막 ingest 이후 편집본이 바뀌어 재분석이 필요한지 (편집 가능 문서만 true 가능) */
+            /** 최신 편집본이 위키(마지막 ingest 스냅샷)에 반영돼 있지 않은지. 한 번도 편입하지 않은 편집 가능 문서도 true */
             @JsonProperty("needs_reingest")
-            @Schema(description = "마지막 ingest 이후 편집본이 바뀌어 재분석이 필요한지 여부. 편집 가능 문서만 true가 될 수 있다.",
+            @Schema(description = "최신 편집본이 위키(마지막 ingest 스냅샷)에 반영돼 있지 않으면 true. "
+                    + "한 번도 편입하지 않은 편집 가능 문서(직접 만든 노트·복제본, content_hash 없음)도 true다. "
+                    + "'편입 후 수정됨'과 '아직 편입 안 됨'은 pipeline_run_id 유무로 구분한다(convert: run은 변환이라 편입 아님). "
+                    + "편집 가능 문서만 true가 될 수 있고, 처리 중(processing)이면 false다.",
                     example = "false")
             boolean needsReingest,
 

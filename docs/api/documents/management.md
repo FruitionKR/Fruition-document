@@ -104,6 +104,9 @@
   편집 문서는 현재 본문(UTF-8)의 해시다. 대용량 직접 업로드 직후나 이 필드 도입 전에 올린 원본은 백그라운드 작업이
   저장소 객체를 읽어 채우므로 그 전까지 `null`이다. 원본 객체가 없어 계산할 수 없는 문서도 `null`이다.
   (`content_hash`는 직접 업로드에서 저장소 ETag 기반 값이라 로컬 파일 해시와 비교할 수 없다.)
+- `needs_reingest`: 최신 편집본이 위키(마지막 ingest 스냅샷)에 반영돼 있지 않으면 `true`. 한 번도 편입하지 않은 편집 가능 문서
+  (직접 만든 노트·복제본, `content_hash` 없음)도 `true`다. "편입 후 수정됨"과 "아직 편입 안 됨"은 `pipeline_run_id` 유무로
+  구분한다(`convert:` run은 변환이라 편입이 아니다). 편집 가능 문서만 `true`가 될 수 있고, 처리 중(`processing`)이면 `false`다.
 - `ai_origin`·`last_ai_change`: 문서가 AI 결과물인지 나타낸다. [AI 출처 표시](README.md#ai-출처-표시)
 - `can_edit`·`can_delete`·`can_convert`: 현재 사용자가 편집·삭제·PDF Markdown 변환을 할 수 있는지. [공동 편집 권한](README.md#공동-편집-권한)
   권한 설정과 사용자의 역할·`document.convert` 권한은 요청마다 한 번만 읽는다(문서마다 조회하지 않음).

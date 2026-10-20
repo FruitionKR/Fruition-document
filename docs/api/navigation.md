@@ -898,6 +898,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folde
   `GET /api/workspaces/{workspace_id}/documents` 항목과 같다.
 
 - 문서 항목은 `GET .../documents` 목록과 같은 `DocumentItem`이다. `file_sha256`으로 데스크톱 앱이 로컬 파일과 서버 문서를 짝짓는다.
+- `document.needs_reingest`: 최신 편집본이 위키에 반영돼 있지 않으면 `true`이며, 한 번도 편입하지 않은 편집 가능 문서도 `true`다.
+  둘은 `pipeline_run_id` 유무로 구분한다(`convert:` run은 편입 아님). 자세한 뜻은 [문서 목록](documents/management.md#detail-get-api-workspaces-workspace-id-documents)의 `needs_reingest` 설명을 따른다.
 
 #### 6. Error response
 
