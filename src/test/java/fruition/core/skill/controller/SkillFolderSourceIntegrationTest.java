@@ -19,7 +19,6 @@ import java.util.UUID;
 
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -90,14 +89,17 @@ class SkillFolderSourceIntegrationTest {
     }
 
     @Test
-    void returnsNullMarkdownWhenNoSavedBodyExists() throws Exception {
+    void skipsDocumentsWithoutBodyAndFillsLimitWithNext() throws Exception {
         UUID folder = insertFolder(workspace, null);
-        String document = insertDocument(folder, "EDITABLE", "2026-01-01T00:00:00Z", null);
+        insertDocument(folder, "EDITABLE", "2026-01-03T00:00:00Z", null);
+        String newer = insertDocument(folder, "EDITABLE", "2026-01-02T00:00:00Z", "# 최근");
+        String older = insertDocument(folder, "EDITABLE", "2026-01-01T00:00:00Z", "# 이전");
 
-        read(member, folder.toString(), 20)
+        read(member, folder.toString(), 2)
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].document_id").value(document))
-                .andExpect(jsonPath("$.items[0].markdown").value(nullValue()));
+                .andExpect(jsonPath("$.total_documents").value(2))
+                .andExpect(jsonPath("$.items[*].document_id").value(contains(newer, older)))
+                .andExpect(jsonPath("$.items[*].markdown").value(contains("# 최근", "# 이전")));
     }
 
     @Test

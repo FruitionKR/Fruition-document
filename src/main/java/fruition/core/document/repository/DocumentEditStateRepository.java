@@ -7,8 +7,14 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 
 public interface DocumentEditStateRepository extends JpaRepository<DocumentEditState, String> {
+
+    /** 주어진 문서 중 편집 상태가 있는 문서 ID. 본문을 읽지 않고 존재 여부만 본다. */
+    @Query("SELECT s.documentId FROM DocumentEditState s WHERE s.documentId IN :documentIds")
+    List<String> findExistingDocumentIds(@Param("documentIds") Collection<String> documentIds);
 
     @Modifying
     @Query(value = """

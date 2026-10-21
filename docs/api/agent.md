@@ -1136,11 +1136,11 @@ string
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `total_documents` | `integer` | 읽을 수 있는 대상 전체 수(`max_documents`로 자르기 전) |
+| `total_documents` | `integer` | 읽을 수 있고 본문이 있는 대상 전체 수(`max_documents`로 자르기 전). 본문이 없는 문서는 세지 않는다 |
 | `items[].document_id` | `string` | 문서 ID |
 | `items[].display_name` | `string` | 문서 표시 이름 |
 | `items[].updated_at` | `string(date-time)` | 문서 마지막 수정 시각(ISO-8601, UTC) |
-| `items[].markdown` | `string \| null` | 저장된 최신 본문(`document_edit_states`). 편집 상태가 없고 저장소 본문으로 만들지도 못하면 `null` |
+| `items[].markdown` | `string` | 저장된 최신 본문(`document_edit_states`). 편집 상태가 없는 예전 문서는 저장소 본문으로 만들어 싣는다 |
 
 ```json
 {
@@ -1156,7 +1156,7 @@ string
       "document_id": "doc_a",
       "display_name": "주간 회의 10월 2주",
       "updated_at": "2026-10-13T01:00:00Z",
-      "markdown": null
+      "markdown": "# 주간 회의\n\n- 공유 사항 ..."
     }
   ]
 }
@@ -1164,6 +1164,9 @@ string
 
 - 대상: `folder_id` **바로 아래** 문서만(하위 폴더 안 문서는 제외). 삭제되지 않은 `EDITABLE`(Markdown 편집 가능) 문서만이며,
   업로드 원본(`ORIGINAL`)과 스킬 참고 문서(`origin=skill_reference`)는 뺀다.
+- 본문: 편집 상태가 있거나 저장소 본문(`source_uri`)으로 만들 수 있는 문서만 대상이다. 싣는 도중 저장소 본문을 만들지 못한
+  문서는 건너뛰고 다음 문서로 `max_documents`를 채우며, 그 문서는 `total_documents`에서도 뺀다. `max_documents` 뒤라서
+  싣지 않은 예전 문서는 본문을 만들지 않고 `source_uri`가 있으면 센다.
 - 정렬: `updated_at` 내림차순, 같으면 `document_id` 오름차순. 앞에서 `max_documents`개를 싣는다.
 
 #### 6. Error response
