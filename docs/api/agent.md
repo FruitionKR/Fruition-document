@@ -928,6 +928,8 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 }
 ```
 
+- 취소 중 응답(`cancel_requested`·`rolling_back`·`rollback_failed`·`cancelled`)도 `folder_id`는 턴을 만들 때 지정한 대상 폴더다(지정하지 않았으면 `null`).
+
 #### 6. Error response
 
 | HTTP 상태 | 코드 | 설명 |

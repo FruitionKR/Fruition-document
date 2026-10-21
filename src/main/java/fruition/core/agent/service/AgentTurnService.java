@@ -218,14 +218,15 @@ public class AgentTurnService {
         }
         var cancelling = cancellation.findStatus(runId, workspaceId, userId)
                 .filter(row -> Set.of("cancel_requested", "rolling_back", "rollback_failed", "cancelled").contains(row.get("status")));
-        if (cancelling.isPresent()) {
-            var row = cancelling.get();
-            return new AgentTurnResponse(null, null, runId, null, (String) row.get("status"), null, (String) row.get("error_code"));
-        }
-        var aiRun = statusRequester.find(workspaceId, userId, runId);
-        // 대상 폴더는 document만 기록하므로 AI 상태로 답할 때도 projection에서 읽는다.
+        // 대상 폴더는 document만 기록하므로 취소·AI 상태로 답할 때도 projection에서 읽는다.
         var projection = runRepository.find(workspaceId, userId, runId);
         String folderId = projection.map(AgentRunCommandRepository.RunView::folderId).orElse(null);
+        if (cancelling.isPresent()) {
+            var row = cancelling.get();
+            return new AgentTurnResponse(null, null, runId, null, (String) row.get("status"), null,
+                    (String) row.get("error_code"), folderId);
+        }
+        var aiRun = statusRequester.find(workspaceId, userId, runId);
         if (aiRun.isPresent()) {
             var run = aiRun.get();
             if ("completed".equals(run.status()) && projection.isPresent()) {

@@ -403,12 +403,17 @@ class AgentTurnServiceTest {
                 .thenReturn(fruition.core.aitask.service.AiTaskCancellationService.AgentTurnCancel.REQUESTED);
         when(cancellation.findStatus(runId, "ws_1", "user_1"))
                 .thenReturn(Optional.of(java.util.Map.of("status", "cancel_requested")));
+        when(runRepository.find("ws_1", "user_1", runId)).thenReturn(Optional.of(
+                new AgentRunCommandRepository.RunView(runId, "doc_1", 1L, "op_1", "queued", null, null,
+                        "11111111-1111-1111-1111-111111111111")));
 
         var response = service.cancelTurn("ws_1", "user_1", runId);
 
         verify(workspaceAccessGuard, org.mockito.Mockito.atLeastOnce()).requireMember("ws_1", "user_1");
         assertThat(response.requestId()).isEqualTo(runId);
         assertThat(response.status()).isEqualTo("cancel_requested");
+        // 취소 중 응답에도 요청한 대상 폴더가 실린다.
+        assertThat(response.folderId()).isEqualTo("11111111-1111-1111-1111-111111111111");
         verifyNoInteractions(statusRequester);
     }
 
