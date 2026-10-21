@@ -112,6 +112,9 @@ class DocumentServiceConvertTest {
 
     @BeforeEach
     void setUp() {
+        // DocumentAccessPolicy.viewer가 역할·권한을 한 번에 읽는다. 기본은 권한 항목 없는 MEMBER.
+        org.mockito.Mockito.lenient().when(workspaceAccessGuard.access(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new fruition.core.authz.WorkspaceAccessGuard.Access("MEMBER", java.util.List.of()));
         accessPolicy = new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate);
         org.mockito.Mockito.lenient().when(applyOperationStore.authorizeSave(anyString(), anyString(), anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.active(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
@@ -261,8 +264,11 @@ class DocumentServiceConvertTest {
 
         for (int i = 0; i < cases.size(); i++) {
             Case c = cases.get(i);
-            when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "document.convert"))
+            // 업로더 본인처럼 변환 요청이 권한을 묻지 않는 경우도 있어 lenient로 둔다.
+            lenient().when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "document.convert"))
                     .thenReturn(c.convertPermission());
+            when(workspaceAccessGuard.access(WORKSPACE_ID, USER_ID)).thenReturn(new fruition.core.authz.WorkspaceAccessGuard.Access(
+                    "MEMBER", c.convertPermission() ? java.util.List.of("document.convert") : java.util.List.of()));
             when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
                     .thenReturn(Optional.of(c.document()));
 

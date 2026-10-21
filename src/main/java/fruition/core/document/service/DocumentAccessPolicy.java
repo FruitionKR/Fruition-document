@@ -55,8 +55,9 @@ public class DocumentAccessPolicy {
                     rs -> { parents.put(rs.getObject("id", UUID.class), rs.getObject("parent_folder_id", UUID.class)); },
                     workspaceId);
         }
-        return new Viewer(userId, workspaceAccessGuard.isOwner(workspaceId, userId),
-                workspaceAccessGuard.hasPermission(workspaceId, userId, WorkspacePermissions.DOCUMENT_CONVERT),
+        // 소유자 여부와 변환 권한을 한 번 읽은 역할·권한으로 함께 판정한다.
+        WorkspaceAccessGuard.Access access = workspaceAccessGuard.access(workspaceId, userId);
+        return new Viewer(userId, access.isOwner(), access.hasPermission(WorkspacePermissions.DOCUMENT_CONVERT),
                 documentAccess, folderAccess, parents);
     }
 
