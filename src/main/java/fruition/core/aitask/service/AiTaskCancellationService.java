@@ -94,8 +94,7 @@ public class AiTaskCancellationService {
         String taskUserId = taskOwner(id, workspaceId, userId);
         transaction.executeWithoutResult(tx -> {
             owned(id, workspaceId, taskUserId, true);
-            jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
-                    + "WHERE id = ? AND status NOT IN ('cancelled', 'rolling_back')", id);
+            requestCancel(id);
             cancelPendingAgentMessage(id);
         });
         advance(id);
@@ -120,8 +119,7 @@ public class AiTaskCancellationService {
             if (List.of("completed", "failed").contains(status)) return AgentTurnCancel.FINISHED;
             // rollback_failed는 기존 취소처럼 다시 요청해 재시도한다.
             if (List.of("running", "rollback_failed").contains(status)) {
-                jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
-                        + "WHERE id = ?", id);
+                requestCancel(id);
             }
             cancelPendingAgentMessage(id);
             return AgentTurnCancel.REQUESTED;
@@ -149,6 +147,7 @@ public class AiTaskCancellationService {
     /**
      * 시스템이 자기 작업(만료·취소한 회의록 등)의 취소를 요청한다. 소유자·멤버십을 보지 않고 상태만 바꾸며,
      * 파이프라인 호출은 하지 않는다. {@link #resume()}이 이어서 진행한다. 호출자 트랜잭션 안에서 쓸 수 있다.
+     * 사용자 취소({@link #cancel})·Agent turn 취소도 권한·상태 확인 뒤 같은 전이로 이 메서드를 쓴다.
      */
     public void requestCancel(String id) {
         jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
