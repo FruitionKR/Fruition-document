@@ -26,7 +26,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * 폴더 바로 아래(하위 폴더 제외) Markdown 편집 문서 중 사용자가 읽을 수 있고 본문이 있는 문서의 최신 본문을 돌려준다.
+ * 폴더 바로 아래(하위 폴더 제외) Markdown 편집 문서 중 사용자가 읽을 수 있고 본문이 비어 있지 않은 문서의 최신 본문을 돌려준다.
  * 문서별 읽기 권한은 {@link DocumentAccessPolicy}로 판정한다.
  */
 @Service
@@ -75,7 +75,7 @@ public class SkillFolderSourceService {
                 .toList();
         int limit = Math.max(MIN_DOCUMENTS, Math.min(MAX_DOCUMENTS, maxDocuments));
         List<Document> withBody = withBody(readable);
-        // 본문을 만들지 못한 문서는 건너뛰고 다음 문서로 limit을 채운다. 건너뛴 문서는 전체 수에서도 뺀다.
+        // 본문을 만들지 못했거나 비어 있는(공백뿐인) 문서는 건너뛰고 다음 문서로 limit을 채운다. 건너뛴 문서는 전체 수에서도 뺀다.
         List<SkillFolderSourceReadResponse.Item> items = new ArrayList<>();
         int skipped = 0;
         for (Document document : withBody) {
@@ -83,7 +83,7 @@ public class SkillFolderSourceService {
                 break;
             }
             String markdown = markdown(document);
-            if (markdown == null) {
+            if (markdown == null || markdown.isBlank()) {
                 skipped++;
                 continue;
             }

@@ -103,6 +103,21 @@ class SkillFolderSourceIntegrationTest {
     }
 
     @Test
+    void skipsBlankBodiesAndExcludesThemFromTotal() throws Exception {
+        UUID folder = insertFolder(workspace, null);
+        insertDocument(folder, "EDITABLE", "2026-01-04T00:00:00Z", "");
+        insertDocument(folder, "EDITABLE", "2026-01-03T00:00:00Z", "  \n\t\n");
+        String newer = insertDocument(folder, "EDITABLE", "2026-01-02T00:00:00Z", "# 최근");
+        insertDocument(folder, "EDITABLE", "2026-01-01T00:00:00Z", "# 이전");
+
+        // 빈 본문은 AI가 버리므로 싣지도 세지도 않는다. limit 밖에 남은 본문 있는 문서는 전체 수에 든다.
+        read(member, folder.toString(), 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total_documents").value(2))
+                .andExpect(jsonPath("$.items[*].document_id").value(contains(newer)));
+    }
+
+    @Test
     void viewOnlyDocumentsAreStillReadable() throws Exception {
         UUID folder = insertFolder(workspace, null);
         String viewOnly = insertDocument(folder, "EDITABLE", "2026-01-02T00:00:00Z", "# 보기 전용");
