@@ -24,6 +24,10 @@
 - 읽기만 필요한 동작(상세·본문·버전 목록·diff 조회, 복제)은 멤버면 할 수 있다. 복제본은 복제한 사람 소유다.
 - **삭제와 휴지통 복구는 문서 소유자와 OWNER만** 한다.
 - 목록·트리·상세 응답의 `can_edit`, `can_delete`로 화면이 읽기 전용 여부를 정하고, `permission`은 문서에 직접 건 설정(없으면 `null`), `updated_by`는 마지막으로 본문을 저장한 사용자다.
+- `can_convert`는 그 문서로 [PDF Markdown 변환](../ai.md#detail-post-api-workspaces-workspace-id-documents-document-id-convert-markdown)을
+  요청하면 받아들여지는지다. 변환 API와 같은 판정 코드를 쓴다: 삭제되지 않은 PDF(`mime_type`이 `application/pdf`이거나 파일명이 `.pdf`)이고
+  원본 파일(`source_uri`)이 있으며, 업로더 본인이거나 `document.convert` 권한자(OWNER는 항상 가짐)면 `true`다.
+  Markdown 등 변환 대상이 아닌 문서는 `false`. 이미 변환한 적이 있는지는 보지 않는다(변환 API도 다시 변환을 허용한다).
 
 ### AI 출처 표시
 
@@ -60,7 +64,7 @@
 | `PUT /api/workspaces/{workspace_id}/folders/{folder_id}/permission` | OWNER | 같은 형식. 폴더 안 문서와 하위 폴더가 따른다 |
 
 오류: `400` access 값이 잘못됨, `403` 바꿀 권한 없음(`DOCUMENT_WRITE_FORBIDDEN`), `404` 문서·폴더 없음.
-권한 설정이 바뀌면 문서 트리의 ETag도 바뀐다. 진입점: `src/main/java/fruition/core/document/controller/DocumentPermissionController.java`, 판정: `DocumentAccessPolicy.java`.
+권한 설정이 바뀌면 문서 트리의 ETag도 바뀐다. 설정해 둔 값은 문서 트리의 항목마다 `permission`(폴더·문서 모두, 미설정이면 `null`)으로, 문서는 `document.permission`으로도 내려간다. 진입점: `src/main/java/fruition/core/document/controller/DocumentPermissionController.java`, 판정: `DocumentAccessPolicy.java`.
 
 ## 편집 충돌 (deprecated)
 

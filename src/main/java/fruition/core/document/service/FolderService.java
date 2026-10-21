@@ -22,6 +22,7 @@ import fruition.core.document.exception.TrashRetentionExpiredException;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
+import fruition.core.authz.WorkspacePermissions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -259,9 +260,12 @@ public class FolderService {
     @Transactional(readOnly = true)
     public String treeVersion(String workspaceId, String userId) {
         verifyMembership(workspaceId, userId);
-        // can_edit·can_delete가 역할과 문서 소유 여부에 따라 달라지므로 사용자·역할이 다르면 다른 버전이 되게 한다.
+        // can_edit·can_delete·can_convert가 역할·document.convert 권한·문서 소유 여부에 따라 달라지므로
+        // 사용자·역할·권한이 다르면 다른 버전이 되게 한다.
         return documentRepository.findTreeFingerprint(workspaceId, DocumentItemAssembler.stalledBefore())
-                + "-" + (workspaceAccessGuard.isOwner(workspaceId, userId) ? "o" : "m") + "-" + userId;
+                + "-" + (workspaceAccessGuard.isOwner(workspaceId, userId) ? "o" : "m")
+                + (workspaceAccessGuard.hasPermission(workspaceId, userId, WorkspacePermissions.DOCUMENT_CONVERT) ? "c" : "")
+                + "-" + userId;
     }
 
     @Transactional(readOnly = true)
@@ -280,13 +284,15 @@ public class FolderService {
             documentsByFolder.computeIfAbsent(document.getFolderId(), ignored -> new ArrayList<>())
                     .add(document);
         }
+        // 권한 설정은 문서·폴더 것을 한 번에 읽어 문서 항목과 폴더 항목이 함께 쓴다. 폴더마다 읽으면 N+1이 된다.
+        DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
         // 화면이 계층과 문서 상태를 함께 쓰므로 목록 조회와 같은 항목을 실어 보낸다.
-        Map<String, DocumentListResponse.DocumentItem> itemsById = documentItemAssembler.assemble(workspaceId, userId, documents)
+        Map<String, DocumentListResponse.DocumentItem> itemsById = documentItemAssembler.assemble(viewer, documents)
                 .stream()
                 .collect(Collectors.toMap(DocumentListResponse.DocumentItem::id, item -> item));
 
         return new DocumentTreeResponse(
-                buildTreeItems(null, foldersByParent, documentsByFolder, itemsById, new HashSet<>()));
+                buildTreeItems(null, foldersByParent, documentsByFolder, itemsById, viewer, new HashSet<>()));
     }
 
     private List<DocumentTreeResponse.Item> buildTreeItems(
@@ -294,6 +300,7 @@ public class FolderService {
             Map<UUID, List<Folder>> foldersByParent,
             Map<UUID, List<Document>> documentsByFolder,
             Map<String, DocumentListResponse.DocumentItem> itemsById,
+            DocumentAccessPolicy.Viewer viewer,
             Set<UUID> ancestorFolderIds
     ) {
         List<DocumentTreeResponse.Item> items = new ArrayList<>();
@@ -308,7 +315,8 @@ public class FolderService {
                     folder.getName(),
                     folder.getSortOrder(),
                     folder.getCurrentVersion(),
-                    buildTreeItems(folder.getId(), foldersByParent, documentsByFolder, itemsById, nextAncestors)
+                    viewer.folderOverride(folder.getId()),
+                    buildTreeItems(folder.getId(), foldersByParent, documentsByFolder, itemsById, viewer, nextAncestors)
             ));
         }
         for (Document document : documentsByFolder.getOrDefault(parentFolderId, List.of())) {

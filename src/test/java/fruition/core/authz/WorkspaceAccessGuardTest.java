@@ -128,6 +128,30 @@ class WorkspaceAccessGuardTest {
     }
 
     @Test
+    void access_returnsOwnerAndPermissionVerdictsFromOneFetch() {
+        server.expect(org.springframework.test.web.client.ExpectedCount.once(), requestTo(ROLE_URL)).andRespond(withSuccess(
+                "{\"role\":\"MEMBER\",\"permissions\":[\"document.convert\"]}", MediaType.APPLICATION_JSON));
+
+        WorkspaceAccessGuard.Access access = guard.access(WS, USER);
+
+        assertThat(access.isOwner()).isFalse();
+        assertThat(access.hasPermission("document.convert")).isTrue();
+        assertThat(access.hasPermission("wiki.ingest")).isFalse();
+        server.verify();
+    }
+
+    @Test
+    void access_ownerHasEveryPermissionAndNoneHasNone() {
+        redisData.put(KEY, "{\"role\":\"OWNER\",\"permissions\":[]}");
+        assertThat(guard.access(WS, USER).isOwner()).isTrue();
+        assertThat(guard.access(WS, USER).hasPermission("document.convert")).isTrue();
+
+        redisData.put(KEY, "{\"role\":\"NONE\",\"permissions\":[\"document.convert\"]}");
+        assertThat(guard.access(WS, USER).hasPermission("document.convert")).isFalse();
+        server.verify();
+    }
+
+    @Test
     void requirePermission_roleAndPermissionsComeFromOneFetch() {
         server.expect(org.springframework.test.web.client.ExpectedCount.once(), requestTo(ROLE_URL)).andRespond(withSuccess(
                 "{\"role\":\"MEMBER\",\"permissions\":[\"skill.author\"]}", MediaType.APPLICATION_JSON));

@@ -141,7 +141,7 @@ public class SpeechController {
     private static byte[] readLimited(InputStream input) throws IOException {
         byte[] audio = input.readNBytes(MAX_AUDIO_BYTES + 1);
         if (audio.length > MAX_AUDIO_BYTES) {
-            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "음성 파일은 24 MiB 이하로 보내주세요.");
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "음성 파일은 24MB 이하로 보내주세요.");
         }
         return audio;
     }

@@ -127,7 +127,7 @@ class MeetingRecordingIntegrationTest {
         MeetingRecordingService.requireSize(MeetingRecordingService.MAX_BYTES, MeetingRecordingService.MAX_BYTES);
         assertThatThrownBy(() -> MeetingRecordingService.requireSize(0, 0)).hasMessageContaining("비어");
         assertThatThrownBy(() -> MeetingRecordingService.requireSize(MeetingRecordingService.MAX_BYTES + 1,
-                MeetingRecordingService.MAX_BYTES + 1)).hasMessageContaining("500 MiB");
+                MeetingRecordingService.MAX_BYTES + 1)).hasMessageContaining("500MB");
         assertThatThrownBy(() -> MeetingRecordingService.requireSize(4, 5)).hasMessageContaining("크기");
     }
 
@@ -222,7 +222,7 @@ class MeetingRecordingIntegrationTest {
                 "provider_unavailable", "일시적인 문제",
                 "deadline_exceeded", "너무 오래",
                 "cancelled", "취소",
-                "internal_error", "전사하지 못했습니다");
+                "internal_error", "글로 옮기지 못했습니다");
         for (var entry : expected.entrySet()) {
             String meetingId = createMeeting("upload");
             uploadRecording(meetingId, "audio/wav", new byte[]{1}, 202);
@@ -307,7 +307,7 @@ class MeetingRecordingIntegrationTest {
 
         mockMvc.perform(post(base() + "/" + meetingId + "/transcription/cancel").header("Authorization", bearer()))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("failed"))
-                .andExpect(jsonPath("$.error").value("전사를 취소했습니다. 녹음을 다시 올려 주세요."));
+                .andExpect(jsonPath("$.error").value("글로 옮기기를 취소했습니다. 녹음을 다시 올려 주세요."));
         verify(pipelineCancellation).cancel(eq(runId), eq(workspaceId), eq(userId), any());
         assertThat(runStatus(runId)).isEqualTo("cancel_requested");
         mockMvc.perform(post(base() + "/" + meetingId + "/transcription/cancel").header("Authorization", bearer()))

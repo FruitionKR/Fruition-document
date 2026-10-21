@@ -36,6 +36,12 @@ public record DocumentTreeResponse(
             @Schema(description = "하위 항목이 있는지 여부", example = "true")
             boolean hasChildren,
 
+            @JsonProperty("permission")
+            @Schema(description = "이 항목에 직접 건 권한 설정(edit | view). null이면 상위 폴더 설정 또는 기본값(edit)을 따른다. "
+                    + "폴더는 폴더 권한 설정 API로 건 값, 문서는 document.permission과 같은 값이다.",
+                    nullable = true, allowableValues = {"edit", "view"})
+            String permission,
+
             @JsonInclude(JsonInclude.Include.NON_NULL)
             @Schema(description = "하위 항목. 문서 항목에는 키 자체가 없다.")
             List<Item> children,
@@ -50,14 +56,17 @@ public record DocumentTreeResponse(
                 String name,
                 long sortOrder,
                 long currentVersion,
+                String permission,
                 List<Item> children
         ) {
-            return new Item("folder", id, name, sortOrder, currentVersion, !children.isEmpty(), children, null);
+            return new Item("folder", id, name, sortOrder, currentVersion, !children.isEmpty(), permission,
+                    children, null);
         }
 
         public static Item document(String id, String name, long sortOrder, long currentVersion,
                                     DocumentListResponse.DocumentItem document) {
-            return new Item("document", id, name, sortOrder, currentVersion, false, null, document);
+            return new Item("document", id, name, sortOrder, currentVersion, false, document.permission(),
+                    null, document);
         }
     }
 }

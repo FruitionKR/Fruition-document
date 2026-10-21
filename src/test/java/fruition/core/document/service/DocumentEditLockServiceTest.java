@@ -47,6 +47,9 @@ class DocumentEditLockServiceTest {
     @Mock AccessUserClient accessUserClient;
 
     private DocumentEditLockService service() {
+        // DocumentAccessPolicy.viewer가 역할·권한을 한 번에 읽는다. 기본은 권한 항목 없는 MEMBER.
+        org.mockito.Mockito.lenient().when(workspaceAccessGuard.access(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new fruition.core.authz.WorkspaceAccessGuard.Access("MEMBER", java.util.List.of()));
         return new DocumentEditLockService(lockRepository, documentRepository,
                 workspaceAccessGuard, accessUserClient, new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate), 45, Clock.fixed(NOW, ZoneOffset.UTC));
     }

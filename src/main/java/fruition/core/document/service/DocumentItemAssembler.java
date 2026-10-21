@@ -45,7 +45,11 @@ public class DocumentItemAssembler {
 
     /** 편집 상태·권한 설정·AI 변경은 한 번에 읽는다. 문서마다 조회하면 N+1이 된다. */
     public List<DocumentListResponse.DocumentItem> assemble(String workspaceId, String userId, List<Document> documents) {
-        DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
+        return assemble(documentAccessPolicy.viewer(workspaceId, userId), documents);
+    }
+
+    /** 권한 설정을 이미 읽은 호출자(문서 트리는 폴더 권한도 함께 쓴다)가 같은 Viewer를 넘겨 다시 읽지 않게 한다. */
+    public List<DocumentListResponse.DocumentItem> assemble(DocumentAccessPolicy.Viewer viewer, List<Document> documents) {
         List<String> documentIds = documents.stream().map(Document::getId).toList();
         Set<String> editableDocumentIds = editStateRepository.findAllById(documentIds).stream()
                 .map(DocumentEditState::getDocumentId)
@@ -101,6 +105,7 @@ public class DocumentItemAssembler {
                 fileSha256Of(doc),
                 viewer.canEdit(doc),
                 viewer.canDelete(doc),
+                viewer.canConvert(doc),
                 viewer.override(doc),
                 doc.getUpdatedBy(),
                 doc.getAiOrigin(),
@@ -136,16 +141,16 @@ public class DocumentItemAssembler {
         return document.getDocumentRole() == DocumentRole.EDITABLE ? "page" : "source_file";
     }
 
-    /**
-     * 마지막 ingest 스냅샷(content_hash)과 현재 편집본(current_content_hash)이 다르면 재분석이 필요하다.
-     * 스냅샷이 없는 문서(content_hash null)는 아직 한 번도 ingest되지 않은 것이므로 재분석 대상이다.
-     * 처리 중이면 이미 재분석이 진행 중이므로 제외한다. 실패(failed)는 기존 오류 표시가 담당한다.
-     */
     /** 진행 갱신이 이 시각보다 오래되면 멈춘 것으로 본다. 트리 지문도 같은 기준을 쓴다. */
     static Instant stalledBefore() {
         return Instant.now().minusSeconds(STALLED_THRESHOLD_SECONDS);
     }
 
+    /**
+     * 마지막 ingest 스냅샷(content_hash)과 현재 편집본(current_content_hash)이 다르면 재분석이 필요하다.
+     * 스냅샷이 없는 문서(content_hash null)는 아직 한 번도 ingest되지 않은 것이므로 재분석 대상이다.
+     * 처리 중이면 이미 재분석이 진행 중이므로 제외한다. 실패(failed)는 기존 오류 표시가 담당한다.
+     */
     static boolean needsReingest(Document document) {
         return document.getDocumentRole() == DocumentRole.EDITABLE
                 && document.getStatus() != DocumentStatus.processing

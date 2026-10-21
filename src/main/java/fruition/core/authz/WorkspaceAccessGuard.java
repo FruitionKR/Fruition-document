@@ -91,11 +91,15 @@ public class WorkspaceAccessGuard {
      * 역할과 권한을 한 번의 캐시 조회(또는 내부 API 호출)로 읽는다.
      */
     public boolean hasPermission(String workspaceId, String userId, String permission) {
-        Access access = resolve(workspaceId, userId);
-        if (ROLE_OWNER.equals(access.role())) {
-            return true;
-        }
-        return !ROLE_NONE.equals(access.role()) && access.permissions().contains(permission);
+        return resolve(workspaceId, userId).hasPermission(permission);
+    }
+
+    /**
+     * 역할과 권한 항목을 한 번의 캐시 조회(또는 내부 API 호출)로 읽어 돌려준다. 한 요청에서 소유자 여부와
+     * 권한 항목을 함께 판정할 때 {@link #isOwner}·{@link #hasPermission}을 따로 불러 두 번 읽지 않도록 쓴다.
+     */
+    public Access access(String workspaceId, String userId) {
+        return resolve(workspaceId, userId);
     }
 
     /** 멤버가 아니면 404(WorkspaceNotFoundException), 멤버인데 항목이 없으면 403으로 거절한다. */
@@ -174,7 +178,18 @@ public class WorkspaceAccessGuard {
         }
     }
 
-    private record Access(String role, List<String> permissions) {}
+    /** 역할(OWNER | MEMBER | NONE)과 부여된 권한 항목. */
+    public record Access(String role, List<String> permissions) {
+
+        public boolean isOwner() {
+            return ROLE_OWNER.equals(role);
+        }
+
+        /** OWNER는 항상 true, NONE은 false, MEMBER는 부여된 항목만 true. */
+        public boolean hasPermission(String permission) {
+            return isOwner() || (!ROLE_NONE.equals(role) && permissions.contains(permission));
+        }
+    }
 
     record RoleResponse(String role, List<String> permissions) {}
 }

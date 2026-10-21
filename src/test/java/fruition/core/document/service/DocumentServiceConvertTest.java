@@ -103,6 +103,7 @@ class DocumentServiceConvertTest {
     @Mock fruition.core.authz.WorkspaceSettingsClient workspaceSettingsClient;
 
     DocumentService documentService;
+    DocumentAccessPolicy accessPolicy;
 
     private final fruition.core.document.repository.AiCommandOutboxWriter taskWriter =
             org.mockito.Mockito.mock(fruition.core.document.repository.AiCommandOutboxWriter.class);
@@ -111,7 +112,10 @@ class DocumentServiceConvertTest {
 
     @BeforeEach
     void setUp() {
-        DocumentAccessPolicy accessPolicy = new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate);
+        // DocumentAccessPolicy.viewer가 역할·권한을 한 번에 읽는다. 기본은 권한 항목 없는 MEMBER.
+        org.mockito.Mockito.lenient().when(workspaceAccessGuard.access(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new fruition.core.authz.WorkspaceAccessGuard.Access("MEMBER", java.util.List.of()));
+        accessPolicy = new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate);
         org.mockito.Mockito.lenient().when(applyOperationStore.authorizeSave(anyString(), anyString(), anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.active(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.join(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
@@ -237,6 +241,49 @@ class DocumentServiceConvertTest {
 
         assertThat(response.status()).isEqualTo(DocumentStatus.processing);
         verify(convertQueueRepository).save(any());
+    }
+
+    @Test
+    @DisplayName("목록의 can_convert는 변환 요청이 받아들여지는지와 항상 같다")
+    void canConvert_matchesConvertEndpoint() {
+        stubOwnedWorkspace();
+        lenient().when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.EDITABLE)).thenReturn(0L);
+        String sourceKey = "sources/documents/" + SOURCE_DOCUMENT_ID + "/original";
+        record Case(String name, Document document, boolean convertPermission, boolean expected) {}
+        java.util.List<Case> cases = java.util.List.of(
+                new Case("업로더 본인", new Document(SOURCE_DOCUMENT_ID, WORKSPACE_ID, USER_ID, "보고서.pdf",
+                        "application/pdf", 1L, sourceKey, "h"), false, true),
+                new Case("권한 없는 타인", new Document(SOURCE_DOCUMENT_ID, WORKSPACE_ID, "user_other", "보고서.pdf",
+                        "application/pdf", 1L, sourceKey, "h"), false, false),
+                new Case("document.convert 권한자(OWNER 포함)", new Document(SOURCE_DOCUMENT_ID, WORKSPACE_ID,
+                        "user_other", "보고서.pdf", "application/pdf", 1L, sourceKey, "h"), true, true),
+                new Case("Markdown 문서", new Document(SOURCE_DOCUMENT_ID, WORKSPACE_ID, USER_ID, "메모.md",
+                        "text/markdown", 1L, sourceKey, "h"), true, false),
+                new Case("원본 파일 없는 PDF", new Document(SOURCE_DOCUMENT_ID, WORKSPACE_ID, USER_ID, "보고서.pdf",
+                        "application/pdf", 1L, null, "h"), true, false));
+
+        for (int i = 0; i < cases.size(); i++) {
+            Case c = cases.get(i);
+            // 업로더 본인처럼 변환 요청이 권한을 묻지 않는 경우도 있어 lenient로 둔다.
+            lenient().when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "document.convert"))
+                    .thenReturn(c.convertPermission());
+            when(workspaceAccessGuard.access(WORKSPACE_ID, USER_ID)).thenReturn(new fruition.core.authz.WorkspaceAccessGuard.Access(
+                    "MEMBER", c.convertPermission() ? java.util.List.of("document.convert") : java.util.List.of()));
+            when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                    .thenReturn(Optional.of(c.document()));
+
+            boolean listed = accessPolicy.viewer(WORKSPACE_ID, USER_ID).canConvert(c.document());
+            boolean accepted;
+            try {
+                documentService.convertToMarkdown(WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key-" + i);
+                accepted = true;
+            } catch (InvalidDocumentConvertRequestException | fruition.core.authz.WorkspacePermissionRequiredException e) {
+                accepted = false;
+            }
+
+            assertThat(listed).as(c.name()).isEqualTo(c.expected());
+            assertThat(accepted).as(c.name()).isEqualTo(listed);
+        }
     }
 
     @Test

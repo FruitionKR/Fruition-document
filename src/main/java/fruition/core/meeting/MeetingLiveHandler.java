@@ -60,7 +60,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                 .stream().mapToLong(b -> b.text().length()).sum();
     }
 
-    private static final String LIMIT_MESSAGE = "회의 전사 한도에 닿았습니다. 지금까지의 전사로 회의록을 만들거나 새 회의를 시작해 주세요.";
+    private static final String LIMIT_MESSAGE = "글로 옮길 수 있는 분량을 다 채웠습니다. 지금까지의 대화 내용으로 회의록을 만들거나 새 회의를 시작해 주세요.";
     private static final Duration SEND_TIMEOUT = Duration.ofSeconds(5);
     private static final Pattern SEGMENT_ID = Pattern.compile("[A-Za-z0-9_-]{1,128}");
     private static final Set<String> COMMANDS = Set.of("commit", "finish");
@@ -159,7 +159,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                 .filter(meeting -> "live".equals(meeting.source()) && "open".equals(meeting.status()))
                 .isPresent();
         if (!open) {
-            fail(live, "meeting_not_open", "실시간 받아쓰기를 시작할 수 없는 회의입니다.", CloseStatus.POLICY_VIOLATION);
+            fail(live, "meeting_not_open", "실시간 회의 녹음을 시작할 수 없는 회의입니다.", CloseStatus.POLICY_VIOLATION);
             return;
         }
         long[] totals = repository.totals(ticket.meetingId());
@@ -189,7 +189,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                 .whenComplete((upstream, error) -> {
                     if (error != null) {
                         log.warn("[회의 실시간 전사 연결 실패] meetingId={}", ticket.meetingId(), error);
-                        fail(live, "transcription_failed", "전사를 시작하지 못했습니다. 다시 연결해 주세요.",
+                        fail(live, "transcription_failed", "글로 옮기기를 시작하지 못했습니다. 다시 연결해 주세요.",
                                 CloseStatus.SERVER_ERROR);
                     } else if (live.closing.get()) {
                         upstream.abort();  // 연결되는 사이에 브라우저가 떠났다
@@ -291,7 +291,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         } catch (TimeoutException e) {
             fail(live, "backpressure", "음성 전송이 밀리고 있습니다. 다시 연결해 주세요.", CloseStatus.SERVER_ERROR);
         } catch (Exception e) {
-            fail(live, "transcription_failed", "전사가 중단됐습니다. 다시 연결해 주세요.", CloseStatus.SERVER_ERROR);
+            fail(live, "transcription_failed", "글로 옮기기가 중단됐습니다. 다시 연결해 주세요.", CloseStatus.SERVER_ERROR);
         }
     }
 
@@ -320,7 +320,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                     handle(live, objectMapper.readTree(raw));
                 } catch (Exception e) {
                     log.warn("[회의 전사 저장 실패] meetingId={}", live.ticket.meetingId(), e);
-                    fail(live, "transcript_save_failed", "전사를 저장하지 못했습니다. 다시 연결해 주세요.",
+                    fail(live, "transcript_save_failed", "대화 내용을 저장하지 못했습니다. 다시 연결해 주세요.",
                             CloseStatus.SERVER_ERROR);
                 }
             }
@@ -341,7 +341,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
 
         private void upstreamGone() {
             if (!live.closing.get()) {
-                fail(live, "transcription_failed", "전사가 중단됐습니다. 다시 연결해 주세요.", CloseStatus.SERVER_ERROR);
+                fail(live, "transcription_failed", "글로 옮기기가 중단됐습니다. 다시 연결해 주세요.", CloseStatus.SERVER_ERROR);
             }
         }
     }
@@ -398,7 +398,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                 live.closing.set(true);
                 live.browser.close(CloseStatus.NORMAL);
             }
-            case "error" -> fail(live, "transcription_failed", "전사가 중단됐습니다. 다시 연결해 주세요.",
+            case "error" -> fail(live, "transcription_failed", "글로 옮기기가 중단됐습니다. 다시 연결해 주세요.",
                     CloseStatus.SERVER_ERROR);
             default -> log.debug("[회의 전사] 알 수 없는 ai-svc 이벤트 무시: {}", event.path("type").asText());
         }

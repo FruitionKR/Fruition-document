@@ -56,7 +56,6 @@ import fruition.core.document.dto.DocumentBlocksResponse;
 import fruition.core.document.dto.DocumentWikiPageRef;
 import fruition.core.document.domain.DocumentConvertQueue;
 import fruition.core.document.exception.DocumentConvertException;
-import fruition.core.document.exception.InvalidDocumentConvertRequestException;
 import fruition.core.document.repository.ConvertCommandOutbox;
 import fruition.core.document.repository.DocumentConvertBatchStore;
 import fruition.core.document.repository.DocumentConvertQueueRepository;
@@ -73,7 +72,6 @@ import fruition.core.aihistory.service.OperationRecorder;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.authz.WorkspaceAccessGuard;
-import fruition.core.authz.WorkspacePermissionRequiredException;
 import fruition.core.authz.WorkspacePermissions;
 import fruition.core.authz.WorkspaceSettingsClient;
 import io.minio.GetObjectArgs;
@@ -119,7 +117,7 @@ public class DocumentService {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
     private static final String INITIAL_NOTE_FILENAME = "새 노트.md";
-    private static final String CONVERT_PLACEHOLDER_MARKDOWN = "PDF 변환 중...\n";
+    private static final String CONVERT_PLACEHOLDER_MARKDOWN = Document.CONVERT_PLACEHOLDER_MARKDOWN;
     // 크기 상한을 넘은 변환 이미지 자리 표시. 정규식·치환 특수 문자가 없는 값이어야 한다.
     private static final String OVERSIZED_CONVERTED_IMAGE = "fruition-oversized-converted-image";
     private static final String PDF_MIME_TYPE = "application/pdf";
@@ -827,6 +825,10 @@ public class DocumentService {
     /** 목록에서 채팅에서 온 문서임을 알리는 이름 접두사. */
     private static final String CHAT_EXPORT_NAME_PREFIX = "[채팅] ";
 
+    /** 이름 앞에 이미 붙어 있는 접두사({@code [채팅]}, 괄호 안팎 공백 변형, 여러 번 반복 포함). */
+    private static final java.util.regex.Pattern EXISTING_CHAT_EXPORT_PREFIX =
+            java.util.regex.Pattern.compile("^(?:\\s*\\[\\s*채팅\\s*\\]\\s*)+");
+
     /** 파이프라인에 넘길 source block 1개. blockId가 {@code session_id:pair_id} provenance다. */
     public record PipelineSourceBlock(String blockId, String text) {}
 
@@ -860,6 +862,7 @@ public class DocumentService {
     /**
      * 채팅 export 문서 이름을 만든다. 채팅에서 온 문서임을 알리는 접두사를 붙이고, 같은 폴더의 기존 항목과
      * 겹치면 {@code (2)}를 더한다. export 시점과 이름 확정 시점이 모두 이 경로를 지나 접두사가 유지된다.
+     * Wiki 페이지 제목처럼 이미 접두사가 붙은 이름이 오면 떼고 하나만 붙인다({@code [채팅] [채팅]} 방지).
      *
      * <p>이름은 세션 제목이나 AI가 만든 페이지 제목에서 오므로 파일명에 못 쓰는 문자가 섞일 수 있어
      * 여기서 정제한다. 접두사가 늘 남으므로 정제 결과가 비는 일은 없다.
@@ -873,7 +876,10 @@ public class DocumentService {
                         java.text.Normalizer.normalize(excludedNormalizedFilename.trim(), java.text.Normalizer.Form.NFC)
                                 .toLowerCase(java.util.Locale.ROOT)))
                 .collect(Collectors.toSet());
-        String candidate = DocumentEditingRules.sanitizeDisplayName(CHAT_EXPORT_NAME_PREFIX + displayName);
+        // AI 제목이 NFD로 오면 "채팅"이 자모로 풀려 접두사 검사를 빠져나가므로 NFC로 맞춘 뒤 비교한다.
+        String baseName = displayName == null ? "" : EXISTING_CHAT_EXPORT_PREFIX.matcher(
+                java.text.Normalizer.normalize(displayName, java.text.Normalizer.Form.NFC)).replaceFirst("");
+        String candidate = DocumentEditingRules.sanitizeDisplayName(CHAT_EXPORT_NAME_PREFIX + baseName);
         return DocumentEditingRules.uniqueFilename(candidate, existingNames).filename();
     }
 
@@ -992,17 +998,8 @@ public class DocumentService {
         validateIdempotencyKey(idempotencyKey);
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        if (!isPdf(source)) {
-            throw new InvalidDocumentConvertRequestException("PDF 원본 문서만 Markdown으로 변환할 수 있습니다.");
-        }
-        if (source.getSourceUri() == null) {
-            throw new InvalidDocumentConvertRequestException("원본 파일이 없는 문서는 변환할 수 없습니다.");
-        }
-        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다.
-        if (!userId.equals(source.getUserId())
-                && !workspaceAccessGuard.hasPermission(workspaceId, userId, WorkspacePermissions.DOCUMENT_CONVERT)) {
-            throw new WorkspacePermissionRequiredException(WorkspacePermissions.DOCUMENT_CONVERT);
-        }
+        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다. 목록의 can_convert와 같은 판정이다.
+        documentAccessPolicy.requireConvert(source, userId);
 
         String endpointScope = convertEndpointScope(workspaceId);
         String requestHash = requestHash(documentId, "convert-markdown", "");
@@ -1056,7 +1053,7 @@ public class DocumentService {
         verifyWorkspaceOwnership(workspaceId, userId);
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        if (!"aws".equals(storageProps.getCredentialsMode()) || !isPdf(document)) return null;
+        if (!"aws".equals(storageProps.getCredentialsMode()) || !DocumentAccessPolicy.isPdf(document)) return null;
         try {
             return minioClient.getPresignedObjectUrl(io.minio.GetPresignedObjectUrlArgs.builder()
                     .bucket(storageProps.getBucket()).object(normalizeObjectKey(document.getSourceUri()))
@@ -1065,11 +1062,6 @@ public class DocumentService {
                             "response-content-disposition", "inline"))
                     .build());
         } catch (Exception e) { throw new DocumentConvertException("원본 읽기 URL 발급 실패", e); }
-    }
-
-    private boolean isPdf(Document document) {
-        return "application/pdf".equals(document.getMimeType())
-                || document.getNormalizedFilename().endsWith(".pdf");
     }
 
     private String convertEndpointScope(String workspaceId) {
@@ -1617,6 +1609,7 @@ public class DocumentService {
                 doc.getFolderId(),
                 viewer.canEdit(doc),
                 viewer.canDelete(doc),
+                viewer.canConvert(doc),
                 viewer.override(doc),
                 doc.getUpdatedBy(),
                 doc.getAiOrigin(),

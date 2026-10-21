@@ -4,6 +4,7 @@ import fruition.TestcontainersConfiguration;
 import fruition.core.document.dto.DocumentLifecycleRequest;
 import fruition.core.document.dto.DocumentListResponse;
 import fruition.core.document.dto.DocumentPositionRequest;
+import fruition.core.document.dto.DocumentTreeResponse;
 import fruition.core.document.dto.DocumentRenameRequest;
 import fruition.core.document.dto.FolderCreateRequest;
 import fruition.core.document.dto.FolderRenameRequest;
@@ -15,6 +16,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.mock.web.MockMultipartFile;
+
+import java.nio.charset.StandardCharsets;
 
 import java.util.UUID;
 
@@ -36,6 +40,7 @@ class DocumentPermissionIntegrationTest {
     final String author = "user_author_" + UUID.randomUUID();
     final String member = "user_member_" + UUID.randomUUID();
     final String owner = "user_owner_" + UUID.randomUUID();
+    final String converter = "user_converter_" + UUID.randomUUID();
 
     UUID folderId;
     String documentId;
@@ -46,6 +51,7 @@ class DocumentPermissionIntegrationTest {
         role(author, "MEMBER");
         role(member, "MEMBER");
         role(owner, "OWNER");
+        role(converter, "MEMBER", "document.convert");
         folderId = folderService.create(workspace, author, key(), new FolderCreateRequest("팀 문서", null)).id();
         documentId = documentService.createMarkdown(workspace, author, key(),
                 new MarkdownDocumentCreateRequest("회의록", "# 처음", folderId)).id();
@@ -109,19 +115,60 @@ class DocumentPermissionIntegrationTest {
         save(member, "# 문서 설정이 폴더보다 우선");
     }
 
+    @Test
+    void canConvertFollowsUploaderConvertPermissionAndOwner() {
+        String pdfId = documentService.upload(workspace, author, key(), folderId,
+                new MockMultipartFile("file", "보고서.pdf", "application/pdf",
+                        "%PDF-1.4 변환 대상".getBytes(StandardCharsets.UTF_8))).id();
+
+        assertThat(item(author, pdfId).canConvert()).isTrue();
+        assertThat(item(member, pdfId).canConvert()).isFalse();
+        assertThat(item(converter, pdfId).canConvert()).isTrue();
+        assertThat(item(owner, pdfId).canConvert()).isTrue();
+        // 문서 트리도 목록과 같은 항목을 싣는다.
+        assertThat(treeItem(member, pdfId).canConvert()).isFalse();
+        assertThat(treeItem(converter, pdfId).canConvert()).isTrue();
+        // Markdown 문서는 변환 대상이 아니므로 작성자·OWNER에게도 false다.
+        assertThat(item(author).canConvert()).isFalse();
+        assertThat(item(owner).canConvert()).isFalse();
+    }
+
+    @Test
+    void treeVersionChangesWhenConvertPermissionIsGranted() {
+        String before = folderService.treeVersion(workspace, member);
+        role(member, "MEMBER", "document.convert");
+
+        assertThat(folderService.treeVersion(workspace, member)).isNotEqualTo(before);
+    }
+
     private void save(String userId, String markdown) {
         revision = documentService.saveContent(workspace, userId, documentId, markdown, revision,
                 "write_" + UUID.randomUUID(), null).currentVersion();
     }
 
     private DocumentListResponse.DocumentItem item(String userId) {
+        return item(userId, documentId);
+    }
+
+    private DocumentListResponse.DocumentItem item(String userId, String id) {
         return documentService.findAll(workspace, userId, null).documents().stream()
-                .filter(document -> document.id().equals(documentId))
+                .filter(document -> document.id().equals(id))
                 .findFirst().orElseThrow();
     }
 
-    private void role(String userId, String role) {
-        redis.opsForValue().set("authz:role:v2:" + workspace + ":" + userId, "{\"role\":\"" + role + "\",\"permissions\":[]}");
+    private DocumentListResponse.DocumentItem treeItem(String userId, String id) {
+        return folderService.tree(workspace, userId).items().stream()
+                .filter(item -> item.children() != null)
+                .flatMap(folder -> folder.children().stream())
+                .filter(child -> id.equals(child.id()))
+                .map(DocumentTreeResponse.Item::document)
+                .findFirst().orElseThrow();
+    }
+
+    private void role(String userId, String role, String... permissions) {
+        String granted = permissions.length == 0 ? "" : "\"" + String.join("\",\"", permissions) + "\"";
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":" + userId,
+                "{\"role\":\"" + role + "\",\"permissions\":[" + granted + "]}");
     }
 
     private static String key() {

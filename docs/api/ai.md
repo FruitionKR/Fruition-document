@@ -1052,6 +1052,8 @@ PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
 - 원본 PDF를 올린 사용자 본인, 워크스페이스 OWNER, `document.convert` 권한을 받은 멤버만 변환을 요청할 수 있다.
+- 대상은 원본 파일(`source_uri`)이 있는 PDF(`mime_type`이 `application/pdf`이거나 파일명이 `.pdf`)다. 이미 변환한 문서도 다시 변환할 수 있다.
+- 문서 목록·트리·상세의 `can_convert`가 이 판정과 같은 코드로 계산된다. 화면은 `can_convert`가 `false`면 변환 메뉴를 숨기거나 막으면 된다.
 - 변환이 끝나면 워크스페이스 설정 `auto_ingest_on_upload`가 켜져 있고 요청자에게 `wiki.ingest`가 있을 때만 자동으로 위키에 편입한다(AWS 묶음 경로와 단일 경로 모두). 그렇지 않으면 편입하지 않는다.
 
 #### 9. 예시 요청/응답

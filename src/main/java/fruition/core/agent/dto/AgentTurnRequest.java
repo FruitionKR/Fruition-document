@@ -90,7 +90,15 @@ public record AgentTurnRequest(
                 + "열린 문서 없이도 받으며, 문서 편집이 필요하면 AI가 문서를 열어 달라고 되묻는다. "
                 + "생략하면 기존 동작이다.",
                 allowableValues = {"task"}, nullable = true, example = "task")
-        String mode
+        String mode,
+
+        @JsonProperty("folder_id")
+        @Schema(description = "작업 대상 폴더 ID. 폴더 정리의 범위이자 새 문서를 둘 위치다. "
+                + "생략(null)하면 대상 폴더를 정하지 않은 것으로, 새 문서는 최상위(루트)에 두고 "
+                + "폴더 정리는 워크스페이스 전체를 범위로 본다(기존 동작). "
+                + "이 워크스페이스의 삭제되지 않은 폴더여야 한다(없으면 404). 문서 없이도 보낼 수 있다.",
+                format = "uuid", nullable = true, example = "44444444-4444-4444-4444-444444444444")
+        String folderId
 ) {
     private static final int MAX_SKILL_ID_LENGTH = 128;
     /**
@@ -125,6 +133,22 @@ public record AgentTurnRequest(
         this(sessionId, documentId, baseVersion, message, provider, model, null, "auto", null, conversationContext,
                 skillDraftSources, skillDraftUserDirectives, skillDraftExcludedLiterals, skillScopeType,
                 editorSnapshot);
+    }
+
+    /** folder_id 이전의 전체 필드 생성자. 대상 폴더는 생략(기존 동작)이다. */
+    public AgentTurnRequest(String sessionId, String documentId, Long baseVersion, String message,
+                            String provider, String model, Boolean allowWebSearch,
+                            String skillMode, String skillId,
+                            ConversationContext conversationContext,
+                            List<SkillDraftSourceSelector> skillDraftSources,
+                            List<String> skillDraftUserDirectives,
+                            List<String> skillDraftExcludedLiterals,
+                            String skillScopeType,
+                            EditorSnapshot editorSnapshot,
+                            String mode) {
+        this(sessionId, documentId, baseVersion, message, provider, model, allowWebSearch, skillMode, skillId,
+                conversationContext, skillDraftSources, skillDraftUserDirectives, skillDraftExcludedLiterals,
+                skillScopeType, editorSnapshot, mode, null);
     }
 
     /** mode 이전의 전체 필드 생성자. mode는 생략(기존 동작)이다. */
@@ -213,7 +237,12 @@ public record AgentTurnRequest(
                 @NotNull
                 @Size(min = 1)
                 @Schema(description = "검토된 Tool 허용 목록")
-                List<String> allowedTools
+                List<String> allowedTools,
+
+                @JsonProperty("requires_source")
+                @Schema(description = "원문 문서·폴더가 필요한 Skill인지. 생략하면 AI가 게시 때 규칙으로 정한다.",
+                        nullable = true)
+                Boolean requiresSource
         ) {}
     }
 

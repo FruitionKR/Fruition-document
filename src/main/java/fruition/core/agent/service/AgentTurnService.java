@@ -6,6 +6,7 @@ import fruition.core.agent.dto.AgentTurnResponse;
 import fruition.core.agent.dto.AgentRunApproveRequest;
 import fruition.core.agent.dto.AgentRunReviseRequest;
 import fruition.core.agent.exception.AgentRunNotFoundException;
+import fruition.core.agent.exception.AgentTurnAlreadyFinishedException;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.core.agent.repository.AgentRunCommandRepository;
 import fruition.core.agent.repository.PipelineAgentRunStatusRequester;
@@ -16,6 +17,8 @@ import fruition.core.chat.service.ChatSessionService;
 import fruition.core.chat.service.ChatTurnRecorder;
 import fruition.core.document.repository.AiCommandOutboxWriter;
 import fruition.core.document.dto.DocumentDetailResponse;
+import fruition.core.document.exception.HierarchyItemNotFoundException;
+import fruition.core.document.repository.FolderRepository;
 import fruition.core.document.service.DocumentEditLockService;
 import fruition.shared.ai.AiModelCatalog;
 import fruition.core.document.service.DocumentService;
@@ -53,6 +56,7 @@ public class AgentTurnService {
     private final fruition.core.aitask.service.AiTaskCancellationService cancellation;
     private final com.fasterxml.jackson.databind.ObjectMapper mapper;
     private final fruition.core.usage.service.UsageChargeService usageCharges;
+    private final FolderRepository folderRepository;
 
     public AgentTurnService(DocumentService documentService,
                             DocumentEditLockService editLockService,
@@ -68,7 +72,8 @@ public class AgentTurnService {
                             @Value("${app.agent.command-topic}") String commandTopic,
                             fruition.core.aitask.service.AiTaskCancellationService cancellation,
                             com.fasterxml.jackson.databind.ObjectMapper mapper,
-                            fruition.core.usage.service.UsageChargeService usageCharges) {
+                            fruition.core.usage.service.UsageChargeService usageCharges,
+                            FolderRepository folderRepository) {
         this.documentService = documentService;
         this.editLockService = editLockService;
         this.workspaceAccessGuard = workspaceAccessGuard;
@@ -84,6 +89,7 @@ public class AgentTurnService {
         this.cancellation = cancellation;
         this.mapper = mapper;
         this.usageCharges = usageCharges;
+        this.folderRepository = folderRepository;
     }
 
     @Transactional
@@ -105,19 +111,16 @@ public class AgentTurnService {
         } else {
             workspaceAccessGuard.requireMember(workspaceId, userId);
         }
+        UUID folderId = targetFolderId(workspaceId, request.folderId());
         AiModelCatalog.AiModel selectedModel = aiModelCatalog.resolve(request.provider(), request.model());
         List<CanonicalSkillDraftSource> skillDraftSources = canonicalSkillDraftSources(
                 workspaceId, userId, request.skillDraftSources());
 
         String runId = "agent_" + UUID.randomUUID().toString().replace("-", "");
-        outboxWriter.begin(runId, workspaceId, userId, "agent");
-        // 편집안을 적용할 때 되돌려받을 표. source=agent 문자열 대신 이 값으로 AI 작업 여부를 가린다.
-        // 적용할 문서가 없으면 표도 만들지 않는다.
-        String applyOperationId = request.hasDocumentContext() ? applyOperationStore.newOperationId() : null;
-        runRepository.create(runId, workspaceId, userId, request.documentId(),
-                request.baseVersion(), applyOperationId);
         // 질의와 같은 방식으로 말풍선을 먼저 만들고 결과가 오면 채운다. command와 같은 트랜잭션이라
         // 발행에 실패하면 메시지도 남지 않는다.
+        // 실행 등록(begin) 전에 만들어 취소 복구 기록에 넣지 않는다. 취소하면 복구가 지우는 대신
+        // 말풍선을 취소로 닫아 대화에 남긴다(AiTaskCancellationService.requestAgentTurnCancel).
         AgentMessageContext messageContext = new AgentMessageContext(
                 UUID.randomUUID().toString(),
                 "chat_user_" + UUID.randomUUID(),
@@ -125,6 +128,12 @@ public class AgentTurnService {
         chatTurnRecorder.createPendingAgentPair(request.sessionId(), messageContext.pairId(),
                 messageContext.userMessageId(), messageContext.assistantMessageId(), request.message(),
                 java.time.Instant.now(), selectedModel.provider(), selectedModel.model(), runId);
+        outboxWriter.begin(runId, workspaceId, userId, "agent");
+        // 편집안을 적용할 때 되돌려받을 표. source=agent 문자열 대신 이 값으로 AI 작업 여부를 가린다.
+        // 적용할 문서가 없으면 표도 만들지 않는다.
+        String applyOperationId = request.hasDocumentContext() ? applyOperationStore.newOperationId() : null;
+        runRepository.create(runId, workspaceId, userId, request.documentId(),
+                request.baseVersion(), applyOperationId, folderId);
         // 질의와 같이 sessionId를 key로 쓴다. 두 갈래가 같은 세션에 쌓이고 세션 단위 누적 요약을
         // 함께 갱신하므로, 한 세션의 턴은 같은 파티션에서 보낸 순서대로 처리돼야 한다.
         outboxWriter.enqueue(runId, commandTopic, request.sessionId(),
@@ -140,7 +149,8 @@ public class AgentTurnService {
                         request.skillDraftUserDirectives(), request.skillDraftExcludedLiterals(),
                         request.skillScopeType(),
                         CommandEditorSnapshot.from(request.editorSnapshot()),
-                        request.mode()));
+                        request.mode(),
+                        folderId == null ? null : folderId.toString()));
         return new AgentTurnResponse(
                 request.documentId(),
                 request.baseVersion(),
@@ -148,8 +158,25 @@ public class AgentTurnService {
                 applyOperationId,
                 "queued",
                 null,
-                null
+                null,
+                folderId == null ? null : folderId.toString()
         );
+    }
+
+    /** 대상 폴더는 이 워크스페이스의 살아 있는 폴더여야 한다. 생략하면 지정하지 않은 것(루트)이다. */
+    private UUID targetFolderId(String workspaceId, String folderId) {
+        if (folderId == null) {
+            return null;
+        }
+        UUID parsed;
+        try {
+            parsed = UUID.fromString(folderId);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidAgentTurnRequestException("folder_id 형식이 올바르지 않습니다.");
+        }
+        folderRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(parsed, workspaceId)
+                .orElseThrow(() -> new HierarchyItemNotFoundException("대상 폴더를 찾을 수 없습니다."));
+        return parsed;
     }
 
     private static List<String> selectedPairIds(AgentTurnRequest request) {
@@ -191,30 +218,49 @@ public class AgentTurnService {
         }
         var cancelling = cancellation.findStatus(runId, workspaceId, userId)
                 .filter(row -> Set.of("cancel_requested", "rolling_back", "rollback_failed", "cancelled").contains(row.get("status")));
+        // 대상 폴더는 document만 기록하므로 취소·AI 상태로 답할 때도 projection에서 읽는다.
+        var projection = runRepository.find(workspaceId, userId, runId);
+        String folderId = projection.map(AgentRunCommandRepository.RunView::folderId).orElse(null);
         if (cancelling.isPresent()) {
             var row = cancelling.get();
-            return new AgentTurnResponse(null, null, runId, null, (String) row.get("status"), null, (String) row.get("error_code"));
+            return new AgentTurnResponse(null, null, runId, null, (String) row.get("status"), null,
+                    (String) row.get("error_code"), folderId);
         }
         var aiRun = statusRequester.find(workspaceId, userId, runId);
         if (aiRun.isPresent()) {
             var run = aiRun.get();
-            if ("completed".equals(run.status())) {
-                var projection = runRepository.find(workspaceId, userId, runId);
-                if (projection.isPresent()) {
-                    var core = projection.get();
-                    return new AgentTurnResponse(core.documentId(), core.baseVersion(), core.runId(),
-                            core.applyOperationId(), publicStatus(core.status()),
-                            core.result(), core.error());
-                }
+            if ("completed".equals(run.status()) && projection.isPresent()) {
+                var core = projection.get();
+                return new AgentTurnResponse(core.documentId(), core.baseVersion(), core.runId(),
+                        core.applyOperationId(), publicStatus(core.status()),
+                        core.result(), core.error(), folderId);
             }
             return new AgentTurnResponse(run.documentId(), run.baseVersion(), run.id(),
-                    run.applyOperationId(), run.status(), run.result(), run.errorCode());
+                    run.applyOperationId(), run.status(), run.result(), run.errorCode(), folderId);
         }
-        var projection = runRepository.find(workspaceId, userId, runId)
-                .orElseThrow(() -> new AgentRunNotFoundException(runId));
-        return new AgentTurnResponse(projection.documentId(), projection.baseVersion(), projection.runId(),
-                projection.applyOperationId(), publicStatus(projection.status()),
-                projection.result(), projection.error());
+        var core = projection.orElseThrow(() -> new AgentRunNotFoundException(runId));
+        return new AgentTurnResponse(core.documentId(), core.baseVersion(), core.runId(),
+                core.applyOperationId(), publicStatus(core.status()),
+                core.result(), core.error(), folderId);
+    }
+
+    /**
+     * 끝나지 않은 Agent turn을 취소한다. 조회와 같이 요청자 본인의 turn만 대상이다.
+     * 취소 요청이 확정되면 늦게 도착한 결과는 반영되지 않고 처리 중 말풍선은 바로 취소로 닫힌다.
+     * AI 쪽 중단·복구 확정은 기존 작업 취소 흐름이 이어서 처리하고, 응답은 그 시점의 turn 상태다
+     * (cancel_requested·rolling_back·cancelled 등).
+     */
+    public AgentTurnResponse cancelTurn(String workspaceId, String userId, String runId) {
+        workspaceAccessGuard.requireMember(workspaceId, userId);
+        if (!RUN_ID_PATTERN.matcher(runId).matches()) {
+            throw new InvalidAgentTurnRequestException("Agent run ID 형식이 올바르지 않습니다.");
+        }
+        switch (cancellation.requestAgentTurnCancel(runId, workspaceId, userId)) {
+            case NOT_FOUND -> throw new AgentRunNotFoundException(runId);
+            case FINISHED -> throw new AgentTurnAlreadyFinishedException(runId);
+            case REQUESTED -> { }
+        }
+        return get(workspaceId, userId, runId);
     }
 
     public JsonNode getRun(String workspaceId, String userId, String runId) {
@@ -225,8 +271,49 @@ public class AgentTurnService {
     public JsonNode approve(String workspaceId, String userId, String runId,
                             AgentRunApproveRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return rerun(workspaceId, userId, runId, () -> statusRequester.approve(workspaceId, userId, runId,
-                request.planVersion(), request.operationHash()));
+        // 고른 작업은 예약하기 전에 검사한다. 잘못된 선택이면 크레딧을 건드리지 않고 400으로 끝난다.
+        return rerun(workspaceId, userId, runId, current -> {
+            List<String> operationIds = selectedOperationIds(current, request.operationIds());
+            return () -> operationIds == null
+                    ? statusRequester.approve(workspaceId, userId, runId, request.planVersion(), request.operationHash())
+                    : statusRequester.approve(workspaceId, userId, runId, request.planVersion(),
+                    request.operationHash(), operationIds);
+        });
+    }
+
+    /**
+     * 부분 승인할 작업 ID를 현재 계획에 비춰 검사한다. null이면 전체 승인이다.
+     * 계획의 모든 작업을 골랐으면 전체 승인과 같으므로 null을 돌려 기존 요청 모양으로 보낸다.
+     * 고른 작업이 고르지 않은 작업의 결과에 기대면(depends_on) 실행할 수 없으므로 거절한다.
+     */
+    private static List<String> selectedOperationIds(JsonNode run, List<String> requested) {
+        if (requested == null) {
+            return null;
+        }
+        Set<String> selected = new java.util.LinkedHashSet<>(requested);
+        if (selected.size() != requested.size()) {
+            throw new InvalidAgentTurnRequestException("operation_ids에 중복된 작업이 있습니다.");
+        }
+        JsonNode operations = run == null ? null : run.path("plan").path("operations");
+        if (operations == null || !operations.isArray() || operations.isEmpty()) {
+            throw new InvalidAgentTurnRequestException("선택해 승인할 계획이 없습니다.");
+        }
+        Set<String> planned = new HashSet<>();
+        for (JsonNode operation : operations) {
+            planned.add(operation.path("id").asText());
+        }
+        if (!planned.containsAll(selected)) {
+            throw new InvalidAgentTurnRequestException("계획에 없는 작업을 승인할 수 없습니다.");
+        }
+        for (JsonNode operation : operations) {
+            if (!selected.contains(operation.path("id").asText())) continue;
+            for (JsonNode dependency : operation.path("depends_on")) {
+                if (!selected.contains(dependency.asText())) {
+                    throw new InvalidAgentTurnRequestException("선택한 작업이 선택하지 않은 작업에 의존합니다.");
+                }
+            }
+        }
+        return selected.size() == planned.size() ? null : List.copyOf(selected);
     }
 
     public JsonNode reject(String workspaceId, String userId, String runId) {
@@ -246,7 +333,7 @@ public class AgentTurnService {
                            AgentRunReviseRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         return rerun(workspaceId, userId, runId,
-                () -> statusRequester.revise(workspaceId, userId, runId, request.instruction()));
+                current -> () -> statusRequester.revise(workspaceId, userId, runId, request.instruction()));
     }
 
     /**
@@ -256,8 +343,11 @@ public class AgentTurnService {
      * 닫지 않아 다음 시도가 잔액을 다시 확인한다. 실행의 종료는 AgentRun 응답의 상태로 알아챈다({@link #closeIfTerminal}).
      * enforce가 꺼져 있으면 아무것도 하지 않는다(#102).
      */
-    private JsonNode rerun(String workspaceId, String userId, String runId, java.util.function.Supplier<JsonNode> forward) {
+    private JsonNode rerun(String workspaceId, String userId, String runId,
+                           java.util.function.Function<JsonNode, java.util.function.Supplier<JsonNode>> prepare) {
         JsonNode current = statusRequester.getAutonomousRun(workspaceId, userId, runId);
+        // 현재 run으로 요청을 검사·준비한다(예약 전). 전달은 아래에서 한다.
+        java.util.function.Supplier<JsonNode> forward = prepare.apply(current);
         if (usageCharges.isAutonomousTerminal(current)) {  // 이미 끝난 실행은 ai-svc가 거절한다. 예약하지 않는다.
             closeIfTerminal(runId, current);
             return forward.get();
@@ -380,7 +470,11 @@ public class AgentTurnService {
             @com.fasterxml.jackson.annotation.JsonProperty("editor_snapshot") CommandEditorSnapshot editorSnapshot,
             // 작업 탭 턴이면 "task". 기존 턴은 command 모양을 바꾸지 않도록 키 자체를 싣지 않는다.
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-            String mode
+            String mode,
+            // 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 지정하지 않은 턴은 command 모양을 바꾸지 않도록 키를 싣지 않는다.
+            @com.fasterxml.jackson.annotation.JsonProperty("folder_id")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String folderId
     ) {}
 
     record CanonicalSkillDraftSource(
@@ -435,12 +529,17 @@ public class AgentTurnService {
             String description,
             @com.fasterxml.jackson.annotation.JsonProperty("instructions_markdown") String instructionsMarkdown,
             java.util.List<String> capabilities,
-            @com.fasterxml.jackson.annotation.JsonProperty("allowed_tools") java.util.List<String> allowedTools
+            @com.fasterxml.jackson.annotation.JsonProperty("allowed_tools") java.util.List<String> allowedTools,
+            // 생략(null)하면 키를 빼 AI가 판단하게 한다.
+            @com.fasterxml.jackson.annotation.JsonProperty("requires_source")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            Boolean requiresSource
     ) {
         static CommandPendingSkillProposal from(AgentTurnRequest.ConversationContext.PendingSkillProposal proposal) {
             return proposal == null ? null
                     : new CommandPendingSkillProposal(proposal.scopeType(), proposal.name(), proposal.description(),
-                    proposal.instructionsMarkdown(), proposal.capabilities(), proposal.allowedTools());
+                    proposal.instructionsMarkdown(), proposal.capabilities(), proposal.allowedTools(),
+                    proposal.requiresSource());
         }
     }
 

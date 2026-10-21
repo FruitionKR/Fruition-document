@@ -5,8 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import fruition.core.aitask.service.AiTaskCancellationService;
+import fruition.core.authz.AccessUserClient;
 import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.document.domain.Document;
 import fruition.core.document.domain.DocumentEditState;
@@ -37,6 +39,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -67,6 +70,10 @@ public class MeetingNotesService {
     private static final Logger log = LoggerFactory.getLogger(MeetingNotesService.class);
     private static final String[][] SECTIONS = {
             {"summary", "요약"}, {"decisions", "결정 사항"}, {"action_items", "할 일"}, {"open_questions", "미결 사항"}};
+    /** 회의 날짜를 정하는 시간대. 문서 내보내기 안내문과 같은 한국 시간이다. */
+    static final ZoneId MEETING_ZONE = ZoneId.of("Asia/Seoul");
+    /** ai 회의록 command의 참석자 이름 한도. */
+    private static final int ATTENDEE_NAME_MAX = 100;
 
     private final MeetingService meetingService;
     private final MeetingNotesRepository notes;
@@ -80,10 +87,12 @@ public class MeetingNotesService {
     private final PostgresDocumentEditStore editStore;
     private final ObjectMapper objectMapper;
     private final AiTaskCancellationService aiCancellation;
+    private final AccessUserClient accessUserClient;
     public MeetingNotesService(MeetingService meetingService, MeetingNotesRepository notes,
                                DocumentService documentService, DocumentEditLockService documentEditRules,
                                PostgresDocumentEditStore editStore, ObjectMapper objectMapper,
-                               WorkspaceAiModelClient workspaceAiModelClient, AiCommandOutboxWriter outboxWriter,
+                               WorkspaceAiModelClient workspaceAiModelClient, AccessUserClient accessUserClient,
+                               AiCommandOutboxWriter outboxWriter,
                                AiTaskCancellationService aiCancellation, PlatformTransactionManager transactionManager,
                                @Value("${app.maintenance.command-topic}") String commandTopic,
                                @Value("${app.speech.meeting-notes-generation-timeout-minutes}") long generationTimeoutMinutes) {
@@ -94,6 +103,7 @@ public class MeetingNotesService {
         this.editStore = editStore;
         this.objectMapper = objectMapper;
         this.workspaceAiModelClient = workspaceAiModelClient;
+        this.accessUserClient = accessUserClient;
         this.outboxWriter = outboxWriter;
         this.aiCancellation = aiCancellation;
         this.transaction = new TransactionTemplate(transactionManager);
@@ -101,7 +111,10 @@ public class MeetingNotesService {
         this.generationTimeout = Duration.ofMinutes(generationTimeoutMinutes);
     }
 
-    /** ai-svc 회의록 명령. 구간은 {@code id}·{@code text}만 보낸다. */
+    /**
+     * ai-svc 회의록 명령. 구간은 {@code id}·{@code text}만 보낸다. {@code meeting_date}·{@code attendees}는 회의록 머리의
+     * 날짜·참석자로 쓰이며, 참석자를 모르면 필드를 싣지 않는다.
+     */
     record MeetingNotesCommand(
             @JsonProperty("run_id") String runId,
             String kind,
@@ -111,6 +124,8 @@ public class MeetingNotesService {
             String model,
             @JsonProperty("meeting_id") String meetingId,
             @JsonProperty("display_name") String displayName,
+            @JsonProperty("meeting_date") String meetingDate,
+            @JsonInclude(JsonInclude.Include.NON_EMPTY) List<String> attendees,
             List<Map<String, String>> segments
     ) {}
 
@@ -128,18 +143,18 @@ public class MeetingNotesService {
             return toResponse(replay.get());
         }
         if (meeting.liveConnected()) {
-            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "받아쓰기가 끝난 뒤 회의록을 만들 수 있습니다.");
+            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "회의 녹음이 끝난 뒤 회의록을 만들 수 있습니다.");
         }
         List<Bundle> bundles = bundles(meeting.segments());
         List<Map<String, String>> segments = bundles.stream()
                 .map(bundle -> Map.of("id", bundle.id(), "text", bundle.text()))
                 .toList();
         if (segments.isEmpty()) {
-            throw new MeetingException(HttpStatus.UNPROCESSABLE_ENTITY, "MEETING_TRANSCRIPT_EMPTY", "확정된 전사가 없습니다.");
+            throw new MeetingException(HttpStatus.UNPROCESSABLE_ENTITY, "MEETING_TRANSCRIPT_EMPTY", "확정된 대화 내용이 없습니다.");
         }
         if (!meeting.transcriptComplete() && !allowPartial) {
             throw new MeetingException(HttpStatus.CONFLICT, "MEETING_TRANSCRIPT_INCOMPLETE",
-                    "누락되었거나 정상 종료되지 않은 녹음이 있습니다. 일부 전사로 만들려면 allow_partial=true로 요청하세요.");
+                    "누락되었거나 정상 종료되지 않은 녹음이 있습니다. 일부 대화 내용으로 만들려면 allow_partial=true로 요청하세요.");
         }
         boolean partial = !meeting.transcriptComplete();
         // 결과 이벤트에서 근거 ID를 원래 구간으로 되돌릴 수 있도록 묶음의 구간 ID도 스냅샷에 남긴다.
@@ -155,7 +170,8 @@ public class MeetingNotesService {
             // 모델 설정 조회는 access-svc HTTP 호출이라 잠금·트랜잭션 밖에서 한다.
             WorkspaceAiModelClient.AiModelSelection model = workspaceAiModelClient.get(workspaceId);
             var command = new MeetingNotesCommand(runId, "meeting_notes", workspaceId, userId, model.provider(),
-                    model.model(), meetingId, meeting.displayName(), segments);
+                    model.model(), meetingId, meeting.displayName(), meetingDate(meeting), attendees(meeting, userId),
+                    segments);
             // 워크스페이스당 생성은 하나다(팀 회의는 한 사람이 녹음한다). 잠금은 같은 트랜잭션 끝까지 쥐어 Pod 사이에서도 직렬이다.
             // generating 행·크레딧 예약·작업 등록·outbox 저장이 한 트랜잭션이라, 중간에 실패하면 명령 없는 generating 행이
             // 남아 워크스페이스를 막지 않는다.
@@ -431,7 +447,7 @@ public class MeetingNotesService {
     /** 미리보기·저장·재시도 비교가 모두 이 본문을 쓴다. AI 초안이라 원시 HTML·위험한 링크를 걷어낸다. */
     private String body(MeetingNotesRepository.Note note, String editedMarkdown) {
         return AiMarkdownSanitizer.sanitize(
-                editedMarkdown != null && !editedMarkdown.isBlank() ? editedMarkdown.strip() : render(result(note)));
+                editedMarkdown != null && !editedMarkdown.isBlank() ? editedMarkdown.strip() : notesMarkdown(result(note)));
     }
 
     /** 기존 본문 끝에 빈 줄 하나를 두고 붙인다. 미리보기와 저장이 같은 규칙을 쓴다. */
@@ -440,7 +456,16 @@ public class MeetingNotesService {
         return base.isEmpty() ? notesMarkdown + "\n" : base + "\n\n" + notesMarkdown + "\n";
     }
 
-    /** AI 응답의 markdown은 근거 ID를 괄호로 붙이므로 쓰지 않고 항목 배열로 다시 만든다. */
+    /**
+     * 초안 본문. 시안 구성으로 만든 AI 응답이면 저장해 둔 AI markdown을 그대로 쓰고, 이전 AI 응답(근거 ID를 괄호로
+     * 붙인 markdown)으로 만든 초안이면 항목 배열로 옛 구성을 다시 만든다.
+     */
+    static String notesMarkdown(JsonNode result) {
+        JsonNode markdown = result.path("markdown");
+        return markdown.isTextual() && !markdown.asText().isBlank() ? markdown.asText() : render(result);
+    }
+
+    /** 이전 AI 응답용 본문. AI markdown은 근거 ID를 괄호로 붙이므로 쓰지 않고 항목 배열로 다시 만든다. */
     static String render(JsonNode result) {
         StringBuilder markdown = new StringBuilder("# ").append(result.path("display_name").asText("회의록").strip());
         for (String[] section : SECTIONS) {
@@ -454,6 +479,27 @@ public class MeetingNotesService {
             }
         }
         return markdown.toString();
+    }
+
+    /** 회의 날짜: 회의를 만든(실시간은 받아쓰기 시작, 파일은 업로드 시작) 날의 한국 날짜. */
+    static String meetingDate(MeetingResponse meeting) {
+        return meeting.createdAt().atZone(MEETING_ZONE).toLocalDate().toString();
+    }
+
+    /**
+     * 확실히 아는 참석자: 실시간 받아쓰기를 한 사람(회의 소유자)만 넣는다. 파일 업로드는 올린 사람이 회의에 있었는지
+     * 알 수 없고, 워크스페이스 멤버는 회의 참석자가 아니라 넣지 않는다. 표시명 조회는 best-effort라 실패하면 비운다.
+     * 나머지 참석자는 AI가 전사에서 확인한 이름으로 채운다.
+     */
+    private List<String> attendees(MeetingResponse meeting, String userId) {
+        if (!"live".equals(meeting.source())) {
+            return List.of();
+        }
+        String name = accessUserClient.getDisplayName(userId);
+        if (name == null || name.isBlank() || name.strip().length() > ATTENDEE_NAME_MAX) {
+            return List.of();
+        }
+        return List.of(name.strip());
     }
 
     /**
@@ -493,25 +539,64 @@ public class MeetingNotesService {
     }
 
     /**
-     * 저장할 결과: 이름과 네 배열만 둔다(AI markdown은 버린다). 근거는 묶음 ID로 돌아오므로 묶인 원래 구간
-     * ID들로 되돌려 저장한다. 모르는 ID는 그대로 둔다.
+     * 저장할 결과. 근거는 묶음 ID로 돌아오므로 묶인 원래 구간 ID들로 되돌려 저장한다. 모르는 ID는 그대로 둔다.
+     *
+     * <p>시안 구성 응답({@code discussion} 배열이 있다)이면 AI markdown과 날짜·참석자·주요 논의·할 일의 담당자/기한·
+     * 다음 일정도 저장한다. 이전 응답이면 이름과 네 배열만 두고 AI markdown은 버린다(근거 ID가 본문에 붙어 있다).
      */
     private ObjectNode stored(JsonNode draft, Map<String, List<String>> sources) {
         ObjectNode result = objectMapper.createObjectNode();
         result.put("display_name", draft.path("display_name").asText("회의록"));
+        boolean designed = draft.path("discussion").isArray() && draft.path("markdown").isTextual()
+                && !draft.path("markdown").asText().isBlank();
         for (String[] section : SECTIONS) {
             ArrayNode items = objectMapper.createArrayNode();
             for (JsonNode item : draft.path(section[0])) {
-                LinkedHashSet<String> refs = new LinkedHashSet<>();
-                item.path("source_segment_ids").forEach(ref ->
-                        refs.addAll(sources.getOrDefault(ref.asText(), List.of(ref.asText()))));
-                ArrayNode ids = objectMapper.createArrayNode();
-                refs.forEach(ids::add);
-                items.addObject().put("text", item.path("text").asText()).set("source_segment_ids", ids);
+                ObjectNode entry = storedItem(item, sources);
+                if (designed && "action_items".equals(section[0])) {
+                    entry.put("owner", text(item.path("owner")));
+                    entry.put("due", text(item.path("due")));
+                }
+                items.add(entry);
             }
             result.set(section[0], items);
         }
+        if (!designed) {
+            return result;
+        }
+        result.put("markdown", AiMarkdownSanitizer.sanitize(draft.path("markdown").asText().strip()));
+        result.put("meeting_date", text(draft.path("meeting_date")));
+        ArrayNode attendees = result.putArray("attendees");
+        draft.path("attendees").forEach(name -> {
+            if (name.isTextual() && !name.asText().isBlank()) {
+                attendees.add(name.asText().strip());
+            }
+        });
+        ArrayNode discussion = result.putArray("discussion");
+        for (JsonNode topic : draft.path("discussion")) {
+            ArrayNode items = objectMapper.createArrayNode();
+            topic.path("items").forEach(item -> items.add(storedItem(item, sources)));
+            discussion.addObject().put("topic", topic.path("topic").asText()).set("items", items);
+        }
+        ArrayNode schedule = result.putArray("next_schedule");
+        draft.path("next_schedule").forEach(item -> schedule.add(storedItem(item, sources)));
         return result;
+    }
+
+    private ObjectNode storedItem(JsonNode item, Map<String, List<String>> sources) {
+        LinkedHashSet<String> refs = new LinkedHashSet<>();
+        item.path("source_segment_ids").forEach(ref ->
+                refs.addAll(sources.getOrDefault(ref.asText(), List.of(ref.asText()))));
+        ArrayNode ids = objectMapper.createArrayNode();
+        refs.forEach(ids::add);
+        ObjectNode stored = objectMapper.createObjectNode().put("text", item.path("text").asText());
+        stored.set("source_segment_ids", ids);
+        return stored;
+    }
+
+    /** 비어 있지 않은 문자열만 값으로 두고 나머지는 null. */
+    private static String text(JsonNode value) {
+        return value.isTextual() && !value.asText().isBlank() ? value.asText().strip() : null;
     }
 
     private JsonNode result(MeetingNotesRepository.Note note) {
@@ -531,19 +616,47 @@ public class MeetingNotesService {
                 ? new MeetingNotesResponse.Applied(note.applyMode(), note.applyDocumentId(), note.appliedAt()) : null;
         return new MeetingNotesResponse(note.meetingId(), note.version(), note.status(), note.partial(),
                 hasResult ? result.path("display_name").asText() : null,
-                hasResult ? render(result) : null,
-                items(result, "summary"), items(result, "decisions"), items(result, "action_items"),
-                items(result, "open_questions"), applied, note.errorCode(), lastReady);
+                hasResult ? notesMarkdown(result) : null,
+                text(result.path("meeting_date")), attendees(result),
+                items(result, "summary"), discussion(result), items(result, "decisions"), actionItems(result),
+                items(result, "next_schedule"), items(result, "open_questions"), applied, note.errorCode(), lastReady);
+    }
+
+    private static List<String> attendees(JsonNode result) {
+        List<String> names = new ArrayList<>();
+        result.path("attendees").forEach(name -> names.add(name.asText()));
+        return names;
+    }
+
+    private static List<MeetingNotesResponse.DiscussionTopic> discussion(JsonNode result) {
+        List<MeetingNotesResponse.DiscussionTopic> topics = new ArrayList<>();
+        for (JsonNode topic : result.path("discussion")) {
+            topics.add(new MeetingNotesResponse.DiscussionTopic(topic.path("topic").asText(), items(topic, "items")));
+        }
+        return topics;
+    }
+
+    private static List<MeetingNotesResponse.ActionItem> actionItems(JsonNode result) {
+        List<MeetingNotesResponse.ActionItem> items = new ArrayList<>();
+        for (JsonNode item : result.path("action_items")) {
+            items.add(new MeetingNotesResponse.ActionItem(item.path("text").asText(), text(item.path("owner")),
+                    text(item.path("due")), refs(item)));
+        }
+        return items;
     }
 
     private static List<MeetingNotesResponse.Item> items(JsonNode result, String key) {
         List<MeetingNotesResponse.Item> items = new ArrayList<>();
         for (JsonNode item : result.path(key)) {
-            List<String> refs = new ArrayList<>();
-            item.path("source_segment_ids").forEach(ref -> refs.add(ref.asText()));
-            items.add(new MeetingNotesResponse.Item(item.path("text").asText(), refs));
+            items.add(new MeetingNotesResponse.Item(item.path("text").asText(), refs(item)));
         }
         return items;
+    }
+
+    private static List<String> refs(JsonNode item) {
+        List<String> refs = new ArrayList<>();
+        item.path("source_segment_ids").forEach(ref -> refs.add(ref.asText()));
+        return refs;
     }
 
     private String json(Object value) {

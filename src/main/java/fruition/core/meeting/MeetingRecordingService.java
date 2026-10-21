@@ -163,7 +163,7 @@ public class MeetingRecordingService {
             throw new MeetingException(HttpStatus.UNPROCESSABLE_ENTITY, "MEETING_RECORDING_EMPTY", "녹음 파일이 비어 있습니다.");
         }
         if (size > MAX_BYTES) {
-            throw new MeetingException(HttpStatus.PAYLOAD_TOO_LARGE, "MEETING_RECORDING_TOO_LARGE", "녹음 파일은 500 MiB 이하로 올려 주세요.");
+            throw new MeetingException(HttpStatus.PAYLOAD_TOO_LARGE, "MEETING_RECORDING_TOO_LARGE", "녹음 파일은 500MB 이하로 올려 주세요.");
         }
         if (size != declared) {
             throw new MeetingException(HttpStatus.BAD_REQUEST, "MEETING_RECORDING_SIZE_MISMATCH", "올린 파일 크기가 처음 알린 크기와 다릅니다.");
@@ -189,7 +189,7 @@ public class MeetingRecordingService {
             throw notAllowed();
         }
         if (!upload && liveLock.isHeld(meeting.id())) {
-            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "받아쓰기가 끝난 뒤 녹음 원본을 올릴 수 있습니다.");
+            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "회의 녹음이 끝난 뒤 녹음 원본을 올릴 수 있습니다.");
         }
     }
 
@@ -224,10 +224,10 @@ public class MeetingRecordingService {
     public void delete(String workspaceId, String userId, String meetingId) {
         MeetingRepository.Meeting meeting = meetingService.requireOwned(workspaceId, userId, meetingId);
         if ("transcribing".equals(meeting.status())) {
-            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_TRANSCRIBING", "전사가 끝나거나 취소한 뒤 삭제해 주세요.");
+            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_TRANSCRIBING", "글로 옮기기가 끝나거나 취소한 뒤 삭제해 주세요.");
         }
         if (liveLock.isHeld(meetingId)) {
-            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "받아쓰기 연결을 닫은 뒤 삭제해 주세요.");
+            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "회의 녹음 연결을 닫은 뒤 삭제해 주세요.");
         }
         String recordingKey = meeting.recordingKey();
         if (recordingKey != null) {

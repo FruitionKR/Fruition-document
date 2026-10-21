@@ -140,6 +140,9 @@ class DocumentServiceBlocksTest {
 
     @BeforeEach
     void setUp() {
+        // DocumentAccessPolicy.viewer가 역할·권한을 한 번에 읽는다. 기본은 권한 항목 없는 MEMBER.
+        org.mockito.Mockito.lenient().when(workspaceAccessGuard.access(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new fruition.core.authz.WorkspaceAccessGuard.Access("MEMBER", java.util.List.of()));
         DocumentAccessPolicy accessPolicy = new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate);
         org.mockito.Mockito.lenient().when(applyOperationStore.authorizeSave(anyString(), anyString(), anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.active(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
@@ -1622,6 +1625,55 @@ class DocumentServiceBlocksTest {
         documentService.confirmChatExportName(chatDoc, "검색 인덱싱");
         assertThat(chatDoc.getFilename()).isEqualTo("[채팅] 검색 인덱싱.md");
         verify(documentRepository, times(1)).save(chatDoc);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "[{index}] \"{0}\" -> \"{1}\"")
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "검색 인덱싱|[채팅] 검색 인덱싱.md",
+            "[채팅] 검색 인덱싱|[채팅] 검색 인덱싱.md",
+            "[채팅]검색 인덱싱|[채팅] 검색 인덱싱.md",
+            "'  [ 채팅 ]   검색 인덱싱'|[채팅] 검색 인덱싱.md",
+            "[채팅] [채팅] 검색 인덱싱|[채팅] 검색 인덱싱.md",
+            "검색 [채팅] 인덱싱|[채팅] 검색 [채팅] 인덱싱.md"
+    })
+    @DisplayName("Wiki 페이지 제목에 이미 [채팅] 접두사가 있으면 다시 붙이지 않는다")
+    void confirmChatExportName_doesNotDuplicatePrefix(String wikiTitle, String expected) {
+        Document chatDoc = new Document(
+                "chatdoc_pre", WORKSPACE_ID, USER_ID, "[채팅] 첫 질문.md", "text/markdown", 10L,
+                "sources/documents/chatdoc_pre/original", "h", "chat_export");
+        when(documentRepository.findActiveSiblingNames(WORKSPACE_ID, null)).thenReturn(List.of());
+
+        documentService.confirmChatExportName(chatDoc, wikiTitle);
+
+        assertThat(chatDoc.getFilename()).isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("NFD로 온 [채팅] 접두사도 같은 접두사로 보고 다시 붙이지 않는다")
+    void confirmChatExportName_doesNotDuplicateNfdPrefix() {
+        Document chatDoc = new Document(
+                "chatdoc_nfd", WORKSPACE_ID, USER_ID, "[채팅] 첫 질문.md", "text/markdown", 10L,
+                "sources/documents/chatdoc_nfd/original", "h", "chat_export");
+        when(documentRepository.findActiveSiblingNames(WORKSPACE_ID, null)).thenReturn(List.of());
+
+        documentService.confirmChatExportName(chatDoc,
+                java.text.Normalizer.normalize("[채팅] 검색 인덱싱", java.text.Normalizer.Form.NFD));
+
+        assertThat(chatDoc.getFilename()).isEqualTo("[채팅] 검색 인덱싱.md");
+    }
+
+    @Test
+    @DisplayName("접두사가 붙은 제목이 기존 문서와 겹치면 접두사는 하나만 두고 번호를 붙인다")
+    void confirmChatExportName_prefixedTitle_keepsDuplicateNumbering() {
+        Document chatDoc = new Document(
+                "chatdoc_dup", WORKSPACE_ID, USER_ID, "[채팅] 첫 질문.md", "text/markdown", 10L,
+                "sources/documents/chatdoc_dup/original", "h", "chat_export");
+        when(documentRepository.findActiveSiblingNames(WORKSPACE_ID, null))
+                .thenReturn(List.of("[채팅] 첫 질문.md", "[채팅] 검색 인덱싱.md"));
+
+        documentService.confirmChatExportName(chatDoc, "[채팅] 검색 인덱싱");
+
+        assertThat(chatDoc.getFilename()).isEqualTo("[채팅] 검색 인덱싱 (2).md");
     }
 
     private Document renameTarget(String documentId, String filename, String mimeType) {
