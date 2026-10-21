@@ -75,7 +75,8 @@ public class SkillFolderSourceService {
                 .toList();
         int limit = Math.max(MIN_DOCUMENTS, Math.min(MAX_DOCUMENTS, maxDocuments));
         List<Document> withBody = withBody(readable);
-        // 본문을 만들지 못했거나 비어 있는(공백뿐인) 문서는 건너뛰고 다음 문서로 limit을 채운다. 건너뛴 문서는 전체 수에서도 뺀다.
+        // 본문을 만들지 못했거나 비어 있는(공백뿐인) 문서, 변환이 실패해 placeholder만 남은 문서는 건너뛰고
+        // 다음 문서로 limit을 채운다. 건너뛴 문서는 전체 수에서도 뺀다.
         List<SkillFolderSourceReadResponse.Item> items = new ArrayList<>();
         int skipped = 0;
         for (Document document : withBody) {
@@ -83,7 +84,7 @@ public class SkillFolderSourceService {
                 break;
             }
             String markdown = markdown(document);
-            if (markdown == null || markdown.isBlank()) {
+            if (markdown == null || markdown.isBlank() || document.isFailedConvertPlaceholder(markdown)) {
                 skipped++;
                 continue;
             }
@@ -95,15 +96,20 @@ public class SkillFolderSourceService {
 
     /**
      * 본문이 있는 문서만 남긴다: 편집 상태가 있거나, 없더라도 저장소 본문으로 만들 수 있는(source_uri가 있는) 문서.
+     * PDF 변환 중인 문서는 본문이 placeholder이거나 일부뿐이라 뺀다. 상태로 판정하므로 limit 밖 문서에도 같이 적용된다.
      * 편집 상태 존재 여부는 한 번에 읽고, 저장소 본문은 실제로 실을 문서만 만든다.
      */
     private List<Document> withBody(List<Document> documents) {
         if (documents.isEmpty()) {
             return List.of();
         }
+        List<Document> settled = documents.stream().filter(document -> !document.isConverting()).toList();
+        if (settled.isEmpty()) {
+            return List.of();
+        }
         Set<String> withEditState = new HashSet<>(editStateRepository.findExistingDocumentIds(
-                documents.stream().map(Document::getId).toList()));
-        return documents.stream()
+                settled.stream().map(Document::getId).toList()));
+        return settled.stream()
                 .filter(document -> withEditState.contains(document.getId())
                         || (document.getSourceUri() != null && !document.getSourceUri().isBlank()))
                 .toList();

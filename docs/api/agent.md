@@ -1136,7 +1136,7 @@ string
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `total_documents` | `integer` | 읽을 수 있고 본문이 있는 대상 전체 수(`max_documents`로 자르기 전). 본문이 없거나 비어 있는(공백뿐인) 문서는 세지 않는다 |
+| `total_documents` | `integer` | 읽을 수 있고 본문이 있는 대상 전체 수(`max_documents`로 자르기 전). 본문이 없거나 비어 있는(공백뿐인) 문서, PDF 변환 중인 문서, 변환이 실패해 placeholder 본문만 남은 문서는 세지 않는다 |
 | `items[].document_id` | `string` | 문서 ID |
 | `items[].display_name` | `string` | 문서 표시 이름 |
 | `items[].updated_at` | `string(date-time)` | 문서 마지막 수정 시각(ISO-8601, UTC) |

@@ -117,7 +117,7 @@ public class DocumentService {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
     private static final String INITIAL_NOTE_FILENAME = "새 노트.md";
-    private static final String CONVERT_PLACEHOLDER_MARKDOWN = "PDF 변환 중...\n";
+    private static final String CONVERT_PLACEHOLDER_MARKDOWN = Document.CONVERT_PLACEHOLDER_MARKDOWN;
     // 크기 상한을 넘은 변환 이미지 자리 표시. 정규식·치환 특수 문자가 없는 값이어야 한다.
     private static final String OVERSIZED_CONVERTED_IMAGE = "fruition-oversized-converted-image";
     private static final String PDF_MIME_TYPE = "application/pdf";

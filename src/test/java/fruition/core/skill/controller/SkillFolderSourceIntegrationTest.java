@@ -1,6 +1,7 @@
 package fruition.core.skill.controller;
 
 import fruition.TestcontainersConfiguration;
+import fruition.core.document.domain.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -118,6 +119,29 @@ class SkillFolderSourceIntegrationTest {
     }
 
     @Test
+    void skipsConvertingAndFailedPlaceholderDocumentsButKeepsReingestingConvertedOnes() throws Exception {
+        UUID folder = insertFolder(workspace, null);
+        // 변환 중: placeholder 본문, 첫 batch만 병합된 본문
+        insertDocument(folder, "2026-01-06T00:00:00Z", Document.CONVERT_PLACEHOLDER_MARKDOWN,
+                "processing", "convert:placeholder");
+        insertDocument(folder, "2026-01-05T00:00:00Z", "# 1쪽만 병합", "processing", "convert:partial");
+        // 첫 batch 전에 변환이 실패해 placeholder 본문이 남은 문서
+        insertDocument(folder, "2026-01-04T00:00:00Z", Document.CONVERT_PLACEHOLDER_MARKDOWN,
+                "failed", "convert:failed");
+        // 변환을 마친 뒤 재ingest로 processing인 문서와, 크레딧 부족으로 ingest가 거절된 변환 완료 문서는 싣는다.
+        String reingesting = insertDocument(folder, "2026-01-03T00:00:00Z", "# 변환 완료", "processing", "ingest-run-1");
+        String ingestRejected = insertDocument(folder, "2026-01-02T00:00:00Z", "# 변환 완료 2", "failed", "convert:done");
+        // limit 밖 변환 중 문서도 전체 수에서 빠진다.
+        insertDocument(folder, "2026-01-01T00:00:00Z", "# 일부", "processing", "convert:outside");
+
+        read(member, folder.toString(), 2)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total_documents").value(2))
+                .andExpect(jsonPath("$.items[*].document_id").value(contains(reingesting, ingestRejected)))
+                .andExpect(jsonPath("$.items[*].markdown").value(contains("# 변환 완료", "# 변환 완료 2")));
+    }
+
+    @Test
     void viewOnlyDocumentsAreStillReadable() throws Exception {
         UUID folder = insertFolder(workspace, null);
         String viewOnly = insertDocument(folder, "EDITABLE", "2026-01-02T00:00:00Z", "# 보기 전용");
@@ -202,16 +226,25 @@ class SkillFolderSourceIntegrationTest {
 
     /** markdown이 null이면 편집 상태를 넣지 않는다. source_uri가 비어 있어 저장소에서 만들지도 않는다. */
     private String insertDocument(UUID folder, String role, String updatedAt, String markdown) {
+        return insertDocument(folder, role, updatedAt, markdown, "completed", null);
+    }
+
+    private String insertDocument(UUID folder, String updatedAt, String markdown, String status, String pipelineRunId) {
+        return insertDocument(folder, "EDITABLE", updatedAt, markdown, status, pipelineRunId);
+    }
+
+    private String insertDocument(UUID folder, String role, String updatedAt, String markdown,
+                                  String status, String pipelineRunId) {
         String id = UUID.randomUUID().toString();
         jdbc.update("""
                 INSERT INTO documents(
                     id, byte_size, content_hash, filename, display_name, normalized_filename,
                     mime_type, source_uri, status, uploaded_at, updated_at, user_id, workspace_id,
-                    current_content_hash, current_version, document_role, sort_order, folder_id
-                ) VALUES (?, 1, 'hash', ?, ?, ?, 'text/markdown', '', 'completed', now(), ?, ?, ?,
-                          'hash', 1, ?, 0, ?)
-                """, id, id + ".md", "문서-" + id, id + ".md", Timestamp.from(Instant.parse(updatedAt)),
-                owner, workspace, role, folder);
+                    current_content_hash, current_version, document_role, sort_order, folder_id, pipeline_run_id
+                ) VALUES (?, 1, 'hash', ?, ?, ?, 'text/markdown', '', ?, now(), ?, ?, ?,
+                          'hash', 1, ?, 0, ?, ?)
+                """, id, id + ".md", "문서-" + id, id + ".md", status, Timestamp.from(Instant.parse(updatedAt)),
+                owner, workspace, role, folder, pipelineRunId);
         if (markdown != null) {
             jdbc.update("""
                     INSERT INTO document_edit_states(document_id, markdown, content_hash, revision, created_at, updated_at)

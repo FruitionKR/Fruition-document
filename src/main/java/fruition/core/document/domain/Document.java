@@ -13,6 +13,10 @@ import java.util.UUID;
         indexes = @Index(name = "idx_documents_reconcile", columnList = "origin, status, reconciled_at"))
 public class Document {
 
+    /** PDF → Markdown 변환 placeholder의 처음 본문. 첫 batch가 병합되기 전까지 편집 상태가 이 본문이다. */
+    public static final String CONVERT_PLACEHOLDER_MARKDOWN = "PDF 변환 중...\n";
+    private static final String CONVERT_RUN_PREFIX = "convert:";
+
     @Id
     private String id;
 
@@ -261,6 +265,20 @@ public class Document {
         this.currentContentHash = currentContentHash;
         this.byteSize = byteSize;
         this.sortOrder = sortOrder;
+    }
+
+    /**
+     * PDF → Markdown 변환이 아직 진행 중인 문서. 본문은 placeholder이거나 일부 batch만 병합된 상태다.
+     * 변환 뒤 ingest가 시작되면 실행 ID가 ingest 실행으로 바뀌므로 재ingest로 processing인 문서는 여기에 들지 않는다.
+     */
+    public boolean isConverting() {
+        return status == DocumentStatus.processing
+                && pipelineRunId != null && pipelineRunId.startsWith(CONVERT_RUN_PREFIX);
+    }
+
+    /** 첫 batch가 병합되기 전에 변환이 실패해 본문이 placeholder 그대로 남은 문서. 실패 처리는 본문을 되돌리지 않는다. */
+    public boolean isFailedConvertPlaceholder(String markdown) {
+        return status == DocumentStatus.failed && CONVERT_PLACEHOLDER_MARKDOWN.equals(markdown);
     }
 
     /** PDF → Markdown 변환 완료: 변환 본문 기준으로 크기·해시를 갱신하고 completed로 전환한다. */
