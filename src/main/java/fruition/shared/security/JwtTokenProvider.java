@@ -3,6 +3,7 @@ package fruition.shared.security;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.JwtParser;
+import io.jsonwebtoken.MalformedJwtException;
 import io.jsonwebtoken.UnsupportedJwtException;
 import org.springframework.beans.factory.annotation.Autowired;
 import java.security.KeyFactory;
@@ -151,6 +152,14 @@ public class JwtTokenProvider {
     }
 
     private Claims parseClaims(String token) {
+        Claims claims = parseVerifiedClaims(token);
+        if (claims.getExpiration() == null || claims.getSubject() == null || claims.getSubject().isBlank()) {
+            throw new MalformedJwtException("JWT requires expiration and a nonblank subject");
+        }
+        return claims;
+    }
+
+    private Claims parseVerifiedClaims(String token) {
         if (rsaParser == null) return legacyParser.parseSignedClaims(token).getPayload();
         try {
             return rsaParser.parseSignedClaims(token).getPayload();
