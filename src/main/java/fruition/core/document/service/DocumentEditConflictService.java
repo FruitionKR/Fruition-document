@@ -80,7 +80,7 @@ public class DocumentEditConflictService {
         if (document.getDocumentRole() != DocumentRole.EDITABLE) {
             throw new InvalidMarkdownContentException("편집 가능한 Markdown 문서만 충돌을 등록할 수 있습니다.");
         }
-        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(request.markdown());
+        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(request.markdown());
         DocumentEditConflictResponse existing = findByClientConflictId(documentId, request.clientConflictId());
         if (existing != null) {
             return existing;

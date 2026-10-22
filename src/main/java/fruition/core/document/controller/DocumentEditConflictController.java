@@ -50,7 +50,7 @@ public class DocumentEditConflictController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "413", description = "Markdown 5MB 초과",
+        @ApiResponse(responseCode = "413", description = "요청 본문 제한 초과",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "423", description = "다른 사용자가 편집 잠금을 보유 중",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))

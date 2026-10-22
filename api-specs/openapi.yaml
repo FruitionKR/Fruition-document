@@ -1962,7 +1962,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: Markdown 5MB 초과
+          description: 요청 본문 제한 초과
         "423":
           content:
             '*/*':
@@ -2049,7 +2049,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: Markdown 5MB 또는 이미지 제한 초과
+          description: 요청 본문 또는 이미지 제한 초과
         "415":
           content:
             '*/*':

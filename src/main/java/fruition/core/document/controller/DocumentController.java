@@ -400,7 +400,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "revision_write_id 충돌(IDEMPOTENCY_KEY_CONFLICT), 또는 base_revision이 서버 현재 revision보다 큼(DOCUMENT_VERSION_CONFLICT, error.current_revision에 서버 현재 revision). 오래된 base_revision은 409가 아니라 자동 병합된다",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "413", description = "Markdown 5MB 또는 이미지 제한 초과",
+        @ApiResponse(responseCode = "413", description = "요청 본문 또는 이미지 제한 초과",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "415", description = "지원하지 않는 이미지 형식",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
