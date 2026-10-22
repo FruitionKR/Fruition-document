@@ -110,6 +110,7 @@ tasks.withType(org.flywaydb.gradle.task.AbstractFlywayTask).configureEach {
 }
 
 tasks.named('test') {
+	environment('JWT_SECRET', 'jwt-secret-INSECURE-NOT-FOR-PRODUCTION-test')
 	useJUnitPlatform()
 	// 운영 기본값을 두지 않는 설정이라 테스트에서만 고정값을 준다.
 	environment('INTERNAL_CALLBACK_TOKEN', 'test-internal-callback')
