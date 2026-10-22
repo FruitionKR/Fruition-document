@@ -43,7 +43,7 @@ final class ContentSaveMerge implements PostgresDocumentEditStore.StaleBaseResol
                 .map(DocumentContentVersion::getMarkdown)
                 .map(base -> LineThreeWayMerge.merge(base, currentMarkdown, mine))
                 .orElseGet(() -> new LineThreeWayMerge.Result(mine, !mine.equals(currentMarkdown)));
-        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(result.markdown());
+        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(result.markdown());
         mergedMarkdown = content.markdown();
         outcome = result.conflicted()
                 ? new Merge(Merge.STATUS_OVERWRITTEN, baseRevision, currentRevision, currentRevision)

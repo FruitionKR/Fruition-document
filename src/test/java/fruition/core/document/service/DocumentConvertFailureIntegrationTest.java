@@ -35,6 +35,58 @@ class DocumentConvertFailureIntegrationTest {
     @Autowired TransactionTemplate tx;
     @Autowired ObjectMapper mapper;
 
+    @Autowired io.minio.MinioClient minio;
+    @Autowired fruition.shared.util.StorageProperties storage;
+
+    @Test
+    void oversizedOutOfOrderBatchesKeepEveryPageInOneDocument() throws Exception {
+        Conversion conversion = conversion();
+        tx.executeWithoutResult(status -> {
+            tasks.join(conversion.run());
+            jdbc.update("INSERT INTO document_edit_states(document_id, markdown, content_hash, revision, created_at, updated_at) VALUES (?, ?, 'placeholder', 1, now(), now())",
+                    conversion.document(), Document.CONVERT_PLACEHOLDER_MARKDOWN);
+            var queue = queues.findById(conversion.queue()).orElseThrow();
+            queue.dispatchedUpTo(20);
+            batches.insertDispatched(queue.getId(), 10, 10, "{}");
+        });
+        String first = "<!-- page 1 -->\n" + "앞쪽 본문\n".repeat(450000);
+        String second = "<!-- page 1 -->\n뒤쪽 마지막 본문";
+        putResult(conversion, 0, first);
+        putResult(conversion, 10, second);
+        service.applyConvertBatch(success(conversion, 10));
+        service.applyConvertBatch(success(conversion, 0));
+        service.applyConvertBatch(success(conversion, 0));
+        String expected = first.stripTrailing() + "\n\n<!-- page 11 -->\n뒤쪽 마지막 본문";
+        assertThat(expected.getBytes(java.nio.charset.StandardCharsets.UTF_8).length).isGreaterThan(5 * 1024 * 1024);
+        assertThat(jdbc.queryForObject("SELECT markdown FROM document_edit_states WHERE document_id=?",
+                String.class, conversion.document())).isEqualTo(expected);
+        assertThat(jdbc.queryForObject("SELECT revision FROM document_edit_states WHERE document_id=?",
+                Long.class, conversion.document())).isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT byte_size FROM documents WHERE id=?", Long.class, conversion.document()))
+                .isEqualTo(expected.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        assertThat(documents.findConvertedParts("workspace", conversion.document())).isEmpty();
+        try (var stream = minio.getObject(io.minio.GetObjectArgs.builder().bucket(storage.getBucket())
+                .object("sources/documents/" + conversion.document() + "/original").build())) {
+            assertThat(new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo(expected);
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM document_convert_queue WHERE id=?", Long.class, conversion.queue())).isZero();
+    }
+
+    private void putResult(Conversion conversion, int start, String markdown) throws Exception {
+        byte[] bytes = markdown.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        minio.putObject(io.minio.PutObjectArgs.builder().bucket(storage.getBucket())
+                .object("tmp/convert/workspace/" + conversion.document() + "/" + start + ".md")
+                .stream(new java.io.ByteArrayInputStream(bytes), bytes.length, -1).build());
+    }
+
+    private ObjectNode success(Conversion conversion, int start) {
+        var event = mapper.createObjectNode().put("run_id", conversion.run() + ":" + start)
+                .put("kind", "convert_batch").put("status", "succeeded");
+        event.putObject("payload").put("page_start", start + 1).put("page_end", start + 10)
+                .put("total_pages", 20).put("result_key", "tmp/convert/workspace/" + conversion.document() + "/" + start + ".md");
+        return event;
+    }
+
     record Conversion(String source, String document, String user, String run, long queue) {}
 
     private Conversion conversion() {

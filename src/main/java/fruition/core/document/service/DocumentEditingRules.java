@@ -62,6 +62,27 @@ final class DocumentEditingRules {
         }
     }
 
+    /** 서버가 생성·저장한 문서 본문은 업로드 한도로 자르거나 분리하지 않는다. */
+    static MarkdownContent storedMarkdown(String markdown) {
+        if (markdown == null) {
+            throw new InvalidMarkdownContentException("Markdown 본문은 null일 수 없습니다.");
+        }
+        byte[] bytes = markdown.getBytes(StandardCharsets.UTF_8);
+        return new MarkdownContent(markdown, bytes, sha256(bytes));
+    }
+
+    static MarkdownContent storedMarkdown(byte[] bytes) {
+        try {
+            String markdown = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString();
+            return new MarkdownContent(markdown, bytes, sha256(bytes));
+        } catch (CharacterCodingException exception) {
+            throw new InvalidMarkdownContentException("Markdown 본문은 올바른 UTF-8이어야 합니다.");
+        }
+    }
+
     static Filename duplicateFilename(String currentDisplayName, Set<String> existingNormalizedFilenames) {
         String baseName = copyBaseName(currentDisplayName);
         for (int number = 1; ; number++) {

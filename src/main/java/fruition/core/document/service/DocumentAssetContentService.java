@@ -48,7 +48,7 @@ public class DocumentAssetContentService {
 
         Map<UUID, DocumentAssetValidator.ValidatedAsset> validated =
                 assetValidator.validateAll(request.attachments());
-        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(request.markdown());
+        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(request.markdown());
         String revisionWriteId = revisionWriteId(request.baseVersion(), content.contentHash(), validated);
         Map<UUID, DocumentAssetStorageCoordinator.StoredAsset> stored =
                 storageCoordinator.storeAll(workspaceId, documentId, request.baseVersion(), validated);

@@ -448,6 +448,7 @@ class DocumentServiceConvertTest {
                 .thenAnswer(inv -> Optional.ofNullable(rows.get(inv.getArgument(0))));
         lenient().when(documentRepository.findConvertedParts(WORKSPACE_ID, parent.getId())).thenAnswer(inv -> rows.values().stream()
                 .filter(doc -> "convert_part".equals(doc.getOrigin())).toList());
+        lenient().when(postgresDocumentEditStore.findState(anyString())).thenAnswer(inv -> Optional.ofNullable(states.get(inv.<String>getArgument(0))));
         lenient().when(editStateRepository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(states.get(inv.<String>getArgument(0))));
         lenient().doAnswer(inv -> {
             DocumentEditState state = inv.getArgument(0); states.put(state.getDocumentId(), state); return state; })
@@ -617,7 +618,7 @@ class DocumentServiceConvertTest {
     }
 
     @Test
-    @DisplayName("순서가 뒤바뀌어 도착해도 최종 문서는 순서대로 도착한 경우와 같고 파트 분할도 같다")
+    @DisplayName("순서가 뒤바뀌어 도착해도 최종 문서는 순서대로 도착한 경우와 같고 5MB를 넘어도 하나다")
     void outOfOrderFinalDocumentEqualsSequential() throws Exception {
         int sixtyPercent = DocumentEditingRules.MAX_MARKDOWN_BYTES / 3 * 6 / 10;
         java.util.Map<Integer, String> batches = java.util.Map.of(
@@ -628,7 +629,8 @@ class DocumentServiceConvertTest {
         var sequential = runMerge(batches, new int[] {10, 20, 30});
         var reversed = runMerge(batches, new int[] {30, 20, 10});
 
-        assertThat(sequential).hasSize(3);
+        assertThat(sequential).hasSize(1);
+        assertThat(sequential.getFirst().getBytes(StandardCharsets.UTF_8).length).isGreaterThan(DocumentEditingRules.MAX_MARKDOWN_BYTES);
         assertThat(reversed).isEqualTo(sequential);
     }
 
@@ -782,21 +784,23 @@ class DocumentServiceConvertTest {
     }
 
     @Test
-    @DisplayName("상한을 넘는 한 묶음은 앞 조각을 이어 붙인 뒤의 본문 기준으로 다음 조각의 파트 전환을 판단한다")
-    void oversizedBatchUsesAppendedContentForNextPiece() throws Exception {
+    @DisplayName("5MB를 넘는 단일 batch도 모든 페이지를 같은 문서에 이어 붙인다")
+    void oversizedBatchKeepsAllPagesInParentDocument() throws Exception {
         int mib = 1024 * 1024;
         startScenario("<!-- page 10 -->\n\n" + "가".repeat(mib / 3));
         queue.checkpoint(10, 100);
         seedDispatched(10);
-        // 11쪽(약 3.5MiB) + 12쪽(약 2MiB): 함께는 상한을 넘어 두 조각이 된다.
+        // 11쪽(약 3.5MiB) + 12쪽(약 2MiB): 단일 batch만으로도 이전 5MB 상한을 넘는다.
         stubResult(10, "<!-- page 1 -->\n\n" + "나".repeat(mib * 7 / 6) + "\n\n<!-- page 2 -->\n\n" + "다".repeat(mib * 2 / 3) + "\n");
 
         documentService.applyConvertBatch(succeeded(10, 20, 100));
 
         var parts = rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).toList();
-        assertThat(parts).hasSize(1);
-        assertThat(states.get(parent.getId()).getMarkdown()).contains("<!-- page 11 -->").doesNotContain("<!-- page 12 -->");
-        assertThat(states.get(parts.getFirst().getId()).getMarkdown()).startsWith("<!-- page 12 -->");
+        assertThat(parts).isEmpty();
+        assertThat(states).hasSize(1);
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo(
+                "<!-- page 10 -->\n\n" + "가".repeat(mib / 3) + "\n\n<!-- page 11 -->\n\n"
+                        + "나".repeat(mib * 7 / 6) + "\n\n<!-- page 12 -->\n\n" + "다".repeat(mib * 2 / 3) + "\n");
         verify(postgresDocumentEditStore, times(1)).save(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyString(), any());
     }
 
@@ -815,26 +819,6 @@ class DocumentServiceConvertTest {
 
         parent.markProcessingFailed("PDF 변환에 실패했습니다", Instant.now());
         documentService.validateContentSavePreconditions(WORKSPACE_ID, USER_ID, parent.getId());
-    }
-
-    @Test
-    @DisplayName("변환 중 삭제된 파트의 ID는 다시 쓰지 않고 다음 번호로 새 파트를 만든다")
-    void deletedPartIdIsNotReused() throws Exception {
-        String nearlyFull = "<!-- page 10 -->\n\n" + "가".repeat((DocumentEditingRules.MAX_MARKDOWN_BYTES - 100) / 3);
-        startScenario(nearlyFull);
-        queue.checkpoint(10, 100);
-        seedDispatched(10);
-        String deletedPartId = "doc_" + java.util.UUID.nameUUIDFromBytes((parent.getId() + ":part:1")
-                .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
-        when(documentRepository.existsById(anyString())).thenAnswer(inv -> deletedPartId.equals(inv.getArgument(0)));
-        stubResult(10, "<!-- page 1 -->\n\n" + "나".repeat(100) + "\n");
-
-        documentService.applyConvertBatch(succeeded(10, 20, 100));
-
-        var parts = rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).toList();
-        assertThat(parts).hasSize(1);
-        assertThat(parts.getFirst().getId()).isNotEqualTo(deletedPartId);
-        assertThat(parts.getFirst().getFilename()).contains("[파트 3,");
     }
 
     @Test
@@ -889,8 +873,8 @@ class DocumentServiceConvertTest {
     }
 
     @Test
-    @DisplayName("이어 붙인 본문이 편집 상한을 넘으면 다음 파트 문서로 넘어가고 파트마다 AI 큐에 등록된다")
-    void batchOverEditLimitStartsNextPart() throws Exception {
+    @DisplayName("이어 붙인 본문이 5MB를 넘어도 한 문서에 보존하고 AI 큐도 한 번만 등록한다")
+    void batchOverEditLimitKeepsSingleDocument() throws Exception {
         enableAutoIngest(true);
         String nearlyFull = "<!-- page 10 -->\n\n" + "가".repeat((DocumentEditingRules.MAX_MARKDOWN_BYTES - 100) / 3);
         startScenario(nearlyFull);
@@ -901,10 +885,11 @@ class DocumentServiceConvertTest {
         documentService.applyConvertBatch(succeeded(10, 20, 20));
 
         var parts = rows.values().stream().filter(doc -> "convert_part".equals(doc.getOrigin())).toList();
-        assertThat(parts).hasSize(1);
-        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo(nearlyFull);
-        assertThat(states.get(parts.getFirst().getId()).getMarkdown()).startsWith("<!-- page 11 -->");
-        verify(ingestCommandOutbox, times(2)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+        assertThat(parts).isEmpty();
+        assertThat(states).hasSize(1);
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo(
+                nearlyFull + "\n\n<!-- page 11 -->\n\n" + "나".repeat(100) + "\n");
+        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
     }
 
     @Test
