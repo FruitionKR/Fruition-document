@@ -16,5 +16,7 @@ public record ChatWikiExportResponse(
 
         @Schema(description = "saved는 저장 완료, skipped는 같은 내용이 이미 있어 건너뜀을 뜻한다.",
                 allowableValues = {"saved", "skipped"}, example = "saved")
-        String status) {
+        String status,
+        @com.fasterxml.jackson.annotation.JsonProperty("export_id") java.util.UUID exportId) {
+    public ChatWikiExportResponse(String documentId, String status) { this(documentId, status, null); }
 }

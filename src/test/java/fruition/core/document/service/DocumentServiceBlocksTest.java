@@ -653,8 +653,11 @@ class DocumentServiceBlocksTest {
     @Test
     @DisplayName("초기 노트는 원본을 object storage에 쓰고 직접 생성 Markdown과 편집 상태로 저장한다")
     void createInitialNote_savesDirectMarkdownWithSource() throws Exception {
+        var analytics = org.mockito.Mockito.mock(fruition.core.analytics.DocumentAnalytics.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(documentService, "analytics", analytics);
         documentService.createInitialNote("ws_first", USER_ID);
         documentService.createInitialNote("ws_second", USER_ID);
+        verify(analytics, never()).uploaded(any());
 
         ArgumentCaptor<Document> documents = ArgumentCaptor.forClass(Document.class);
         ArgumentCaptor<DocumentEditState> editStates = ArgumentCaptor.forClass(DocumentEditState.class);

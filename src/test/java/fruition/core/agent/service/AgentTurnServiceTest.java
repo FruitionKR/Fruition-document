@@ -1093,4 +1093,33 @@ class AgentTurnServiceTest {
         org.mockito.Mockito.verifyNoInteractions(runRepository);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"disabled", "missing", "unavailable"})
+    void analyticsMetadataNeverRejectsExplicitSkillExecution(String scenario) throws Exception {
+        try (var server = new okhttp3.mockwebserver.MockWebServer()) {
+            server.start();
+            if (!"disabled".equals(scenario)) server.enqueue(new okhttp3.mockwebserver.MockResponse()
+                    .setResponseCode("unavailable".equals(scenario) ? 503 : 200)
+                    .setHeader("Content-Type", "application/json").setBody("{}"));
+            var settings = new fruition.core.analytics.AnalyticsSettings(!"disabled".equals(scenario), "",
+                    "http://localhost", "local", "test");
+            var metadata = new fruition.core.analytics.AnalyticsSkillMetadataClient(settings,
+                    server.url("/skills").toString(), "test-internal-token");
+            var recorder = org.mockito.Mockito.mock(fruition.core.analytics.AnalyticsRecorder.class);
+            var analytics = new fruition.core.analytics.DocumentAnalytics(recorder,
+                    org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class), new ObjectMapper());
+            org.springframework.test.util.ReflectionTestUtils.setField(analytics, "skillMetadata", metadata);
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "analytics", analytics);
+            var request = new ObjectMapper().readValue("""
+                    {"session_id":"session_1","message":"run skill","provider":"openai","model":"gpt-6-luna",
+                     "skill_mode":"explicit","skill_id":"skill-1"}
+                    """, AgentTurnRequest.class);
+            assertThat(service.turn("ws_1", "user_1", request).status()).isEqualTo("queued");
+            verify(outboxWriter).enqueue(anyString(), anyString(), anyString(), any());
+            verify(workspaceAccessGuard).requireMember("ws_1", "user_1");
+            assertThat(server.getRequestCount()).isEqualTo("disabled".equals(scenario) ? 0 : 1);
+            verify(recorder, never()).record(any(), any(), any(), any(), any(), any());
+        }
+    }
+
 }

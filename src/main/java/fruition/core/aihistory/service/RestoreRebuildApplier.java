@@ -41,6 +41,9 @@ import java.util.regex.Pattern;
 @Component
 public class RestoreRebuildApplier {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
+
     private static final Pattern SAFE_IDENTIFIER = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,254}");
     private static final Set<String> SAFE_FAILURE_CODES = Set.of(
             "assembly_failed", "concept_rebuild_failed", "contribution_missing",
@@ -103,6 +106,7 @@ public class RestoreRebuildApplier {
                 : OperationStatus.partially_succeeded;
         String summary = resultSummary(request, changedPages);
         operation.complete(status, summary, changed, payloadHash, now);
+        if (analytics != null) analytics.restored(operation, status == OperationStatus.succeeded ? null : "internal_error");
         return new OperationResultResponse(operationId, status.name(), changed);
     }
 

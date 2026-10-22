@@ -39,6 +39,9 @@ import java.util.Set;
 @Service
 public class AiTaskResultApplier {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
+
     private static final Set<String> MARKDOWN_ACTIONS = Set.of("markdown_create", "markdown_edit");
     private static final java.util.regex.Pattern NOTE_MARKER = java.util.regex.Pattern.compile(
             "^(<!--\\s*fruition-(?:note|workspace):\\s*[^\\r\\n]+?\\s*-->)\\r?\\n?");
@@ -202,6 +205,7 @@ public class AiTaskResultApplier {
             } catch (RestorePreviewStaleException e) {
                 operation.complete(OperationStatus.conflict, e.getMessage(),
                         operation.getChangedResourceCount(), null, java.time.Instant.now());
+                if (analytics != null) analytics.restored(operation, "internal_error");
                 return;
             }
         }
@@ -226,6 +230,7 @@ public class AiTaskResultApplier {
         OperationResultRequest result = objectMapper.convertValue(
                 required(event, "payload"), OperationResultRequest.class);
         operationIngestService.accept(operationId, result);
+        if (analytics != null) analytics.ingestCompleted(event, operationLogRepository.findById(operationId).orElse(null));
         documentService.applyPipelineResult(documentId, runId,
                 "succeeded".equals(text(event, "status")) ? "succeeded" : "failed",
                 event.path("error").asText(null));
@@ -306,6 +311,11 @@ public class AiTaskResultApplier {
             throw new IllegalStateException("Agent 적용 projection을 갱신하지 못했습니다: " + runId);
         }
         recordAgentChatMessage(event, errorCode);
+        if (analytics != null) {
+            if (errorCode == null) analytics.proposed(event);
+            if ("chat_answer".equals(event.path("payload").path("action").asText()))
+                analytics.queryCompleted(event, true, errorCode);
+        }
         chatTurnRecorder.recordContextSummary(
                 textOrNull(event.path("request"), "session_id"),
                 event.path("payload").path("updated_conversation_summary").asText(null));
@@ -521,6 +531,7 @@ public class AiTaskResultApplier {
                     : responseFrom(question, context, result);
             if (first) {
                 chatTurnRecorder.recordContextSummary(sessionId, result.updatedConversationSummary());
+                if (analytics != null) analytics.queryCompleted(canonical, false, null);
             }
             return new QueryProjection(runId, response, null);
         }
@@ -528,6 +539,7 @@ public class AiTaskResultApplier {
         String error = canonical.path("error").asText("internal_error");
         if (first) {
             queryService.failAsync(runId, context, error);
+            if (analytics != null) analytics.queryCompleted(canonical, false, error);
         }
         return new QueryProjection(runId, null, error);
     }
