@@ -99,4 +99,25 @@ class JwtTokenProviderTest {
                 .signWith(pair.getPrivate(), Jwts.SIG.RS384).compact();
         assertFalse(verifier(pair, null, "", "").isValid(token));
     }
+
+    @Test void requiresExpiryAndNonblankSubjectForRsaAndLegacyTokens() throws Exception {
+        var pair = pair();
+        var verifier = verifier(pair, null, LEGACY, Instant.now().plusSeconds(60).toString());
+        for (boolean rsa : new boolean[] {true, false}) {
+            for (String subject : new String[] {null, "", " ", "\t\n", "audit-test-user"}) {
+                for (boolean expires : new boolean[] {true, false}) {
+                    var builder = Jwts.builder().issuer("fruition-access").audience().add("fruition-api").and();
+                    if (subject != null) builder.subject(subject);
+                    if (expires) builder.expiration(Date.from(Instant.now().plusSeconds(60)));
+                    String token = rsa
+                            ? builder.header().keyId("current").and().signWith(pair.getPrivate(), Jwts.SIG.RS256).compact()
+                            : builder.signWith(Keys.hmacShaKeyFor(LEGACY.getBytes(java.nio.charset.StandardCharsets.UTF_8))).compact();
+                    boolean valid = expires && subject != null && !subject.isBlank();
+                    assertEquals(valid, verifier.isValid(token));
+                    if (valid) assertEquals(subject, verifier.extractUserId(token));
+                    else assertThrows(io.jsonwebtoken.JwtException.class, () -> verifier.extractUserId(token));
+                }
+            }
+        }
+    }
 }
