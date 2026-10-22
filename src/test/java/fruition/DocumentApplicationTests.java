@@ -39,6 +39,34 @@ class DocumentApplicationTests {
 	void contextLoads() {
 	}
 
+	@Autowired
+	org.springframework.kafka.config.KafkaListenerEndpointRegistry kafkaListeners;
+
+	@Autowired
+	org.springframework.boot.autoconfigure.kafka.KafkaProperties kafkaProperties;
+
+	@Autowired
+	org.springframework.core.env.Environment environment;
+
+	@Test
+	void defaultIntegrationContextDoesNotJoinDeveloperBrokerOrCallDeveloperServices() {
+		assertThat(kafkaListeners.getListenerContainers()).isNotEmpty().allSatisfy(container -> {
+			assertThat(container.isAutoStartup()).isFalse();
+			assertThat(container.isRunning()).isFalse();
+		});
+		assertThat(kafkaProperties.getBootstrapServers()).containsExactly("127.0.0.1:1");
+		for (String property : new String[]{
+				"app.internal.access-base-url", "app.pipeline-run.endpoint", "app.query.endpoint",
+				"app.agent.status-endpoint", "app.agent.run-endpoint", "app.skill.endpoint",
+				"app.speech.live-endpoint", "app.speech.transcription-endpoint", "app.speech.synthesis-endpoint",
+				"app.wiki-state.endpoint", "app.model-usage.endpoint", "app.usage-charge.calls-endpoint",
+				"app.fx.koreaexim.endpoint", "app.billing.pg.confirm-endpoint", "POSTHOG_HOST"
+		}) {
+			assertThat(environment.getRequiredProperty(property)).as(property)
+					.matches("(?:http|ws)://127\\.0\\.0\\.1:1(?:/.*)?");
+		}
+	}
+
 	@Test
 	void flywayDropsLegacyAiTablesAndKeepsInUseOnes() {
 		for (String table : new String[]{
