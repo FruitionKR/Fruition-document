@@ -13,6 +13,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class QueryRunService {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
+
     private static final Logger log = LoggerFactory.getLogger(QueryRunService.class);
     private final QueryRunStore queryRunStore;
     private final QueryService queryService;
@@ -76,6 +79,7 @@ public class QueryRunService {
                         question, provider, model, webSearchEnabled,
                         chatSessionService.contextSummary(sessionId),
                         messageContext.recentMessages(), messageContext));
+        if (analytics != null) analytics.queryStarted(run.requestId(), userId, workspaceId, sessionId, messageContext.createdAt(), "chat");
         log.info("[질의 command 등록 완료] requestId={}", run.requestId());
         return run;
     }

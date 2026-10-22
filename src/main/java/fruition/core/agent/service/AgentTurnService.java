@@ -36,6 +36,9 @@ import java.util.regex.Pattern;
 @Service
 public class AgentTurnService {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
+
     private static final Set<String> TARGET_TYPES = Set.of("selection", "current_section", "whole_document");
     private static final Set<String> AUTONOMOUS_ACTIONS = Set.of("folder_organize", "workspace_workflow");
     private static final int MAX_SKILL_DRAFT_SOURCES = 3;
@@ -125,9 +128,10 @@ public class AgentTurnService {
                 UUID.randomUUID().toString(),
                 "chat_user_" + UUID.randomUUID(),
                 "chat_assistant_" + UUID.randomUUID());
+        java.time.Instant requestedAt = java.time.Instant.now();
         chatTurnRecorder.createPendingAgentPair(request.sessionId(), messageContext.pairId(),
                 messageContext.userMessageId(), messageContext.assistantMessageId(), request.message(),
-                java.time.Instant.now(), selectedModel.provider(), selectedModel.model(), runId);
+                requestedAt, selectedModel.provider(), selectedModel.model(), runId);
         outboxWriter.begin(runId, workspaceId, userId, "agent");
         // 편집안을 적용할 때 되돌려받을 표. source=agent 문자열 대신 이 값으로 AI 작업 여부를 가린다.
         // 적용할 문서가 없으면 표도 만들지 않는다.
@@ -151,6 +155,11 @@ public class AgentTurnService {
                         CommandEditorSnapshot.from(request.editorSnapshot()),
                         request.mode(),
                         folderId == null ? null : folderId.toString()));
+        if (analytics != null) {
+            analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt, "task");
+            if ("explicit".equals(request.skillMode()))
+                analytics.explicitSkillRun(runId, request.skillId(), userId, workspaceId, requestedAt);
+        }
         return new AgentTurnResponse(
                 request.documentId(),
                 request.baseVersion(),

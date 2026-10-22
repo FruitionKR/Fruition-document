@@ -113,6 +113,9 @@ import java.util.stream.Collectors;
 @Service
 public class DocumentService {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
+
     private static final int MAX_SAVE_ATTEMPTS = 3;
 
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
@@ -342,6 +345,7 @@ public class DocumentService {
                 document.recordOriginalSha256(contentHash);
             }
             documentRepository.save(document);
+            if (analytics != null) analytics.uploaded(document);
             if (markdownUpload) {
                 editStateRepository.save(new DocumentEditState(
                         documentId, markdownContent.markdown(), markdownContent.contentHash(), 1));
@@ -424,7 +428,7 @@ public class DocumentService {
 
         DocumentUploadResponse response =
                 createMarkdownDocument(workspaceId, userId, filename.filename(), content,
-                        skillReference ? Document.SKILL_REFERENCE_ORIGIN : "direct", request.folderId(), aiOrigin);
+                        skillReference ? Document.SKILL_REFERENCE_ORIGIN : "direct", request.folderId(), aiOrigin, true);
         saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
         return response;
     }
@@ -514,7 +518,8 @@ public class DocumentService {
                     DocumentEditingRules.markdown("# 새 노트\n"),
                     "direct",
                     null,
-                    null
+                    null,
+                    false
             );
         } catch (Exception e) {
             log.warn("초기 노트 저장 실패로 건너뜁니다. workspaceId={}", workspaceId, e);
@@ -589,7 +594,8 @@ public class DocumentService {
             DocumentEditingRules.MarkdownContent content,
             String origin,
             UUID folderId,
-            String aiOrigin
+            String aiOrigin,
+            boolean recordUpload
     ) {
         String documentId = newDocumentId();
         Document document = new Document(
@@ -612,6 +618,7 @@ public class DocumentService {
         document.place(folderId, sortOrder);
         document.markAiOrigin(aiOrigin);
         documentRepository.save(document);
+        if (recordUpload && analytics != null) analytics.uploaded(document);
         editStateRepository.save(new DocumentEditState(
                 documentId, content.markdown(), content.contentHash(), 1));
         return toUploadResponse(document, true);
@@ -976,6 +983,7 @@ public class DocumentService {
                 .orElseThrow(() -> new IllegalStateException("예약한 chat export 문서를 찾을 수 없습니다."));
         // 파이프라인 입력은 항상 command inline이다. storage 원본은 사용자에게 보여줄 본문으로만 쓴다.
         document.assignPipelineInput(markdown, serializePipelineBlocks(blocks));
+        if (analytics != null) analytics.uploaded(document);
         log.info("[채팅 export 문서 DB 저장 완료] documentId={} workspaceId={} userId={} filename={} selectionMode={} status={} sourceUri={}",
                 document.getId(), document.getWorkspaceId(), document.getUserId(), document.getFilename(),
                 document.getSelectionMode(), document.getStatus(), document.getSourceUri());
@@ -1183,6 +1191,7 @@ public class DocumentService {
             });
             // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 푼다. 남겨 두면 그 예약이 가용 잔액을 줄여 ingest를 거절시킨다.
             taskWriter.completeAndSettle(convertRunId);
+            if (analytics != null) analytics.converted(placeholder, queue.getSourceDocumentId(), total, null);
             convertQueueRepository.delete(queue);
             log.info("[문서 변환 완료] documentId={} totalPages={}", documentId, total);
             return new ConvertOutcome(placeholder, true, List.of());
@@ -1221,6 +1230,7 @@ public class DocumentService {
         }
         // 다시 시도하지 않으므로 실행을 닫아 크레딧 예약을 푼다. AI가 batch를 나눠 다시 시도한 뒤의 실패라 문서 단위 재시도는 없다.
         taskWriter.fail("convert:" + placeholder.getId());
+        if (analytics != null) analytics.converted(placeholder, queue.getSourceDocumentId(), 0, code == null ? "internal_error" : code);
         convertQueueRepository.delete(queue);
         log.warn("[문서 변환 실패 반영] documentId={} code={}", placeholder.getId(), code);
         return new ConvertOutcome(placeholder, false, toCancel);
@@ -1453,7 +1463,7 @@ public class DocumentService {
                             .filter(doc -> doc.getStatus() == DocumentStatus.uploaded)
                             .ifPresent(doc -> {
                                 doc.reopenForReingest(contentHash, byteSize);
-                                enqueueIngest(doc, userId);
+                                enqueueIngest(doc, userId, "auto");
                             });
                     return null;
                 });
@@ -1475,11 +1485,15 @@ public class DocumentService {
     }
 
     String enqueueIngest(Document document) {
-        return enqueueIngest(document, document.getUserId());
+        return enqueueIngest(document, document.getUserId(), "auto");
     }
 
     /** requesterId는 ingest를 요청한 사용자다. 공동 편집에서는 소유자와 다를 수 있다. */
     private String enqueueIngest(Document document, String requesterId) {
+        return enqueueIngest(document, requesterId, "manual");
+    }
+
+    private String enqueueIngest(Document document, String requesterId, String trigger) {
         String runId = UUID.randomUUID().toString();
         ingestCommandOutbox.begin(runId, document.getWorkspaceId(), requesterId);
         String documentId = document.getId();
@@ -1501,6 +1515,7 @@ public class DocumentService {
                 document.getCurrentVersion(),
                 document.getCurrentContentHash()
         );
+        if (analytics != null) analytics.ingestRequested(document, runId, operationId, requesterId, startedAt, trigger);
         log.info("[문서 처리 command 등록 완료] documentId={} runId={} operationId={}",
                 documentId, runId, operationId);
         return runId;

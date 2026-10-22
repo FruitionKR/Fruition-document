@@ -26,6 +26,9 @@ import java.util.stream.Collectors;
 @Component
 public class RestoreOperationLifecycle {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
+
     private static final Logger log = LoggerFactory.getLogger(RestoreOperationLifecycle.class);
 
     /** 이미 끝난 복구. 판단 기준은 {@link OperationStatus#isTerminal()} 하나로 둔다. */
@@ -101,16 +104,19 @@ public class RestoreOperationLifecycle {
                     restoreOperationId, reason);
             return;
         }
+        if (analytics != null) operationLogRepository.findById(restoreOperationId).ifPresent(op -> analytics.restored(op, reason));
         log.warn("[복구 실패 확정] operationId={} reason={}", restoreOperationId, reason);
     }
 
     /** 문서 되돌리기는 재작성이 없어 본문 저장과 같은 트랜잭션에서 확정한다. */
     @Transactional
     public void finishDocument(String restoreOperationId, long toVersion, long newVersion, Instant now) {
-        operationLogRepository.findById(restoreOperationId).ifPresent(restore ->
+        operationLogRepository.findById(restoreOperationId).ifPresent(restore -> {
                 restore.complete(OperationStatus.succeeded,
                         "버전 " + toVersion + " 내용으로 되돌렸습니다. 새 버전 " + newVersion,
-                        1, null, now));
+                        1, null, now);
+                if (analytics != null) analytics.restored(restore, null);
+        });
     }
 
     private String randomSuffix() {

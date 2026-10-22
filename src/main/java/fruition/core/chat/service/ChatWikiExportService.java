@@ -39,11 +39,17 @@ import java.util.Set;
 @Service
 public class ChatWikiExportService {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
+
     private static final Logger log = LoggerFactory.getLogger(ChatWikiExportService.class);
 
     /** 처리 중 임시 문서 이름의 최대 길이. 넘치면 끝을 줄임표로 접는다. */
     private static final int MAX_TITLE_LENGTH = 20;
     private static final String QUESTION_PREFIX = "Q : ";
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.ChatExportLinks exportLinks;
 
     private final ChatSessionService chatSessionService;
     private final ChatMessageRepository chatMessageRepository;
@@ -93,11 +99,18 @@ public class ChatWikiExportService {
                 pipelineBlocks(source));
 
         String status = result.skipped() ? "skipped" : "saved";
+        java.util.UUID exportId = request.exportId() == null ? java.util.UUID.randomUUID() : request.exportId();
+        String mode = request.mode() == null ? "selected" : request.mode();
+        if (exportLinks != null) exportLinks.save(exportId, result.documentId(), userId, sessionId, mode);
+        if (analytics != null) analytics.exported(exportId.toString(), result.documentId(), sessionId,
+                source.blocks().size(), mode, status, userId, workspaceId);
         log.info("[chat-wiki][export] 등록 session={} document={} status={}", sessionId, result.documentId(), status);
-        return new ChatWikiExportResponse(result.documentId(), status);
+        return new ChatWikiExportResponse(result.documentId(), status, exportId);
     }
 
     private void validate(ChatWikiExportRequest request) {
+        if (request != null && request.mode() != null && !Set.of("all", "selected").contains(request.mode()))
+            throw new InvalidChatWikiExportRequestException("mode는 all 또는 selected여야 합니다.");
         if (request == null || request.pairIds() == null || request.pairIds().isEmpty()) {
             throw new InvalidChatWikiExportRequestException("pair_ids는 필수입니다.");
         }
