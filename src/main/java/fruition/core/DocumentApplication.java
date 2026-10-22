@@ -19,7 +19,8 @@ public class DocumentApplication {
             Flyway.configure()
                     .dataSource("jdbc:postgresql://" + requiredEnv("POSTGRES_HOST") + ":"
                                     + requiredEnv("POSTGRES_PORT") + "/" + requiredEnv("CORE_DB_NAME")
-                                    + "?sslmode=" + System.getenv().getOrDefault("PGSSLMODE", "prefer"),
+                                    + "?sslmode=" + System.getenv().getOrDefault("PGSSLMODE", "prefer")
+                                    + "&sslrootcert=" + System.getenv().getOrDefault("PGSSLROOTCERT", ""),
                             requiredEnv("CORE_DB_MIGRATION_USER"), requiredEnv("CORE_DB_MIGRATION_PASSWORD"))
                     .locations("classpath:db/migration")
                     .load().migrate();
