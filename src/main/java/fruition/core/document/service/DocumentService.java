@@ -1228,10 +1228,12 @@ public class DocumentService {
         if (placeholder.getPipelineRunId() == null || placeholder.getPipelineRunId().startsWith("convert:")) {
             placeholder.markProcessingFailed(AiErrorMessages.convert(code), Instant.now());
         }
-        // 다시 시도하지 않으므로 실행을 닫아 크레딧 예약을 푼다. AI가 batch를 나눠 다시 시도한 뒤의 실패라 문서 단위 재시도는 없다.
-        taskWriter.fail("convert:" + placeholder.getId());
-        if (analytics != null) analytics.converted(placeholder, queue.getSourceDocumentId(), 0, code == null ? "internal_error" : code);
+        // 실패 상태로 닫힌 작업의 변경은 DB journal guard가 거절한다. 지연된 JPA 문서 UPDATE와
+        // queue 삭제를 running 상태에서 먼저 flush하고, 같은 트랜잭션 안에서 실행과 예약을 닫는다.
         convertQueueRepository.delete(queue);
+        documentRepository.flush();
+        taskWriter.failAndSettle("convert:" + placeholder.getId());
+        if (analytics != null) analytics.converted(placeholder, queue.getSourceDocumentId(), 0, code == null ? "internal_error" : code);
         log.warn("[문서 변환 실패 반영] documentId={} code={}", placeholder.getId(), code);
         return new ConvertOutcome(placeholder, false, toCancel);
     }

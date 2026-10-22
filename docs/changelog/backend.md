@@ -2,6 +2,9 @@
 
 ## 2026-10-22
 
+- PDF 변환 실패 결과에서 부모 작업을 먼저 `failed`로 닫아 지연된 문서 UPDATE가 DB 작업 guard에 거절되고 계속 재처리되던 순서를 수정했다. 문서 실패 상태·변환 queue 삭제를 먼저 flush하고 같은 트랜잭션에서 작업 종료·크레딧 예약 해제·실패 분석 이벤트를 반영한다. guard는 유지하며 늦은 비용은 기존 수집 대기열에서 정산한다.
+- 실제 PostgreSQL의 `applyConvertBatch` 실패 경로로 재현한 뒤 문서/작업 실패, queue·batch 정리, 예약 1회 해제, 실패 이벤트 1회, 중복 결과 무시, 전체 rollback 및 terminal 이후 쓰기 거절을 검증했다. 변환·분석 대상 60개 테스트를 통과했다.
+
 - `query_answered`가 Query의 `message_context.assistantMessageId`를 Agent용 snake_case 키로 읽어 저장된 인용을 0건으로 집계하던 오류를 수정했다. Query와 Agent의 실제 직렬화 계약을 구분하며 제품 flush·SAVEPOINT 경계·이벤트 허용 속성은 변경하지 않는다.
 - 실제 `applyQuery`/`applyAgent(chat_answer)` → JPA 근거 저장 → 커밋 전 JDBC 분석 경로를 PostgreSQL에서 회귀 검증한다. 내부/웹 인용 수, 원본 계보·최초 편입 이력, 워크스페이스/삭제/빈 근거 필터, 관련 페이지만 있는 답변, 중복 terminal, 전체 롤백 및 분석 INSERT 실패 후 제품 커밋을 포함한다. 실제 Query/Agent command 직렬화 회귀 8건을 포함한 전체 1,415건과 `bootJar`를 통과했다.
 

@@ -702,7 +702,7 @@ class DocumentServiceConvertTest {
 
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
         assertThat(parent.getErrorMessage()).contains("암호").doesNotContain("input_rejected");
-        verify(taskWriter).fail("convert:doc_placeholder");
+        verify(taskWriter).failAndSettle("convert:doc_placeholder");
         verify(convertQueueRepository).delete(queue);
         ArgumentCaptor<String> cancelled = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<com.fasterxml.jackson.databind.JsonNode> commands =
@@ -738,7 +738,7 @@ class DocumentServiceConvertTest {
 
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
         verify(minioClient, never()).getObject(any());
-        verify(taskWriter).fail("convert:doc_placeholder");
+        verify(taskWriter).failAndSettle("convert:doc_placeholder");
     }
 
     @Test
@@ -918,7 +918,7 @@ class DocumentServiceConvertTest {
         documentService.applyConvertBatch(succeeded(0, 10, 100));
 
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
-        verify(taskWriter).fail("convert:doc_placeholder");
+        verify(taskWriter).failAndSettle("convert:doc_placeholder");
     }
 
     @Test
