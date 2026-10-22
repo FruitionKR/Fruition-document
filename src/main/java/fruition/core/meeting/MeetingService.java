@@ -126,10 +126,10 @@ public class MeetingService {
     public LiveTicket issueTicket(String workspaceId, String userId, String meetingId) {
         MeetingRepository.Meeting meeting = requireOwned(workspaceId, userId, meetingId);
         if (!"live".equals(meeting.source()) || !"open".equals(meeting.status())) {
-            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_NOT_OPEN", "실시간 받아쓰기를 시작할 수 없는 회의입니다.");
+            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_NOT_OPEN", "실시간 회의 녹음을 시작할 수 없는 회의입니다.");
         }
         if (liveLock.isHeld(meetingId)) {
-            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "이미 다른 곳에서 받아쓰는 중입니다.");
+            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_LIVE_IN_USE", "이미 다른 곳에서 회의를 녹음하는 중입니다.");
         }
         String ticket = "wst_" + UUID.randomUUID().toString().replace("-", "");
         redis.opsForValue().set(ticketKey(ticket), write(new Ticket(userId, workspaceId, meetingId)), TICKET_TTL);

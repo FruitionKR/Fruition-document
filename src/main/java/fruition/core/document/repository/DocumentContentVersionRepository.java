@@ -71,6 +71,19 @@ public interface DocumentContentVersionRepository
             @Param("source") String source
     );
 
+    /** 자동 병합으로 만든 버전에 병합 결과(merged | overwritten)를 기록한다. 재전송이 처음 기록을 바꾸지 않게 비어 있을 때만 쓴다. */
+    @Modifying
+    @Query("""
+            UPDATE DocumentContentVersion v SET v.mergeStatus = :mergeStatus
+            WHERE v.id.documentId = :documentId AND v.id.version = :version
+              AND v.mergeStatus IS NULL
+            """)
+    int markMergeStatus(
+            @Param("documentId") String documentId,
+            @Param("version") long version,
+            @Param("mergeStatus") String mergeStatus
+    );
+
     /** 문서마다 가장 최근 AI 저장 버전(agent·meeting_notes) 한 건. 목록에서 문서마다 조회하지 않도록 한 번에 읽는다. */
     @Query("""
             SELECT v.id.documentId AS documentId, v.id.version AS version, v.source AS source,
@@ -91,7 +104,7 @@ public interface DocumentContentVersionRepository
             SELECT v.id.version AS version, v.contentHash AS contentHash,
                    v.createdBy AS createdBy, v.createdAt AS createdAt,
                    v.restoredFromVersion AS restoredFromVersion,
-                   v.source AS source, v.operationId AS operationId
+                   v.source AS source, v.operationId AS operationId, v.mergeStatus AS mergeStatus
             FROM DocumentContentVersion v
             WHERE v.id.documentId = :documentId
             ORDER BY v.id.version DESC
@@ -106,6 +119,7 @@ public interface DocumentContentVersionRepository
         Long getRestoredFromVersion();
         String getSource();
         String getOperationId();
+        String getMergeStatus();
     }
 
     interface AiChange {

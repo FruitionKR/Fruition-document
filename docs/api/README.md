@@ -10,7 +10,7 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 |---|---:|---|
 | [작업 취소](tasks.md) | 5 | 공개 취소·상태와 Python의 업무 변경 역순 복구 |
 | [AI](ai.md) | 9 | AI 모델 설정과 작업·변환·ingest 관리 |
-| [Agent](agent.md) | 10 | Agent 실행·승인과 내부 Tool 호출 |
+| [Agent](agent.md) | 11 | Agent 실행·승인과 내부 Tool·Skill 폴더 원문 호출 |
 | [Chat](chat.md) | 7 | 채팅 세션·메시지와 Wiki 내보내기 |
 | [Documents](documents/README.md) | 29 | 문서 관리·본문·편집·이력 |
 | [Meetings](meetings.md) | 15 + WS 1 | 회의 생성·조회·삭제, 실시간 받아쓰기 WebSocket, 녹음 원본 직접 업로드·비동기 파일 전사·취소, 회의록 초안·저장 |
@@ -82,8 +82,8 @@ Wiki 복원(`restore_ingest`·`restore_lint`)은 모델을 부르지 않아 비�
 | 구분 | path 수 | 호출자 확인 | 호출자 없음 | 미조사 |
 |---|---:|---:|---:|---:|
 | `/api/**` (프론트엔드 전용 표면) | 103 | 55 | **31** | 17 |
-| `/internal/**` (서비스 간 표면) | 12 | 12 | **0** | 0 |
-| 합계 | 115 | 67 | **31** | 17 |
+| `/internal/**` (서비스 간 표면) | 13 | 13 | **0** | 0 |
+| 합계 | 116 | 68 | **31** | 17 |
 
 path 수는 `api-specs/openapi.yaml`에서 센 값이다. 호출자 조사는 `/api/**` 86개 시점에 한 것이라, 이후 추가된 17개(path 103 − 86)는 아직 프론트엔드 호출을 확인하지 않았다(미조사).
 
@@ -91,7 +91,7 @@ path 수는 `api-specs/openapi.yaml`에서 센 값이다. 호출자 조사는 `/
 
 - `/api/**`는 프론트엔드만 호출한다. ai-svc·access-svc 어느 쪽도 이 서비스의 `/api/**`를 호출하지 않는다
   (ai-svc의 outbound 조립은 `/internal/**`과 access-svc `/internal/authz/**`뿐이고, access-svc의 outbound RestClient는 `DocumentInternalClient` 하나다).
-- `/internal/**` 12개 중 8개는 ai-svc가, 3개(`POST /internal/workspaces/{workspace_id}/initial-note`와 데이터 파기 2개)는 access-svc가 호출하고, 1개(`POST /internal/payments/webhook`)는 결제 대행사(PG)가 호출한다.
+- `/internal/**` 13개 중 9개는 ai-svc가, 3개(`POST /internal/workspaces/{workspace_id}/initial-note`와 데이터 파기 2개)는 access-svc가 호출하고, 1개(`POST /internal/payments/webhook`)는 결제 대행사(PG)가 호출한다.
   데이터 파기 2개(`POST /internal/purge/workspaces`, `POST /internal/purge/users`)는 access-svc `DataPurgeRequestJob`이 호출하고,
   성공하면 access-svc가 이어서 ai-svc 파기 API를 부른다(document는 ai-svc 파기를 호출하지 않는다).
 - 주의: `/internal/agent/runs`와 `/internal/ai/tasks`는 이 서비스의 경로가 **아니다**. ai-svc가 노출하고 이 서비스가 호출하는 경로다

@@ -13,7 +13,6 @@ import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.authz.WorkspaceNotFoundException;
 import fruition.core.document.domain.DocumentStatus;
 import fruition.core.document.dto.DocumentDetailResponse;
-import fruition.core.document.exception.DocumentVersionConflictException;
 import fruition.core.document.repository.AiCommandOutboxWriter;
 import fruition.core.agent.repository.PipelineAgentRunStatusRequester;
 import fruition.core.document.service.DocumentEditLockService;
@@ -60,6 +59,7 @@ class AgentTurnServiceTest {
 
     @Mock fruition.core.aitask.service.AiTaskCancellationService cancellation;
     @Mock fruition.core.usage.service.UsageChargeService usageCharges;
+    @Mock fruition.core.document.repository.FolderRepository folderRepository;
 
     @BeforeEach
     void setUp() {
@@ -71,7 +71,7 @@ class AgentTurnServiceTest {
         service = new AgentTurnService(documentService, editLockService, workspaceAccessGuard, runRepository,
                 statusRequester, outboxWriter, applyOperationStore, aiModelCatalog,
                 chatSessionService, chatConversationReader, chatTurnRecorder, "ai.agent.command", cancellation, new ObjectMapper(),
-                usageCharges);
+                usageCharges, folderRepository);
     }
 
     @Test
@@ -83,7 +83,7 @@ class AgentTurnServiceTest {
                         new AgentTurnRequest.ConversationContext.PendingSkillProposal(
                                 "personal", "meeting-notes", "회의록을 작성합니다.", "# 정확한 원문 지침",
                                 java.util.List.of("document-create"),
-                                java.util.List.of("list_root_items", "list_folder_children", "create_document"))));
+                                java.util.List.of("list_root_items", "list_folder_children", "create_document"), true)));
         when(documentService.findById("ws_1", "user_1", "doc_1"))
                 .thenReturn(document("note.md", "text/markdown", 7));
         when(applyOperationStore.newOperationId()).thenReturn("op_apply_1");
@@ -94,7 +94,8 @@ class AgentTurnServiceTest {
         assertThat(response.applyOperationId()).isEqualTo("op_apply_1");
         verify(runRepository).create(anyString(), org.mockito.ArgumentMatchers.eq("ws_1"),
                 org.mockito.ArgumentMatchers.eq("user_1"), org.mockito.ArgumentMatchers.eq("doc_1"),
-                org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq("op_apply_1"));
+                org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq("op_apply_1"),
+                org.mockito.ArgumentMatchers.isNull());
         ArgumentCaptor<AgentTurnService.AgentCommand> command =
                 ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
         verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
@@ -115,7 +116,32 @@ class AgentTurnServiceTest {
                 .containsExactly("list_root_items", "list_folder_children", "create_document");
         assertThat(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(command.getValue()))
                 .contains("\"pending_skill_proposal\":{\"scope_type\":\"personal\"")
-                .contains("\"instructions_markdown\":\"# 정확한 원문 지침\"");
+                .contains("\"instructions_markdown\":\"# 정확한 원문 지침\"")
+                .contains("\"requires_source\":true");
+        assertThat(command.getValue().conversationContext().pendingSkillProposal().requiresSource()).isTrue();
+    }
+
+    @Test
+    void turn_omitsRequiresSourceWhenPendingSkillProposalLeavesItOut() throws Exception {
+        AgentTurnRequest request = request("whole_document", 1, 2,
+                new AgentTurnRequest.ConversationContext(
+                        java.util.List.of(), null,
+                        new AgentTurnRequest.ConversationContext.PendingSkillProposal(
+                                "personal", "meeting-notes", "회의록을 작성합니다.", "# 지침",
+                                java.util.List.of("document-create"), java.util.List.of("create_document"), null)));
+        when(documentService.findById("ws_1", "user_1", "doc_1"))
+                .thenReturn(document("note.md", "text/markdown", 7));
+        when(applyOperationStore.newOperationId()).thenReturn("op_apply_1");
+
+        service.turn("ws_1", "user_1", request);
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"pending_skill_proposal\":{\"scope_type\":\"personal\"")
+                .doesNotContain("requires_source");
     }
 
     @Test
@@ -134,7 +160,121 @@ class AgentTurnServiceTest {
         verifyNoInteractions(documentService, editLockService, applyOperationStore);
         verify(runRepository).create(anyString(), org.mockito.ArgumentMatchers.eq("ws_1"),
                 org.mockito.ArgumentMatchers.eq("user_1"), org.mockito.ArgumentMatchers.isNull(),
-                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull());
+                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.isNull());
+    }
+
+    @Test
+    void turn_taskModeWithoutDocumentForwardsModeToAi() throws Exception {
+        // 작업 탭 턴은 열린 문서 없이도 받는다(폴더 정리·폴더 Skill). 문서 편집이 필요하면 AI가 되묻는다.
+        var request = new AgentTurnRequest("session_1", null, null, "회의록을 연도별 폴더로 정리해줘",
+                "openai", "gpt-6-luna", null, "auto", null, null,
+                java.util.List.of(), java.util.List.of(), java.util.List.of(), null, null, "task");
+
+        var response = service.turn("ws_1", "user_1", request);
+
+        assertThat(response.status()).isEqualTo("queued");
+        assertThat(response.applyOperationId()).isNull();
+        verify(workspaceAccessGuard).requireMember("ws_1", "user_1");
+        verifyNoInteractions(documentService, editLockService, applyOperationStore);
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(command.getValue().mode()).isEqualTo("task");
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue())).contains("\"mode\":\"task\"");
+    }
+
+    @Test
+    void turn_withTargetFolderForwardsFolderAndEchoesIt() throws Exception {
+        // 작업 탭에서 대상 폴더를 고르고 문서 없이 실행한다(폴더 정리 범위·새 문서 위치).
+        java.util.UUID folderId = java.util.UUID.fromString("44444444-4444-4444-4444-444444444444");
+        when(folderRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(folderId, "ws_1"))
+                .thenReturn(Optional.of(org.mockito.Mockito.mock(fruition.core.document.domain.Folder.class)));
+        var request = new AgentTurnRequest("session_1", null, null, "회의록 만들어줘",
+                "openai", "gpt-6-luna", null, "auto", null, null,
+                java.util.List.of(), java.util.List.of(), java.util.List.of(), null, null, "task",
+                folderId.toString());
+
+        var response = service.turn("ws_1", "user_1", request);
+
+        assertThat(response.folderId()).isEqualTo(folderId.toString());
+        verify(runRepository).create(anyString(), org.mockito.ArgumentMatchers.eq("ws_1"),
+                org.mockito.ArgumentMatchers.eq("user_1"), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.eq(folderId));
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"folder_id\":\"44444444-4444-4444-4444-444444444444\"");
+    }
+
+    @Test
+    void turn_rejectsMissingTargetFolderBeforeQueueing() {
+        java.util.UUID folderId = java.util.UUID.fromString("44444444-4444-4444-4444-444444444444");
+        when(folderRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(folderId, "ws_1"))
+                .thenReturn(Optional.empty());
+        var request = new AgentTurnRequest("session_1", null, null, "정리해줘", "openai", "gpt-6-luna",
+                null, "auto", null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), null, null,
+                "task", folderId.toString());
+
+        assertThatThrownBy(() -> service.turn("ws_1", "user_1", request))
+                .isInstanceOf(fruition.core.document.exception.HierarchyItemNotFoundException.class);
+        verifyNoInteractions(outboxWriter, runRepository);
+    }
+
+    @Test
+    void turn_rejectsMalformedTargetFolder() {
+        var request = new AgentTurnRequest("session_1", null, null, "정리해줘", "openai", "gpt-6-luna",
+                null, "auto", null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), null, null,
+                "task", "not-a-uuid");
+
+        assertThatThrownBy(() -> service.turn("ws_1", "user_1", request))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+        verifyNoInteractions(outboxWriter, runRepository, folderRepository);
+    }
+
+    @Test
+    void get_returnsRecordedTargetFolderWhileAiRunIsInProgress() {
+        when(cancellation.findStatus("agent_00000000000000000000000000000001", "ws_1", "user_1"))
+                .thenReturn(Optional.empty());
+        when(statusRequester.find("ws_1", "user_1", "agent_00000000000000000000000000000001"))
+                .thenReturn(Optional.of(new PipelineAgentRunStatusRequester.RunStatus(
+                        "agent_00000000000000000000000000000001", null, null, null, "executing", null, null)));
+        when(runRepository.find("ws_1", "user_1", "agent_00000000000000000000000000000001"))
+                .thenReturn(Optional.of(new AgentRunCommandRepository.RunView(
+                        "agent_00000000000000000000000000000001", null, 0, null, "queued", null, null,
+                        "44444444-4444-4444-4444-444444444444")));
+
+        var response = service.get("ws_1", "user_1", "agent_00000000000000000000000000000001");
+
+        assertThat(response.status()).isEqualTo("executing");
+        assertThat(response.folderId()).isEqualTo("44444444-4444-4444-4444-444444444444");
+    }
+
+    @Test
+    void turn_withoutModeKeepsLegacyCommandShape() throws Exception {
+        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-6-luna", null, null);
+
+        service.turn("ws_1", "user_1", request);
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(command.getValue().mode()).isNull();
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue())).doesNotContain("\"mode\"");
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue())).doesNotContain("\"folder_id\"");
+    }
+
+    @Test
+    void request_rejectsUnknownMode() {
+        assertThatThrownBy(() -> new AgentTurnRequest("session_1", null, null, "정리해줘", "openai", "gpt-6-luna",
+                null, "auto", null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), null, null,
+                "chat"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -240,6 +380,68 @@ class AgentTurnServiceTest {
                 ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
         verify(outboxWriter).enqueue(anyString(), anyString(), anyString(), command.capture());
         assertThat(command.getValue().allowWebSearch()).isNull();
+    }
+
+    @Test
+    void turn_savesPendingChatPairBeforeRegisteringRunSoCancelRollbackKeepsIt() {
+        // 실행 등록(begin)이 켜는 복구 기록 밖에서 말풍선을 만들어야 취소 시 복구가 지우지 않고 취소로 닫을 수 있다.
+        var request = new AgentTurnRequest("session_1", null, null, "RAG가 뭐야?", "openai", "gpt-6-luna", null, null);
+
+        var response = service.turn("ws_1", "user_1", request);
+
+        var order = org.mockito.Mockito.inOrder(chatTurnRecorder, outboxWriter);
+        order.verify(chatTurnRecorder).createPendingAgentPair(anyString(), anyString(), anyString(), anyString(),
+                anyString(), org.mockito.ArgumentMatchers.any(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.eq(response.requestId()));
+        order.verify(outboxWriter).begin(response.requestId(), "ws_1", "user_1", "agent");
+    }
+
+    @Test
+    void cancelTurn_requestsCancelAndReturnsCancellingStatus() {
+        String runId = "agent_00000000000000000000000000000001";
+        when(cancellation.requestAgentTurnCancel(runId, "ws_1", "user_1"))
+                .thenReturn(fruition.core.aitask.service.AiTaskCancellationService.AgentTurnCancel.REQUESTED);
+        when(cancellation.findStatus(runId, "ws_1", "user_1"))
+                .thenReturn(Optional.of(java.util.Map.of("status", "cancel_requested")));
+        when(runRepository.find("ws_1", "user_1", runId)).thenReturn(Optional.of(
+                new AgentRunCommandRepository.RunView(runId, "doc_1", 1L, "op_1", "queued", null, null,
+                        "11111111-1111-1111-1111-111111111111")));
+
+        var response = service.cancelTurn("ws_1", "user_1", runId);
+
+        verify(workspaceAccessGuard, org.mockito.Mockito.atLeastOnce()).requireMember("ws_1", "user_1");
+        assertThat(response.requestId()).isEqualTo(runId);
+        assertThat(response.status()).isEqualTo("cancel_requested");
+        // 취소 중 응답에도 요청한 대상 폴더가 실린다.
+        assertThat(response.folderId()).isEqualTo("11111111-1111-1111-1111-111111111111");
+        verifyNoInteractions(statusRequester);
+    }
+
+    @Test
+    void cancelTurn_rejectsFinishedTurnWithConflict() {
+        String runId = "agent_00000000000000000000000000000001";
+        when(cancellation.requestAgentTurnCancel(runId, "ws_1", "user_1"))
+                .thenReturn(fruition.core.aitask.service.AiTaskCancellationService.AgentTurnCancel.FINISHED);
+
+        assertThatThrownBy(() -> service.cancelTurn("ws_1", "user_1", runId))
+                .isInstanceOf(fruition.core.agent.exception.AgentTurnAlreadyFinishedException.class);
+    }
+
+    @Test
+    void cancelTurn_unknownOrOthersTurnIsNotFound() {
+        String runId = "agent_00000000000000000000000000000001";
+        when(cancellation.requestAgentTurnCancel(runId, "ws_1", "user_1"))
+                .thenReturn(fruition.core.aitask.service.AiTaskCancellationService.AgentTurnCancel.NOT_FOUND);
+
+        assertThatThrownBy(() -> service.cancelTurn("ws_1", "user_1", runId))
+                .isInstanceOf(fruition.core.agent.exception.AgentRunNotFoundException.class);
+    }
+
+    @Test
+    void cancelTurn_rejectsMalformedRunIdBeforeTouchingCancellation() {
+        assertThatThrownBy(() -> service.cancelTurn("ws_1", "user_1", "../agent_x"))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+        verifyNoInteractions(cancellation);
     }
 
     @Test
@@ -471,7 +673,8 @@ class AgentTurnServiceTest {
                       "description": "회의록을 작성합니다.",
                       "instructions_markdown": "# 정확한 원문 지침",
                       "capabilities": ["document-create"],
-                      "allowed_tools": ["list_root_items", "list_folder_children", "create_document"]
+                      "allowed_tools": ["list_root_items", "list_folder_children", "create_document"],
+                      "requires_source": false
                     }
                   },
                   "editorSnapshot": {"markdown": "# 제목\\n본문"}
@@ -485,6 +688,7 @@ class AgentTurnServiceTest {
                 .isEqualTo("# 정확한 원문 지침");
         assertThat(request.conversationContext().pendingSkillProposal().capabilities())
                 .containsExactly("document-create");
+        assertThat(request.conversationContext().pendingSkillProposal().requiresSource()).isFalse();
     }
 
     @Test
@@ -498,13 +702,19 @@ class AgentTurnServiceTest {
     }
 
     @Test
-    void turn_rejectsStaleBaseVersionBeforeQueue() {
+    void turn_staleBaseVersionStillQueuesBecauseApplySaveAutoMerges() {
         when(documentService.findById("ws_1", "user_1", "doc_1"))
                 .thenReturn(document("note.md", "text/markdown", 9));
+        when(applyOperationStore.newOperationId()).thenReturn("op_apply_1");
 
-        assertThatThrownBy(() -> service.turn("ws_1", "user_1", request("whole_document", 1, 2)))
-                .isInstanceOf(DocumentVersionConflictException.class);
-        verify(outboxWriter, never()).enqueue(anyString(), anyString(), anyString(), any());
+        var response = service.turn("ws_1", "user_1", request("whole_document", 1, 2));
+
+        assertThat(response.status()).isEqualTo("queued");
+        // 적용 저장은 요청의 baseVersion(7) 스냅샷 기준으로 그 사이 변경(9)과 자동 병합한다.
+        verify(runRepository).create(anyString(), org.mockito.ArgumentMatchers.eq("ws_1"),
+                org.mockito.ArgumentMatchers.eq("user_1"), org.mockito.ArgumentMatchers.eq("doc_1"),
+                org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq("op_apply_1"),
+                org.mockito.ArgumentMatchers.isNull());
     }
 
     @Test
@@ -586,6 +796,77 @@ class AgentTurnServiceTest {
                 .isInstanceOf(fruition.core.usage.service.CreditService.InsufficientCreditException.class);
         verify(statusRequester, never()).revise(anyString(), anyString(), anyString(), anyString());
         verify(statusRequester, never()).approve(anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt(), anyString());
+    }
+
+    /** 폴더 정리 계획 메타데이터는 ai-svc가 만든다. document는 필드를 고르지 않고 그대로 전달한다. */
+    @Test
+    void getRun_passesAiPlanMetadataThroughUnchanged() throws Exception {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        JsonNode aiRun = new ObjectMapper().readTree("""
+                {"id":"%s","target_folder_id":"44444444-4444-4444-4444-444444444444",
+                 "skill_rule_summary":"연도별 폴더로 묶는다",
+                 "plan":{"operations":[{"id":"op_1","suggested_selected":false,
+                   "warning":{"type":"duplicate","message":"같은 이름의 문서가 있습니다."}}]}}
+                """.formatted(runId));
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(aiRun);
+
+        assertThat(service.getRun("ws_1", "user_1", runId)).isEqualTo(aiRun);
+    }
+
+    /** 세 작업 계획. op_2는 op_1(폴더 만들기)의 결과에 기댄다. */
+    private static JsonNode planWithThreeOperations(String runId) throws Exception {
+        return new ObjectMapper().readTree("""
+                {"id":"%s","status":"awaiting_approval","plan":{"id":"plan-1","version":1,"operations":[
+                  {"id":"op_1","depends_on":[]},
+                  {"id":"op_2","depends_on":["op_1"]},
+                  {"id":"op_3","depends_on":[]}]}}
+                """.formatted(runId));
+    }
+
+    @Test
+    void approve_forwardsSelectedOperationsOnly() throws Exception {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(planWithThreeOperations(runId));
+
+        service.approve("ws_1", "user_1", runId,
+                new AgentRunApproveRequest(1, "a".repeat(64), List.of("op_1", "op_2")));
+
+        verify(statusRequester).approve("ws_1", "user_1", runId, 1, "a".repeat(64), List.of("op_1", "op_2"));
+    }
+
+    @Test
+    void approve_allOperationsSelectedIsSentAsFullApproval() throws Exception {
+        // 모두 고르면 전체 승인과 같다. operation_ids를 모르는 AI에도 같은 요청이 가도록 키를 싣지 않는다.
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(planWithThreeOperations(runId));
+
+        service.approve("ws_1", "user_1", runId,
+                new AgentRunApproveRequest(1, "a".repeat(64), List.of("op_3", "op_1", "op_2")));
+
+        verify(statusRequester).approve("ws_1", "user_1", runId, 1, "a".repeat(64));
+    }
+
+    @Test
+    void approve_rejectsInvalidSelectionBeforeReserving() throws Exception {
+        String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(planWithThreeOperations(runId));
+
+        // 고르지 않은 작업(op_1)에 의존한다.
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId,
+                new AgentRunApproveRequest(1, "a".repeat(64), List.of("op_2"))))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+        // 계획에 없는 작업.
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId,
+                new AgentRunApproveRequest(1, "a".repeat(64), List.of("op_9"))))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+        // 중복.
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId,
+                new AgentRunApproveRequest(1, "a".repeat(64), List.of("op_3", "op_3"))))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+
+        verify(usageCharges, never()).reserveAutonomousRun(anyString(), anyString(), anyString());
+        verify(statusRequester, never()).approve(anyString(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.anyInt(), anyString(), org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -786,7 +1067,7 @@ class AgentTurnServiceTest {
                 "s3://source", null, Instant.now(), Instant.now(), null, List.of(),
                 null, null, null, filename.substring(0, filename.lastIndexOf('.')),
                 filename.substring(filename.lastIndexOf('.') + 1), null, false, currentVersion,
-                currentVersion, null, Instant.now(), null, null, null, true, false, null, null, null, null);
+                currentVersion, null, Instant.now(), null, null, null, true, false, false, null, null, null, null);
     }
 
     /** 고른 문답 ID는 조회의 IN 절로 그대로 들어간다. 클라이언트가 SQL 크기를 정하지 못하게 막는다. */
@@ -810,6 +1091,35 @@ class AgentTurnServiceTest {
                 .thenReturn(java.util.Optional.of(java.util.Map.of("status", "cancelled")));
         service.verifyRunAccess("ws_1", "user_1", "agent_12345678123456781234567812345678");
         org.mockito.Mockito.verifyNoInteractions(runRepository);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"disabled", "missing", "unavailable"})
+    void analyticsMetadataNeverRejectsExplicitSkillExecution(String scenario) throws Exception {
+        try (var server = new okhttp3.mockwebserver.MockWebServer()) {
+            server.start();
+            if (!"disabled".equals(scenario)) server.enqueue(new okhttp3.mockwebserver.MockResponse()
+                    .setResponseCode("unavailable".equals(scenario) ? 503 : 200)
+                    .setHeader("Content-Type", "application/json").setBody("{}"));
+            var settings = new fruition.core.analytics.AnalyticsSettings(!"disabled".equals(scenario), "",
+                    "http://localhost", "local", "test");
+            var metadata = new fruition.core.analytics.AnalyticsSkillMetadataClient(settings,
+                    server.url("/skills").toString(), "test-internal-token");
+            var recorder = org.mockito.Mockito.mock(fruition.core.analytics.AnalyticsRecorder.class);
+            var analytics = new fruition.core.analytics.DocumentAnalytics(recorder,
+                    org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class), new ObjectMapper());
+            org.springframework.test.util.ReflectionTestUtils.setField(analytics, "skillMetadata", metadata);
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "analytics", analytics);
+            var request = new ObjectMapper().readValue("""
+                    {"session_id":"session_1","message":"run skill","provider":"openai","model":"gpt-6-luna",
+                     "skill_mode":"explicit","skill_id":"skill-1"}
+                    """, AgentTurnRequest.class);
+            assertThat(service.turn("ws_1", "user_1", request).status()).isEqualTo("queued");
+            verify(outboxWriter).enqueue(anyString(), anyString(), anyString(), any());
+            verify(workspaceAccessGuard).requireMember("ws_1", "user_1");
+            assertThat(server.getRequestCount()).isEqualTo("disabled".equals(scenario) ? 0 : 1);
+            verify(recorder, never()).record(any(), any(), any(), any(), any(), any());
+        }
     }
 
 }

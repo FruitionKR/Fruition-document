@@ -648,6 +648,19 @@ class DocumentEditingSchemaIntegrationTest {
                 .isZero();
     }
 
+    /** 턴이 지정한 대상 폴더는 projection에 남아 결과 조회가 그대로 돌려준다(V81). 문서 없는 턴도 기록된다. */
+    @Test
+    void agentRunProjectionKeepsTargetFolder() {
+        String runId = "agent_" + UUID.randomUUID().toString().replace("-", "");
+        UUID folderId = UUID.randomUUID();
+
+        agentRunCommandRepository.create(runId, "ws-1", "user-1", null, null, null, folderId);
+
+        var view = agentRunCommandRepository.find("ws-1", "user-1", runId).orElseThrow();
+        assertThat(view.folderId()).isEqualTo(folderId.toString());
+        assertThat(view.documentId()).isNull();
+    }
+
     @Test
     void agentApplyProjectionCanBeConsumedOnlyOnceWhenReady() {
         String runId = "agent_" + UUID.randomUUID().toString().replace("-", "");

@@ -140,6 +140,9 @@ class DocumentServiceBlocksTest {
 
     @BeforeEach
     void setUp() {
+        // DocumentAccessPolicy.viewer가 역할·권한을 한 번에 읽는다. 기본은 권한 항목 없는 MEMBER.
+        org.mockito.Mockito.lenient().when(workspaceAccessGuard.access(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new fruition.core.authz.WorkspaceAccessGuard.Access("MEMBER", java.util.List.of()));
         DocumentAccessPolicy accessPolicy = new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate);
         org.mockito.Mockito.lenient().when(applyOperationStore.authorizeSave(anyString(), anyString(), anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.active(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
@@ -176,7 +179,7 @@ class DocumentServiceBlocksTest {
         // 기본 저장 결과: base revision + 1로 변경 성공. 필요한 테스트는 개별로 다시 stub한다.
         lenient().when(postgresDocumentEditStore.save(
                 anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
-                anyString(), any()))
+                anyString(), any(), any()))
                 .thenAnswer(invocation -> {
                     String documentId = invocation.getArgument(1);
                     long baseRevision = invocation.getArgument(4);
@@ -470,6 +473,7 @@ class DocumentServiceBlocksTest {
             @Override public Long getRestoredFromVersion() { return restoredFromVersion; }
             @Override public String getSource() { return restoredFromVersion != null ? "restore" : null; }
             @Override public String getOperationId() { return null; }
+            @Override public String getMergeStatus() { return null; }
         };
     }
 
@@ -649,8 +653,11 @@ class DocumentServiceBlocksTest {
     @Test
     @DisplayName("초기 노트는 원본을 object storage에 쓰고 직접 생성 Markdown과 편집 상태로 저장한다")
     void createInitialNote_savesDirectMarkdownWithSource() throws Exception {
+        var analytics = org.mockito.Mockito.mock(fruition.core.analytics.DocumentAnalytics.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(documentService, "analytics", analytics);
         documentService.createInitialNote("ws_first", USER_ID);
         documentService.createInitialNote("ws_second", USER_ID);
+        verify(analytics, never()).uploaded(any());
 
         ArgumentCaptor<Document> documents = ArgumentCaptor.forClass(Document.class);
         ArgumentCaptor<DocumentEditState> editStates = ArgumentCaptor.forClass(DocumentEditState.class);
@@ -941,7 +948,7 @@ class DocumentServiceBlocksTest {
         assertThat(document.getContentHash()).isEqualTo("original-hash");
         verify(postgresDocumentEditStore).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), anyString(),
-                eq(1L), eq("write_1"), eq(USER_ID), isNull());
+                eq(1L), eq("write_1"), eq(USER_ID), isNull(), any());
     }
 
     @Test
@@ -986,7 +993,7 @@ class DocumentServiceBlocksTest {
         assertThat(response.changed()).isTrue();
         verify(postgresDocumentEditStore).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), anyString(),
-                eq(1L), eq("write_1"), eq(USER_ID), isNull());
+                eq(1L), eq("write_1"), eq(USER_ID), isNull(), any());
         verify(contentVersionRepository).insertIfAbsent(
                 eq(document.getId()), eq(1L), eq("old"), eq(editState.getContentHash()), eq(USER_ID), any());
         verify(contentVersionRepository).insertIfAbsent(
@@ -1039,7 +1046,7 @@ class DocumentServiceBlocksTest {
 
         verify(postgresDocumentEditStore, never()).save(
                 anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
-                anyString(), any());
+                anyString(), any(), any());
         verify(contentVersionRepository, never()).insertIfAbsent(
                 anyString(), anyLong(), anyString(), anyString(), anyString(), any());
     }
@@ -1068,7 +1075,7 @@ class DocumentServiceBlocksTest {
         order.verify(applyOperationStore).consume("op-agent", USER_ID, document.getId(), "write-agent", 1L, "# 변경\n");
         order.verify(postgresDocumentEditStore).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), anyString(),
-                eq(1L), eq("write-agent"), eq(USER_ID), eq("op-agent"));
+                eq(1L), eq("write-agent"), eq(USER_ID), eq("op-agent"), any());
         verify(applyOperationStore).consume("op-agent", USER_ID, document.getId(), "write-agent", 1L, "# 변경\n");
         verify(operationRecorder).recordDocumentEdit(
                 eq("op-agent"), eq(WORKSPACE_ID), eq(USER_ID), eq(document.getId()),
@@ -1096,13 +1103,13 @@ class DocumentServiceBlocksTest {
                 .thenReturn(Optional.of(document));
         when(postgresDocumentEditStore.save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), anyString(),
-                eq(1L), eq("write-reused"), eq(USER_ID), isNull()))
+                eq(1L), eq("write-reused"), eq(USER_ID), isNull(), any()))
                 .thenReturn(manualResult);
         when(applyOperationStore.consume("op-reused", USER_ID, document.getId(), "write-reused", 1L, "# 변경\n"))
                 .thenReturn(true);
         when(postgresDocumentEditStore.save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), anyString(),
-                eq(1L), eq("write-reused"), eq(USER_ID), eq("op-reused")))
+                eq(1L), eq("write-reused"), eq(USER_ID), eq("op-reused"), any()))
                 .thenThrow(new IdempotencyConflictException("같은 revision_write_id를 다른 저장 요청에 사용할 수 없습니다."));
 
         documentService.saveContent(
@@ -1205,7 +1212,7 @@ class DocumentServiceBlocksTest {
                 .thenReturn(Optional.of(document));
         when(postgresDocumentEditStore.save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("new"), anyString(),
-                eq(2L), eq("write-agent-conflict"), eq(USER_ID), eq("op-agent")))
+                eq(2L), eq("write-agent-conflict"), eq(USER_ID), eq("op-agent"), any()))
                 .thenThrow(new DocumentVersionConflictException("충돌"));
         when(applyOperationStore.consume("op-agent", USER_ID, document.getId(), "write-agent-conflict", 2L, "new"))
                 .thenReturn(true);
@@ -1220,7 +1227,7 @@ class DocumentServiceBlocksTest {
                 "op-agent", USER_ID, document.getId(), "write-agent-conflict", 2L, "new");
         order.verify(postgresDocumentEditStore).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("new"), anyString(),
-                eq(2L), eq("write-agent-conflict"), eq(USER_ID), eq("op-agent"));
+                eq(2L), eq("write-agent-conflict"), eq(USER_ID), eq("op-agent"), any());
         verify(operationRecorder).recordConflict(
                 eq("op-agent"), eq(WORKSPACE_ID), eq(USER_ID), eq(document.getId()), any());
         verify(applyOperationStore, times(2)).consume(
@@ -1267,7 +1274,7 @@ class DocumentServiceBlocksTest {
                 .thenReturn(Optional.of(document));
         when(postgresDocumentEditStore.save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
-                eq(1L), eq("write_1"), eq(USER_ID), isNull()))
+                eq(1L), eq("write_1"), eq(USER_ID), isNull(), any()))
                 .thenReturn(replayResult);
         when(contentVersionRepository.insertIfAbsent(
                 document.getId(), 1L, "old", editState.getContentHash(), USER_ID, updatedAt))
@@ -1288,7 +1295,7 @@ class DocumentServiceBlocksTest {
         assertThat(recovered.currentVersion()).isEqualTo(2);
         verify(postgresDocumentEditStore, times(2)).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
-                eq(1L), eq("write_1"), eq(USER_ID), isNull());
+                eq(1L), eq("write_1"), eq(USER_ID), isNull(), any());
         verify(contentVersionRepository, times(2)).insertIfAbsent(
                 document.getId(), 1L, "old", editState.getContentHash(), USER_ID, updatedAt);
         verify(contentVersionRepository, times(2)).insertIfAbsent(
@@ -1311,7 +1318,7 @@ class DocumentServiceBlocksTest {
                 .thenReturn(Optional.of(document));
         when(postgresDocumentEditStore.save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
-                eq(1L), eq("write-retry-transient"), eq(USER_ID), isNull()))
+                eq(1L), eq("write-retry-transient"), eq(USER_ID), isNull(), any()))
                 .thenReturn(result, result);
         when(contentVersionRepository.insertIfAbsent(
                 document.getId(), 1L, "old", editState.getContentHash(), USER_ID, updatedAt))
@@ -1326,7 +1333,7 @@ class DocumentServiceBlocksTest {
         verify(contentVersionRepository, never()).markRestoredFrom(anyString(), anyLong(), anyLong());
         verify(postgresDocumentEditStore, times(2)).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), eq(resultHash),
-                eq(1L), eq("write-retry-transient"), eq(USER_ID), isNull());
+                eq(1L), eq("write-retry-transient"), eq(USER_ID), isNull(), any());
         verify(contentVersionRepository).insertIfAbsent(
                 document.getId(), 2L, "# 변경\n", resultHash, USER_ID, updatedAt);
         verify(documentRepository).updateCurrentContentHash(document.getId(), resultHash, updatedAt, USER_ID);
@@ -1354,7 +1361,7 @@ class DocumentServiceBlocksTest {
         assertThat(response.currentVersion()).isEqualTo(2);
         verify(postgresDocumentEditStore).save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("# 예전\n"), anyString(),
-                eq(1L), eq("restore:5:1"), eq(USER_ID), isNull());
+                eq(1L), eq("restore:5:1"), eq(USER_ID), isNull(), any());
         verify(contentVersionRepository).markRestoredFrom(document.getId(), 2L, 5L);
     }
 
@@ -1623,6 +1630,55 @@ class DocumentServiceBlocksTest {
         verify(documentRepository, times(1)).save(chatDoc);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest(name = "[{index}] \"{0}\" -> \"{1}\"")
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "검색 인덱싱|[채팅] 검색 인덱싱.md",
+            "[채팅] 검색 인덱싱|[채팅] 검색 인덱싱.md",
+            "[채팅]검색 인덱싱|[채팅] 검색 인덱싱.md",
+            "'  [ 채팅 ]   검색 인덱싱'|[채팅] 검색 인덱싱.md",
+            "[채팅] [채팅] 검색 인덱싱|[채팅] 검색 인덱싱.md",
+            "검색 [채팅] 인덱싱|[채팅] 검색 [채팅] 인덱싱.md"
+    })
+    @DisplayName("Wiki 페이지 제목에 이미 [채팅] 접두사가 있으면 다시 붙이지 않는다")
+    void confirmChatExportName_doesNotDuplicatePrefix(String wikiTitle, String expected) {
+        Document chatDoc = new Document(
+                "chatdoc_pre", WORKSPACE_ID, USER_ID, "[채팅] 첫 질문.md", "text/markdown", 10L,
+                "sources/documents/chatdoc_pre/original", "h", "chat_export");
+        when(documentRepository.findActiveSiblingNames(WORKSPACE_ID, null)).thenReturn(List.of());
+
+        documentService.confirmChatExportName(chatDoc, wikiTitle);
+
+        assertThat(chatDoc.getFilename()).isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("NFD로 온 [채팅] 접두사도 같은 접두사로 보고 다시 붙이지 않는다")
+    void confirmChatExportName_doesNotDuplicateNfdPrefix() {
+        Document chatDoc = new Document(
+                "chatdoc_nfd", WORKSPACE_ID, USER_ID, "[채팅] 첫 질문.md", "text/markdown", 10L,
+                "sources/documents/chatdoc_nfd/original", "h", "chat_export");
+        when(documentRepository.findActiveSiblingNames(WORKSPACE_ID, null)).thenReturn(List.of());
+
+        documentService.confirmChatExportName(chatDoc,
+                java.text.Normalizer.normalize("[채팅] 검색 인덱싱", java.text.Normalizer.Form.NFD));
+
+        assertThat(chatDoc.getFilename()).isEqualTo("[채팅] 검색 인덱싱.md");
+    }
+
+    @Test
+    @DisplayName("접두사가 붙은 제목이 기존 문서와 겹치면 접두사는 하나만 두고 번호를 붙인다")
+    void confirmChatExportName_prefixedTitle_keepsDuplicateNumbering() {
+        Document chatDoc = new Document(
+                "chatdoc_dup", WORKSPACE_ID, USER_ID, "[채팅] 첫 질문.md", "text/markdown", 10L,
+                "sources/documents/chatdoc_dup/original", "h", "chat_export");
+        when(documentRepository.findActiveSiblingNames(WORKSPACE_ID, null))
+                .thenReturn(List.of("[채팅] 첫 질문.md", "[채팅] 검색 인덱싱.md"));
+
+        documentService.confirmChatExportName(chatDoc, "[채팅] 검색 인덱싱");
+
+        assertThat(chatDoc.getFilename()).isEqualTo("[채팅] 검색 인덱싱 (2).md");
+    }
+
     private Document renameTarget(String documentId, String filename, String mimeType) {
         stubOwnedWorkspace();
         Document document = new Document(documentId, WORKSPACE_ID, USER_ID, filename, mimeType, 10L,
@@ -1745,7 +1801,7 @@ class DocumentServiceBlocksTest {
         verify(editLockService, never()).requireWritable(anyString(), anyString());
         verify(postgresDocumentEditStore, never()).save(
                 anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
-                anyString(), any());
+                anyString(), any(), any());
     }
 
     @Test
@@ -1861,7 +1917,7 @@ class DocumentServiceBlocksTest {
         // 잠금 차단은 편집 상태 저장·스냅샷 이전에 일어난다
         verify(postgresDocumentEditStore, never()).save(
                 anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
-                anyString(), any());
+                anyString(), any(), any());
         verify(contentVersionRepository, never()).insertIfAbsent(
                 anyString(), anyLong(), anyString(), anyString(), anyString(), any());
     }
@@ -1881,7 +1937,7 @@ class DocumentServiceBlocksTest {
                 .thenReturn(Optional.of(document));
         when(postgresDocumentEditStore.save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq(markdown), eq(hash),
-                eq(1L), eq("write_1"), eq(USER_ID), isNull()))
+                eq(1L), eq("write_1"), eq(USER_ID), isNull(), any()))
                 .thenReturn(new PostgresDocumentEditSaveResult(
                         1, markdown, hash, 1, hash, editState.getUpdatedAt(), USER_ID, false, false));
 
@@ -1907,7 +1963,7 @@ class DocumentServiceBlocksTest {
         DocumentEditState editState = new DocumentEditState(document.getId(), "old", "old-hash", 1);
         when(postgresDocumentEditStore.save(
                 eq(WORKSPACE_ID), eq(document.getId()), eq("new"), anyString(),
-                eq(2L), eq("write_1"), eq(USER_ID), isNull()))
+                eq(2L), eq("write_1"), eq(USER_ID), isNull(), any()))
                 .thenThrow(new DocumentVersionConflictException("충돌"));
 
         assertThatThrownBy(() -> documentService.saveContent(

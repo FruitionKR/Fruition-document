@@ -5,7 +5,7 @@
 사용자용 Agent 실행·승인과 내부 Tool 실행 API다. Agent turn은 Kafka `ai.agent.command`,
 계획 조회·승인·거절·취소·수정은 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 10
+- API 수: 12
 
 ## API 목차
 
@@ -18,7 +18,9 @@
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/revise`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-revise) | 현재 AgentRun에 새 계획을 요청합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/turn`](#summary-post-api-workspaces-workspace-id-agent-turn) | 사용자 요청을 비동기 Agent 실행 대기열에 등록합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/turn/{run_id}`](#summary-get-api-workspaces-workspace-id-agent-turn-run-id) | 워크스페이스의 Agent 실행 결과를 조회합니다. |
+| [`POST /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel`](#summary-post-api-workspaces-workspace-id-agent-turn-run-id-cancel) | 끝나지 않은 Agent turn을 취소합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/turn/{run_id}/events`](#summary-get-api-workspaces-workspace-id-agent-turn-run-id-events) | Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. |
+| [`POST /internal/agent/skill-execution/folder-sources/read`](#summary-post-internal-agent-skill-execution-folder-sources-read) | Skill 실행 원문으로 쓸 폴더 바로 아래 문서의 최신 본문을 반환합니다. |
 | [`POST /internal/agent/tools/execute/{tool_name}`](#summary-post-internal-agent-tools-execute-tool-name) | 승인된 Agent Tool 변경 작업을 실행합니다. |
 | [`POST /internal/agent/tools/read/{tool_name}`](#summary-post-internal-agent-tools-read-tool-name) | 승인된 Agent Tool 읽기 작업을 실행합니다. |
 
@@ -48,6 +50,11 @@
 #### 2. 목적
 
 자율 AgentRun 계획과 실행 상태를 조회합니다.
+
+응답 본문은 ai-svc AgentRun 응답을 그대로 전달한다(document-svc는 필드를 고르거나 바꾸지 않는다).
+따라서 폴더 정리 계획의 메타데이터(`target_folder_id`, 스킬 규칙 요약, `plan.operations[].warning`·
+`suggested_selected` 등)는 ai-svc가 AgentRun 응답에 넣으면 이 API에 별도 변경 없이 그대로 실린다.
+승인(`approve`)·수정(`revise`)·거절·취소 응답도 같다.
 
 #### 3. Auth 필요 여부
 
@@ -136,6 +143,12 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 
 현재 AgentRun 계획을 승인합니다.
 
+`operation_ids`를 보내면 고른 작업(`plan.operations[].id`)만 실행한다(부분 적용). 생략하면 계획 전체다.
+document-svc는 현재 계획을 조회해 다음을 먼저 검사하고, 어긋나면 크레딧을 예약하지 않고 `400`으로 거절한다.
+빈 배열·중복, 계획에 없는 ID, 고른 작업이 고르지 않은 작업에 의존(`depends_on`)하는 경우다.
+모든 작업을 고르면 전체 승인과 같으므로 ai-svc에 `operation_ids` 없이 보낸다.
+부분 승인은 ai-svc approve 요청의 `operation_ids`로 그대로 전달하며, 고르지 않은 작업을 건너뛰는 실행은 ai-svc가 맡는다.
+
 #### 3. Auth 필요 여부
 
 - 필요
@@ -147,12 +160,19 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 |---|---|---|---|---|
 | path | `workspace_id` | `string` | 예 | - |
 | path | `run_id` | `string` | 예 | - |
+| body | `plan_version` | `integer` | 예 | 승인 대상 plan 버전 |
+| body | `operation_hash` | `string` | 예 | 승인 대상 편집안 해시(64자) |
+| body | `operation_ids` | `string[]` | 아니오 | 실행할 작업 ID(1~20개). 생략하면 계획 전체 |
 
 - Content-Type: `application/json` (`AgentRunApproveRequest`)
 
 ```json
 {
   "operation_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "operation_ids": [
+    "op_1",
+    "op_3"
+  ],
   "plan_version": 1
 }
 ```
@@ -169,7 +189,12 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 
 #### 6. Error response
 
-- 명세에 별도 오류 응답이 정의되어 있지 않다.
+| HTTP 상태 | 설명 | 응답 스키마 |
+|---|---|---|
+| `400` | 잘못된 요청(`operation_ids` 빈 배열·중복·계획에 없는 ID·의존 작업 누락 포함) | `ErrorResponse` |
+| `402` | 크레딧 부족 | `ErrorResponse` |
+| `404` | AgentRun 없음 | `ErrorResponse` |
+| `409` | ai-svc가 거절(계획 버전·해시 불일치 등, `AGENT_REQUEST_REJECTED`) | `ErrorResponse` |
 
 #### 7. Pagination / filtering
 
@@ -485,7 +510,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `AgentTurnRequest` |
 | 출력 | `202` Agent 실행이 대기열에 등록됨 — `AgentTurnResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`409` 문서 version 충돌 — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -508,6 +533,21 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 문서를 열지 않은 상태에서도 보낼 수 있다. 그때는 `documentId`·`baseVersion`·`editorSnapshot`을
 모두 생략하며, 적용할 대상이 없어 AI는 답변·되물음만 낸다. 셋은 함께 있거나 함께 없어야 하고
 하나만 오면 `400`이다.
+
+작업 탭에서 보내는 턴은 `"mode": "task"`를 넣는다. 이때 AI는 위키 질문 답변(`chat_answer`)·대화
+답변(`conversation_reply`)을 고르지 않고 문서 편집·새 문서·폴더 정리·워크플로·Skill·되물음(`clarify`)
+중에서만 고른다. 위키 질문처럼 보이면 채팅 탭에서 질문하라는 `clarify`를 돌려준다. 열린 문서가 없어도
+받으므로 폴더 정리·폴더 Skill은 문서 없이 실행되고, 문서 편집이 필요한데 문서가 없으면 문서를 열어
+달라는 `clarify`가 나온다. `mode`를 생략하면 기존 동작이며, `task` 외의 값은 `400`이다.
+document-svc는 `mode`를 ai command의 `mode` 키로 그대로 전달한다(생략 시 키 자체를 싣지 않는다).
+
+작업 대상 폴더는 `folder_id`로 보낸다. 폴더 정리의 범위이자 새 문서를 둘 위치다. 생략하면 대상 폴더를
+정하지 않은 것으로, 새 문서는 최상위(루트)에 두고 폴더 정리는 워크스페이스 전체를 범위로 본다(기존 동작).
+이 워크스페이스의 삭제되지 않은 폴더가 아니면 `404`, UUID 형식이 아니면 `400`이다. 문서 없이도 보낼 수 있어
+결과 방식이 "새 문서로 만들기"인 Skill을 기준 문서 없이(루트 포함) 실행할 수 있다.
+document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 시 키 자체를 싣지 않는다), 턴 기록
+(`agent_apply_projections.folder_id`)에 남겨 턴 생성·조회 응답의 `folder_id`로 돌려준다.
+새 문서 초안(`markdown_create`)은 클라이언트가 이 `folder_id`로 문서를 만든다.
 
 열린 문서에서 저장·반영을 명시한 편집 요청은 `workspace_workflow` AgentRun으로 전환한다.
 이때 편집 대상 문서와 기준 버전을 계획에 고정하고,
@@ -534,10 +574,14 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | body | `session_id` | `string` | 예 | 이 턴을 남길 채팅 세션 ID |
 | body | `message` | `string` | 예 | 사용자 지시문 |
 | body | `documentId` | `string` | 아니오 | 편집 대상 문서. 생략하면 `baseVersion`·`editorSnapshot`도 함께 생략한다 |
-| body | `baseVersion` | `integer` | 아니오 | 편집 기준 문서 버전 |
+| body | `baseVersion` | `integer` | 아니오 | 편집 기준 문서 버전. 현재 버전보다 오래되어도 거절하지 않고, 적용 저장이 이 버전 스냅샷 기준으로 그 사이 변경과 자동 병합한다([자동 병합](documents/content.md#자동-병합)) |
 | body | `editorSnapshot` | `object` | 아니오 | 편집 시작 시점의 에디터 상태 |
+| body | `mode` | `string` | 아니오 | `task`(작업 탭 턴)만 허용. 생략하면 기존 동작 |
+| body | `folder_id` | `string(uuid)` | 아니오 | 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 생략하면 루트·워크스페이스 전체 |
 | body | `allow_web_search` | `boolean` | 아니오 | Query와 웹 근거 기반 새 문서 생성에서 웹 검색을 허용할지. 편집·Skill 갈래에는 영향이 없다 |
 | body | `conversationContext.selected_pair_ids` | `string[]` | 아니오 | 맥락으로 쓸 문답 ID(최대 20개). 비우면 세션의 최근 완결 문답을 쓴다 |
+| body | `conversationContext.pendingSkillProposal` | `object` | 아니오 | 채팅에서 "게시"를 기다리는 Skill 제안. 필드는 snake_case(`scope_type`, `name`, `description`, `instructions_markdown`, `capabilities`, `allowed_tools`, `requires_source`)이고 ai command의 `conversation_context.pending_skill_proposal`로 그대로 옮긴다 |
+| body | `conversationContext.pendingSkillProposal.requires_source` | `boolean` | 아니오 | 원문 문서·폴더가 필요한 Skill인지. 생략(null)하면 ai command에서 키를 빼고 AI가 게시 때 규칙으로 정한다 |
 
 - Content-Type: `application/json` (`AgentTurnRequest`)
 
@@ -555,6 +599,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
       "description": "string",
       "instructions_markdown": "string",
       "name": "string",
+      "requires_source": true,
       "scope_type": "string"
     },
     "referenceContext": {
@@ -605,6 +650,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
   "error_message": "string",
+  "folder_id": null,
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -618,8 +664,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 |---|---|---|
 | `400` | 잘못된 요청 | `ErrorResponse` |
 | `402` | 크레딧 부족(`app.billing.enforce`, `INSUFFICIENT_CREDIT`) | `ErrorResponse` |
-| `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `409` | 문서 version 충돌 | `ErrorResponse` |
+| `404` | 문서·대상 폴더(`folder_id`) 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `423` | 다른 사용자가 문서를 편집 중 | `ErrorResponse` |
 
 ```json
@@ -663,6 +708,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
   "error_message": "string",
+  "folder_id": null,
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -707,6 +753,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 
 워크스페이스의 Agent 실행 결과를 조회합니다.
 
+`folder_id`는 턴을 만들 때 지정한 작업 대상 폴더다(지정하지 않았으면 `null`). AI 진행 중에도 같은 값을 돌려준다.
+
 #### 3. Auth 필요 여부
 
 - 필요
@@ -735,6 +783,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
   "error_message": "string",
+  "folder_id": "44444444-4444-4444-4444-444444444444",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -789,6 +838,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
   "documentId": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "error": "string",
   "error_message": "string",
+  "folder_id": "44444444-4444-4444-4444-444444444444",
   "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
   "result": {
   },
@@ -805,6 +855,115 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-turn-run-id)
+
+</details>
+
+<a id="summary-post-api-workspaces-workspace-id-agent-turn-run-id-cancel"></a>
+### `POST /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 끝나지 않은 Agent turn을 취소합니다. |
+| 입력 | **Path** — `workspace_id`: `string`, `run_id`: `string` |
+| 출력 | `200` 취소 요청 접수 또는 이미 취소 중·취소됨 — `AgentTurnResponse` |
+| 조건 | 인증 필요<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다.<br>요청자 본인의 turn만 취소할 수 있다(결과 조회와 같은 범위). |
+| 주요 오류 | `400` Agent run ID 형식이 올바르지 않음(`INVALID_REQUEST`)<br>`404` turn 또는 워크스페이스를 찾을 수 없음(`AGENT_RUN_NOT_FOUND`)<br>`409` 이미 완료·실패로 끝난 turn(`AGENT_TURN_ALREADY_FINISHED`) |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-api-workspaces-workspace-id-agent-turn-run-id-cancel"></a>
+### `POST /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel` 상세
+
+#### 1. Method + Path
+
+`POST /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel`
+
+#### 2. 목적
+
+끝나지 않은 Agent turn(대기열에 있거나 AI가 처리 중인 turn)을 취소한다. 기존 AI 작업 취소 흐름
+(`ai_task_runs` → ai-svc `POST /internal/ai/tasks/{id}/cancel`)을 그대로 쓴다.
+
+- 취소 요청이 확정되는 순간(`cancel_requested`) 이후 도착한 결과·진행 이벤트는 반영되지 않는다.
+  상태 확인과 전이를 결과 반영과 같은 행 잠금 안에서 해 둘 중 하나만 이긴다.
+- 세션의 처리 중 assistant 메시지는 AI의 취소 확정을 기다리지 않고 바로 `status=cancelled`,
+  `error_message="Agent 작업이 취소되었습니다."`로 닫힌다. 메시지는 대화에 남지만 다음 turn 맥락에는 실리지 않는다.
+- AI 중단·복구 확정은 비동기로 이어진다. 응답의 `status`는 그 시점의 turn 상태다:
+  `cancel_requested` → `rolling_back` → `cancelled`(복구 실패 시 `rollback_failed`).
+  끝까지 기다리려면 `GET .../agent/turn/{run_id}`를 폴링하거나 `.../events`의 `query.cancelled` 종료 이벤트를 받는다.
+- 이미 취소 중·취소된 turn에 다시 요청하면 현재 상태를 그대로 돌려준다(멱등). `rollback_failed`면 취소를 다시 시도한다.
+- 대기열에 있던 turn은 AI가 command를 받기 전에 취소로 등록되어 실행되지 않는다. 처리 중인 turn은 다음 모델 호출 전
+  확인 지점에서 멈추고, 이미 진행 중인 모델 호출이 늦게 끝나도 결과를 남기지 않는다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| path | `run_id` | `string` | 예 | 취소할 Agent 실행 ID |
+
+- Body: 없음
+
+#### 5. Response body
+
+- HTTP `200`: 취소 요청 접수 또는 이미 취소 중·취소됨
+- Content-Type: `*/*` (`AgentTurnResponse`)
+
+```json
+{
+  "apply_operation_id": null,
+  "baseVersion": null,
+  "documentId": null,
+  "error": null,
+  "error_message": null,
+  "folder_id": null,
+  "requestId": "agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+  "result": null,
+  "status": "cancel_requested"
+}
+```
+
+- 취소 중 응답(`cancel_requested`·`rolling_back`·`rollback_failed`·`cancelled`)도 `folder_id`는 턴을 만들 때 지정한 대상 폴더다(지정하지 않았으면 `null`).
+
+#### 6. Error response
+
+| HTTP 상태 | 코드 | 설명 |
+|---|---|---|
+| `400` | `INVALID_REQUEST` | Agent run ID 형식이 올바르지 않음 |
+| `404` | `AGENT_RUN_NOT_FOUND` | turn이 없거나 다른 사용자의 turn, 또는 워크스페이스 멤버가 아님 |
+| `409` | `AGENT_TURN_ALREADY_FINISHED` | 결과가 이미 반영됐거나 실패로 끝난 turn |
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 인증된 사용자만 호출할 수 있다.
+- path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 요청자 본인의 turn만 취소한다. (`POST /api/workspaces/{workspace_id}/ai/tasks/{id}/cancel`은 OWNER가 다른 멤버 작업도 취소할 수 있다.)
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/turn/agent_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83/cancel" \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
+- 서비스: `AgentTurnService.cancelTurn` → `AiTaskCancellationService.requestAgentTurnCancel`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: cancelTurn`)
+- 하위 호출: ai-svc `POST /internal/ai/tasks/{id}/cancel`, `GET /internal/ai/tasks/{id}`, `POST /internal/ai/tasks/{id}/rollback-backend`
+
+[↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-agent-turn-run-id-cancel)
 
 </details>
 
@@ -919,6 +1078,137 @@ string
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-turn-run-id-events)
+
+</details>
+
+<a id="summary-post-internal-agent-skill-execution-folder-sources-read"></a>
+### `POST /internal/agent/skill-execution/folder-sources/read`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | Skill 실행 원문으로 쓸 폴더 바로 아래 문서의 최신 본문을 반환합니다. |
+| 입력 | **Header** — `X-Agent-Service-Token`(필수, 인증 계층 검증): `string`<br>**Body** — `SkillFolderSourceReadRequest` |
+| 출력 | `200` 성공 — `SkillFolderSourceReadResponse` |
+| 조건 | 인증 필요<br>`X-Agent-Service-Token`을 `AgentServiceTokenFilter`가 검증한다(`/internal/agent/tools/**`와 같은 필터·토큰 `AGENT_INTERNAL_TOKEN`).<br>`user_id`가 워크스페이스 멤버이고 폴더·문서를 읽을 수 있어야 한다. |
+| 주요 오류 | `401` 서비스 토큰 누락·불일치, `403` 멤버 아님·폴더 읽기 권한 없음, `404` 폴더 없음·삭제됨·다른 워크스페이스, `400` 필수 필드 누락 |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-internal-agent-skill-execution-folder-sources-read"></a>
+### `POST /internal/agent/skill-execution/folder-sources/read` 상세
+
+#### 1. Method + Path
+
+`POST /internal/agent/skill-execution/folder-sources/read`
+
+#### 2. 목적
+
+원문이 필요한 Skill(`requires_source=true`)을 문서 없이 폴더만 골라 실행할 때, ai-svc가 그 폴더의 문서 본문을 원문으로 읽는다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `X-Agent-Service-Token`을 검증한다. 토큰이 없거나 다르면 서비스 계층에 닿기 전에 `401`이다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| header | `X-Agent-Service-Token` | `string` | 예 (인증 계층 검증) | - |
+| body | `workspace_id` | `string` | 예 | 워크스페이스 ID |
+| body | `user_id` | `string` | 예 | 실행한 사용자. 이 사용자의 읽기 권한으로 거른다 |
+| body | `folder_id` | `string(uuid)` | 예 | 원문 폴더. UUID가 아니면 `404` |
+| body | `max_documents` | `integer` | 예 | 돌려받을 최대 문서 수. 1..50 밖이면 그 범위로 맞춘다(0 → 1, 100 → 50) |
+
+```json
+{
+  "workspace_id": "ws_9d47a0e9a6324341b47562553b75f92a",
+  "user_id": "user_1",
+  "folder_id": "6b1f3c1e-9a2d-4c55-8e0b-2f7a1d9c4e10",
+  "max_documents": 20
+}
+```
+
+#### 5. Response body
+
+- HTTP `200`: OK
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `total_documents` | `integer` | 읽을 수 있고 본문이 있는 대상 전체 수(`max_documents`로 자르기 전). 본문이 없거나 비어 있는(공백뿐인) 문서, PDF 변환 중인 문서, 변환이 실패해 placeholder 본문만 남은 문서는 세지 않는다 |
+| `items[].document_id` | `string` | 문서 ID |
+| `items[].display_name` | `string` | 문서 표시 이름 |
+| `items[].updated_at` | `string(date-time)` | 문서 마지막 수정 시각(ISO-8601, UTC) |
+| `items[].markdown` | `string` | 저장된 최신 본문(`document_edit_states`). 편집 상태가 없는 예전 문서는 저장소 본문으로 만들어 싣는다 |
+
+```json
+{
+  "total_documents": 3,
+  "items": [
+    {
+      "document_id": "doc_b",
+      "display_name": "주간 회의 10월 3주",
+      "updated_at": "2026-10-20T01:00:00Z",
+      "markdown": "# 주간 회의\n\n- 결정 사항 ..."
+    },
+    {
+      "document_id": "doc_a",
+      "display_name": "주간 회의 10월 2주",
+      "updated_at": "2026-10-13T01:00:00Z",
+      "markdown": "# 주간 회의\n\n- 공유 사항 ..."
+    }
+  ]
+}
+```
+
+- 대상: `folder_id` **바로 아래** 문서만(하위 폴더 안 문서는 제외). 삭제되지 않은 `EDITABLE`(Markdown 편집 가능) 문서만이며,
+  업로드 원본(`ORIGINAL`)과 스킬 참고 문서(`origin=skill_reference`)는 뺀다.
+- 본문: 편집 상태가 있거나 저장소 본문(`source_uri`)으로 만들 수 있는 문서만 대상이다. 싣는 도중 저장소 본문을 만들지 못한
+  문서는 건너뛰고 다음 문서로 `max_documents`를 채우며, 그 문서는 `total_documents`에서도 뺀다. `max_documents` 뒤라서
+  싣지 않은 예전 문서는 본문을 만들지 않고 `source_uri`가 있으면 센다.
+- 정렬: `updated_at` 내림차순, 같으면 `document_id` 오름차순. 앞에서 `max_documents`개를 싣는다.
+
+#### 6. Error response
+
+| HTTP | code | 조건 |
+|---|---|---|
+| `401` | - | `X-Agent-Service-Token` 누락·불일치 |
+| `403` | `FOLDER_SOURCE_FORBIDDEN` | `user_id`가 워크스페이스 멤버가 아님(폴더 존재 여부를 알리지 않으려고 폴더 확인보다 먼저 본다), 또는 폴더를 읽을 권한 없음 |
+| `404` | `HIERARCHY_ITEM_NOT_FOUND` | 폴더가 없거나 삭제됐거나 다른 워크스페이스 폴더, `folder_id`가 UUID 아님 |
+| `400` | `INVALID_REQUEST` | 필수 필드 누락 |
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음(`max_documents` 상한만)
+- 필터링: 위 대상 규칙과 읽기 권한으로만 거른다
+
+#### 8. 권한 규칙
+
+- 멤버 확인: `WorkspaceAccessGuard.requireMember`. 멤버가 아니면 `403`.
+- 문서별 읽기: `DocumentAccessPolicy.viewer(workspace, user)`로 한 번 읽은 권한 설정으로 `Viewer.canReadFolder(folder)`와
+  문서마다 `Viewer.canRead(document)`를 본다. 워크스페이스 OWNER와 문서 소유자는 항상 읽고, 그 밖에는 적용되는 설정
+  (문서 설정 → 가장 가까운 상위 폴더 설정 → 기본값 `edit`)이 `edit` 또는 `view`일 때 읽는다. 알 수 없는 값은 읽지 못하는 것으로 본다.
+- 현재 권한 모델은 `edit`·`view`만 있어 멤버는 보기 전용 문서도 읽는다. 읽기를 막는 설정이 생기면 이 API도 그 판정을 따른다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X POST "$DOCUMENT/internal/agent/skill-execution/folder-sources/read" \
+  -H 'X-Agent-Service-Token: <value>' \
+  -H 'Content-Type: application/json' \
+  --data '{"workspace_id":"<value>","user_id":"<value>","folder_id":"<uuid>","max_documents":20}'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/skill/controller/SkillFolderSourceController.java`, 서비스 `src/main/java/fruition/core/skill/service/SkillFolderSourceService.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: readFolderSources`)
+- 호출자: ai-svc — `pipeline/app/modules/agent/infrastructure/backend_folder_source_reader.py`(`BackendFolderSourceReader.read`, `max_documents=20`). base URL은 `DOCUMENT_INTERNAL_BASE_URL`, 토큰은 `AGENT_INTERNAL_TOKEN`. `400`·`403`·`404`는 "이 폴더의 문서를 읽을 수 없어요" 안내로 바꾼다
+- 하위 호출: 없음(DB와, 편집 상태가 없는 예전 문서는 저장소 본문 읽기)
+- 배선 상태: 배선됨(ai-svc `Mireutale/ai-requires-source` 브랜치 기준)
+
+[↑ 요약으로 돌아가기](#summary-post-internal-agent-skill-execution-folder-sources-read)
 
 </details>
 

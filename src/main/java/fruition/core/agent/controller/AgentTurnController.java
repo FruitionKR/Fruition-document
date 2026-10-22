@@ -50,8 +50,6 @@ public class AgentTurnController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "문서 version 충돌",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "423", description = "다른 사용자가 문서를 편집 중",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
@@ -82,6 +80,31 @@ public class AgentTurnController {
             @Parameter(description = "조회할 Agent 실행 ID", required = true)
             @PathVariable("run_id") String runId) {
         return ResponseEntity.ok(agentTurnService.get(workspaceId, userId, runId));
+    }
+
+    @Operation(summary = "Agent turn 취소",
+            description = "끝나지 않은 Agent turn을 취소합니다. 요청자 본인의 turn만 취소할 수 있습니다. "
+                    + "취소 요청이 확정되면 늦게 도착한 결과는 반영되지 않고, 세션의 처리 중 assistant 메시지는 "
+                    + "status=cancelled로 닫힙니다. AI 중단·복구 확정은 비동기로 이어지며 응답의 status는 그 시점의 "
+                    + "turn 상태(cancel_requested·rolling_back·cancelled, 복구 실패 시 rollback_failed)입니다. "
+                    + "이미 취소 중·취소된 turn에 다시 요청하면 현재 상태를 그대로 돌려줍니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "취소 요청 접수 또는 이미 취소 중·취소됨",
+            content = @Content(schema = @Schema(implementation = AgentTurnResponse.class))),
+        @ApiResponse(responseCode = "400", description = "Agent run ID 형식이 올바르지 않음(INVALID_REQUEST)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "404", description = "turn 또는 워크스페이스를 찾을 수 없음(AGENT_RUN_NOT_FOUND)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "409", description = "이미 완료·실패로 끝난 turn(AGENT_TURN_ALREADY_FINISHED)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PostMapping("/turn/{run_id}/cancel")
+    public ResponseEntity<AgentTurnResponse> cancelTurn(
+            @PathVariable("workspace_id") String workspaceId,
+            @AuthenticationPrincipal String userId,
+            @Parameter(description = "취소할 Agent 실행 ID", required = true)
+            @PathVariable("run_id") String runId) {
+        return ResponseEntity.ok(agentTurnService.cancelTurn(workspaceId, userId, runId));
     }
 
     @Operation(summary = "AgentRun 조회", description = "자율 AgentRun 계획과 실행 상태를 조회합니다.")

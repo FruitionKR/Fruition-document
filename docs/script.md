@@ -2,6 +2,16 @@
 
 이 문서의 명령은 이 서비스 저장소 루트에서 실행합니다. Java 21이 필요하며 통합 테스트는 Docker의 임시 Testcontainers를 사용합니다.
 
+Gradle `test`는 `src/test/resources/application-test.properties`를 `test` 프로필로 읽는다.
+기본 Kafka listener와 topic 자동 생성은 시작하지 않으며, broker·AI·Access·외부 API 주소는
+`127.0.0.1:1`로 격리해 실행 중인 로컬 서비스에 연결하지 않는다. DB/Redis/MinIO는 테스트 컨테이너가
+주소를 덮어쓴다. 실제 통신을 검증하는 테스트는 `@DynamicPropertySource` 또는
+`@SpringBootTest(properties=...)`로 자신이 띄운 HTTP/WebSocket 서버나 컨테이너 주소를 명시한다.
+Kafka 통신 테스트를 추가할 때도 전용 broker와 `spring.kafka.listener.auto-startup=true`를 명시해야 한다.
+스케줄러·제품 로직은 전역 비활성화하지 않으며 outbox 발행 동작은 기존 mock 기반 테스트로 검증한다.
+IDE에서도 Gradle test runner를 사용한다. JUnit을 직접 실행한다면 `test` 프로필 및 Gradle의 테스트 전용
+환경변수를 동일하게 적용해야 하며, 실제 서비스 설정을 주입하지 않는다.
+
 ```bash
 ./gradlew test bootJar
 ./gradlew bootRun

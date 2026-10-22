@@ -41,6 +41,15 @@ public class PipelineSkillRequester {
                     "Skill 이름 형식이 올바르지 않습니다."),
             "invalid_reference", new Rejection("SKILL_INSTRUCTION_INVALID",
                     "참조 문서를 확인해 주세요. 접근할 수 없거나 비어 있거나 너무 긴 문서가 있습니다."),
+            // 게시·수정의 targets·result_mode가 capabilities와 어긋남. 수정에서는 생략해 이어받은 기존 값일 수도 있다.
+            "invalid_result_mode", new Rejection("SKILL_RESULT_MODE_INVALID",
+                    "결과 방식이 Skill 기능과 맞지 않습니다. 새 문서는 문서 작성, 현재 문서 수정은 문서 수정, "
+                            + "자동은 두 기능이 모두 있어야 합니다. 결과 방식을 다시 골라 주세요."),
+            "invalid_targets", new Rejection("SKILL_TARGETS_INVALID",
+                    "적용 대상이 올바르지 않습니다. 대상은 문서 작성·수정 Skill에서만 고를 수 있고, 같은 대상을 두 번 고를 수 없습니다."),
+            // 게시·수정의 capabilities 값이나 조합이 허용되지 않음.
+            "invalid_capabilities", new Rejection("SKILL_CAPABILITIES_INVALID",
+                    "Skill 종류가 올바르지 않습니다. 문서 작성·수정, 폴더 정리, 템플릿 중에서 다시 골라 주세요."),
             "test_run_unsupported", new Rejection("SKILL_TEST_RUN_UNSUPPORTED",
                     "이 종류의 Skill은 테스트 실행을 지원하지 않습니다. 문서 작성·수정·템플릿 Skill만 테스트할 수 있습니다."));
 
@@ -76,7 +85,7 @@ public class PipelineSkillRequester {
                             WorkspaceAiModelClient.AiModelSelection aiModel, String runId) {
         return task(runId, "skill_publish", workspaceId, userId, null, new PublishPayload(workspaceId, userId, request.scopeType(), request.name(),
                 request.description(), request.instructionsMarkdown(), request.capabilities(), request.allowedTools(),
-                request.targets(), request.resultMode(), aiModel.provider(), aiModel.model()));
+                request.targets(), request.resultMode(), request.requiresSource(), aiModel.provider(), aiModel.model()));
     }
 
     public JsonNode list(String workspaceId, String userId) {
@@ -99,7 +108,7 @@ public class PipelineSkillRequester {
                            WorkspaceAiModelClient.AiModelSelection aiModel, String runId) {
         return task(runId, "skill_update", workspaceId, userId, skillId, new UpdatePayload(workspaceId, userId, request.name(),
                 request.description(), request.instructionsMarkdown(), request.targets(), request.resultMode(),
-                aiModel.provider(), aiModel.model()));
+                request.requiresSource(), request.capabilities(), aiModel.provider(), aiModel.model()));
     }
 
     /**
@@ -283,6 +292,10 @@ public class PipelineSkillRequester {
             @JsonProperty("result_mode")
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
             String resultMode,
+            // 생략하면 키를 빼서 AI가 원문 필요 여부를 판단하게 한다.
+            @JsonProperty("requires_source")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            Boolean requiresSource,
             String provider,
             String model) {}
 
@@ -298,6 +311,13 @@ public class PipelineSkillRequester {
             @JsonProperty("result_mode")
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
             String resultMode,
+            // 생략하면 키를 빼서 AI가 원문 필요 여부를 판단하게 한다.
+            @JsonProperty("requires_source")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            Boolean requiresSource,
+            // 생략하면 키를 빼서 AI가 기존 capabilities를 이어받게 한다.
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            java.util.List<String> capabilities,
             String provider,
             String model) {}
 

@@ -49,6 +49,43 @@ class AgentTurnControllerTest {
     @MockBean fruition.core.query.service.QueryEventBroker runEventBroker;
 
     @Test
+    void cancelTurn_returnsCurrentTurnStatus() throws Exception {
+        String runId = "agent_00000000000000000000000000000001";
+        when(agentTurnService.cancelTurn(WORKSPACE_ID, USER_ID, runId))
+                .thenReturn(new AgentTurnResponse(null, null, runId, null, "cancel_requested", null, null));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn/" + runId + "/cancel")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requestId").value(runId))
+                .andExpect(jsonPath("$.status").value("cancel_requested"));
+    }
+
+    @Test
+    void cancelTurn_finishedTurnReturnsConflict() throws Exception {
+        String runId = "agent_00000000000000000000000000000002";
+        when(agentTurnService.cancelTurn(WORKSPACE_ID, USER_ID, runId))
+                .thenThrow(new fruition.core.agent.exception.AgentTurnAlreadyFinishedException(runId));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn/" + runId + "/cancel")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("AGENT_TURN_ALREADY_FINISHED"));
+    }
+
+    @Test
+    void cancelTurn_unknownTurnReturnsNotFound() throws Exception {
+        String runId = "agent_00000000000000000000000000000003";
+        when(agentTurnService.cancelTurn(WORKSPACE_ID, USER_ID, runId))
+                .thenThrow(new AgentRunNotFoundException(runId));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn/" + runId + "/cancel")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("AGENT_RUN_NOT_FOUND"));
+    }
+
+    @Test
     void turn_authenticatedRequestReturnsPipelineResult() throws Exception {
         AgentTurnRequest request = request();
         AgentTurnResponse response = new AgentTurnResponse(
@@ -99,6 +136,61 @@ class AgentTurnControllerTest {
         verify(agentTurnService).turn(eq(WORKSPACE_ID), eq(USER_ID), captured.capture());
         org.assertj.core.api.Assertions.assertThat(captured.getValue().skillMode()).isEqualTo("explicit");
         org.assertj.core.api.Assertions.assertThat(captured.getValue().skillId()).isEqualTo("skill-1");
+    }
+
+    @Test
+    void turn_taskModeWithoutDocumentReachesService() throws Exception {
+        when(agentTurnService.turn(eq(WORKSPACE_ID), eq(USER_ID), any(AgentTurnRequest.class)))
+                .thenReturn(new AgentTurnResponse(null, null, "agent_request_1", null, "queued", null, null));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"session_id":"session_1","message":"회의록을 연도별 폴더로 정리해줘","mode":"task"}
+                                """))
+                .andExpect(status().isAccepted());
+
+        ArgumentCaptor<AgentTurnRequest> captured = ArgumentCaptor.forClass(AgentTurnRequest.class);
+        verify(agentTurnService).turn(eq(WORKSPACE_ID), eq(USER_ID), captured.capture());
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().mode()).isEqualTo("task");
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().hasDocumentContext()).isFalse();
+    }
+
+    @Test
+    void turn_targetFolderReachesServiceAndIsEchoed() throws Exception {
+        when(agentTurnService.turn(eq(WORKSPACE_ID), eq(USER_ID), any(AgentTurnRequest.class)))
+                .thenReturn(new AgentTurnResponse(null, null, "agent_request_1", null, "queued", null, null,
+                        "44444444-4444-4444-4444-444444444444"));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"session_id":"session_1","message":"회의록 만들어줘","mode":"task",
+                                 "skill_mode":"explicit","skill_id":"skill-1",
+                                 "folder_id":"44444444-4444-4444-4444-444444444444"}
+                                """))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.folder_id").value("44444444-4444-4444-4444-444444444444"));
+
+        ArgumentCaptor<AgentTurnRequest> captured = ArgumentCaptor.forClass(AgentTurnRequest.class);
+        verify(agentTurnService).turn(eq(WORKSPACE_ID), eq(USER_ID), captured.capture());
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().folderId())
+                .isEqualTo("44444444-4444-4444-4444-444444444444");
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().hasDocumentContext()).isFalse();
+    }
+
+    @Test
+    void turn_rejectsUnknownMode() throws Exception {
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"session_id":"session_1","message":"정리해줘","mode":"chat"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
     }
 
     @Test
@@ -168,6 +260,29 @@ class AgentTurnControllerTest {
                 .andExpect(jsonPath("$.error.code").value("AGENT_REQUEST_REJECTED"))
                 .andExpect(jsonPath("$.error.message").value("AgentRun 요청이 거부되었습니다."))
                 .andExpect(content().string(not(containsString("stale plan"))));
+    }
+
+    @Test
+    void approve_acceptsOperationIdsAndRejectsEmptySelection() throws Exception {
+        String runId = "run-autonomous";
+        when(agentTurnService.approve(eq(WORKSPACE_ID), eq(USER_ID), eq(runId), any(AgentRunApproveRequest.class)))
+                .thenReturn(new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode().put("id", runId));
+        String path = "/api/workspaces/" + WORKSPACE_ID + "/agent/runs/" + runId + "/approve";
+        String auth = "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com");
+
+        mockMvc.perform(post(path).header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"plan_version\":1,\"operation_hash\":\"" + "a".repeat(64)
+                                + "\",\"operation_ids\":[\"op_1\",\"op_3\"]}"))
+                .andExpect(status().isOk());
+        ArgumentCaptor<AgentRunApproveRequest> captured = ArgumentCaptor.forClass(AgentRunApproveRequest.class);
+        verify(agentTurnService).approve(eq(WORKSPACE_ID), eq(USER_ID), eq(runId), captured.capture());
+        org.assertj.core.api.Assertions.assertThat(captured.getValue().operationIds()).containsExactly("op_1", "op_3");
+
+        // 빈 선택은 승인할 것이 없으므로 거절한다(전체 승인은 키를 생략한다).
+        mockMvc.perform(post(path).header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"plan_version\":1,\"operation_hash\":\"" + "a".repeat(64)
+                                + "\",\"operation_ids\":[]}"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

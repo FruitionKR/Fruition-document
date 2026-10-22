@@ -1,6 +1,7 @@
 package fruition.core;
 
 import fruition.core.agent.exception.AgentRunNotFoundException;
+import fruition.core.agent.exception.AgentTurnAlreadyFinishedException;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.core.agent.exception.PipelineAgentException;
 import fruition.core.ai.WorkspaceAiModelForbiddenException;
@@ -14,6 +15,7 @@ import fruition.core.aihistory.exception.WikiObjectReadException;
 import fruition.core.skill.exception.InvalidSkillTestRunException;
 import fruition.core.skill.exception.PipelineSkillException;
 import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
+import fruition.core.skill.exception.SkillFolderSourceForbiddenException;
 import fruition.core.wikimaintenance.exception.PipelineWikiMaintenanceException;
 import fruition.core.document.exception.ConflictAlreadyResolvedException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
@@ -117,6 +119,13 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
                 .body(ErrorResponse.of("REFERENCE_DOCUMENT_TOO_LARGE", e.getMessage()));
     }
 
+    @ExceptionHandler(SkillFolderSourceForbiddenException.class)
+    public ResponseEntity<ErrorResponse> handleSkillFolderSourceForbidden(SkillFolderSourceForbiddenException e) {
+        logHandled(e, HttpStatus.FORBIDDEN, "FOLDER_SOURCE_FORBIDDEN");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of("FOLDER_SOURCE_FORBIDDEN", e.getMessage()));
+    }
+
     @ExceptionHandler(PipelineWikiPageException.class)
     public ResponseEntity<?> handlePipelineWikiPage(PipelineWikiPageException e) {
         if (e.getResponseBody() != null && !e.getResponseBody().isBlank()) {
@@ -153,6 +162,13 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         logHandled(e, HttpStatus.NOT_FOUND, "AGENT_RUN_NOT_FOUND");
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("AGENT_RUN_NOT_FOUND", e.getMessage()));
+    }
+
+    @ExceptionHandler(AgentTurnAlreadyFinishedException.class)
+    public ResponseEntity<ErrorResponse> handleAgentTurnAlreadyFinished(AgentTurnAlreadyFinishedException e) {
+        logHandled(e, HttpStatus.CONFLICT, "AGENT_TURN_ALREADY_FINISHED");
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("AGENT_TURN_ALREADY_FINISHED", e.getMessage()));
     }
 
     @ExceptionHandler(PipelineWikiMaintenanceException.class)

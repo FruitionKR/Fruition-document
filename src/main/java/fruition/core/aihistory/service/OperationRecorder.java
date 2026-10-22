@@ -22,6 +22,9 @@ import java.util.Optional;
 @Component
 public class OperationRecorder {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
+
     private static final Logger log = LoggerFactory.getLogger(OperationRecorder.class);
     private static final String CONFLICT_SUMMARY = "문서가 이미 변경되어 AI 편집을 반영하지 못했습니다.";
 
@@ -69,6 +72,7 @@ public class OperationRecorder {
         }
         operation.complete(OperationStatus.succeeded, "AI 편집을 문서에 반영했습니다.", 1, null, now);
         operationLogRepository.save(operation);
+        if (analytics != null) analytics.accepted(operationId, userId, workspaceId, documentId, now);
 
         if (!operationChangeRepository.existsByOperationIdAndResourceIdAndChangeType(
                 operationId, documentId, ChangeType.updated)) {
@@ -91,6 +95,7 @@ public class OperationRecorder {
             throw new OperationPayloadConflictException(operationId);
         }
         operation.complete(OperationStatus.succeeded, "AI 편집 결과가 현재 본문과 같습니다.", 0, null, now);
+        if (analytics != null) analytics.accepted(operationId, userId, workspaceId, documentId, now);
         operationLogRepository.save(operation);
     }
 

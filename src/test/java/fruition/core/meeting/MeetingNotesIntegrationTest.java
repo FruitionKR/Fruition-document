@@ -46,9 +46,23 @@ class MeetingNotesIntegrationTest {
              "open_questions":[]}
             """;
 
+    /** 시안 구성 AI 응답(Fruition-ai docs/api/speech.md). 근거 ID는 본문에 없고 배열에만 있다. */
+    static final String DESIGNED_DRAFT = """
+            {"display_name":"출시 회의",
+             "markdown":"# 출시 회의\\n\\n- 날짜: 2026-10-19\\n- 참석자: 김민수, 이지은\\n\\n### 회의 요약\\n- 출시 일정을 정했다.\\n\\n### 주요 논의\\n#### 출시 일정\\n- QA 기간을 검토했다.\\n\\n### 결정 사항\\n- 금요일 출시\\n\\n### 해야 할 일\\n- [ ] 배포 점검 · 김민수 · 기한 미정\\n\\n### 다음 일정\\n- 다음 주 <img src=x>점검 회의",
+             "meeting_date":"2026-10-19","attendees":["김민수","이지은"],
+             "summary":[{"text":"출시 일정을 정했다.","source_segment_ids":["s1_a"]}],
+             "discussion":[{"topic":"출시 일정","items":[{"text":"QA 기간을 검토했다.","source_segment_ids":["s1_a"]}]}],
+             "decisions":[{"text":"금요일 출시","source_segment_ids":["s1_a"]}],
+             "action_items":[{"text":"배포 점검","owner":"김민수","due":null,"source_segment_ids":["s1_a"]}],
+             "next_schedule":[{"text":"다음 주 점검 회의","source_segment_ids":[]}],
+             "open_questions":[{"text":"할인 여부","source_segment_ids":["s1_a"]}]}
+            """;
+
     /** 명령이 Kafka로 나가 outbox에서 사라지지 않게 한다(다른 outbox 통합 테스트와 같다). */
     @MockBean fruition.core.document.service.AiCommandOutboxPublisher outboxPublisher;
     @MockBean WorkspaceAiModelClient workspaceAiModelClient;
+    @MockBean fruition.core.authz.AccessUserClient accessUserClient;
     @MockBean fruition.core.aitask.repository.PipelineTaskCancellationClient pipeline;
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
@@ -109,6 +123,16 @@ class MeetingNotesIntegrationTest {
         assertThat(sent.path("segments").get(0).path("text").asText())
                 .isEqualTo("출시는 금요일로 확정하겠습니다. 민수가 배포 점검을 맡겠습니다.");
         assertThat(sent.path("segments").get(0).size()).isEqualTo(2);
+        // 회의 날짜는 회의를 만든 날의 한국 날짜다. 표시명을 모르면 참석자는 싣지 않는다.
+        assertThat(sent.path("meeting_date").asText()).isEqualTo(jdbc.queryForObject(
+                "SELECT (created_at AT TIME ZONE 'Asia/Seoul')::date::text FROM meetings WHERE id = ?", String.class, meetingId));
+        assertThat(sent.has("attendees")).isFalse();
+        // 이전 AI 응답이면 새 필드는 비어 있다.
+        assertThat(notes.path("meeting_date").isNull()).isTrue();
+        assertThat(notes.path("attendees")).isEmpty();
+        assertThat(notes.path("discussion")).isEmpty();
+        assertThat(notes.path("next_schedule")).isEmpty();
+        assertThat(notes.path("action_items").get(0).path("owner").isNull()).isTrue();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE id = ? AND kind = 'meeting_notes'",
                 Integer.class, runId(meetingId, 1))).isEqualTo(1);  // 취소·사용량 추적용 run 등록
 
@@ -116,6 +140,41 @@ class MeetingNotesIntegrationTest {
                 .andExpect(jsonPath("$.version").value(1)).andExpect(jsonPath("$.status").value("ready"));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM meeting_notes WHERE meeting_id = ?", Integer.class,
                 meetingId)).isEqualTo(1);  // 같은 키 재시도는 새 작업을 만들지 않는다
+    }
+
+    @Test
+    void designedDraft_usesAiMarkdownAndReturnsNewFields() throws Exception {
+        when(accessUserClient.getDisplayName(userId)).thenReturn(" 김민수 ");
+        String meetingId = meetingWithTranscript(null, "finished");
+        grant();
+        generate(meetingId, "k1", false).andExpect(status().isAccepted());
+        // 실시간 받아쓰기를 한 회의 소유자는 참석자로 보낸다.
+        assertThat(command(meetingId, 1).path("attendees")).extracting(JsonNode::asText).containsExactly("김민수");
+        succeed(meetingId, 1, DESIGNED_DRAFT);
+        JsonNode notes = awaitStatus(meetingId, "ready");
+
+        // AI 본문을 그대로 쓰되 원시 HTML은 걷어낸다.
+        assertThat(notes.path("markdown").asText())
+                .startsWith("# 출시 회의\n\n- 날짜: 2026-10-19\n- 참석자: 김민수, 이지은\n\n### 회의 요약")
+                .contains("### 주요 논의\n#### 출시 일정", "- [ ] 배포 점검 · 김민수 · 기한 미정", "### 다음 일정")
+                .doesNotContain("<img", "s1_a", "## 미결 사항");
+        assertThat(notes.path("meeting_date").asText()).isEqualTo("2026-10-19");
+        assertThat(notes.path("attendees")).extracting(JsonNode::asText).containsExactly("김민수", "이지은");
+        assertThat(notes.path("discussion").get(0).path("topic").asText()).isEqualTo("출시 일정");
+        // 주제 항목의 근거도 묶음 ID에서 원래 구간 ID로 되돌린다.
+        assertThat(notes.path("discussion").get(0).path("items").get(0).path("source_segment_ids"))
+                .extracting(JsonNode::asText).containsExactly("s1_a", "s1_b");
+        JsonNode action = notes.path("action_items").get(0);
+        assertThat(action.path("text").asText()).isEqualTo("배포 점검");
+        assertThat(action.path("owner").asText()).isEqualTo("김민수");
+        assertThat(action.path("due").isNull()).isTrue();
+        assertThat(notes.path("next_schedule").get(0).path("text").asText()).isEqualTo("다음 주 점검 회의");
+        assertThat(notes.path("open_questions").get(0).path("text").asText()).isEqualTo("할인 여부");
+
+        // 새 문서 저장도 같은 본문을 쓴다.
+        String documentId = json(apply(meetingId, 1, "a1", "{\"mode\":\"create\"}").andExpect(status().isOk()))
+                .path("applied").path("document_id").asText();
+        assertThat(markdownOf(documentId)).isEqualTo(notes.path("markdown").asText());
     }
 
     @Test
@@ -189,7 +248,7 @@ class MeetingNotesIntegrationTest {
     }
 
     @Test
-    void append_mergesOnceAndRejectsChangedDocument() throws Exception {
+    void append_mergesOnceEvenAfterDocumentChanged() throws Exception {
         String documentId = createDocument("# 주간 회의\n\n- 기존 본문");
         String meetingId = meetingWithTranscript(documentId, "finished");
         generated(meetingId, "k1");
@@ -199,17 +258,13 @@ class MeetingNotesIntegrationTest {
         long base = preview.path("base_revision").asLong();
         assertThat(preview.path("markdown").asText()).startsWith("# 주간 회의\n\n- 기존 본문\n\n# 출시 회의\n");
 
-        // 미리보기 이후 다른 곳에서 문서가 바뀌면 저장하지 않는다.
+        // 미리보기 이후 다른 곳에서 문서가 바뀌어도 거절하지 않고 지금 본문 끝에 덧붙인다(자동 병합, ADR 0032).
         saveContent(documentId, "# 주간 회의\n\n- 다른 곳에서 수정", base);
-        apply(meetingId, 1, "a1", appendBody(base)).andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.code").value("DOCUMENT_REVISION_CHANGED"));
-
-        long fresh = json(mockMvc.perform(post(notesUrl(meetingId) + "/1/append-preview")
-                .header("Authorization", bearer()))).path("base_revision").asLong();
-        apply(meetingId, 1, "a2", appendBody(fresh)).andExpect(status().isOk())
+        long fresh = base + 1;
+        apply(meetingId, 1, "a1", appendBody(base)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.applied.mode").value("append"));
-        apply(meetingId, 1, "a2", appendBody(fresh)).andExpect(status().isOk());  // 같은 요청 재시도
-        apply(meetingId, 1, "a2", "{\"mode\":\"append\",\"base_revision\":" + fresh + ",\"markdown\":\"# 다른 회의록\"}")
+        apply(meetingId, 1, "a1", appendBody(base)).andExpect(status().isOk());  // 같은 요청 재시도
+        apply(meetingId, 1, "a1", "{\"mode\":\"append\",\"base_revision\":" + base + ",\"markdown\":\"# 다른 회의록\"}")
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_CONFLICT"));
 
         String saved = markdownOf(documentId);
@@ -525,8 +580,12 @@ class MeetingNotesIntegrationTest {
     }
 
     private void succeed(String meetingId, int version) throws Exception {
+        succeed(meetingId, version, DRAFT);
+    }
+
+    private void succeed(String meetingId, int version, String draft) throws Exception {
         consumer.consume("{\"event_id\":\"e-" + UUID.randomUUID() + "\",\"kind\":\"meeting_notes\",\"run_id\":\""
-                + runId(meetingId, version) + "\",\"status\":\"succeeded\",\"payload\":" + DRAFT + "}");
+                + runId(meetingId, version) + "\",\"status\":\"succeeded\",\"payload\":" + draft + "}");
     }
 
     private void fail(String meetingId, int version, String error) throws Exception {

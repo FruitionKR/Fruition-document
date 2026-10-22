@@ -18,7 +18,7 @@ tags:
   name: Chat Sessions
 - description: Markdown 문서 이미지 asset 조회 API
   name: Document Assets
-- description: 같은 revision에서 갈라진 편집을 OWNER가 골라 해결
+- description: (deprecated) 본문 저장이 서버에서 자동 병합되어 더 쓰지 않는다. 구 데스크톱 호환용으로 남긴다
   name: Document Edit Conflicts
 - description: 문서 편집 잠금(활성 편집 추적) API
   name: Document Edit Lock
@@ -476,12 +476,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 문서 또는 워크스페이스를 찾을 수 없음
-        "409":
-          content:
-            '*/*':
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-          description: 문서 version 충돌
         "423":
           content:
             '*/*':
@@ -537,6 +531,52 @@ paths:
                 - $ref: "#/components/schemas/ErrorResponse"
           description: Agent 상태 파이프라인 사용 불가
       summary: Agent turn 결과 조회
+      tags:
+      - Agent
+  /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel:
+    post:
+      description: "끝나지 않은 Agent turn을 취소합니다. 요청자 본인의 turn만 취소할 수 있습니다. 취소 요청이 확정되면 늦게 도착한 결과는 반영되지 않고, 세션의 처리 중 assistant 메시지는 status=cancelled로 닫힙니다. AI 중단·복구 확정은 비동기로 이어지며 응답의 status는 그 시점의 turn 상태(cancel_requested·rolling_back·cancelled, 복구 실패 시 rollback_failed)입니다. 이미 취소 중·취소된 turn에 다시 요청하면 현재 상태를 그대로 돌려줍니다."
+      operationId: cancelTurn
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - description: 취소할 Agent 실행 ID
+        in: path
+        name: run_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/AgentTurnResponse"
+          description: 취소 요청 접수 또는 이미 취소 중·취소됨
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Agent run ID 형식이 올바르지 않음(INVALID_REQUEST)
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: turn 또는 워크스페이스를 찾을 수 없음(AGENT_RUN_NOT_FOUND)
+        "409":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 이미 완료·실패로 끝난 turn(AGENT_TURN_ALREADY_FINISHED)
+      summary: Agent turn 취소
       tags:
       - Agent
   /api/workspaces/{workspace_id}/agent/turn/{run_id}/events:
@@ -1276,7 +1316,8 @@ paths:
       - Chat Sessions
   /api/workspaces/{workspace_id}/conflicts:
     get:
-      description: 충돌 본과 서버 현재 본문·revision·마지막 수정자를 함께 반환합니다. OWNER만 호출할 수 있습니다.
+      deprecated: true
+      description: 자동 병합 도입 후에는 새 충돌이 열리지 않아 비어 있습니다. 충돌 본과 서버 현재 본문·revision·마지막 수정자를 함께 반환합니다. OWNER만 호출할 수 있습니다.
       operationId: listConflicts
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1305,12 +1346,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 워크스페이스를 찾을 수 없음
-      summary: 미해결 편집 충돌 목록
+      summary: 미해결 편집 충돌 목록 (deprecated)
       tags:
       - Document Edit Conflicts
   /api/workspaces/{workspace_id}/conflicts/{conflict_id}/resolve:
     post:
-      description: "server는 본문을 그대로 두고, conflict·merged는 그 본문으로 새 revision을 저장합니다. 고르지 않은 본문은 버전 이력과 충돌 기록에 남습니다. OWNER만 호출할 수 있고, 먼저 해결한 요청만 반영됩니다."
+      deprecated: true
+      description: "자동 병합 도입 후에는 해결할 열린 충돌이 없습니다. server는 본문을 그대로 두고, conflict·merged는 그 본문으로 새 revision을 저장합니다. 고르지 않은 본문은 버전 이력과 충돌 기록에 남습니다. OWNER만 호출할 수 있고, 먼저 해결한 요청만 반영됩니다."
       operationId: resolveConflict
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1369,7 +1411,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 다른 사용자가 편집 잠금을 보유 중
-      summary: 편집 충돌 해결
+      summary: 편집 충돌 해결 (deprecated)
       tags:
       - Document Edit Conflicts
   /api/workspaces/{workspace_id}/document-tree:
@@ -1868,7 +1910,8 @@ paths:
       - Documents
   /api/workspaces/{workspace_id}/documents/{document_id}/conflicts:
     post:
-      description: 본문 저장이 409 DOCUMENT_VERSION_CONFLICT로 막혔을 때 내 본문을 충돌로 올려 보존합니다. 그 문서를 편집할 수 있어야 합니다. 같은 client_conflict_id로 다시 보내면 기존 충돌을 돌려줍니다.
+      deprecated: true
+      description: "본문 저장이 자동 병합으로 바뀌어 새 클라이언트는 호출하지 않습니다. 구 데스크톱 호환용으로, 받은 본문을 본문 저장과 같은 자동 병합 경로로 곧바로 저장하고 해결된 충돌(status=resolved, resolution=merged|conflict)로 돌려줍니다. OWNER 알림은 만들지 않습니다. 그 문서를 편집할 수 있어야 합니다. 같은 client_conflict_id로 다시 보내면 기존 충돌을 돌려줍니다."
       operationId: registerConflict
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1920,12 +1963,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
           description: Markdown 5MB 초과
-      summary: 편집 충돌 등록
+        "423":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 다른 사용자가 편집 잠금을 보유 중
+      summary: 편집 충돌 등록 (deprecated)
       tags:
       - Document Edit Conflicts
   /api/workspaces/{workspace_id}/documents/{document_id}/content:
     put:
-      description: 전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision과 일치할 때만 반영하며 revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다.
+      description: "전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision보다 오래되었으면 서버가 base_revision 스냅샷 기준으로 줄 단위 3-way merge합니다. 겹치지 않으면 합친 본을(merge.status=merged), 겹치거나 기준 스냅샷이 없으면 요청 본을 저장하고(merge.status=overwritten) 덮어쓴 서버 본의 버전을 merge.overwritten_version에 담습니다. merged·overwritten이면 markdown에 저장된 최종 본문이 옵니다. revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다."
       operationId: saveContent
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1970,7 +2019,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/DocumentContentSaveResponse"
-          description: 저장 성공 또는 동일 본문 no-op
+          description: 저장 성공(자동 병합 포함) 또는 동일 본문 no-op
         "400":
           content:
             '*/*':
@@ -1994,7 +2043,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 편집 revision 또는 revision_write_id 충돌. revision 충돌(DOCUMENT_VERSION_CONFLICT)은 error.current_revision에 서버 현재 revision을 담는다
+          description: "revision_write_id 충돌(IDEMPOTENCY_KEY_CONFLICT), 또는 base_revision이 서버 현재 revision보다 큼(DOCUMENT_VERSION_CONFLICT, error.current_revision에 서버 현재 revision). 오래된 base_revision은 409가 아니라 자동 병합된다"
         "413":
           content:
             '*/*':
@@ -4289,7 +4338,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 잘못된 Skill 정의
+          description: "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, 수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), SKILL_CAPABILITIES_INVALID(허용되지 않는 capabilities 값 또는 조합), 초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), SKILL_REQUEST_REJECTED(그 밖의 거절)"
         "402":
           content:
             '*/*':
@@ -4552,7 +4601,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 잘못된 Skill 정의
+          description: "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, 수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), SKILL_CAPABILITIES_INVALID(허용되지 않는 capabilities 값 또는 조합), 초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), SKILL_REQUEST_REJECTED(그 밖의 거절)"
         "402":
           content:
             '*/*':
@@ -5335,6 +5384,26 @@ paths:
           description: OK
       tags:
       - skill-reference-controller
+  /internal/agent/skill-execution/folder-sources/read:
+    post:
+      description: 폴더 바로 아래 Markdown 편집 문서 중 사용자가 읽을 수 있는 문서의 최신 본문을 최근 수정순으로 반환합니다.
+      operationId: readFolderSources
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillFolderSourceReadRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/SkillFolderSourceReadResponse"
+          description: OK
+      summary: Skill 폴더 원문 읽기
+      tags:
+      - skill-folder-source-controller
   /internal/agent/tools/execute/{tool_name}:
     post:
       operationId: execute
@@ -5630,6 +5699,14 @@ components:
           description: 승인 대상 편집안의 해시(64자). 내용이 바뀌면 값이 달라져 잘못된 승인을 막는다.
           maxLength: 64
           minLength: 64
+        operation_ids:
+          type: array
+          description: "실행할 작업(plan.operations[].id)만 고를 때 보낸다. 생략하면 계획 전체를 실행한다. 계획에 없는 ID·중복이 있거나, 고른 작업이 고르지 않은 작업에 의존(depends_on)하면 거절된다. 계획의 모든 작업을 고르면 생략과 같다."
+          items:
+            type: string
+            minLength: 1
+          maxItems: 20
+          minItems: 1
         plan_version:
           type: integer
           format: int32
@@ -5710,7 +5787,7 @@ components:
       - workspace_id
     AgentTurnRequest:
       type: object
-      description: "Agent turn 요청. 접수되면 202로 돌아오고 결과는 비동기로 만들어진다. 문서를 열지 않은 상태에서도 보낼 수 있으며, 그때는 편집 대신 답변·되물음만 나온다. skill_* 필드는 snake_case이고 나머지는 camelCase다."
+      description: "Agent turn 요청. 접수되면 202로 돌아오고 결과는 비동기로 만들어진다. 문서를 열지 않은 상태에서도 보낼 수 있으며, 그때는 편집 대신 답변·되물음만 나온다(mode=task면 답변 대신 폴더 정리·워크플로·되물음이 나온다). skill_* 필드는 snake_case이고 나머지는 camelCase다."
       properties:
         allow_web_search:
           type: boolean
@@ -5731,11 +5808,23 @@ components:
         editorSnapshot:
           $ref: "#/components/schemas/EditorSnapshot"
           description: 편집 시작 시점의 에디터 상태. documentId와 함께 생략한다.
+        folder_id:
+          type: string
+          format: uuid
+          description: "작업 대상 폴더 ID. 폴더 정리의 범위이자 새 문서를 둘 위치다. 생략(null)하면 대상 폴더를 정하지 않은 것으로, 새 문서는 최상위(루트)에 두고 폴더 정리는 워크스페이스 전체를 범위로 본다(기존 동작). 이 워크스페이스의 삭제되지 않은 폴더여야 한다(없으면 404). 문서 없이도 보낼 수 있다."
+          example: 44444444-4444-4444-4444-444444444444
         message:
           type: string
           description: 사용자 지시문
           example: 이 문단을 표로 정리해줘
           minLength: 1
+        mode:
+          type: string
+          description: "턴을 보낸 화면. 작업 탭이면 \"task\"를 보낸다. task면 AI가 위키 질문 답변(chat_answer)·대화 답변(conversation_reply)을 고르지 않고 문서 편집·폴더 정리·워크플로·Skill·되물음(clarify) 중에서만 고른다. 열린 문서 없이도 받으며, 문서 편집이 필요하면 AI가 문서를 열어 달라고 되묻는다. 생략하면 기존 동작이다."
+          enum:
+          - task
+          example: task
+          pattern: task
         model:
           type: string
           description: 모델명. provider와 짝을 이뤄야 한다.
@@ -5814,6 +5903,10 @@ components:
         error_message:
           type: string
           description: 실패 코드에 대응하는 사용자용 한국어 문구. 성공이면 null이다.
+        folder_id:
+          type: string
+          format: uuid
+          description: 요청한 작업 대상 폴더 ID(요청의 folder_id). 새 문서로 만드는 결과는 이 폴더에 둔다. null이면 최상위(루트)다.
         requestId:
           type: string
           description: 이 턴의 run ID. 상태 조회에 쓴다.
@@ -6197,6 +6290,11 @@ components:
       type: object
       description: 채팅 내용을 Markdown 원문 문서로 저장하는 요청
       properties:
+        export_id:
+          type: string
+          format: uuid
+        mode:
+          type: string
         pair_ids:
           type: array
           description: 내보낼 문답(pair) ID 목록. 비어 있을 수 없다.
@@ -6210,6 +6308,9 @@ components:
           type: string
           description: 생성된 export 문서 ID. 같은 내용이 이미 있으면 기존 문서 ID다.
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+        export_id:
+          type: string
+          format: uuid
         status:
           type: string
           description: "saved는 저장 완료, skipped는 같은 내용이 이미 있어 건너뜀을 뜻한다."
@@ -6424,6 +6525,33 @@ components:
           minimum: 1
       required:
       - base_version
+    DocumentContentSaveMerge:
+      type: object
+      description: 자동 병합 결과
+      properties:
+        base_version:
+          type: integer
+          format: int64
+          description: 요청이 기준으로 삼은 버전(base_revision). status가 none이면 생략
+          example: 10
+        overwritten_version:
+          type: integer
+          format: int64
+          description: overwritten일 때 덮어쓰기 전 서버 본이 남은 버전 번호. 버전 복원 API로 되살릴 수 있다. 그 밖에는 생략
+          example: 12
+        server_version:
+          type: integer
+          format: int64
+          description: 병합 직전 서버 버전. status가 none이면 생략
+          example: 12
+        status:
+          type: string
+          description: "none: 기준 버전이 현재 버전이라 그대로 저장. merged: 다른 저장과 겹치지 않아 줄 단위로 합쳐 저장. overwritten: 겹쳐서(또는 기준 버전 스냅샷이 없어) 요청 본으로 저장하고 직전 서버 본은 overwritten_version에 남김"
+          enum:
+          - none
+          - merged
+          - overwritten
+          example: merged
     DocumentContentSaveResponse:
       type: object
       properties:
@@ -6451,6 +6579,9 @@ components:
         markdown:
           type: string
           description: 서버가 정규화한 뒤의 Markdown 본문
+        merge:
+          $ref: "#/components/schemas/DocumentContentSaveMerge"
+          description: 기준 버전이 지나간 저장을 서버가 어떻게 반영했는지. status가 merged·overwritten이면 markdown에 저장된 최종 본문이 담긴다.
         updated_at:
           type: string
           format: date-time
@@ -6472,6 +6603,14 @@ components:
           type: string
           description: 저장한 사용자 ID
           example: user_3f1c8a6b52d7411e9c04ab5d2e7f6081
+        merge_status:
+          type: string
+          description: "자동 병합 결과. merged: 다른 저장과 줄 단위로 합친 버전, overwritten: 겹쳐서 요청 본으로 덮어쓴 버전(직전 버전이 덮어쓰기 전 본문), conflict_archived: 자동 병합 도입 때 닫은 편집 충돌 본문을 옮겨 둔 버전. 그 밖에는 null"
+          enum:
+          - merged
+          - overwritten
+          - conflict_archived
+          example: merged
         operation_id:
           type: string
           description: Agent 편집으로 만든 버전이면 AI 작업 ID. 그 밖의 저장은 null
@@ -6556,6 +6695,10 @@ components:
           format: int64
           description: 파일 크기(바이트)
           example: 482913
+        can_convert:
+          type: boolean
+          description: 현재 사용자가 이 문서를 PDF Markdown 변환(POST .../convert-markdown)할 수 있는지. 원본 파일이 있는 PDF이고 업로더 본인이거나 document.convert 권한자(OWNER 포함)면 true다. Markdown 등 변환 대상이 아닌 문서는 false다.
+          example: false
         can_delete:
           type: boolean
           description: 현재 사용자가 삭제·휴지통 복구를 할 수 있는지. 문서 소유자와 OWNER만 true다.
@@ -6895,6 +7038,10 @@ components:
           format: int64
           description: 파일 크기(바이트)
           example: 482913
+        can_convert:
+          type: boolean
+          description: 현재 사용자가 이 문서를 PDF Markdown 변환(POST .../convert-markdown)할 수 있는지. 원본 파일이 있는 PDF이고 업로더 본인이거나 document.convert 권한자(OWNER 포함)면 true다. Markdown 등 변환 대상이 아닌 문서는 false다.
+          example: false
         can_delete:
           type: boolean
           description: 현재 사용자가 삭제·휴지통 복구를 할 수 있는지. 문서 소유자와 OWNER만 true다.
@@ -6960,7 +7107,7 @@ components:
           example: application/pdf
         needs_reingest:
           type: boolean
-          description: 마지막 ingest 이후 편집본이 바뀌어 재분석이 필요한지 여부. 편집 가능 문서만 true가 될 수 있다.
+          description: "최신 편집본이 위키(마지막 ingest 스냅샷)에 반영돼 있지 않으면 true. 한 번도 편입하지 않은 편집 가능 문서(직접 만든 노트·복제본, content_hash 없음)도 true다. '편입 후 수정됨'과 '아직 편입 안 됨'은 pipeline_run_id 유무로 구분한다(convert: run은 변환이라 편입 아님). 편집 가능 문서만 true가 될 수 있고, 처리 중(processing)이면 false다."
           example: false
         permission:
           type: string
@@ -7269,6 +7416,12 @@ components:
           type: string
           description: "트리에 보여줄 이름. 폴더는 폴더 이름, 문서는 확장자를 포함한 파일명이다. 문서가 사람에게 보이는 제목은 document.display_name에 있다."
           example: 설계
+        permission:
+          type: string
+          description: "이 항목에 직접 건 권한 설정(edit | view). null이면 상위 폴더 설정 또는 기본값(edit)을 따른다. 폴더는 폴더 권한 설정 API로 건 값, 문서는 document.permission과 같은 값이다."
+          enum:
+          - edit
+          - view
         sort_order:
           type: integer
           format: int64
@@ -7875,6 +8028,32 @@ components:
         ticket:
           type: string
           example: wst_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+    MeetingNoteActionItem:
+      type: object
+      description: "할 일과 담당자·기한, 근거 전사 구간"
+      properties:
+        due:
+          type: string
+          description: 발언으로 확인된 기한. 없으면 null
+        owner:
+          type: string
+          description: 발언으로 확인된 담당자. 없으면 null
+        source_segment_ids:
+          type: array
+          items:
+            type: string
+        text:
+          type: string
+    MeetingNoteDiscussionTopic:
+      type: object
+      description: 주요 논의의 주제 하나와 그 항목
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MeetingNoteItem"
+        topic:
+          type: string
     MeetingNoteItem:
       type: object
       description: 회의록 항목과 근거 전사 구간
@@ -7950,19 +8129,29 @@ components:
           - append
     MeetingNotesResponse:
       type: object
-      description: 회의록 초안. markdown은 document가 항목 배열로 만든 본문이며 근거 ID를 넣지 않는다.
+      description: "회의록 초안. markdown은 AI가 만든 시안 구성 본문(날짜·참석자, 회의 요약, 주요 논의, 결정 사항, 해야 할 일, 다음 일정)이며 근거 ID를 넣지 않는다. 이전 AI 응답으로 만든 초안은 document가 네 배열로 만든 옛 구성이다."
       properties:
         action_items:
           type: array
           items:
-            $ref: "#/components/schemas/MeetingNoteItem"
+            $ref: "#/components/schemas/MeetingNoteActionItem"
         applied:
           $ref: "#/components/schemas/MeetingNotesApplied"
           description: 저장 후 결과. 저장 전이면 null
+        attendees:
+          type: array
+          description: 참석자 이름. 확인되지 않았거나 이전 초안이면 빈 배열
+          items:
+            type: string
         decisions:
           type: array
           items:
             $ref: "#/components/schemas/MeetingNoteItem"
+        discussion:
+          type: array
+          description: 주요 논의의 주제별 묶음. 이전 초안이면 빈 배열
+          items:
+            $ref: "#/components/schemas/MeetingNoteDiscussionTopic"
         display_name:
           type: string
         error_code:
@@ -7974,10 +8163,19 @@ components:
           description: 최신 버전이 실패일 때 마지막으로 성공한 버전
         markdown:
           type: string
+        meeting_date:
+          type: string
+          description: "회의 날짜(예: 2026-10-19). 없거나 이전 초안이면 null"
         meeting_id:
           type: string
+        next_schedule:
+          type: array
+          description: 다음 일정. 이전 초안이면 빈 배열
+          items:
+            $ref: "#/components/schemas/MeetingNoteItem"
         open_questions:
           type: array
+          description: 미결 사항. 시안 본문에는 싣지 않지만 배열로 계속 돌려준다
           items:
             $ref: "#/components/schemas/MeetingNoteItem"
         partial:
@@ -8492,6 +8690,9 @@ components:
         name:
           type: string
           description: 제안된 Skill 이름
+        requires_source:
+          type: boolean
+          description: 원문 문서·폴더가 필요한 Skill인지. 생략하면 AI가 게시 때 규칙으로 정한다.
         scope_type:
           type: string
           description: 제안된 Skill의 적용 범위 종류
@@ -8991,6 +9192,9 @@ components:
           type: string
         question:
           type: string
+        requires_source:
+          type: boolean
+          description: 원문 문서가 필요한 Skill인지 여부
         result_mode:
           type: string
           description: 결과 방식
@@ -9028,6 +9232,48 @@ components:
           minLength: 1
       required:
       - run_id
+    SkillFolderSourceItem:
+      type: object
+      properties:
+        display_name:
+          type: string
+        document_id:
+          type: string
+        markdown:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+    SkillFolderSourceReadRequest:
+      type: object
+      properties:
+        folder_id:
+          type: string
+          minLength: 1
+        max_documents:
+          type: integer
+          format: int32
+        user_id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+      required:
+      - folder_id
+      - max_documents
+      - user_id
+      - workspace_id
+    SkillFolderSourceReadResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillFolderSourceItem"
+        total_documents:
+          type: integer
+          format: int32
     SkillPublishRequest:
       type: object
       description: Skill 게시 요청. 게시하면 새 버전이 만들어진다.
@@ -9061,6 +9307,10 @@ components:
           example: meeting-notes
           minLength: 1
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        requires_source:
+          type: boolean
+          description: 원문 문서가 필요한 Skill인지 여부. 사용자가 명시한 값이다. 생략(null)하면 키를 보내지 않고 AI가 판단한다.
+          example: true
         result_mode:
           type: string
           description: "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 키를 보내지 않는다(기본값은 AI가 정함)."
@@ -9277,6 +9527,15 @@ components:
       type: object
       description: 이미 게시된 Skill의 내용 수정 요청. scope_type은 바꿀 수 없다.
       properties:
+        capabilities:
+          type: array
+          description: "Skill 종류를 바꿀 capability. 게시(publish)의 capabilities와 같은 값·조합 규칙을 쓴다(AI가 검증). 보내면 allowed_tools를 새 capabilities로 다시 계산하고, 생략(null)하면 키를 보내지 않아 기존 값을 유지한다."
+          example:
+          - document-edit
+          items:
+            type: string
+          maxItems: 2147483647
+          minItems: 1
         description:
           type: string
           description: Skill 설명(500자 이하)
@@ -9293,6 +9552,10 @@ components:
           example: meeting-notes
           minLength: 1
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        requires_source:
+          type: boolean
+          description: 원문 문서가 필요한 Skill인지 여부. 사용자가 명시한 값이다. 생략(null)하면 키를 보내지 않는다(기존 값 처리는 AI가 정함).
+          example: true
         result_mode:
           type: string
           description: "결과 방식. create는 새 문서, edit는 현재 문서 수정, auto는 상황에 맞게. capabilities와 맞아야 한다(AI가 검증). 생략하면 기존 값을 유지한다."
@@ -9346,6 +9609,9 @@ components:
           type: string
           description: Skill 이름
           example: meeting-notes
+        requires_source:
+          type: boolean
+          description: 원문 문서가 필요한 Skill인지 여부. AI가 저장하기 전 버전에는 없거나 null일 수 있다.
         result_mode:
           type: string
           description: 결과 방식. 문서 Skill이 아니거나 지정하지 않았으면 null이다.

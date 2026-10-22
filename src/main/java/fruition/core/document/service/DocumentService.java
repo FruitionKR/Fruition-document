@@ -56,7 +56,6 @@ import fruition.core.document.dto.DocumentBlocksResponse;
 import fruition.core.document.dto.DocumentWikiPageRef;
 import fruition.core.document.domain.DocumentConvertQueue;
 import fruition.core.document.exception.DocumentConvertException;
-import fruition.core.document.exception.InvalidDocumentConvertRequestException;
 import fruition.core.document.repository.ConvertCommandOutbox;
 import fruition.core.document.repository.DocumentConvertBatchStore;
 import fruition.core.document.repository.DocumentConvertQueueRepository;
@@ -73,7 +72,6 @@ import fruition.core.aihistory.service.OperationRecorder;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.authz.WorkspaceAccessGuard;
-import fruition.core.authz.WorkspacePermissionRequiredException;
 import fruition.core.authz.WorkspacePermissions;
 import fruition.core.authz.WorkspaceSettingsClient;
 import io.minio.GetObjectArgs;
@@ -106,6 +104,7 @@ import java.util.Arrays; import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -114,11 +113,14 @@ import java.util.stream.Collectors;
 @Service
 public class DocumentService {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
+
     private static final int MAX_SAVE_ATTEMPTS = 3;
 
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
     private static final String INITIAL_NOTE_FILENAME = "새 노트.md";
-    private static final String CONVERT_PLACEHOLDER_MARKDOWN = "PDF 변환 중...\n";
+    private static final String CONVERT_PLACEHOLDER_MARKDOWN = Document.CONVERT_PLACEHOLDER_MARKDOWN;
     // 크기 상한을 넘은 변환 이미지 자리 표시. 정규식·치환 특수 문자가 없는 값이어야 한다.
     private static final String OVERSIZED_CONVERTED_IMAGE = "fruition-oversized-converted-image";
     private static final String PDF_MIME_TYPE = "application/pdf";
@@ -343,6 +345,7 @@ public class DocumentService {
                 document.recordOriginalSha256(contentHash);
             }
             documentRepository.save(document);
+            if (analytics != null) analytics.uploaded(document);
             if (markdownUpload) {
                 editStateRepository.save(new DocumentEditState(
                         documentId, markdownContent.markdown(), markdownContent.contentHash(), 1));
@@ -425,7 +428,7 @@ public class DocumentService {
 
         DocumentUploadResponse response =
                 createMarkdownDocument(workspaceId, userId, filename.filename(), content,
-                        skillReference ? Document.SKILL_REFERENCE_ORIGIN : "direct", request.folderId(), aiOrigin);
+                        skillReference ? Document.SKILL_REFERENCE_ORIGIN : "direct", request.folderId(), aiOrigin, true);
         saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
         return response;
     }
@@ -515,7 +518,8 @@ public class DocumentService {
                     DocumentEditingRules.markdown("# 새 노트\n"),
                     "direct",
                     null,
-                    null
+                    null,
+                    false
             );
         } catch (Exception e) {
             log.warn("초기 노트 저장 실패로 건너뜁니다. workspaceId={}", workspaceId, e);
@@ -590,7 +594,8 @@ public class DocumentService {
             DocumentEditingRules.MarkdownContent content,
             String origin,
             UUID folderId,
-            String aiOrigin
+            String aiOrigin,
+            boolean recordUpload
     ) {
         String documentId = newDocumentId();
         Document document = new Document(
@@ -613,6 +618,7 @@ public class DocumentService {
         document.place(folderId, sortOrder);
         document.markAiOrigin(aiOrigin);
         documentRepository.save(document);
+        if (recordUpload && analytics != null) analytics.uploaded(document);
         editStateRepository.save(new DocumentEditState(
                 documentId, content.markdown(), content.contentHash(), 1));
         return toUploadResponse(document, true);
@@ -826,6 +832,10 @@ public class DocumentService {
     /** 목록에서 채팅에서 온 문서임을 알리는 이름 접두사. */
     private static final String CHAT_EXPORT_NAME_PREFIX = "[채팅] ";
 
+    /** 이름 앞에 이미 붙어 있는 접두사({@code [채팅]}, 괄호 안팎 공백 변형, 여러 번 반복 포함). */
+    private static final java.util.regex.Pattern EXISTING_CHAT_EXPORT_PREFIX =
+            java.util.regex.Pattern.compile("^(?:\\s*\\[\\s*채팅\\s*\\]\\s*)+");
+
     /** 파이프라인에 넘길 source block 1개. blockId가 {@code session_id:pair_id} provenance다. */
     public record PipelineSourceBlock(String blockId, String text) {}
 
@@ -859,6 +869,7 @@ public class DocumentService {
     /**
      * 채팅 export 문서 이름을 만든다. 채팅에서 온 문서임을 알리는 접두사를 붙이고, 같은 폴더의 기존 항목과
      * 겹치면 {@code (2)}를 더한다. export 시점과 이름 확정 시점이 모두 이 경로를 지나 접두사가 유지된다.
+     * Wiki 페이지 제목처럼 이미 접두사가 붙은 이름이 오면 떼고 하나만 붙인다({@code [채팅] [채팅]} 방지).
      *
      * <p>이름은 세션 제목이나 AI가 만든 페이지 제목에서 오므로 파일명에 못 쓰는 문자가 섞일 수 있어
      * 여기서 정제한다. 접두사가 늘 남으므로 정제 결과가 비는 일은 없다.
@@ -872,7 +883,10 @@ public class DocumentService {
                         java.text.Normalizer.normalize(excludedNormalizedFilename.trim(), java.text.Normalizer.Form.NFC)
                                 .toLowerCase(java.util.Locale.ROOT)))
                 .collect(Collectors.toSet());
-        String candidate = DocumentEditingRules.sanitizeDisplayName(CHAT_EXPORT_NAME_PREFIX + displayName);
+        // AI 제목이 NFD로 오면 "채팅"이 자모로 풀려 접두사 검사를 빠져나가므로 NFC로 맞춘 뒤 비교한다.
+        String baseName = displayName == null ? "" : EXISTING_CHAT_EXPORT_PREFIX.matcher(
+                java.text.Normalizer.normalize(displayName, java.text.Normalizer.Form.NFC)).replaceFirst("");
+        String candidate = DocumentEditingRules.sanitizeDisplayName(CHAT_EXPORT_NAME_PREFIX + baseName);
         return DocumentEditingRules.uniqueFilename(candidate, existingNames).filename();
     }
 
@@ -969,6 +983,7 @@ public class DocumentService {
                 .orElseThrow(() -> new IllegalStateException("예약한 chat export 문서를 찾을 수 없습니다."));
         // 파이프라인 입력은 항상 command inline이다. storage 원본은 사용자에게 보여줄 본문으로만 쓴다.
         document.assignPipelineInput(markdown, serializePipelineBlocks(blocks));
+        if (analytics != null) analytics.uploaded(document);
         log.info("[채팅 export 문서 DB 저장 완료] documentId={} workspaceId={} userId={} filename={} selectionMode={} status={} sourceUri={}",
                 document.getId(), document.getWorkspaceId(), document.getUserId(), document.getFilename(),
                 document.getSelectionMode(), document.getStatus(), document.getSourceUri());
@@ -991,17 +1006,8 @@ public class DocumentService {
         validateIdempotencyKey(idempotencyKey);
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        if (!isPdf(source)) {
-            throw new InvalidDocumentConvertRequestException("PDF 원본 문서만 Markdown으로 변환할 수 있습니다.");
-        }
-        if (source.getSourceUri() == null) {
-            throw new InvalidDocumentConvertRequestException("원본 파일이 없는 문서는 변환할 수 없습니다.");
-        }
-        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다.
-        if (!userId.equals(source.getUserId())
-                && !workspaceAccessGuard.hasPermission(workspaceId, userId, WorkspacePermissions.DOCUMENT_CONVERT)) {
-            throw new WorkspacePermissionRequiredException(WorkspacePermissions.DOCUMENT_CONVERT);
-        }
+        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다. 목록의 can_convert와 같은 판정이다.
+        documentAccessPolicy.requireConvert(source, userId);
 
         String endpointScope = convertEndpointScope(workspaceId);
         String requestHash = requestHash(documentId, "convert-markdown", "");
@@ -1055,7 +1061,7 @@ public class DocumentService {
         verifyWorkspaceOwnership(workspaceId, userId);
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        if (!"aws".equals(storageProps.getCredentialsMode()) || !isPdf(document)) return null;
+        if (!"aws".equals(storageProps.getCredentialsMode()) || !DocumentAccessPolicy.isPdf(document)) return null;
         try {
             return minioClient.getPresignedObjectUrl(io.minio.GetPresignedObjectUrlArgs.builder()
                     .bucket(storageProps.getBucket()).object(normalizeObjectKey(document.getSourceUri()))
@@ -1064,11 +1070,6 @@ public class DocumentService {
                             "response-content-disposition", "inline"))
                     .build());
         } catch (Exception e) { throw new DocumentConvertException("원본 읽기 URL 발급 실패", e); }
-    }
-
-    private boolean isPdf(Document document) {
-        return "application/pdf".equals(document.getMimeType())
-                || document.getNormalizedFilename().endsWith(".pdf");
     }
 
     private String convertEndpointScope(String workspaceId) {
@@ -1190,6 +1191,7 @@ public class DocumentService {
             });
             // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 푼다. 남겨 두면 그 예약이 가용 잔액을 줄여 ingest를 거절시킨다.
             taskWriter.completeAndSettle(convertRunId);
+            if (analytics != null) analytics.converted(placeholder, queue.getSourceDocumentId(), total, null);
             convertQueueRepository.delete(queue);
             log.info("[문서 변환 완료] documentId={} totalPages={}", documentId, total);
             return new ConvertOutcome(placeholder, true, List.of());
@@ -1226,9 +1228,12 @@ public class DocumentService {
         if (placeholder.getPipelineRunId() == null || placeholder.getPipelineRunId().startsWith("convert:")) {
             placeholder.markProcessingFailed(AiErrorMessages.convert(code), Instant.now());
         }
-        // 다시 시도하지 않으므로 실행을 닫아 크레딧 예약을 푼다. AI가 batch를 나눠 다시 시도한 뒤의 실패라 문서 단위 재시도는 없다.
-        taskWriter.fail("convert:" + placeholder.getId());
+        // 실패 상태로 닫힌 작업의 변경은 DB journal guard가 거절한다. 지연된 JPA 문서 UPDATE와
+        // queue 삭제를 running 상태에서 먼저 flush하고, 같은 트랜잭션 안에서 실행과 예약을 닫는다.
         convertQueueRepository.delete(queue);
+        documentRepository.flush();
+        taskWriter.failAndSettle("convert:" + placeholder.getId());
+        if (analytics != null) analytics.converted(placeholder, queue.getSourceDocumentId(), 0, code == null ? "internal_error" : code);
         log.warn("[문서 변환 실패 반영] documentId={} code={}", placeholder.getId(), code);
         return new ConvertOutcome(placeholder, false, toCancel);
     }
@@ -1460,7 +1465,7 @@ public class DocumentService {
                             .filter(doc -> doc.getStatus() == DocumentStatus.uploaded)
                             .ifPresent(doc -> {
                                 doc.reopenForReingest(contentHash, byteSize);
-                                enqueueIngest(doc, userId);
+                                enqueueIngest(doc, userId, "auto");
                             });
                     return null;
                 });
@@ -1482,11 +1487,15 @@ public class DocumentService {
     }
 
     String enqueueIngest(Document document) {
-        return enqueueIngest(document, document.getUserId());
+        return enqueueIngest(document, document.getUserId(), "auto");
     }
 
     /** requesterId는 ingest를 요청한 사용자다. 공동 편집에서는 소유자와 다를 수 있다. */
     private String enqueueIngest(Document document, String requesterId) {
+        return enqueueIngest(document, requesterId, "manual");
+    }
+
+    private String enqueueIngest(Document document, String requesterId, String trigger) {
         String runId = UUID.randomUUID().toString();
         ingestCommandOutbox.begin(runId, document.getWorkspaceId(), requesterId);
         String documentId = document.getId();
@@ -1508,6 +1517,7 @@ public class DocumentService {
                 document.getCurrentVersion(),
                 document.getCurrentContentHash()
         );
+        if (analytics != null) analytics.ingestRequested(document, runId, operationId, requesterId, startedAt, trigger);
         log.info("[문서 처리 command 등록 완료] documentId={} runId={} operationId={}",
                 documentId, runId, operationId);
         return runId;
@@ -1616,6 +1626,7 @@ public class DocumentService {
                 doc.getFolderId(),
                 viewer.canEdit(doc),
                 viewer.canDelete(doc),
+                viewer.canConvert(doc),
                 viewer.override(doc),
                 doc.getUpdatedBy(),
                 doc.getAiOrigin(),
@@ -1654,7 +1665,7 @@ public class DocumentService {
     ) {
         String versionSource = applyOperationId != null && !applyOperationId.isBlank() ? "agent" : "user";
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                versionSource, applyOperationId, false, null);
+                versionSource, applyOperationId, false, null, true);
     }
 
     /** 사용자가 수락한 회의록을 기존 문서에 덧붙인다. 버전 이력에 meeting_notes로 남는다. */
@@ -1667,7 +1678,7 @@ public class DocumentService {
             String revisionWriteId
     ) {
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                "meeting_notes", null, false, null);
+                "meeting_notes", null, false, null, true);
     }
 
     private DocumentContentSaveResponse saveContent(
@@ -1680,13 +1691,14 @@ public class DocumentService {
             String versionSource,
             String applyOperationId,
             boolean applyOperationClaimed,
-            Long restoredFromVersion
+            Long restoredFromVersion,
+            boolean autoMerge
     ) {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
         try {
             return executeWithSaveRetry(() -> saveTransaction.execute(status -> saveContentInTransaction(
                     workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                    versionSource, applyOperationId, applyOperationClaimed, restoredFromVersion)));
+                    versionSource, applyOperationId, applyOperationClaimed, restoredFromVersion, autoMerge)));
         } catch (DocumentVersionConflictException conflict) {
             if (applyOperationId != null && !applyOperationId.isBlank()) {
                 recordConflictInIndependentTransaction(
@@ -1713,12 +1725,30 @@ public class DocumentService {
             String revisionWriteId,
             String versionSource
     ) {
+        return saveContentInCurrentTransaction(
+                workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId, versionSource, false);
+    }
+
+    /**
+     * @param autoMerge true면 기준 revision이 지나간 저장을 자동 병합한다(ADR 0032). 버전 복원처럼 정확히 그 본문이어야
+     *                  하는 저장은 false로 두어 기존처럼 409로 거절한다.
+     */
+    public DocumentContentSaveResponse saveContentInCurrentTransaction(
+            String workspaceId,
+            String userId,
+            String documentId,
+            String markdown,
+            Long baseRevision,
+            String revisionWriteId,
+            String versionSource,
+            boolean autoMerge
+    ) {
         if (!TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("현재 PostgreSQL transaction 안에서 호출해야 합니다.");
         }
         return saveContentInTransaction(
                 workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                versionSource, null, false, null);
+                versionSource, null, false, null, autoMerge);
     }
 
     private DocumentContentSaveResponse saveContentInTransaction(
@@ -1731,7 +1761,8 @@ public class DocumentService {
             String versionSource,
             String applyOperationId,
             boolean applyOperationClaimed,
-            Long restoredFromVersion
+            Long restoredFromVersion,
+            boolean autoMerge
     ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         if (applyOperationId != null && !applyOperationId.isBlank()
@@ -1761,28 +1792,30 @@ public class DocumentService {
                     baseRevision, content.markdown(), applyOperationId);
         }
         editStateInitializer.initializeIfNeeded(document);
-        PostgresDocumentEditSaveResult result;
-        result = hasApplyOperation
-                    ? postgresDocumentEditStore.save(
-                            workspaceId, documentId, content.markdown(), content.contentHash(), baseRevision,
-                            revisionWriteId, userId, applyOperationId)
-                    : postgresDocumentEditStore.save(
-                            workspaceId, documentId, content.markdown(), content.contentHash(), baseRevision,
-                            revisionWriteId, userId, null);
+        // 기준 버전이 지나간 저장은 409 대신 서버에서 자동 병합한다(ADR 0032). 버전 복원·충돌 해결처럼
+        // 정확히 그 본문이어야 하는 내부 저장은 병합하지 않고 기존처럼 충돌로 거절한다.
+        ContentSaveMerge merge = autoMerge
+                ? new ContentSaveMerge(contentVersionRepository, documentId, baseRevision, content.markdown())
+                : null;
+        PostgresDocumentEditSaveResult result = postgresDocumentEditStore.save(
+                workspaceId, documentId, content.markdown(), content.contentHash(), baseRevision,
+                revisionWriteId, userId, hasApplyOperation ? applyOperationId : null, merge);
         if (result.replayed()) {
-            return new DocumentContentSaveResponse(
-                    documentId, result.revision(), result.contentHash(), result.updatedAt(), result.changed());
+            return replayedSave(documentId, baseRevision, content, result);
         }
+        String savedMarkdown = merge != null ? merge.savedMarkdown() : content.markdown();
+        DocumentContentSaveResponse.Merge mergeOutcome =
+                merge != null ? merge.outcome() : DocumentContentSaveResponse.Merge.NONE;
         if (hasApplyOperation) {
             transactionTemplate.execute(status -> {
-                projectContentVersions(documentId, content.markdown(), result, lastAuthor(document));
+                projectContentVersions(documentId, savedMarkdown, result, lastAuthor(document));
                 if (result.changed()) {
                     int linked = contentVersionRepository.linkOperation(documentId, result.revision(), applyOperationId);
                     if (linked == 1) {
                         operationRecorder.recordDocumentEdit(applyOperationId, workspaceId, userId, documentId,
                                 document.getDisplayName(),
                                 result.baseRevision(), result.revision(), result.baseMarkdown(),
-                                content.markdown(), result.updatedAt());
+                                savedMarkdown, result.updatedAt());
                     } else if (!contentVersionRepository.findById(
                             new DocumentContentVersionId(documentId, result.revision()))
                             .map(version -> applyOperationId.equals(version.getOperationId()))
@@ -1797,7 +1830,7 @@ public class DocumentService {
                 return null;
             });
         } else {
-            projectContentVersions(documentId, content.markdown(), result, lastAuthor(document));
+            projectContentVersions(documentId, savedMarkdown, result, lastAuthor(document));
         }
         if (result.changed()) {
             if (restoredFromVersion != null) {
@@ -1806,21 +1839,44 @@ public class DocumentService {
             if (versionSource != null) {
                 contentVersionRepository.markSource(documentId, result.revision(), versionSource);
             }
+            if (mergeOutcome.applied()) {
+                contentVersionRepository.markMergeStatus(documentId, result.revision(), mergeOutcome.status());
+            }
             // 재ingest 필요 판단용 projection: 목록 API가 PG만으로 현재 편집본 해시를 비교할 수 있게 한다.
             documentRepository.updateCurrentContentHash(documentId, result.contentHash(), result.updatedAt(), userId);
             // 이미지를 첨부하지 않는 저장에서도 본문에 남은 관리 이미지를 기준으로 참조를 맞춘다.
             // 그러지 않으면 본문에서 지운 이미지가 참조된 상태로 남아 정리 대상이 되지 않는다.
             assetReferenceSynchronizer.synchronize(
-                    documentId, workspaceId, assetReferenceParser.parse(content.markdown()));
+                    documentId, workspaceId, assetReferenceParser.parse(savedMarkdown));
         }
 
-        return new DocumentContentSaveResponse(
+        DocumentContentSaveResponse response = new DocumentContentSaveResponse(
                 documentId,
                 result.revision(),
                 result.contentHash(),
                 result.updatedAt(),
                 result.changed()
         );
+        return mergeOutcome.applied() ? response.withMerge(savedMarkdown, mergeOutcome) : response;
+    }
+
+    /**
+     * 같은 revision_write_id 재전송. 처음 저장이 자동 병합으로 요청과 다른 본문을 남겼으면(해시가 다르면)
+     * 그 버전 스냅샷을 merged로 돌려줘 클라이언트가 실제 저장본으로 맞추게 한다.
+     */
+    private DocumentContentSaveResponse replayedSave(String documentId, Long baseRevision,
+                                                     DocumentEditingRules.MarkdownContent content,
+                                                     PostgresDocumentEditSaveResult result) {
+        DocumentContentSaveResponse response = new DocumentContentSaveResponse(
+                documentId, result.revision(), result.contentHash(), result.updatedAt(), result.changed());
+        if (Objects.equals(result.contentHash(), content.contentHash())) {
+            return response;
+        }
+        return contentVersionRepository.findById(new DocumentContentVersionId(documentId, result.revision()))
+                .map(saved -> response.withMerge(saved.getMarkdown(), new DocumentContentSaveResponse.Merge(
+                        DocumentContentSaveResponse.Merge.STATUS_MERGED, baseRevision,
+                        result.changed() ? result.revision() - 1 : result.revision(), null)))
+                .orElse(response);
     }
 
     private void validateRevisionWriteId(String revisionWriteId) {
@@ -1935,7 +1991,7 @@ public class DocumentService {
                 assetRepository.saveAll(assets);
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),
-                        baseVersion, revisionWriteId, null, applyOperationId, false, null);
+                        baseVersion, revisionWriteId, null, applyOperationId, false, null, true);
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
                     assetRepository.deleteAllInBatch(assets);
@@ -1952,7 +2008,8 @@ public class DocumentService {
         }
         return new DocumentContentSaveResponse(
                 saved.documentId(), saved.currentVersion(), saved.contentHash(), saved.updatedAt(),
-                saved.changed(), content.markdown(), List.of());
+                saved.changed(), saved.markdown() != null ? saved.markdown() : content.markdown(), List.of(),
+                saved.merge());
     }
 
     private void recordContentVersion(String documentId, long version, String markdown,
@@ -2027,7 +2084,7 @@ public class DocumentService {
         List<DocumentContentVersionListResponse.Item> items = contentVersionRepository.findSummaries(documentId).stream()
                 .map(s -> new DocumentContentVersionListResponse.Item(
                         s.getVersion(), s.getContentHash(), s.getCreatedBy(), s.getCreatedAt(),
-                        s.getRestoredFromVersion(), s.getSource(), s.getOperationId()))
+                        s.getRestoredFromVersion(), s.getSource(), s.getOperationId(), s.getMergeStatus()))
                 .toList();
         return new DocumentContentVersionListResponse(documentId, editRevision, items);
     }
@@ -2080,7 +2137,8 @@ public class DocumentService {
                 "restore",
                 null,
                 false,
-                version
+                version,
+                false
         );
     }
 

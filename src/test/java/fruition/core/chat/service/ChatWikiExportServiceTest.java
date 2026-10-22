@@ -343,8 +343,12 @@ class ChatWikiExportServiceTest {
         ChatWikiExportResponse replay = service.export(
                 WS, USER, SESSION, new ChatWikiExportRequest(List.of("p1")));
 
-        assertThat(first).isEqualTo(new ChatWikiExportResponse("chatdoc_1", "saved"));
-        assertThat(replay).isEqualTo(new ChatWikiExportResponse("chatdoc_1", "skipped"));
+        assertThat(first.exportDocumentId()).isEqualTo("chatdoc_1");
+        assertThat(first.status()).isEqualTo("saved");
+        assertThat(first.exportId()).isNotNull();
+        assertThat(replay.exportDocumentId()).isEqualTo("chatdoc_1");
+        assertThat(replay.status()).isEqualTo("skipped");
+        assertThat(replay.exportId()).isNotNull().isNotEqualTo(first.exportId());
         ArgumentCaptor<String> hashes = ArgumentCaptor.forClass(String.class);
         verify(documentService, times(2)).createChatExportDocument(
                 eq(WS), eq(USER), anyString(), anyString(), hashes.capture(), any());
@@ -373,4 +377,23 @@ class ChatWikiExportServiceTest {
                 .containsExactly("session_1:p1", "session_1:p2");
         assertThat(blocks.getValue().get(0).text()).isEqualTo("Q : 질문1  \nA : 답변1");
     }
+    @Test
+    void explicitExportIdAndModePersistAndReachAnalytics() {
+        ChatSession s = session();
+        when(chatSessionService.verifyOwnedSession(WS, USER, SESSION)).thenReturn(s);
+        when(chatMessageRepository.findAllBySessionIdInTurnOrder(SESSION)).thenReturn(twoCompletedPairs(s));
+        when(documentService.createChatExportDocument(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new DocumentService.ExportDocumentResult("chatdoc_1", false));
+        var links = org.mockito.Mockito.mock(fruition.core.analytics.ChatExportLinks.class);
+        var analytics = org.mockito.Mockito.mock(fruition.core.analytics.DocumentAnalytics.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "exportLinks", links);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "analytics", analytics);
+        var exportId = java.util.UUID.randomUUID();
+        var response = service.export(WS, USER, SESSION,
+                new ChatWikiExportRequest(List.of("p1", "p2"), exportId, "all"));
+        assertThat(response.exportId()).isEqualTo(exportId);
+        verify(links).save(exportId, "chatdoc_1", USER, SESSION, "all");
+        verify(analytics).exported(exportId.toString(), "chatdoc_1", SESSION, 2, "all", "saved", USER, WS);
+    }
+
 }

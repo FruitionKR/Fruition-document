@@ -30,7 +30,7 @@ public final class AiErrorMessages {
     private static final String LINT_DEFAULT = "위키 정리에 실패했습니다.";
     private static final String CONVERT_PREFIX = "PDF 변환에 실패했습니다. ";
     private static final String CONVERT_DEFAULT = "변환 중 오류가 발생했습니다.";
-    private static final String TRANSCRIPTION_DEFAULT = "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.";
+    private static final String TRANSCRIPTION_DEFAULT = "녹음 파일을 글로 옮기지 못했습니다. 다시 올려 주세요.";
 
     /** 변환에서만 공통 문구 대신 쓰는 문구. */
     private static final Map<String, String> CONVERT_OVERRIDES = Map.of(
@@ -38,12 +38,12 @@ public final class AiErrorMessages {
 
     /** 회의 전사에서만 공통 문구 대신 쓰거나 더하는 문구. */
     private static final Map<String, String> TRANSCRIPTION_OVERRIDES = Map.of(
-            "MEETING_RECORDING_TOO_LONG", "녹음이 3시간을 넘어 전사할 수 없습니다. 나눠서 올려 주세요.",
+            "MEETING_RECORDING_TOO_LONG", "녹음이 3시간을 넘어 글로 옮길 수 없습니다. 나눠서 올려 주세요.",
             "MEETING_RECORDING_UNREADABLE", "지원하지 않거나 인식할 수 없는 녹음 파일입니다.",
             "input_rejected", "지원하지 않거나 인식할 수 없는 녹음 파일입니다.",
             "MEETING_TRANSCRIPT_EMPTY", "인식된 음성이 없습니다.",
-            "MEETING_TRANSCRIPT_TOO_LONG", "전사가 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요.",
-            "deadline_exceeded", "전사 시간이 너무 오래 걸려 중단했습니다. 녹음을 나눠 올려 주세요.");
+            "MEETING_TRANSCRIPT_TOO_LONG", "대화 내용이 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요.",
+            "deadline_exceeded", "글로 옮기는 시간이 너무 오래 걸려 중단했습니다. 녹음을 나눠 올려 주세요.");
 
     private static final Map<String, String> MESSAGES = Map.ofEntries(
             // ai 공통 코드

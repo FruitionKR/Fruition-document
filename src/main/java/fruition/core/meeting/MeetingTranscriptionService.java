@@ -103,8 +103,8 @@ public class MeetingTranscriptionService {
         MeetingRepository.Meeting meeting = meetingService.requireOwned(workspaceId, userId, meetingId);
         String runId = meeting.transcriptionRunId();
         if (!"transcribing".equals(meeting.status()) || runId == null
-                || !repository.failTranscription(meetingId, runId, "전사를 취소했습니다. 녹음을 다시 올려 주세요.")) {
-            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_NOT_TRANSCRIBING", "전사 중인 회의가 아닙니다.");
+                || !repository.failTranscription(meetingId, runId, "글로 옮기기를 취소했습니다. 녹음을 다시 올려 주세요.")) {
+            throw new MeetingException(HttpStatus.CONFLICT, "MEETING_NOT_TRANSCRIBING", "글로 옮기는 중인 회의가 아닙니다.");
         }
         cancellation.cancel(runId, workspaceId, userId);
         return meetingService.get(workspaceId, userId, meetingId);

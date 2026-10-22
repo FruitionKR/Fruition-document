@@ -678,4 +678,22 @@ class AiTaskResultApplierTest {
         }
         return root.toString();
     }
+    @Test
+    void classifiedAgentChatFailureRecordsQueryFailureButUnknownActionDoesNot() throws Exception {
+        var analytics = org.mockito.Mockito.mock(fruition.core.analytics.DocumentAnalytics.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(applier, "analytics", analytics);
+        when(jdbcTemplate.update(contains("INSERT INTO ai_task_result_receipts"), any(), any(), any())).thenReturn(1);
+        when(jdbcTemplate.update(contains("UPDATE agent_apply_projections"), anyString(), anyString())).thenReturn(1);
+        JsonNode failure = objectMapper.readTree("""
+            {"event_id":"failed-agent","run_id":"agent-failed","status":"failed",
+             "error":"provider_unavailable","request":{"session_id":"session"},
+             "payload":{"action":"chat_answer"}}
+            """);
+        applier.applyAgent(failure);
+        verify(analytics).queryCompleted(failure, true, "provider_unavailable");
+        ((com.fasterxml.jackson.databind.node.ObjectNode)failure.path("payload")).remove("action");
+        applier.applyAgent(failure);
+        verify(analytics, org.mockito.Mockito.times(1)).queryCompleted(any(), eq(true), any());
+    }
+
 }

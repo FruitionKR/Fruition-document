@@ -70,6 +70,12 @@ public class AiCommandOutboxWriter {
         close(runId, "failed");
     }
 
+    /** 재시도하지 않을 변환 실패의 예약을 즉시 푼다. 늦은 사용 금액은 수집 대기열이 계속 정산한다. */
+    public void failAndSettle(String runId) {
+        close(runId, "failed");
+        credits.settle(runId);
+    }
+
     private void close(String runId, String status) {
         if (jdbcTemplate.update("UPDATE ai_task_runs SET status = ?, updated_at = now() WHERE id = ? AND status = 'running'",
                 status, runId) == 1) {

@@ -8,6 +8,7 @@ import fruition.core.document.service.DocumentService;
 import fruition.shared.security.JwtTokenProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import fruition.core.notification.service.NotificationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -39,6 +40,7 @@ class NotificationIntegrationTest {
     @Autowired DocumentService documentService;
     @Autowired StringRedisTemplate redis;
     @Autowired JdbcTemplate jdbc;
+    @Autowired NotificationService notificationService;
 
     final String workspace = "ws_" + UUID.randomUUID();
     final String author = "user_author_" + UUID.randomUUID();
@@ -58,27 +60,43 @@ class NotificationIntegrationTest {
     }
 
     @Test
-    void registeredConflictNotifiesOnlyOwnersOnce() throws Exception {
-        String conflictId = registerConflict("client-1");
-        registerConflict("client-1");
+    void ownerNotificationIsVisibleOnlyToOwners() throws Exception {
+        String notificationKey = ownerNotification("client-1");
 
         list(owner, "")
                 .andExpect(jsonPath("$.notifications.length()").value(1))
                 .andExpect(jsonPath("$.notifications[0].type").value("edit_conflict_registered"))
                 .andExpect(jsonPath("$.notifications[0].read").value(false))
-                .andExpect(jsonPath("$.notifications[0].payload.conflict_id").value(conflictId))
-                .andExpect(jsonPath("$.notifications[0].payload.document_id").value(documentId))
-                .andExpect(jsonPath("$.notifications[0].payload.document_name").value("회의록"))
-                .andExpect(jsonPath("$.notifications[0].payload.author_user_id").value(author));
+                .andExpect(jsonPath("$.notifications[0].payload.conflict_id").value(notificationKey))
+                .andExpect(jsonPath("$.notifications[0].payload.document_id").value(documentId));
         list(member, "").andExpect(jsonPath("$.notifications.length()").value(0));
         list(author, "").andExpect(jsonPath("$.notifications.length()").value(0));
+    }
+
+    @Test
+    void registeringConflictNoLongerNotifiesOwners() throws Exception {
+        // 자동 병합 도입(ADR 0032) 후 충돌 등록은 곧바로 저장되고 OWNER 알림을 만들지 않는다.
+        mockMvc.perform(post("/api/workspaces/" + workspace + "/documents/" + documentId + "/conflicts")
+                        .header("Authorization", bearer(author))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "markdown", "# 작성자 본", "base_revision", 1, "client_conflict_id", "client-1"))))
+                .andExpect(status().isCreated());
+
+        list(owner, "").andExpect(jsonPath("$.notifications.length()").value(0));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM notifications WHERE workspace_id = ?",
-                Integer.class, workspace)).isEqualTo(1);
+                Integer.class, workspace)).isZero();
     }
 
     @Test
     void resolvedConflictNotifiesAuthor() throws Exception {
-        String conflictId = registerConflict("client-1");
+        // 자동 병합 도입 전에 열린 충돌을 OWNER가 해결하는 경우.
+        String conflictId = UUID.randomUUID().toString();
+        jdbc.update("""
+                INSERT INTO document_edit_conflicts(
+                    id, workspace_id, document_id, base_revision, markdown, content_hash, author_user_id, client_conflict_id
+                ) VALUES (?::uuid, ?, ?, 1, '# 작성자 본', 'hash', ?, 'legacy-1')
+                """, conflictId, workspace, documentId, author);
 
         mockMvc.perform(post("/api/workspaces/" + workspace + "/conflicts/" + conflictId + "/resolve")
                         .header("Authorization", bearer(owner))
@@ -94,14 +112,13 @@ class NotificationIntegrationTest {
                 .andExpect(jsonPath("$.notifications[0].payload.choice").value("server"))
                 .andExpect(jsonPath("$.notifications[0].payload.resolved_by").value(owner));
         list(member, "").andExpect(jsonPath("$.notifications.length()").value(0));
-        // OWNER에게는 등록 알림만 보인다.
-        list(owner, "").andExpect(jsonPath("$.notifications.length()").value(1));
+        list(owner, "").andExpect(jsonPath("$.notifications.length()").value(0));
     }
 
     @Test
     void readAndReadAll() throws Exception {
-        registerConflict("client-1");
-        registerConflict("client-2");
+        ownerNotification("client-1");
+        ownerNotification("client-2");
         String latest = notificationId(owner, 0);
 
         read(owner, latest).andExpect(status().isNoContent());
@@ -142,7 +159,7 @@ class NotificationIntegrationTest {
 
     @Test
     void cannotReadSomeoneElsesNotification() throws Exception {
-        registerConflict("client-1");
+        ownerNotification("client-1");
         String ownerNotification = notificationId(owner, 0);
 
         read(member, ownerNotification)
@@ -153,15 +170,11 @@ class NotificationIntegrationTest {
                 Integer.class, member)).isZero();
     }
 
-    private String registerConflict(String clientConflictId) throws Exception {
-        String body = mockMvc.perform(post("/api/workspaces/" + workspace + "/documents/" + documentId + "/conflicts")
-                        .header("Authorization", bearer(author))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of(
-                                "markdown", "# 작성자 본", "base_revision", 1, "client_conflict_id", clientConflictId))))
-                .andExpect(status().isCreated())
-                .andReturn().getResponse().getContentAsString();
-        return objectMapper.readTree(body).path("id").asText();
+    /** OWNER 대상 알림 하나를 만든다. 지금은 OWNER 알림을 만드는 기능이 없어 서비스로 직접 넣는다. */
+    private String ownerNotification(String key) {
+        notificationService.notifyWorkspaceOwners(workspace, NotificationService.TYPE_EDIT_CONFLICT_REGISTERED,
+                Map.of("conflict_id", key, "document_id", documentId));
+        return key;
     }
 
     private ResultActions list(String userId, String query) throws Exception {

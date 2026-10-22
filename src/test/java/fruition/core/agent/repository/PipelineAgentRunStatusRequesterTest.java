@@ -155,6 +155,20 @@ class PipelineAgentRunStatusRequesterTest {
         assertThat(body.get()).contains("계획을 좁혀줘");
     }
 
+    /** 부분 승인만 operation_ids를 싣는다. 전체 승인은 키 없이 기존 요청 모양 그대로다. */
+    @Test
+    void approveSendsOperationIdsOnlyForPartialApproval() {
+        var client = requester();
+
+        assertThatThrownBy(() -> client.approve("ws-1", "user-1", "run-1", 1, "hash", java.util.List.of("op_1")))
+                .isInstanceOf(fruition.core.agent.exception.PipelineAgentException.class);
+        assertThat(body.get()).contains("\"operation_ids\":[\"op_1\"]").contains("\"plan_version\":1");
+
+        assertThatThrownBy(() -> client.approve("ws-1", "user-1", "run-1", 1, "hash"))
+                .isInstanceOf(fruition.core.agent.exception.PipelineAgentException.class);
+        assertThat(body.get()).doesNotContain("operation_ids");
+    }
+
     @Test
     void lifecycleMapsNotFoundAndConflict() {
         assertThatThrownBy(() -> requester().getAutonomousRun("foreign", "user-1", "run-1"))

@@ -14,6 +14,9 @@ import java.util.List;
 public record ChatWikiExportRequest(
         @JsonProperty("pair_ids")
         @Schema(description = "내보낼 문답(pair) ID 목록. 비어 있을 수 없다.")
-        List<String> pairIds
+        List<String> pairIds,
+        @JsonProperty("export_id") java.util.UUID exportId,
+        @JsonProperty("mode") String mode
 ) {
+    public ChatWikiExportRequest(List<String> pairIds) { this(pairIds, null, null); }
 }

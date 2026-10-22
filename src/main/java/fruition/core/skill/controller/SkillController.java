@@ -82,7 +82,11 @@ public class SkillController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "200", description = "게시 성공",
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
-        @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의",
+        @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, "
+                + "수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), "
+                + "SKILL_CAPABILITIES_INVALID(허용되지 않는 capabilities 값 또는 조합), "
+                + "초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), "
+                + "SKILL_REQUEST_REJECTED(그 밖의 거절)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -189,7 +193,11 @@ public class SkillController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "200", description = "수정 성공",
             content = @Content(schema = @Schema(implementation = SkillAuthoringResponseSchema.class))),
-        @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의",
+        @ApiResponse(responseCode = "400", description = "잘못된 Skill 정의. code: SKILL_RESULT_MODE_INVALID(result_mode가 capabilities와 맞지 않음, "
+                + "수정에서는 이어받은 기존 값 포함), SKILL_TARGETS_INVALID(문서 Skill이 아닌데 targets 지정 또는 중복), "
+                + "SKILL_CAPABILITIES_INVALID(허용되지 않는 capabilities 값 또는 조합), "
+                + "초안 작성과 같은 code(SKILL_INTENT_AMBIGUOUS, SKILL_INTENT_UNSUPPORTED, SKILL_INSTRUCTION_INVALID), "
+                + "SKILL_REQUEST_REJECTED(그 밖의 거절)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "대상이 팀 Skill인데 skill.author 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, OWNER는 항상 가능). 개인 Skill은 권한이 필요 없다",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -331,6 +339,8 @@ public class SkillController {
         @Schema(description = "결과 방식. 문서 Skill이 아니거나 지정하지 않았으면 null이다.",
                 allowableValues = {"create", "edit", "auto"}, nullable = true)
         public String result_mode;
+        @Schema(description = "원문 문서가 필요한 Skill인지 여부. AI가 저장하기 전 버전에는 없거나 null일 수 있다.", nullable = true)
+        public Boolean requires_source;
         @Schema(description = "게시 전 점검 결과. 항목별 통과 여부가 담긴다.")
         public java.util.Map<String, Object> lint_result;
         @Schema(description = "버전 상태", example = "published")
@@ -386,6 +396,8 @@ public class SkillController {
         public java.util.List<String> targets;
         @Schema(description = "결과 방식", allowableValues = {"create", "edit", "auto"}, nullable = true)
         public String result_mode;
+        @Schema(description = "원문 문서가 필요한 Skill인지 여부", nullable = true)
+        public Boolean requires_source;
         public java.util.List<Object> issues;
     }
 }
