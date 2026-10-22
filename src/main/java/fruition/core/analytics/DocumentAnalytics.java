@@ -118,7 +118,10 @@ public class DocumentAnalytics {
             Instant at = Instant.now();
             String eventName = error == null ? "query_answered" : "query_failed";
             if (jdbc.update("INSERT INTO analytics_query_terminals(query_id,event_name,occurred_at) VALUES (?,?,?) ON CONFLICT DO NOTHING",run,eventName,Timestamp.from(at)) == 0) return;
-            String messageId = request.path("message_context").path("assistant_message_id").asText();
+            // QueryMessageContext uses camelCase; AgentMessageContext explicitly uses snake_case.
+            // Reading the agent key for a query selects no references even after JPA inserted them.
+            String messageId = request.path("message_context")
+                    .path(agent ? "assistant_message_id" : "assistantMessageId").asText();
             Integer turn = jdbc.queryForObject("SELECT count(*) FROM chat_messages WHERE session_id=? AND role='user' AND created_at<=?",Integer.class,conversation,Timestamp.from(requested));
             var p = props("query_id",run,"conversation_id",conversation,"turn_index",Math.max(1,turn == null ? 1 : turn),
                     "entry_point",agent ? "task" : "chat", "query_requested_at",requested.toString(),"duration_sec",seconds(requested,at));

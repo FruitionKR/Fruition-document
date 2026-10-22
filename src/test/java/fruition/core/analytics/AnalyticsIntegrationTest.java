@@ -34,6 +34,7 @@ class AnalyticsIntegrationTest {
     @Autowired OperationLogRepository operations;
     @Autowired RestoreOperationLifecycle restores;
     @Autowired ChatExportLinks exports;
+    @Autowired fruition.core.aitask.service.AiTaskResultApplier applier;
     static final Instant AT = Instant.parse("2026-10-20T12:00:00Z");
     String suffix;
     @BeforeEach void isolate() { suffix = UUID.randomUUID().toString(); }
@@ -100,7 +101,7 @@ class AnalyticsIntegrationTest {
     }
     JsonNode query(String run,boolean web) {
         var e=mapper.createObjectNode();e.put("run_id",run);e.put("status","succeeded");
-        var r=e.putObject("request");r.put("user_id","spoofed");r.put("workspace_id","spoofed");r.put("session_id",id("session"));r.putObject("message_context").put("assistant_message_id",id("assistant"));
+        var r=e.putObject("request");r.put("user_id","spoofed");r.put("workspace_id","spoofed");r.put("session_id",id("session"));r.putObject("message_context").put("assistantMessageId",id("assistant"));
         var p=e.putObject("payload");p.put("web_search_executed",web);
         if(web)p.putArray("evidence_snippets").addObject().put("source_document_id","web:secret-url").put("text","private body");
         return e;
@@ -262,6 +263,164 @@ class AnalyticsIntegrationTest {
         assertThat(reingest.path("trigger").asText()).isEqualTo("manual");
         assertThat(reingest.path("document_id").asText()).isEqualTo(upload.getId());
         assertThat(event("wiki_ingest_requested",id("first-note")).path("properties").path("source").asText()).isEqualTo("existing_document");
+    }
+
+    // Exercise the real result application and JPA save path, without flushing before the JDBC assertions.
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void resultApplicationSeesJpaCitationsBeforeCommit(boolean agent) throws Exception {
+        String run = id("apply-citations");
+        var input = applicationEvent(run, agent);
+        Document original = document("apply-original", "workspace", "upload");
+        Document child = document("apply-child", "workspace", "convert");
+        Document additional = document("apply-additional", "workspace", "upload");
+        Document foreign = document("apply-foreign", "other-workspace", "upload");
+        Document deleted = document("apply-deleted", "workspace", "upload");
+        jdbc.update("UPDATE documents SET source_document_id=? WHERE id=?", original.getId(), child.getId());
+        jdbc.update("UPDATE documents SET deleted_at=now() WHERE id=?", deleted.getId());
+        operations.saveAndFlush(OperationLog.completed(id("apply-old-ingest"), "workspace", "teammate",
+                OperationType.ingest, child.getId(), "private summary", 1, AT.minusSeconds(172800)));
+        operations.saveAndFlush(OperationLog.completed(id("apply-reingest"), "workspace", "original-actor",
+                OperationType.ingest, child.getId(), "private summary", 1, AT.minusSeconds(10)));
+        var payload = (com.fasterxml.jackson.databind.node.ObjectNode)
+                (agent ? input.path("payload").path("chat") : input.path("payload"));
+        var snippets = payload.putArray("evidence_snippets");
+        var snippet = snippets.addObject().put("rank", 0).put("source_document_id", child.getId()).put("text", "private quote");
+        var refs = snippet.putArray("source_refs");
+        for (String source : List.of(original.getId(), additional.getId(), foreign.getId(), deleted.getId(), id("missing")))
+            refs.addObject().put("source_document_id", source).put("source_block_id", "private-block");
+        snippets.addObject().put("rank", 1).put("source_document_id", original.getId()).put("text", "private second quote");
+        for (String source : List.of(foreign.getId(), deleted.getId(), id("missing")))
+            snippets.addObject().put("source_document_id", source).put("text", "private rejected quote");
+        snippets.addObject().put("source_document_id", additional.getId()).put("text", "  ");
+        snippets.addObject().put("source_document_id", "web:private-url").put("text", "private web quote");
+        snippets.addObject().put("source_document_id", "web:empty-url").put("text", "  ");
+        tx.executeWithoutResult(status -> {
+            apply(input, agent);
+            // IDENTITY references are SQL-visible already: the failure was the message-context field name.
+            assertThat(referenceCount()).isEqualTo(2);
+            JsonNode envelope = readAnswer(run), properties = envelope.path("properties");
+            assertThat(properties.path("has_citations").asBoolean()).isTrue();
+            assertThat(properties.path("internal_citation_count").asInt()).isEqualTo(2);
+            assertThat(properties.path("web_citation_count").asInt()).isEqualTo(1);
+            assertThat(properties.path("citation_count").asInt()).isEqualTo(3);
+            assertThat(mapper.convertValue(properties.path("cited_document_ids"), List.class))
+                    .containsExactlyElementsOf(new TreeSet<>(List.of(original.getId(), additional.getId())));
+            assertThat(properties.path("cited_document_first_ingested_at").size()).isEqualTo(1);
+            assertThat(properties.path("cited_document_first_ingested_at").path(original.getId()).asText())
+                    .isEqualTo(AT.minusSeconds(172800).toString());
+            assertThat(properties.path("entry_point").asText()).isEqualTo(agent ? "task" : "chat");
+            assertThat(envelope.path("distinct_id").asText()).isEqualTo("original-actor");
+            assertThat(properties.path("$groups").path("workspace").asText()).isEqualTo("workspace");
+            assertThat(envelope.toString()).doesNotContain("private", foreign.getId(), deleted.getId(), child.getId());
+            apply(input, agent);
+            assertThat(readAnswer(run)).isEqualTo(envelope);
+            assertThat(referenceCount()).isEqualTo(2);
+            analytics.queryCompleted(input, agent, "internal_error");
+            assertThat(count("query_failed", run)).isZero();
+        });
+        assertThat(count("query_answered", run)).isEqualTo(1);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void resultApplicationRollbackRemovesReferencesReceiptTerminalAndOutbox(boolean agent) {
+        String run = id("apply-rollback");
+        var input = applicationWithOneCitation(run, agent);
+        tx.executeWithoutResult(status -> {
+            apply(input, agent);
+            assertThat(referenceCount()).isEqualTo(1);
+            assertThat(readAnswer(run).path("properties").path("internal_citation_count").asInt()).isEqualTo(1);
+            status.setRollbackOnly();
+        });
+        assertThat(referenceCount()).isZero();
+        assertThat(count("query_answered", run)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM analytics_query_terminals WHERE query_id=?", Integer.class, run)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_result_receipts WHERE run_id=?", Integer.class, run)).isZero();
+        assertThat(jdbc.queryForObject("SELECT status FROM chat_messages WHERE id=?", String.class, id("assistant"))).isEqualTo("pending");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void resultApplicationCommitsJpaProductWhenAnalyticsInsertFails(boolean agent) {
+        String run = id("apply-fail-open");
+        var input = applicationWithOneCitation(run, agent);
+        tx.executeWithoutResult(status -> {
+            jdbc.execute("ALTER TABLE analytics_outbox ADD CONSTRAINT analytics_test_reject CHECK (false) NOT VALID");
+            apply(input, agent);
+            assertThat(referenceCount()).isEqualTo(1);
+            assertThat(count("query_answered", run)).isZero();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM analytics_query_terminals WHERE query_id=?", Integer.class, run)).isZero();
+            jdbc.execute("ALTER TABLE analytics_outbox DROP CONSTRAINT analytics_test_reject");
+        });
+        assertThat(referenceCount()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT content FROM chat_messages WHERE id=?", String.class, id("assistant")))
+                .isEqualTo("private answer");
+        assertThat(jdbc.queryForObject("SELECT status FROM chat_messages WHERE id=?", String.class, id("assistant")))
+                .isEqualTo("completed");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_result_receipts WHERE run_id=?", Integer.class, run)).isEqualTo(1);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void relatedPagesAloneAreNotCitationsInResultApplication(boolean agent) {
+        String run = id("apply-no-citation");
+        var input = applicationEvent(run, agent);
+        tx.executeWithoutResult(status -> {
+            apply(input, agent);
+            var properties = readAnswer(run).path("properties");
+            assertThat(properties.path("has_citations").asBoolean()).isFalse();
+            assertThat(properties.path("citation_count").asInt()).isZero();
+            assertThat(properties.path("cited_document_ids").size()).isZero();
+        });
+    }
+
+    private com.fasterxml.jackson.databind.node.ObjectNode applicationWithOneCitation(String run, boolean agent) {
+        var input = applicationEvent(run, agent);
+        var document = document("apply-one", "workspace", "upload");
+        var payload = (com.fasterxml.jackson.databind.node.ObjectNode)
+                (agent ? input.path("payload").path("chat") : input.path("payload"));
+        payload.putArray("evidence_snippets").addObject()
+                .put("source_document_id", document.getId()).put("text", "private quote");
+        return input;
+    }
+
+    private com.fasterxml.jackson.databind.node.ObjectNode applicationEvent(String run, boolean agent) {
+        seedQuery(run);
+        jdbc.update("UPDATE chat_messages SET content='', status='pending' WHERE id=?", id("assistant"));
+        var input = (com.fasterxml.jackson.databind.node.ObjectNode) query(run, false);
+        input.put("event_id", id("result")).put("kind", agent ? "agent" : "query");
+        Object command;
+        if (agent) {
+            jdbc.update("UPDATE ai_task_runs SET kind='agent' WHERE id=?", run);
+            jdbc.update("INSERT INTO agent_apply_projections(run_id,workspace_id,user_id) VALUES (?,'workspace','original-actor')", run);
+            command = fruition.core.agent.service.AnalyticsAgentCommandFixture.command(
+                    run, id("session"), id("pair"), id("user"), id("assistant"));
+        } else {
+            command = fruition.core.query.service.AnalyticsQueryCommandFixture.command(run, id("session"),
+                    new fruition.core.query.service.QueryService.QueryMessageContext(id("pair"), id("user"), id("assistant"), AT));
+        }
+        // Serialize the full production command, including its actual nested context DTO.
+        input.set("request", mapper.valueToTree(command));
+        var payload = input.putObject("payload");
+        if (agent) payload = payload.put("action", "chat_answer").putObject("chat");
+        payload.put("answer", "private answer");
+        payload.putArray("related_pages").addObject().put("id", "wiki-page")
+                .put("title", "private title").put("page_type", "Concept").put("slug", "private-slug");
+        payload.putArray("evidence_snippets");
+        return input;
+    }
+
+    private void apply(JsonNode input, boolean agent) {
+        if (agent) assertThat(applier.applyAgent(input).error()).isNull();
+        else assertThat(applier.applyQuery(input).error()).isNull();
+    }
+    private int referenceCount() {
+        return jdbc.queryForObject("SELECT count(*) FROM chat_message_references WHERE chat_message_id=?", Integer.class, id("assistant"));
+    }
+    private JsonNode readAnswer(String run) {
+        try { return event("query_answered", run); }
+        catch (Exception error) { throw new AssertionError(error); }
     }
 
 }

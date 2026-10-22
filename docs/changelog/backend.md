@@ -2,6 +2,9 @@
 
 ## 2026-10-22
 
+- `query_answered`가 Query의 `message_context.assistantMessageId`를 Agent용 snake_case 키로 읽어 저장된 인용을 0건으로 집계하던 오류를 수정했다. Query와 Agent의 실제 직렬화 계약을 구분하며 제품 flush·SAVEPOINT 경계·이벤트 허용 속성은 변경하지 않는다.
+- 실제 `applyQuery`/`applyAgent(chat_answer)` → JPA 근거 저장 → 커밋 전 JDBC 분석 경로를 PostgreSQL에서 회귀 검증한다. 내부/웹 인용 수, 원본 계보·최초 편입 이력, 워크스페이스/삭제/빈 근거 필터, 관련 페이지만 있는 답변, 중복 terminal, 전체 롤백 및 분석 INSERT 실패 후 제품 커밋을 포함한다. 실제 Query/Agent command 직렬화 회귀 8건을 포함한 전체 1,415건과 `bootJar`를 통과했다.
+
 - 서명 검증을 통과해도 `exp`가 없거나 `sub`가 없고 비어 있는 JWT는 거부한다. RSA·전환용 HMAC 모두 같은 필수 claim 검증을 적용하며 정상 토큰·만료 토큰 회귀 검증을 유지한다.
 - Document 알파 분석 이벤트(업로드·편입·PDF 변환·질의·AI 편집/복구·명시적 스킬 실행·채팅 export)를 트랜잭션 outbox에 기록하고 HTTP batch로 재전송한다. 기본 비활성, 공개 phc_ 토큰만 허용하며 원문/URL을 제외한 이벤트별 허용 속성과 고정 UUIDv5/UTC 시각을 사용한다.
 - JDBC SAVEPOINT로 분석 INSERT 오류를 제품 커밋과 격리하고, query_id terminal guard 및 복구 성공/실패 논리 키로 중복·상호 충돌을 막는다. 이전 팀 문서와 재편입의 최초 성공 이력, 원본 문서 인용, 웹 인용 수, 요청 세션 연결을 보존한다.
