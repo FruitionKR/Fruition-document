@@ -28,9 +28,11 @@ class DocumentEditStateInitializerTest {
     @Mock MinioClient minioClient;
     @Mock StorageProperties storageProperties;
 
-    @Test
-    void editableMarkdownWithoutState_isLoadedFromOriginalStorage() throws Exception {
-        byte[] markdown = "# 기존 문서\n".getBytes(StandardCharsets.UTF_8);
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 5 * 1024 * 1024 + 1})
+    void editableMarkdownWithoutState_isLoadedFromOriginalStorage(int extraBytes) throws Exception {
+        String fullMarkdown = "# 기존 문서\n" + "x".repeat(extraBytes);
+        byte[] markdown = fullMarkdown.getBytes(StandardCharsets.UTF_8);
         Document document = new Document(
                 "doc_markdown",
                 "ws_1",
@@ -56,8 +58,8 @@ class DocumentEditStateInitializerTest {
 
         verify(editStateRepository).insertIfAbsent(
                 eq(document.getId()),
-                eq("# 기존 문서\n"),
-                eq("3350cfe0c286a74ff91ff31b8e2bd6488c52b1076327376429c56c0e39319c61"),
+                eq(fullMarkdown),
+                eq(DocumentEditingRules.storedMarkdown(fullMarkdown).contentHash()),
                 eq(1L),
                 any(),
                 any()

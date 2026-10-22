@@ -36,13 +36,15 @@ class DocumentAssetContentServiceTest {
     @Mock DocumentAssetStorageCoordinator storageCoordinator;
     @Mock DocumentService documentService;
 
-    @Test
-    void save_replacesPlaceholderAndReturnsServerMarkdownAndMapping() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 5 * 1024 * 1024 + 1})
+    void save_replacesPlaceholderAndReturnsServerMarkdownAndMapping(int extraBytes) {
+        String body = "x".repeat(extraBytes);
         UUID attachmentId = UUID.randomUUID();
         UUID assetId = UUID.randomUUID();
         MockMultipartFile file = new MockMultipartFile("file", "image.png", "image/png", new byte[]{1});
         var parsed = new DocumentAssetSaveRequestParser.ParsedAssetSaveRequest(
-                "![](attachment://" + attachmentId + ")", 3, Map.of(attachmentId, file));
+                body + "![](attachment://" + attachmentId + ")", 3, Map.of(attachmentId, file));
         var validated = validated();
         var stored = new DocumentAssetStorageCoordinator.StoredAsset(
                 assetId, "assets/ws_1/" + assetId + "/content", validated);
@@ -63,7 +65,7 @@ class DocumentAssetContentServiceTest {
                 "operation_1");
 
         String expectedPath = "/api/workspaces/ws_1/assets/" + assetId + "/content";
-        assertThat(response.markdown()).isEqualTo("![](" + expectedPath + ")");
+        assertThat(response.markdown()).isEqualTo(body + "![](" + expectedPath + ")");
         assertThat(response.attachments()).singleElement().satisfies(mapping -> {
             assertThat(mapping.attachmentId()).isEqualTo(attachmentId);
             assertThat(mapping.assetId()).isEqualTo(assetId);

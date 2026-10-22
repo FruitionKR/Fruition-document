@@ -474,7 +474,7 @@ public class DocumentService {
                 .max()
                 .orElse(-1) + 1;
         DocumentEditingRules.MarkdownContent content =
-                DocumentEditingRules.markdown(sourceEditState.getMarkdown());
+                DocumentEditingRules.storedMarkdown(sourceEditState.getMarkdown());
 
         String duplicateId = newDocumentId();
         Document duplicate = new Document(
@@ -545,7 +545,7 @@ public class DocumentService {
     }
 
     private DocumentEditingRules.MarkdownContent readUploadedMarkdown(MultipartFile file) throws IOException {
-        // 편집 본문은 DB·diff 처리 한도를 유지하고, 읽기 전에 크기를 검사한다.
+        // 직접 업로드하는 Markdown 파일의 크기는 읽기 전에 검사한다.
         if (file.getSize() > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
             throw new MarkdownContentTooLargeException("Markdown 본문은 UTF-8 기준 5MB 이하여야 합니다.");
         }
@@ -1183,7 +1183,7 @@ public class DocumentService {
         }
         if (queue.getCompletedPages() >= total) {
             documentRepository.findByIdInActiveWorkspace(documentId).ifPresent(doc -> {
-                var content = editStateRepository.findById(doc.getId()).orElseThrow();
+                var content = postgresDocumentEditStore.findState(doc.getId()).orElseThrow();
                 if (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:")) {
                     doc.completeConvert(content.getContentHash(),
                             content.getMarkdown().getBytes(StandardCharsets.UTF_8).length, Instant.now());
@@ -1238,7 +1238,7 @@ public class DocumentService {
         return new ConvertOutcome(placeholder, false, toCancel);
     }
 
-    /** 변환이 끝난 문서와 상한을 넘어 생긴 파트를 각각 한 번씩 AI 큐로 보낸다. */
+    /** 변환 문서를 AI 큐로 보낸다. 이전 버전에서 생성한 파트도 호환 처리한다. */
     private void ingestConvertedParts(Document placeholder) {
         // 설정·권한은 변환을 요청한 사용자 기준이며, 변환이 끝나는 시점에 판정한다(트랜잭션 밖).
         boolean autoIngest = autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId());
@@ -1252,7 +1252,7 @@ public class DocumentService {
                     Document doc = documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
                             .filter(value -> value.getDeletedAt() == null).orElse(null);
                     if (doc == null) return null;
-                    var content = editStateRepository.findById(doc.getId()).orElseThrow();
+                    var content = postgresDocumentEditStore.findState(doc.getId()).orElseThrow();
                     recordContentVersion(doc.getId(), content.getRevision(), content.getMarkdown(),
                             content.getContentHash(), doc.getUserId(), Instant.now());
                     if (autoIngest && (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:"))) {
@@ -1323,7 +1323,7 @@ public class DocumentService {
     }
 
     /**
-     * batch 하나를 placeholder(와 상한을 넘으면 파트 문서)에 이어 붙이고 체크포인트를 옮긴다.
+     * batch 하나를 동일한 문서에 이어 붙이고 체크포인트를 옮긴다.
      * 호출자의 트랜잭션·queue 행 잠금·run join 안에서 쓴다.
      */
     private void mergeConvertedBatch(DocumentConvertQueue queue, Document parent, String batchMarkdown,
@@ -1332,69 +1332,24 @@ public class DocumentService {
         // data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다.
         String markdown = ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitizeConverted(
                 externalizeConvertedImages(parent, batchMarkdown)), pageStart);
-        // PDF 하나를 문서 하나로 이어 붙이고, 편집 문서 상한을 넘을 때만 다음 파트 문서로 넘어간다.
-        // 버전 기록은 변환 완료 시 한 번만 남겨 묶음마다 누적 본문이 쌓이지 않게 한다.
-        var parts = documentRepository.findConvertedParts(parent.getWorkspaceId(), parent.getId());
-        int partCount = parts.size();
-        String targetId = parts.isEmpty() ? parent.getId() : parts.getLast().getId();
-        var pieces = ConvertedMarkdownChunks.split(markdown, DocumentEditingRules.MAX_MARKDOWN_BYTES);
-        // 저장은 JDBC라 같은 트랜잭션에서 JPA로 다시 읽으면 갱신 전 값이 온다. 대상 본문·revision은 한 번만 읽고 직접 갱신한다.
-        var state = editStateRepository.findById(targetId).orElseThrow();
+        // 변환 batch는 내부 처리 단위일 뿐이다. 크기와 관계없이 원본 PDF의 모든 쪽을 같은 문서에 저장한다.
+        // JDBC 저장 직후에도 최신 본문을 읽도록 JPA 1차 캐시를 거치지 않는다.
+        var state = postgresDocumentEditStore.findState(parent.getId()).orElseThrow();
         String existing = CONVERT_PLACEHOLDER_MARKDOWN.equals(state.getMarkdown()) ? "" : state.getMarkdown();
-        long revision = state.getRevision();
-        for (int index = 0; index < pieces.size(); index++) {
-            String merged = existing.isEmpty() ? pieces.get(index) : existing.stripTrailing() + "\n\n" + pieces.get(index);
-            if (merged.getBytes(StandardCharsets.UTF_8).length > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
-                targetId = createConvertedPart(parent, ++partCount, pieces.get(index));
-                existing = pieces.get(index);
-                revision = 1;
-                continue;
-            }
-            var content = DocumentEditingRules.markdown(merged);
-            var saved = postgresDocumentEditStore.save(parent.getWorkspaceId(), targetId, content.markdown(),
-                    content.contentHash(), revision, "convert:" + queue.getId() + ":" + pageEnd + ":" + index,
-                    parent.getUserId(), null);
-            existing = content.markdown();
-            revision = saved.revision();
-            storeMarkdownSource(targetId, content.bytes());
-            // 이미지 참조를 등록해 조회 권한·orphan 수거와 연결한다.
-            assetReferenceSynchronizer.synchronize(targetId, parent.getWorkspaceId(), assetReferenceParser.parse(content.markdown()));
-        }
+        String merged = existing.isEmpty() ? markdown : existing.stripTrailing() + "\n\n" + markdown;
+        var content = DocumentEditingRules.storedMarkdown(merged);
+        postgresDocumentEditStore.save(parent.getWorkspaceId(), parent.getId(), content.markdown(),
+                content.contentHash(), state.getRevision(), "convert:" + queue.getId() + ":" + pageEnd + ":0",
+                parent.getUserId(), null);
+        storeMarkdownSource(parent.getId(), content.bytes());
+        assetReferenceSynchronizer.synchronize(parent.getId(), parent.getWorkspaceId(),
+                assetReferenceParser.parse(content.markdown()));
         queue.checkpoint(pageEnd, totalPages);
         documentRepository.findById(parent.getId()).ifPresent(doc -> doc.markProcessingHeartbeat(
                 "PDF " + pageEnd + "/" + totalPages + "페이지 변환 완료", Instant.now()));
     }
 
-    private String createConvertedPart(Document parent, int partNumber, String markdown) {
-        var content = DocumentEditingRules.markdown(markdown);
-        // 변환 중 삭제된 파트도 행이 남아 있으므로, 그 ID를 덮어쓰지 않게 비어 있는 번호까지 넘긴다.
-        String id = convertedPartId(parent, partNumber);
-        while (documentRepository.existsById(id)) {
-            id = convertedPartId(parent, ++partNumber);
-        }
-        String base = parent.getDisplayName();
-        base = base.substring(0, Math.min(170, base.length()));
-        String filename = base + " [파트 " + (partNumber + 1) + ", "
-                + parent.getId().substring(parent.getId().length() - 6) + "].md";
-        var part = new Document(id, parent.getWorkspaceId(), parent.getUserId(), filename, "text/markdown",
-                content.bytes().length, storeMarkdownSource(id, content.bytes()), content.contentHash(), "convert_part");
-        part.initializeDuplicate(parent.getId(), parent.getFolderId(), content.contentHash(), content.bytes().length,
-                placementSortOrder(parent.getWorkspaceId(), parent.getFolderId(), DocumentRole.EDITABLE));
-        documentRepository.save(part);
-        editStateRepository.save(new DocumentEditState(id, content.markdown(), content.contentHash(), 1));
-        assetReferenceSynchronizer.synchronize(id, parent.getWorkspaceId(), assetReferenceParser.parse(content.markdown()));
-        return id;
-    }
-
-    private String convertedPartId(Document parent, int partNumber) {
-        return "doc_" + UUID.nameUUIDFromBytes((parent.getId() + ":part:" + partNumber)
-                .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
-    }
-
-    /**
-     * 변환 결과의 {@code data:} 이미지를 asset으로 저장하고 내부 주소로 바꾼다. 업로드 PDF는 사용자가 만들 수 있어
-     * 첨부 이미지와 같은 크기 상한을 둔다. 넘는 이미지는 변환 전체를 실패시키지 않고 생략 문구로 바꾼다.
-     */
+    /** 변환 결과의 data: 이미지를 asset으로 저장하고 내부 주소로 바꾼다. */
     private String externalizeConvertedImages(Document parent, String markdown) {
         var pattern = java.util.regex.Pattern.compile("data:(image/(?:png|jpeg|gif));base64,([A-Za-z0-9+/=]+)");
         var matcher = pattern.matcher(markdown);
@@ -1785,7 +1740,7 @@ public class DocumentService {
         requireNotConverting(document);
         editLockService.requireWritable(documentId, userId);
 
-        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(markdown);
+        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(markdown);
         boolean hasApplyOperation = applyOperationId != null && !applyOperationId.isBlank();
         if (!applyOperationClaimed) {
             claimApplyOperation(workspaceId, userId, documentId, revisionWriteId,
@@ -1975,7 +1930,7 @@ public class DocumentService {
             Map<UUID, DocumentAssetStorageCoordinator.StoredAsset> storedAssets,
             String applyOperationId
     ) {
-        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(markdown);
+        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(markdown);
         Instant updatedAt = Instant.now();
         List<DocumentAsset> assets = storedAssets.values().stream()
                 .map(stored -> new DocumentAsset(
@@ -2051,7 +2006,7 @@ public class DocumentService {
     ) {
         TransactionTemplate conflictTransaction = requiresNewSaveTransactionTemplate();
         conflictTransaction.execute(status -> {
-            DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(markdown);
+            DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(markdown);
             if (!applyOperationStore.consume(
                     applyOperationId, userId, documentId, revisionWriteId,
                     baseRevision, content.markdown())) {

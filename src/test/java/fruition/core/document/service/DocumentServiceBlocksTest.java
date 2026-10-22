@@ -925,9 +925,11 @@ class DocumentServiceBlocksTest {
         verify(minioClient).putObject(org.mockito.ArgumentMatchers.argThat(args -> args.objectSize() == size));
     }
 
-    @Test
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 5 * 1024 * 1024 + 1})
     @DisplayName("Markdown 본문 저장은 편집 상태와 현재 버전을 함께 갱신한다")
-    void saveContent_changed_updatesContentAndVersion() {
+    void saveContent_changed_updatesContentAndVersion(int extraBytes) {
+        String fullMarkdown = "# 변경\n" + "x".repeat(extraBytes);
         stubOwnedWorkspace();
         Document document = new Document(
                 "doc_edit", WORKSPACE_ID, USER_ID, "문서.md", "text/markdown", 4,
@@ -939,7 +941,7 @@ class DocumentServiceBlocksTest {
         when(editStateRepository.findById(document.getId())).thenReturn(Optional.of(editState));
 
         DocumentContentSaveResponse response = documentService.saveContent(
-                WORKSPACE_ID, USER_ID, document.getId(), "# 변경\n", 1L, "write_1", null);
+                WORKSPACE_ID, USER_ID, document.getId(), fullMarkdown, 1L, "write_1", null);
 
         assertThat(response.changed()).isTrue();
         assertThat(response.currentVersion()).isEqualTo(2);
@@ -947,7 +949,7 @@ class DocumentServiceBlocksTest {
         assertThat(editState.getMarkdown()).isEqualTo("old");
         assertThat(document.getContentHash()).isEqualTo("original-hash");
         verify(postgresDocumentEditStore).save(
-                eq(WORKSPACE_ID), eq(document.getId()), eq("# 변경\n"), anyString(),
+                eq(WORKSPACE_ID), eq(document.getId()), eq(fullMarkdown), anyString(),
                 eq(1L), eq("write_1"), eq(USER_ID), isNull(), any());
     }
 
@@ -1339,9 +1341,11 @@ class DocumentServiceBlocksTest {
         verify(documentRepository).updateCurrentContentHash(document.getId(), resultHash, updatedAt, USER_ID);
     }
 
-    @Test
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 5 * 1024 * 1024 + 1})
     @DisplayName("버전 복원은 대상 본문을 새 edit revision으로 적용한다")
-    void restoreContentVersion_appliesTargetThroughEditStateStore() {
+    void restoreContentVersion_appliesTargetThroughEditStateStore(int extraBytes) {
+        String fullMarkdown = "# 예전\n" + "x".repeat(extraBytes);
         stubOwnedWorkspace();
         Document document = new Document(
                 "doc_edit", WORKSPACE_ID, USER_ID, "문서.md", "text/markdown", 4,
@@ -1353,14 +1357,14 @@ class DocumentServiceBlocksTest {
         when(contentVersionRepository.findById(
                 new fruition.core.document.domain.DocumentContentVersionId(document.getId(), 5L)))
                 .thenReturn(Optional.of(new fruition.core.document.domain.DocumentContentVersion(
-                        document.getId(), 5L, "# 예전\n", "old-hash", USER_ID, java.time.Instant.now())));
+                        document.getId(), 5L, fullMarkdown, "old-hash", USER_ID, java.time.Instant.now())));
 
         DocumentContentSaveResponse response = documentService.restoreContentVersion(
                 WORKSPACE_ID, USER_ID, document.getId(), 5L, 1L);
 
         assertThat(response.currentVersion()).isEqualTo(2);
         verify(postgresDocumentEditStore).save(
-                eq(WORKSPACE_ID), eq(document.getId()), eq("# 예전\n"), anyString(),
+                eq(WORKSPACE_ID), eq(document.getId()), eq(fullMarkdown), anyString(),
                 eq(1L), eq("restore:5:1"), eq(USER_ID), isNull(), any());
         verify(contentVersionRepository).markRestoredFrom(document.getId(), 2L, 5L);
     }
@@ -2063,9 +2067,11 @@ class DocumentServiceBlocksTest {
                 anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any());
     }
 
-    @Test
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 5 * 1024 * 1024 + 1})
     @DisplayName("최신 Markdown을 새 ID와 version 1로 같은 폴더의 마지막에 복제한다")
-    void duplicate_copiesLatestMarkdownAtEndOfSameParent() {
+    void duplicate_copiesLatestMarkdownAtEndOfSameParent(int extraBytes) {
+        String fullMarkdown = "# 최신 본문\n" + "x".repeat(extraBytes);
         stubOwnedWorkspace();
         java.util.UUID folderId = java.util.UUID.fromString("11111111-1111-1111-1111-111111111111");
         Document source = new Document(
@@ -2079,7 +2085,7 @@ class DocumentServiceBlocksTest {
                 "text/markdown", 10, null, null, "duplicate");
         existingCopy.initializeDuplicate("doc_source", folderId, "old-hash", 10, 3);
         DocumentEditState sourceEditState = new DocumentEditState(
-                source.getId(), "# 최신 본문\n", DocumentEditingRules.markdown("# 최신 본문\n").contentHash(), 1);
+                source.getId(), fullMarkdown, DocumentEditingRules.storedMarkdown(fullMarkdown).contentHash(), 1);
         when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(source.getId(), WORKSPACE_ID))
                 .thenReturn(Optional.of(source));
         when(documentRepository.findSiblingPagesForUpdate(WORKSPACE_ID, folderId))
@@ -2105,7 +2111,7 @@ class DocumentServiceBlocksTest {
         assertThat(documentCaptor.getValue().getSourceUri())
                 .isEqualTo("sources/documents/" + documentCaptor.getValue().getId() + "/original");
         assertThat(documentCaptor.getValue().getContentHash()).isNull();
-        assertThat(editStateCaptor.getValue().getMarkdown()).isEqualTo("# 최신 본문\n");
+        assertThat(editStateCaptor.getValue().getMarkdown()).isEqualTo(fullMarkdown);
         verify(assetReferenceSynchronizer).copyReferences(source.getId(), response.id());
         verify(idempotencyService).save(any(), any(), any(), any(), anyInt(), any(), any());
     }
