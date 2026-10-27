@@ -59,10 +59,12 @@ class AgentFolderLookupIntegrationTest {
     }
 
     @Test
-    void rejectsNonMember() throws Exception {
+    void rejectsNonMemberWith404() throws Exception {
         insertFolder(null, "회의록");
 
-        tree(outsider).andExpect(status().is4xxClientError());
+        tree(outsider)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("WORKSPACE_NOT_FOUND"));
     }
 
     @Test
