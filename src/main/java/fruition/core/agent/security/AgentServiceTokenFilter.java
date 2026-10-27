@@ -23,7 +23,8 @@ public class AgentServiceTokenFilter extends OncePerRequestFilter {
         String uri = request.getRequestURI();
         String contextPath = request.getContextPath();
         return !uri.startsWith(contextPath + "/internal/agent/tools/")
-                && !uri.startsWith(contextPath + "/internal/agent/skill-execution/");
+                && !uri.startsWith(contextPath + "/internal/agent/skill-execution/")
+                && !uri.startsWith(contextPath + "/internal/agent/folder-lookup/");
     }
 
     @Override
