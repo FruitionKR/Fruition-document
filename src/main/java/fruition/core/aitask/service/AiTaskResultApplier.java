@@ -46,7 +46,8 @@ public class AiTaskResultApplier {
     private static final java.util.regex.Pattern NOTE_MARKER = java.util.regex.Pattern.compile(
             "^(<!--\\s*fruition-(?:note|workspace):\\s*[^\\r\\n]+?\\s*-->)\\r?\\n?");
     private static final Set<String> NON_MUTATING_ACTIONS = Set.of(
-            "chat_answer", "conversation_reply", "clarify", "reject", "skill_authoring", "skill_draft_proposal");
+            "chat_answer", "conversation_reply", "clarify", "reject", "skill_authoring", "skill_draft_proposal",
+            "folder_lookup");
     private static final Set<String> AUTONOMOUS_ACTIONS = Set.of("folder_organize", "workspace_workflow");
 
     private static final Logger log = LoggerFactory.getLogger(AiTaskResultApplier.class);
@@ -312,9 +313,14 @@ public class AiTaskResultApplier {
         }
         recordAgentChatMessage(event, errorCode);
         if (analytics != null) {
+            String action = event.path("payload").path("action").asText(null);
+            String status = text(event, "status");
             if (errorCode == null) analytics.proposed(event);
-            if ("chat_answer".equals(event.path("payload").path("action").asText()))
+            if ("chat_answer".equals(action))
                 analytics.queryCompleted(event, true, errorCode);
+            else if (errorCode != null && !"cancelled".equals(status))
+                analytics.taskFailed(runId, "agent_turn", "succeeded".equals(status) ? "validation" : "result",
+                        errorCode, action);
         }
         chatTurnRecorder.recordContextSummary(
                 textOrNull(event.path("request"), "session_id"),

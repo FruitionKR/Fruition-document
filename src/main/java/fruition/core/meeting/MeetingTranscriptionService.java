@@ -25,6 +25,8 @@ import java.util.regex.Pattern;
  */
 @Service
 public class MeetingTranscriptionService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
     static final int MAX_SEGMENT_CHARS = 10_000;
     /** 회의록 AI는 구간 1,000개·전체 100,000자까지 받는다. 문장을 이 길이까지 묶어 구간 수를 한도 안에 둔다. */
     static final int TARGET_SEGMENT_CHARS = 1_000;
@@ -93,6 +95,8 @@ public class MeetingTranscriptionService {
         if (error == null && applied) outbox.complete(runId);
         else outbox.fail(runId);
         if (error != null) log.warn("[회의 전사 실패 반영] meetingId={} code={}", meetingId, error);
+        if (error != null && applied && analytics != null)
+            analytics.taskFailed(runId, "transcription", "result", error, null);
     }
 
     /**

@@ -21,9 +21,18 @@ public record MarkdownDocumentCreateRequest(
 
         @Schema(description = "skill_reference면 스킬 참고 문서로 만든다. 문서 트리·목록·위키 편입에서 빠지며 folder_id와 함께 쓸 수 없다. 그 밖의 값은 400이다.",
                 example = "skill_reference")
-        String origin
+        String origin,
+
+        @JsonProperty("agent_run_id")
+        @Schema(description = "작업 탭 AI 초안(markdown_create)으로 만들 때 그 Agent run ID. 요청자 본인의 초안이면 AI 생성 문서로 표시한다. 맞지 않으면 일반 문서로 만든다.",
+                example = "agent_06dc3c1e")
+        String agentRunId
 ) {
     public MarkdownDocumentCreateRequest(String displayName, String markdown, UUID folderId) {
-        this(displayName, markdown, folderId, null);
+        this(displayName, markdown, folderId, null, null);
+    }
+
+    public MarkdownDocumentCreateRequest(String displayName, String markdown, UUID folderId, String origin) {
+        this(displayName, markdown, folderId, origin, null);
     }
 }

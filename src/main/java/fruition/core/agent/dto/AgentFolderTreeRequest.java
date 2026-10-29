@@ -1,0 +1,9 @@
+package fruition.core.agent.dto;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.validation.constraints.NotBlank;
+
+public record AgentFolderTreeRequest(
+        @JsonProperty("workspace_id") @NotBlank String workspaceId,
+        @JsonProperty("user_id") @NotBlank String userId
+) {}

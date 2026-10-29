@@ -188,7 +188,7 @@ public class PipelineSkillRequester {
             cancellation.finish(runId);
             return result;
         } catch (RuntimeException e) {
-            usageCharges.failRun(runId);
+            usageCharges.failRun(runId, fruition.core.usage.service.UsageChargeService.failureCode(e));
             throw e;
         } finally {
             // 실패해도 공급사 호출은 일어났을 수 있어 사용 금액을 수집한다(#78).
