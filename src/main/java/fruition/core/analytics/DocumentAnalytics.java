@@ -170,6 +170,43 @@ public class DocumentAnalytics {
                     "edit_type",editType(tree((String)row.get("result")).path("edit")),"decision","accepted","operation_id",operation));
         });
     }
+    /** Terminal AI task failure. Query failures use query_failed; cancellation is not a failure. */
+    public void taskFailed(String task, String kind, String stage, String error, String action) {
+        if ("cancelled".equals(error)) return;
+        recorder.safely(() -> insertTaskFailed(task, kind, stage, error, action));
+    }
+    public void applyConflicted(String applyOperation) {
+        recorder.safely(() -> {
+            var runs = jdbc.queryForList("SELECT run_id FROM agent_apply_projections WHERE apply_operation_id=?",String.class,applyOperation);
+            if (!runs.isEmpty()) insertTaskFailed(runs.getFirst(),"edit_apply","apply","conflict",null);
+        });
+    }
+    private void insertTaskFailed(String task, String kind, String stage, String error, String action) {
+        var row = jdbc.queryForMap("SELECT r.user_id,r.workspace_id,r.created_at,r.kind,p.document_id FROM ai_task_runs r LEFT JOIN agent_apply_projections p ON p.run_id=r.id WHERE r.id=?",task);
+        Instant at = Instant.now();
+        var p = props("task_id",task,"task_kind",kind,"stage",stage,"failure_reason",AnalyticsSchema.failureReason(error),
+                "duration_sec",seconds(instant(row.get("created_at")),at));
+        if (action == null && "sync_call".equals(kind)) action = (String)row.get("kind");
+        if (action != null && !action.isBlank()) p.put("action",AnalyticsSchema.AGENT_ACTIONS.contains(action) ? action : "unknown");
+        if (row.get("document_id") != null) p.put("document_id",row.get("document_id"));
+        recorder.insert("ai_task_failed",kind+":"+task,(String)row.get("user_id"),(String)row.get("workspace_id"),at,p);
+    }
+    public void aiDocumentCreated(String proposal, Document d) {
+        recorder.record("ai_document_created",d.getId(),d.getUserId(),d.getWorkspaceId(),d.getUploadedAt(),
+                props("proposal_id",proposal,"document_id",d.getId()));
+    }
+    /** error null means the draft is ready; the run key keeps one terminal event even if a late result follows a timeout. */
+    public void meetingNotesCompleted(String run, String error) {
+        if ("MEETING_NOTES_CANCELLED".equals(error)) return;
+        recorder.safely(() -> {
+            var row = jdbc.queryForMap("SELECT n.meeting_id,r.user_id,r.workspace_id,r.created_at FROM meeting_notes n JOIN ai_task_runs r ON r.id=n.ai_run_id WHERE n.ai_run_id=?",run);
+            Instant at = Instant.now();
+            var p = props("meeting_id",row.get("meeting_id"),"status",error == null ? "succeeded" : "failed",
+                    "duration_sec",seconds(instant(row.get("created_at")),at));
+            if (error != null) p.put("failure_reason",AnalyticsSchema.failureReason(error));
+            recorder.insert("meeting_notes_completed",run,(String)row.get("user_id"),(String)row.get("workspace_id"),at,p);
+        });
+    }
     public void restored(OperationLog restore, String failure) {
         recorder.safely(() -> {
             var original = jdbc.queryForMap("SELECT operation_type,completed_at FROM ai_operation_logs WHERE operation_id=?",restore.getRestoredFrom());

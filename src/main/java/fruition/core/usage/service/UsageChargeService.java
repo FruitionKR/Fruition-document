@@ -56,6 +56,8 @@ import java.util.stream.Stream;
  */
 @Service
 public class UsageChargeService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
 
     /** ai-svc가 HTTP 동기 호출의 사용량을 귀속할 run_id를 받는 헤더. 본문·쿼리로 보내면 버려지거나 거부된다. */
     public static final String RUN_ID_HEADER = "X-Request-Id";
@@ -203,7 +205,7 @@ public class UsageChargeService {
             runs.finish(runId);
             return result;
         } catch (RuntimeException e) {
-            failRun(runId);
+            failRun(runId, failureCode(e));
             throw e;
         } finally {
             enqueue(runId);
@@ -212,7 +214,33 @@ public class UsageChargeService {
 
     /** 실패한 동기 실행을 닫는다. 취소 중이거나 이미 끝난 실행은 그대로 둔다. */
     public void failRun(String runId) {
-        jdbc.update("UPDATE ai_task_runs SET status = 'failed', updated_at = now() WHERE id = ? AND status = 'running'", runId);
+        failRun(runId, "internal_error");
+    }
+
+    /**
+     * 실패한 동기 실행을 닫고 실제로 닫았으면 {@code ai_task_failed}를 남긴다. failure가 null(사용자가 중단)이면 상태만 닫는다.
+     * 호출부가 트랜잭션 밖이라 분석 기록이 함께 커밋되도록 여기서 트랜잭션을 연다.
+     */
+    public void failRun(String runId, String failure) {
+        transaction.executeWithoutResult(status -> {
+            boolean closed = jdbc.update("UPDATE ai_task_runs SET status = 'failed', updated_at = now() WHERE id = ? AND status = 'running'", runId) == 1;
+            if (closed && failure != null && analytics != null) analytics.taskFailed(runId, "sync_call", "result", failure, null);
+        });
+    }
+
+    /** 동기 호출 예외를 분석용 실패 코드로 줄인다. 원문은 보내지 않는다. */
+    public static String failureCode(RuntimeException e) {
+        HttpStatus status = null;
+        if (e instanceof ResponseStatusException r) status = HttpStatus.resolve(r.getStatusCode().value());
+        else if (e instanceof org.springframework.web.client.RestClientResponseException r) status = HttpStatus.resolve(r.getStatusCode().value());
+        else if (e instanceof org.springframework.web.client.ResourceAccessException r)
+            // JDK HttpClient 읽기 시간 초과는 HttpTimeoutException으로 온다.
+            return r.getCause() instanceof java.net.http.HttpTimeoutException || r.getCause() instanceof java.net.SocketTimeoutException
+                    ? "deadline_exceeded" : "provider_unavailable";
+        if (status == null) return "internal_error";
+        if (status == HttpStatus.GATEWAY_TIMEOUT) return "deadline_exceeded";
+        if (status.is5xxServerError()) return "provider_unavailable";
+        return status.is4xxClientError() ? "input_rejected" : "internal_error";
     }
 
     /**

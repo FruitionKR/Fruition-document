@@ -42,18 +42,18 @@ public class MeetingNotesRepository {
                 """, Integer.class, meetingId, requestId, partial, snapshotJson, aiRunId, meetingId).stream().findFirst();
     }
 
-    public void markReady(String meetingId, int version, String resultJson) {
-        jdbc.update("""
+    public boolean markReady(String meetingId, int version, String resultJson) {
+        return jdbc.update("""
                 UPDATE meeting_notes SET status = 'ready', result = ?::jsonb, error_code = NULL, updated_at = now()
                 WHERE meeting_id = ? AND version = ? AND status = 'generating'
-                """, resultJson, meetingId, version);
+                """, resultJson, meetingId, version) == 1;
     }
 
-    public void markFailed(String meetingId, int version, String errorCode) {
-        jdbc.update("""
+    public boolean markFailed(String meetingId, int version, String errorCode) {
+        return jdbc.update("""
                 UPDATE meeting_notes SET status = 'failed', error_code = ?, updated_at = now()
                 WHERE meeting_id = ? AND version = ? AND status = 'generating'
-                """, errorCode, meetingId, version);
+                """, errorCode, meetingId, version) == 1;
     }
 
     /** 한 워크스페이스의 회의록 생성을 직렬화한다. 같은 트랜잭션에서 busy 확인과 insertGenerating을 하는 호출자가 쥔다. */

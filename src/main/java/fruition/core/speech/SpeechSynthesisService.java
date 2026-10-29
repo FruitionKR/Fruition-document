@@ -86,7 +86,7 @@ public class SpeechSynthesisService {
             upstream = client.open(runId, workspaceId, userId, text);
         } catch (RuntimeException e) {
             // 실패해도 공급사 호출이 일어났을 수 있어 사용량 수집은 건다.
-            usageCharges.failRun(runId);
+            usageCharges.failRun(runId, UsageChargeService.failureCode(e));
             usageCharges.enqueue(runId);
             throw e;
         }
@@ -117,6 +117,7 @@ public class SpeechSynthesisService {
         long pcmBytes = 0;
         boolean overflow = false;
         boolean completed = false;
+        String failure = "provider_unavailable";  // AI error 이벤트나 종결 이벤트 없는 끊김
         try (upstream) {
             pcmFile = Files.createTempFile("speech-", ".pcm");
             pcm = Files.newOutputStream(pcmFile);
@@ -158,10 +159,13 @@ public class SpeechSynthesisService {
             emit(out, errorLine("provider_unavailable"));  // 종결 이벤트 없이 끊겼다.
         } catch (ClientGone e) {
             // 클라이언트가 멈췄다. try-with-resources가 ai 연결을 닫아 ai가 공급사 응답을 취소한다.
+            failure = null;
         } catch (SocketTimeoutException e) {
+            failure = "deadline_exceeded";
             tryEmit(out, errorLine("deadline_exceeded"));
         } catch (IOException | RuntimeException e) {
             log.warn("[답변 음성 중계 실패] runId={} error={}", runId, e.toString());
+            failure = "internal_error";
             tryEmit(out, errorLine("internal_error"));
         } finally {
             closeQuietly(pcm);
@@ -169,7 +173,7 @@ public class SpeechSynthesisService {
             if (completed) {
                 usageCharges.endRun(runId);
             } else {
-                usageCharges.failRun(runId);
+                usageCharges.failRun(runId, failure);
                 usageCharges.enqueue(runId);  // 취소·실패한 합성도 생성된 만큼 과금된다.
             }
         }

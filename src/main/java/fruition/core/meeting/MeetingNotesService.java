@@ -59,6 +59,8 @@ import java.util.UUID;
  */
 @Service
 public class MeetingNotesService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.analytics.DocumentAnalytics analytics;
 
     private static final Set<String> AI_FAILURE_CODES =
             Set.of("MEETING_NOTES_INPUT_REJECTED", "MEETING_NOTES_UNAVAILABLE", "MEETING_NOTES_FAILED");
@@ -234,14 +236,19 @@ public class MeetingNotesService {
         }
         String meetingId = note.get().meetingId();
         int version = note.get().version();
+        String failure = null;
+        boolean changed;
         if (!succeeded) {
             // ai가 보내는 실패 code는 그대로 남기고, 모르는 값은 일반 실패로 본다. 크레딧 부족은 발행 전에 거른다.
-            notes.markFailed(meetingId, version, AI_FAILURE_CODES.contains(error) ? error : "MEETING_NOTES_FAILED");
+            failure = AI_FAILURE_CODES.contains(error) ? error : "MEETING_NOTES_FAILED";
+            changed = notes.markFailed(meetingId, version, failure);
         } else if (draft == null || !draft.path("summary").isArray()) {
-            notes.markFailed(meetingId, version, "MEETING_NOTES_INVALID");
+            failure = "MEETING_NOTES_INVALID";
+            changed = notes.markFailed(meetingId, version, failure);
         } else {
-            notes.markReady(meetingId, version, json(stored(draft, snapshotSources(note.get().segmentSnapshot()))));
+            changed = notes.markReady(meetingId, version, json(stored(draft, snapshotSources(note.get().segmentSnapshot()))));
         }
+        if (changed && analytics != null) analytics.meetingNotesCompleted(runId, failure);
     }
 
     /** 스냅샷의 묶음 ID → 묶인 원래 구간 ID들. */
@@ -272,7 +279,10 @@ public class MeetingNotesService {
      */
     private void expireGenerating(String workspaceId) {
         transaction.executeWithoutResult(status -> notes.expireGenerating(workspaceId, Instant.now().minus(generationTimeout))
-                .forEach(aiCancellation::requestCancel));
+                .forEach(runId -> {
+                    aiCancellation.requestCancel(runId);
+                    if (analytics != null) analytics.meetingNotesCompleted(runId, "MEETING_NOTES_TIMEOUT");
+                }));
     }
 
     /** 아무도 조회하지 않아도 만료가 처리되게 모든 워크스페이스를 주기적으로 정리한다. 여러 Pod가 겹쳐도 UPDATE가 한 번만 반영한다. */
