@@ -313,9 +313,14 @@ public class AiTaskResultApplier {
         }
         recordAgentChatMessage(event, errorCode);
         if (analytics != null) {
+            String action = event.path("payload").path("action").asText(null);
+            String status = text(event, "status");
             if (errorCode == null) analytics.proposed(event);
-            if ("chat_answer".equals(event.path("payload").path("action").asText()))
+            if ("chat_answer".equals(action))
                 analytics.queryCompleted(event, true, errorCode);
+            else if (errorCode != null && !"cancelled".equals(status))
+                analytics.taskFailed(runId, "agent_turn", "succeeded".equals(status) ? "validation" : "result",
+                        errorCode, action);
         }
         chatTurnRecorder.recordContextSummary(
                 textOrNull(event.path("request"), "session_id"),

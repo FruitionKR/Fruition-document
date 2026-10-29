@@ -237,7 +237,7 @@ class PipelineSkillRequesterTest {
                         new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "skill_test_404"));
         assertThat(missing.getHttpStatus()).isEqualTo(503);
         assertThat(missing.getCode()).isEqualTo("SKILL_TEST_RUN_UNAVAILABLE");
-        org.mockito.Mockito.verify(usageCharges).failRun("skill_test_404");
+        org.mockito.Mockito.verify(usageCharges).failRun(org.mockito.ArgumentMatchers.eq("skill_test_404"), org.mockito.ArgumentMatchers.any());
         org.mockito.Mockito.verify(usageCharges).enqueue("skill_test_404");
 
         responseStatus = 400;
@@ -382,7 +382,7 @@ class PipelineSkillRequesterTest {
                         new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "run-failed"));
 
         var order = org.mockito.Mockito.inOrder(usageCharges);
-        order.verify(usageCharges).failRun("run-failed");
+        order.verify(usageCharges).failRun(org.mockito.ArgumentMatchers.eq("run-failed"), org.mockito.ArgumentMatchers.any());
         order.verify(usageCharges).enqueue("run-failed");
     }
 

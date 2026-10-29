@@ -70,6 +70,7 @@ import fruition.core.aihistory.service.AgentApplyOperationStore;
 import fruition.core.aihistory.service.IngestOperationStarter;
 import fruition.core.aihistory.service.OperationRecorder;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
+import fruition.core.agent.repository.AgentRunCommandRepository;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.authz.WorkspacePermissions;
@@ -115,6 +116,9 @@ public class DocumentService {
 
     @org.springframework.beans.factory.annotation.Autowired
     private fruition.core.analytics.DocumentAnalytics analytics;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private AgentRunCommandRepository agentRuns;
 
     private static final int MAX_SAVE_ATTEMPTS = 3;
 
@@ -386,7 +390,22 @@ public class DocumentService {
             String idempotencyKey,
             MarkdownDocumentCreateRequest request
     ) {
-        return createMarkdown(workspaceId, userId, idempotencyKey, request, null);
+        String agentRun = request == null ? null : ownAgentDraft(workspaceId, userId, request.agentRunId());
+        DocumentUploadResponse response = createMarkdown(workspaceId, userId, idempotencyKey, request,
+                agentRun == null ? null : Document.AGENT_ORIGIN);
+        if (agentRun != null && analytics != null) {
+            documentRepository.findById(response.id()).ifPresent(document -> analytics.aiDocumentCreated(agentRun, document));
+        }
+        return response;
+    }
+
+    /** 작업 탭 초안은 요청자 본인의 markdown_create run일 때만 AI 문서로 본다. 아니면 일반 문서로 만든다. */
+    private String ownAgentDraft(String workspaceId, String userId, String agentRunId) {
+        if (agentRunId == null || agentRunId.isBlank() || agentRuns == null) return null;
+        return agentRuns.find(workspaceId, userId, agentRunId)
+                .filter(run -> run.result() != null && "markdown_create".equals(run.result().path("action").asText()))
+                .map(AgentRunCommandRepository.RunView::runId)
+                .orElse(null);
     }
 
     /**
@@ -2015,6 +2034,7 @@ public class DocumentService {
             }
             operationRecorder.recordConflict(
                     applyOperationId, workspaceId, userId, documentId, Instant.now());
+            if (analytics != null) analytics.applyConflicted(applyOperationId);
             return null;
         });
     }

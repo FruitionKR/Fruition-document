@@ -7967,6 +7967,10 @@ components:
     MarkdownDocumentCreateRequest:
       type: object
       properties:
+        agent_run_id:
+          type: string
+          description: 작업 탭 AI 초안(markdown_create)으로 만들 때 그 Agent run ID. 요청자 본인의 초안이면 AI 생성 문서로 표시한다. 맞지 않으면 일반 문서로 만든다.
+          example: agent_06dc3c1e
         display_name:
           type: string
           description: 문서 표시 이름

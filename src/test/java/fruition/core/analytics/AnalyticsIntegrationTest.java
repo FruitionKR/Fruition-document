@@ -35,6 +35,10 @@ class AnalyticsIntegrationTest {
     @Autowired RestoreOperationLifecycle restores;
     @Autowired ChatExportLinks exports;
     @Autowired fruition.core.aitask.service.AiTaskResultApplier applier;
+    @Autowired fruition.core.document.service.DocumentService documentService;
+    @Autowired fruition.core.meeting.MeetingNotesService meetingNotes;
+    @Autowired org.springframework.data.redis.core.StringRedisTemplate redis;
+    @Autowired fruition.core.usage.service.UsageChargeService usageCharges;
     static final Instant AT = Instant.parse("2026-10-20T12:00:00Z");
     String suffix;
     @BeforeEach void isolate() { suffix = UUID.randomUUID().toString(); }
@@ -409,6 +413,117 @@ class AnalyticsIntegrationTest {
                 .put("title", "private title").put("page_type", "Concept").put("slug", "private-slug");
         payload.putArray("evidence_snippets");
         return input;
+    }
+
+    void seedAgent(String run, String document) {
+        jdbc.update("INSERT INTO ai_task_runs(id,workspace_id,user_id,kind,created_at) VALUES (?,'workspace','actor','agent',?)",run,Timestamp.from(AT));
+        jdbc.update("INSERT INTO agent_apply_projections(run_id,workspace_id,user_id,document_id,base_version,apply_operation_id) VALUES (?,'workspace','actor',?,?,?)",
+                run,document,document == null ? null : 1L,document == null ? null : id("apply-op"));
+    }
+    com.fasterxml.jackson.databind.node.ObjectNode agentResult(String run, String status) {
+        return mapper.createObjectNode().put("event_id",id("result")+run).put("run_id",run).put("status",status);
+    }
+    @Test void agentFailuresRecordOneTaskFailedWithStageAndSafeAction() throws Exception {
+        String failed=id("agent-failed"),invalid=id("agent-invalid"),unsupported=id("agent-unsupported"),cancelled=id("agent-cancelled");
+        for (String run : List.of(failed,invalid,unsupported,cancelled)) seedAgent(run,null);
+        var invalidResult=agentResult(invalid,"succeeded");invalidResult.putObject("request");invalidResult.putObject("payload").put("action","markdown_create");
+        var unsupportedResult=agentResult(unsupported,"succeeded");unsupportedResult.putObject("request");unsupportedResult.putObject("payload").put("action","private-action");
+        tx.executeWithoutResult(t->{
+            applier.applyAgent(agentResult(failed,"failed").put("error","provider_unavailable"));
+            applier.applyAgent(agentResult(failed,"failed").put("error","provider_unavailable"));
+            applier.applyAgent(invalidResult);
+            applier.applyAgent(unsupportedResult);
+            applier.applyAgent(agentResult(cancelled,"cancelled"));
+        });
+        JsonNode result=event("ai_task_failed","agent_turn:"+failed).path("properties");
+        assertThat(count("ai_task_failed","agent_turn:"+failed)).isEqualTo(1);
+        assertThat(result.path("task_kind").asText()).isEqualTo("agent_turn");
+        assertThat(result.path("stage").asText()).isEqualTo("result");
+        assertThat(result.path("failure_reason").asText()).isEqualTo("provider_error");
+        assertThat(result.has("action")).isFalse();
+        JsonNode validation=event("ai_task_failed","agent_turn:"+invalid).path("properties");
+        assertThat(validation.path("stage").asText()).isEqualTo("validation");
+        assertThat(validation.path("failure_reason").asText()).isEqualTo("validation");
+        assertThat(validation.path("action").asText()).isEqualTo("markdown_create");
+        assertThat(event("ai_task_failed","agent_turn:"+unsupported).path("properties").path("action").asText()).isEqualTo("unknown");
+        assertThat(count("ai_task_failed","agent_turn:"+cancelled)).isZero();
+    }
+    @Test void applyConflictRecordsEditApplyFailureForProposal() throws Exception {
+        String run=id("conflict-run");
+        seedAgent(run,"doc");
+        tx.executeWithoutResult(t->analytics.applyConflicted(id("apply-op")));
+        JsonNode p=event("ai_task_failed","edit_apply:"+run).path("properties");
+        assertThat(p.path("task_id").asText()).isEqualTo(run);
+        assertThat(p.path("failure_reason").asText()).isEqualTo("conflict");
+        assertThat(p.path("document_id").asText()).isEqualTo("doc");
+    }
+    @Test void agentDraftCreatesAiGeneratedDocumentOnlyForOwnMarkdownCreateRun() throws Exception {
+        String workspace=id("ws"),actor=id("actor"),own=id("draft-own"),edit=id("draft-edit");
+        redis.opsForValue().set("authz:role:v2:"+workspace+":"+actor,"{\"role\":\"MEMBER\",\"permissions\":[]}");
+        for (String[] run : new String[][]{{own,"markdown_create"},{edit,"markdown_edit"}})
+            jdbc.update("INSERT INTO agent_apply_projections(run_id,workspace_id,user_id,status,result) VALUES (?,?,?,'ready',CAST(? AS jsonb))",
+                    run[0],workspace,actor,"{\"action\":\""+run[1]+"\"}");
+        String created=documentService.createMarkdown(workspace,actor,UUID.randomUUID().toString(),
+                new fruition.core.document.dto.MarkdownDocumentCreateRequest("초안","# private body",null,null,own)).id();
+        String plain=documentService.createMarkdown(workspace,actor,UUID.randomUUID().toString(),
+                new fruition.core.document.dto.MarkdownDocumentCreateRequest("편집 초안","# private body",null,null,edit)).id();
+        assertThat(event("document_uploaded",created).path("properties").path("origin").asText()).isEqualTo("ai_generated");
+        assertThat(event("ai_document_created",created).path("properties").path("proposal_id").asText()).isEqualTo(own);
+        assertThat(event("document_uploaded",plain).path("properties").path("origin").asText()).isEqualTo("user_upload");
+        assertThat(count("ai_document_created",plain)).isZero();
+    }
+    @Test void meetingNotesRecordReadyFailureTimeoutButNotCancelOrLateResult() throws Exception {
+        String meeting=id("mtg"),ready=id("notes-ready"),failed=id("notes-failed"),late=id("notes-late");
+        jdbc.update("INSERT INTO meetings(id,workspace_id,created_by,display_name,source,status,created_at,updated_at) VALUES (?,'workspace','actor','회의','upload','open',?,?)",
+                meeting,Timestamp.from(AT),Timestamp.from(AT));
+        int version=1;
+        for (String run : List.of(ready,failed,late)) {
+            jdbc.update("INSERT INTO ai_task_runs(id,workspace_id,user_id,kind,created_at) VALUES (?,'workspace','actor','meeting_notes',?)",run,Timestamp.from(AT));
+            jdbc.update("INSERT INTO meeting_notes(meeting_id,version,generation_request_id,status,partial,segment_snapshot,ai_run_id,created_at,updated_at) VALUES (?,?,?,'generating',false,'[]',?,now(),now())",
+                    meeting,version++,run,run);
+        }
+        var draft=mapper.createObjectNode();draft.putArray("summary");
+        tx.executeWithoutResult(t->{
+            meetingNotes.applyResult(ready,true,draft,null);
+            meetingNotes.applyResult(failed,false,null,"MEETING_NOTES_UNAVAILABLE");
+            jdbc.update("UPDATE meeting_notes SET status='failed', error_code='MEETING_NOTES_CANCELLED' WHERE ai_run_id=?",late);
+            meetingNotes.applyResult(late,true,draft,null);
+        });
+        assertThat(event("meeting_notes_completed",ready).path("properties").path("status").asText()).isEqualTo("succeeded");
+        JsonNode failure=event("meeting_notes_completed",failed).path("properties");
+        assertThat(failure.path("status").asText()).isEqualTo("failed");
+        assertThat(failure.path("failure_reason").asText()).isEqualTo("provider_error");
+        assertThat(failure.path("meeting_id").asText()).isEqualTo(meeting);
+        assertThat(count("meeting_notes_completed",late)).isZero();
+    }
+    @Test void syncCallFailureOutsideTransactionRecordsOnceAndUserStopDoesNot() throws Exception {
+        String failed=id("speech_transcription:"),stopped=id("speech_synthesis:");
+        for (String[] run : new String[][]{{failed,"speech_transcription"},{stopped,"speech_synthesis"}})
+            jdbc.update("INSERT INTO ai_task_runs(id,workspace_id,user_id,kind,status,created_at) VALUES (?,'workspace','actor',?,'running',?)",run[0],run[1],Timestamp.from(AT));
+        usageCharges.failRun(failed,"provider_unavailable");
+        usageCharges.failRun(failed,"internal_error");
+        usageCharges.failRun(stopped,null);
+        JsonNode p=event("ai_task_failed","sync_call:"+failed).path("properties");
+        assertThat(count("ai_task_failed","sync_call:"+failed)).isEqualTo(1);
+        assertThat(p.path("action").asText()).isEqualTo("speech_transcription");
+        assertThat(p.path("failure_reason").asText()).isEqualTo("provider_error");
+        assertThat(count("ai_task_failed","sync_call:"+stopped)).isZero();
+        assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id=?",String.class,stopped)).isEqualTo("failed");
+        assertThat(fruition.core.usage.service.UsageChargeService.failureCode(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.GATEWAY_TIMEOUT))).isEqualTo("deadline_exceeded");
+        assertThat(fruition.core.usage.service.UsageChargeService.failureCode(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_GATEWAY))).isEqualTo("provider_unavailable");
+        assertThat(fruition.core.usage.service.UsageChargeService.failureCode(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY))).isEqualTo("input_rejected");
+        assertThat(fruition.core.usage.service.UsageChargeService.failureCode(new IllegalStateException("private"))).isEqualTo("internal_error");
+    }
+    @Test void newEventSchemasRejectMissingForbiddenAndInvalidValues() {
+        var valid=DocumentAnalytics.props("task_id","t","task_kind","agent_turn","stage","result","failure_reason","conflict","duration_sec",1.0);
+        AnalyticsSchema.validate("ai_task_failed",valid);
+        var missing=new LinkedHashMap<>(valid);missing.remove("stage");
+        var forbidden=new LinkedHashMap<>(valid);forbidden.put("error_message","private");
+        var invalid=new LinkedHashMap<>(valid);invalid.put("action","private-action");
+        for (var props : List.of(missing,forbidden,invalid))
+            assertThatThrownBy(()->AnalyticsSchema.validate("ai_task_failed",props)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(()->AnalyticsSchema.validate("meeting_notes_completed",DocumentAnalytics.props("meeting_id","m","status","failed","duration_sec",1.0)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private void apply(JsonNode input, boolean agent) {
