@@ -234,7 +234,9 @@ public class UsageChargeService {
         if (e instanceof ResponseStatusException r) status = HttpStatus.resolve(r.getStatusCode().value());
         else if (e instanceof org.springframework.web.client.RestClientResponseException r) status = HttpStatus.resolve(r.getStatusCode().value());
         else if (e instanceof org.springframework.web.client.ResourceAccessException r)
-            return r.getCause() instanceof java.net.SocketTimeoutException ? "deadline_exceeded" : "provider_unavailable";
+            // JDK HttpClient 읽기 시간 초과는 HttpTimeoutException으로 온다.
+            return r.getCause() instanceof java.net.http.HttpTimeoutException || r.getCause() instanceof java.net.SocketTimeoutException
+                    ? "deadline_exceeded" : "provider_unavailable";
         if (status == null) return "internal_error";
         if (status == HttpStatus.GATEWAY_TIMEOUT) return "deadline_exceeded";
         if (status.is5xxServerError()) return "provider_unavailable";

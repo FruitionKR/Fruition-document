@@ -394,7 +394,10 @@ public class DocumentService {
         DocumentUploadResponse response = createMarkdown(workspaceId, userId, idempotencyKey, request,
                 agentRun == null ? null : Document.AGENT_ORIGIN);
         if (agentRun != null && analytics != null) {
-            documentRepository.findById(response.id()).ifPresent(document -> analytics.aiDocumentCreated(agentRun, document));
+            // 같은 멱등 키의 재요청은 처음 만든 문서를 돌려주므로 실제 AI 문서일 때만 기록한다.
+            documentRepository.findById(response.id())
+                    .filter(document -> Document.AGENT_ORIGIN.equals(document.getAiOrigin()))
+                    .ifPresent(document -> analytics.aiDocumentCreated(agentRun, document));
         }
         return response;
     }

@@ -471,6 +471,13 @@ class AnalyticsIntegrationTest {
         assertThat(event("ai_document_created",created).path("properties").path("proposal_id").asText()).isEqualTo(own);
         assertThat(event("document_uploaded",plain).path("properties").path("origin").asText()).isEqualTo("user_upload");
         assertThat(count("ai_document_created",plain)).isZero();
+        String key=UUID.randomUUID().toString();
+        String first=documentService.createMarkdown(workspace,actor,key,
+                new fruition.core.document.dto.MarkdownDocumentCreateRequest("재요청","# private body",null,null,null)).id();
+        String replay=documentService.createMarkdown(workspace,actor,key,
+                new fruition.core.document.dto.MarkdownDocumentCreateRequest("재요청","# private body",null,null,own)).id();
+        assertThat(replay).isEqualTo(first);
+        assertThat(count("ai_document_created",first)).isZero();
     }
     @Test void meetingNotesRecordReadyFailureTimeoutButNotCancelOrLateResult() throws Exception {
         String meeting=id("mtg"),ready=id("notes-ready"),failed=id("notes-failed"),late=id("notes-late");
@@ -513,6 +520,8 @@ class AnalyticsIntegrationTest {
         assertThat(fruition.core.usage.service.UsageChargeService.failureCode(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_GATEWAY))).isEqualTo("provider_unavailable");
         assertThat(fruition.core.usage.service.UsageChargeService.failureCode(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY))).isEqualTo("input_rejected");
         assertThat(fruition.core.usage.service.UsageChargeService.failureCode(new IllegalStateException("private"))).isEqualTo("internal_error");
+        assertThat(fruition.core.usage.service.UsageChargeService.failureCode(new org.springframework.web.client.ResourceAccessException("timeout",new java.net.http.HttpTimeoutException("private")))).isEqualTo("deadline_exceeded");
+        assertThat(fruition.core.usage.service.UsageChargeService.failureCode(new org.springframework.web.client.ResourceAccessException("refused",new java.net.ConnectException("private")))).isEqualTo("provider_unavailable");
     }
     @Test void newEventSchemasRejectMissingForbiddenAndInvalidValues() {
         var valid=DocumentAnalytics.props("task_id","t","task_kind","agent_turn","stage","result","failure_reason","conflict","duration_sec",1.0);
