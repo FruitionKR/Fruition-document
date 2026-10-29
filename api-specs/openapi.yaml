@@ -5366,6 +5366,26 @@ paths:
       summary: Wiki 페이지 변경분 조회
       tags:
       - Wiki
+  /internal/agent/folder-lookup/tree:
+    post:
+      description: 사이드바 트리(GET 트리 조회)와 같은 폴더·문서 트리를 사용자 기준으로 반환합니다.
+      operationId: readFolderTree
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentFolderTreeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentTreeResponse"
+          description: OK
+      summary: Agent 폴더 트리 읽기
+      tags:
+      - agent-folder-lookup-controller
   /internal/agent/skill-authoring/references/read:
     post:
       operationId: read_1
@@ -5679,6 +5699,18 @@ paths:
 components:
   schemas:
     Actor:
+      type: object
+      properties:
+        user_id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+      required:
+      - user_id
+      - workspace_id
+    AgentFolderTreeRequest:
       type: object
       properties:
         user_id:
@@ -6152,6 +6184,7 @@ components:
           - clarify
           - reject
           - folder_organize
+          - folder_lookup
           - workspace_workflow
           - skill_authoring
           - skill_draft_proposal

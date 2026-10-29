@@ -5,7 +5,7 @@
 사용자용 Agent 실행·승인과 내부 Tool 실행 API다. Agent turn은 Kafka `ai.agent.command`,
 계획 조회·승인·거절·취소·수정은 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 12
+- API 수: 13
 
 ## API 목차
 
@@ -20,6 +20,7 @@
 | [`GET /api/workspaces/{workspace_id}/agent/turn/{run_id}`](#summary-get-api-workspaces-workspace-id-agent-turn-run-id) | 워크스페이스의 Agent 실행 결과를 조회합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel`](#summary-post-api-workspaces-workspace-id-agent-turn-run-id-cancel) | 끝나지 않은 Agent turn을 취소합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/turn/{run_id}/events`](#summary-get-api-workspaces-workspace-id-agent-turn-run-id-events) | Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. |
+| [`POST /internal/agent/folder-lookup/tree`](#summary-post-internal-agent-folder-lookup-tree) | 작업 탭 폴더 내용 조회용으로 사용자 기준 폴더·문서 트리를 반환합니다. |
 | [`POST /internal/agent/skill-execution/folder-sources/read`](#summary-post-internal-agent-skill-execution-folder-sources-read) | Skill 실행 원문으로 쓸 폴더 바로 아래 문서의 최신 본문을 반환합니다. |
 | [`POST /internal/agent/tools/execute/{tool_name}`](#summary-post-internal-agent-tools-execute-tool-name) | 승인된 Agent Tool 변경 작업을 실행합니다. |
 | [`POST /internal/agent/tools/read/{tool_name}`](#summary-post-internal-agent-tools-read-tool-name) | 승인된 Agent Tool 읽기 작업을 실행합니다. |
@@ -1078,6 +1079,95 @@ string
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-turn-run-id-events)
+
+</details>
+
+<a id="summary-post-internal-agent-folder-lookup-tree"></a>
+### `POST /internal/agent/folder-lookup/tree`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 작업 탭 폴더 내용 조회용으로 사용자 기준 폴더·문서 트리를 반환합니다. |
+| 입력 | **Header** — `X-Agent-Service-Token`(필수, 인증 계층 검증): `string`<br>**Body** — `AgentFolderTreeRequest` |
+| 출력 | `200` 성공 — `DocumentTreeResponse` |
+| 조건 | 인증 필요<br>`X-Agent-Service-Token`을 `AgentServiceTokenFilter`가 검증한다(`/internal/agent/tools/**`와 같은 필터·토큰 `AGENT_INTERNAL_TOKEN`).<br>`user_id`가 워크스페이스 멤버여야 한다. |
+| 주요 오류 | `401` 서비스 토큰 누락·불일치, `404` 멤버 아님, `400` 필수 필드 누락 |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-internal-agent-folder-lookup-tree"></a>
+### `POST /internal/agent/folder-lookup/tree` 상세
+
+#### 1. Method + Path
+
+`POST /internal/agent/folder-lookup/tree`
+
+#### 2. 목적
+
+작업 탭에서 "회의록 폴더에 뭐가 있어?"처럼 폴더 내용을 물으면(ai-svc `folder_lookup`), ai-svc가 트리를 읽어 메시지에 나온 폴더 이름을 찾고
+그 폴더 바로 아래 하위 폴더·문서 이름을 답한다. 문서 본문은 싣지 않는다. AgentRun이 없는 조회라 `/internal/agent/tools/read`(run 권한 확인)를 쓰지 않는다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `X-Agent-Service-Token`을 검증한다. 토큰이 없거나 다르면 서비스 계층에 닿기 전에 `401`이다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| header | `X-Agent-Service-Token` | `string` | 예 (인증 계층 검증) | - |
+| body | `workspace_id` | `string` | 예 | 워크스페이스 ID |
+| body | `user_id` | `string` | 예 | 요청한 사용자. 이 사용자 기준 트리를 만든다 |
+
+```json
+{
+  "workspace_id": "ws_9d47a0e9a6324341b47562553b75f92a",
+  "user_id": "user_1"
+}
+```
+
+#### 5. Response body
+
+- HTTP `200`: OK
+- 사이드바 트리 `GET /api/workspaces/{workspace_id}/document-tree`와 같은 `DocumentTreeResponse`다(같은 `FolderService.tree`). 폴더 항목은 `children`, 문서 항목은 `document`(`display_name` 등)를 갖는다.
+
+#### 6. Error response
+
+| HTTP | code | 조건 |
+|---|---|---|
+| `401` | - | `X-Agent-Service-Token` 누락·불일치 |
+| `404` | `WORKSPACE_NOT_FOUND` | `user_id`가 워크스페이스 멤버가 아님 |
+| `400` | `INVALID_REQUEST` | 필수 필드 누락 |
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음(트리 전체)
+- 필터링: 사이드바 트리와 같다
+
+#### 8. 권한 규칙
+
+- 멤버 확인: `WorkspaceAccessGuard.requireMember`. 사이드바 트리와 같은 범위를 보여 주므로 문서별 읽기 권한으로 이름을 거르지 않는다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X POST "$DOCUMENT/internal/agent/folder-lookup/tree" \
+  -H 'X-Agent-Service-Token: <value>' \
+  -H 'Content-Type: application/json' \
+  --data '{"workspace_id":"<value>","user_id":"<value>"}'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/agent/controller/AgentFolderLookupController.java`, 서비스 `src/main/java/fruition/core/document/service/FolderService.java`(`tree`)
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: readFolderTree`)
+- 호출자: ai-svc `folder_lookup` 실행 경로. base URL은 `DOCUMENT_INTERNAL_BASE_URL`, 토큰은 `AGENT_INTERNAL_TOKEN`
+- 하위 호출: 없음(DB)
+- 배선 상태: ai-svc 배선 예정
+
+[↑ 요약으로 돌아가기](#summary-post-internal-agent-folder-lookup-tree)
 
 </details>
 
