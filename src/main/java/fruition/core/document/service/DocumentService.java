@@ -1474,6 +1474,8 @@ public class DocumentService {
 
     private String enqueueIngest(Document document, String requesterId, String trigger) {
         String runId = UUID.randomUUID().toString();
+        // access HTTP 조회는 크레딧 예약(계정 행 잠금) 전에 한다. 잠금을 쥔 채 기다리면 같은 사용자의 AI 요청이 줄을 선다.
+        var aiModel = workspaceAiModelClient.get(document.getWorkspaceId());
         ingestCommandOutbox.begin(runId, document.getWorkspaceId(), requesterId);
         String documentId = document.getId();
         Instant startedAt = Instant.now();
@@ -1492,7 +1494,8 @@ public class DocumentService {
                 false,
                 operationId,
                 document.getCurrentVersion(),
-                document.getCurrentContentHash()
+                document.getCurrentContentHash(),
+                aiModel
         );
         if (analytics != null) analytics.ingestRequested(document, runId, operationId, requesterId, startedAt, trigger);
         log.info("[문서 처리 command 등록 완료] documentId={} runId={} operationId={}",
@@ -1554,13 +1557,21 @@ public class DocumentService {
                 ));
     }
 
-    @Transactional
+    /**
+     * DB 작업은 짧은 트랜잭션으로 끝내고 AI 위키 연결 조회는 트랜잭션 밖에서 한다. 연결을 쥔 채 AI 응답을 기다리면
+     * AI가 느릴 때 연결 풀이 바닥나 AI와 무관한 API까지 멈춘다.
+     */
     public DocumentDetailResponse findById(String workspaceId, String userId, String documentId) {
         verifyWorkspaceOwnership(workspaceId, userId);
-        Document doc = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
-                .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        editStateInitializer.initializeIfNeeded(doc);
-        Optional<DocumentEditState> editState = postgresDocumentEditStore.findState(documentId);
+        record Loaded(Document doc, Optional<DocumentEditState> editState) {}
+        Loaded loaded = transactionTemplate.execute(status -> {
+            Document found = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                    .orElseThrow(() -> new DocumentNotFoundException(documentId));
+            editStateInitializer.initializeIfNeeded(found);
+            return new Loaded(found, postgresDocumentEditStore.findState(documentId));
+        });
+        Document doc = loaded.doc();
+        Optional<DocumentEditState> editState = loaded.editState();
         long editRevision = editState.map(DocumentEditState::getRevision).orElseGet(() -> {
             if (doc.getDocumentRole() == DocumentRole.EDITABLE) {
                 throw new InvalidMarkdownContentException("현재 Markdown 편집 상태를 찾을 수 없습니다.");
