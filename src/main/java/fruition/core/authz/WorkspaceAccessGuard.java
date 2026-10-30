@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
@@ -115,7 +116,15 @@ public class WorkspaceAccessGuard {
 
     private Access resolve(String workspaceId, String userId) {
         String key = KEY_PREFIX + workspaceId + ":" + userId;
-        String cached = redisTemplate.opsForValue().get(key);
+        String cached;
+        try {
+            cached = redisTemplate.opsForValue().get(key);
+        } catch (DataAccessException e) {
+            // Redis는 캐시일 뿐이다. 장애면 miss로 보고 내부 API로 판정한다(내부 API도 실패하면 fail-closed).
+            log.warn("[authz] Redis 조회 실패 — 내부 API로 판정 workspace={} user={} cause={}",
+                    workspaceId, userId, e.toString());
+            return fetchAccess(workspaceId, userId);
+        }
         if (cached != null) {
             // 판정 근거 로그 — 인가 우회 의심 사례 추적용 (docs/backlog/issue/backend/2026-08-07.md)
             log.debug("[authz] cache hit workspace={} user={} value={}", workspaceId, userId, cached);
@@ -129,7 +138,11 @@ public class WorkspaceAccessGuard {
         Access access = fetchAccess(workspaceId, userId);
         log.debug("[authz] cache miss → 내부 API 판정 workspace={} user={} role={} permissions={}",
                 workspaceId, userId, access.role(), access.permissions());
-        redisTemplate.opsForValue().set(key, serialize(access), CACHE_TTL);
+        try {
+            redisTemplate.opsForValue().set(key, serialize(access), CACHE_TTL);
+        } catch (DataAccessException e) {
+            log.warn("[authz] Redis 캐시 저장 실패 workspace={} user={} cause={}", workspaceId, userId, e.toString());
+        }
         return access;
     }
 

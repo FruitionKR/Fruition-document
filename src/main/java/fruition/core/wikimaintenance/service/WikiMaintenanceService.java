@@ -65,9 +65,10 @@ public class WikiMaintenanceService {
         WikiLintRequest safe = request == null ? new WikiLintRequest(null, null) : request;
         boolean dryRun = !Boolean.FALSE.equals(safe.dryRun());
         String runId = UUID.randomUUID().toString();
+        // access HTTP 조회는 크레딧 예약(계정 행 잠금) 전에 한다. 잠금을 쥔 채 기다리면 같은 사용자의 AI 요청이 줄을 선다.
+        WorkspaceAiModelClient.AiModelSelection aiModel = workspaceAiModelClient.get(workspaceId);
         outboxWriter.begin(runId, workspaceId, userId, "lint");
         String operationId = dryRun ? null : operationStarter.start(workspaceId, userId);
-        WorkspaceAiModelClient.AiModelSelection aiModel = workspaceAiModelClient.get(workspaceId);
         outboxWriter.enqueue(runId, commandTopic, workspaceId,
                 new LintCommand(runId, "lint", workspaceId, userId, operationId,
                         Boolean.TRUE.equals(safe.materializePromotions()), dryRun,

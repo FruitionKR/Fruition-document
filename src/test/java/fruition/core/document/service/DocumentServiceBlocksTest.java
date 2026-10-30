@@ -1430,7 +1430,7 @@ class DocumentServiceBlocksTest {
         verify(documentRepository).findByIdAndWorkspaceIdForUpdate(document.getId(), WORKSPACE_ID);
         verify(ingestCommandOutbox).enqueue(
                 eq(response.runId()), eq(document.getId()), eq(USER_ID), eq(WORKSPACE_ID),
-                any(), any(), any(), eq(false), eq("op_ingest_1"), anyLong(), any());
+                any(), any(), any(), eq(false), eq("op_ingest_1"), anyLong(), any(), any());
     }
 
     private MockMultipartFile markdownUploadFile() {
@@ -1465,7 +1465,7 @@ class DocumentServiceBlocksTest {
 
         verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
         verify(ingestCommandOutbox).enqueue(anyString(), anyString(), eq(USER_ID), eq(WORKSPACE_ID),
-                any(), any(), any(), eq(false), any(), anyLong(), any());
+                any(), any(), any(), eq(false), any(), anyLong(), any(), any());
         // 응답은 업로드 시점 상태이고, 편입은 이후 별도 트랜잭션에서 등록된다.
         assertThat(response.status()).isEqualTo(fruition.core.document.domain.DocumentStatus.uploaded);
     }
@@ -1830,7 +1830,7 @@ class DocumentServiceBlocksTest {
         verify(ingestCommandOutbox).enqueue(
                 anyString(), eq(chatDoc.getId()), eq(USER_ID), eq(WORKSPACE_ID), eq("full"),
                 eq(chatDoc.getPipelineInputMarkdown()), eq(chatDoc.getPipelineInputBlocks()),
-                eq(false), any(), anyLong(), any());
+                eq(false), any(), anyLong(), any(), any());
         verifyNoInteractions(editLockService, editStateInitializer, minioClient);
 
         assertThatThrownBy(() -> documentService.ingest(WORKSPACE_ID, USER_ID, chatDoc.getId()))
@@ -1855,7 +1855,7 @@ class DocumentServiceBlocksTest {
                 anyString(), any(Instant.class));
         verify(ingestCommandOutbox).enqueue(
                 anyString(), eq(chatDoc.getId()), eq(editorId), eq(WORKSPACE_ID), any(),
-                any(), any(), eq(false), any(), anyLong(), any());
+                any(), any(), eq(false), any(), anyLong(), any(), any());
     }
 
     @Test
@@ -2383,7 +2383,7 @@ class DocumentServiceBlocksTest {
         ArgumentCaptor<Boolean> chatWiki = ArgumentCaptor.forClass(Boolean.class);
         ArgumentCaptor<String> runId = ArgumentCaptor.forClass(String.class);
         verify(ingestCommandOutbox).enqueue(runId.capture(), eq("chatdoc_1"), eq(USER_ID), eq(WORKSPACE_ID),
-                eq("full"), any(), any(), chatWiki.capture(), eq("op_ingest_1"), anyLong(), any());
+                eq("full"), any(), any(), chatWiki.capture(), eq("op_ingest_1"), anyLong(), any(), any());
         assertThat(chatWiki.getValue()).isFalse();
         assertThat(chatDoc.getPipelineRunId()).isEqualTo(runId.getValue());
     }
@@ -2399,7 +2399,7 @@ class DocumentServiceBlocksTest {
 
         ArgumentCaptor<Boolean> chatWiki = ArgumentCaptor.forClass(Boolean.class);
         verify(ingestCommandOutbox).enqueue(anyString(), any(), any(), any(), any(), any(), any(),
-                chatWiki.capture(), any(), anyLong(), any());
+                chatWiki.capture(), any(), anyLong(), any(), any());
         assertThat(chatWiki.getValue()).isFalse();
     }
 
