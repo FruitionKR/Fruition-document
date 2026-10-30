@@ -1474,6 +1474,8 @@ public class DocumentService {
 
     private String enqueueIngest(Document document, String requesterId, String trigger) {
         String runId = UUID.randomUUID().toString();
+        // access HTTP 조회는 크레딧 예약(계정 행 잠금) 전에 한다. 잠금을 쥔 채 기다리면 같은 사용자의 AI 요청이 줄을 선다.
+        var aiModel = workspaceAiModelClient.get(document.getWorkspaceId());
         ingestCommandOutbox.begin(runId, document.getWorkspaceId(), requesterId);
         String documentId = document.getId();
         Instant startedAt = Instant.now();
@@ -1492,7 +1494,8 @@ public class DocumentService {
                 false,
                 operationId,
                 document.getCurrentVersion(),
-                document.getCurrentContentHash()
+                document.getCurrentContentHash(),
+                aiModel
         );
         if (analytics != null) analytics.ingestRequested(document, runId, operationId, requesterId, startedAt, trigger);
         log.info("[문서 처리 command 등록 완료] documentId={} runId={} operationId={}",

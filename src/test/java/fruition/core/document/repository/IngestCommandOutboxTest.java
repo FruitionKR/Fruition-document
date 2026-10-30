@@ -13,30 +13,27 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class IngestCommandOutboxTest {
 
     @Mock AiCommandOutboxRepository outboxRepository;
-    @Mock WorkspaceAiModelClient workspaceAiModelClient;
 
     @Test
     void enqueue_serializesProviderAndModelAtOutboxBoundary() {
         ObjectMapper objectMapper = new ObjectMapper();
-        when(workspaceAiModelClient.get("ws_1"))
-                .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
         AiCommandOutboxWriter writer = spy(new AiCommandOutboxWriter(outboxRepository, objectMapper,
                 org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class),
                 org.mockito.Mockito.mock(jakarta.persistence.EntityManager.class),
                 org.mockito.Mockito.mock(fruition.core.usage.service.CreditService.class)));
         IngestCommandOutbox outbox = new IngestCommandOutbox(
                 writer,
-                "ai.ingest.command", workspaceAiModelClient, objectMapper);
+                "ai.ingest.command", objectMapper);
 
         outbox.enqueue("run_1", "doc_1", "user_1", "ws_1", "full", "# markdown",
                 "[{\"block_id\":\"session_1:pair_1\",\"text\":\"Q : 질문\\nA : 답변\"}]", true,
-                "op_1", 3, "sha256:source");
+                "op_1", 3, "sha256:source",
+                new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
 
         ArgumentCaptor<IngestCommandOutbox.IngestCommand> command =
                 ArgumentCaptor.forClass(IngestCommandOutbox.IngestCommand.class);
@@ -57,7 +54,7 @@ class IngestCommandOutboxTest {
                 org.mockito.Mockito.mock(jakarta.persistence.EntityManager.class),
                 org.mockito.Mockito.mock(fruition.core.usage.service.CreditService.class)));
         IngestCommandOutbox outbox = new IngestCommandOutbox(
-                writer, "ai.ingest.command", workspaceAiModelClient, objectMapper);
+                writer, "ai.ingest.command", objectMapper);
 
         outbox.enqueueRename("doc_1", "ws_1", "새 이름");
 

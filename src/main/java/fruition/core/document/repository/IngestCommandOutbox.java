@@ -17,16 +17,13 @@ public class IngestCommandOutbox {
 
     private final AiCommandOutboxWriter writer;
     private final String commandTopic;
-    private final WorkspaceAiModelClient workspaceAiModelClient;
     private final ObjectMapper objectMapper;
 
     public IngestCommandOutbox(AiCommandOutboxWriter writer,
                                @Value("${app.processing.command-topic}") String commandTopic,
-                               WorkspaceAiModelClient workspaceAiModelClient,
                                ObjectMapper objectMapper) {
         this.writer = writer;
         this.commandTopic = commandTopic;
-        this.workspaceAiModelClient = workspaceAiModelClient;
         this.objectMapper = objectMapper;
     }
 
@@ -36,8 +33,8 @@ public class IngestCommandOutbox {
 
     public void enqueue(String runId, String documentId, String userId, String workspaceId,
                         String selectionMode, String inputMarkdown, String inputBlocksJson, boolean chatWiki,
-                        String operationId, long sourceRevision, String sourceContentHash) {
-        WorkspaceAiModelClient.AiModelSelection aiModel = workspaceAiModelClient.get(workspaceId);
+                        String operationId, long sourceRevision, String sourceContentHash,
+                        WorkspaceAiModelClient.AiModelSelection aiModel) {
         IngestCommand command = new IngestCommand(
                 runId,
                 chatWiki ? "chat_wiki" : "document",
