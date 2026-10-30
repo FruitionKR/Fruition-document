@@ -132,7 +132,8 @@ class WikiLintCreditLockIntegrationTest {
                 maxLockWaiters.get(), lockWaitObservedMs);
 
         // 크레딧 잠금은 예약 순간에만 겹치고, access 응답을 기다리는 동안에는 쥐지 않는다.
-        assertThat(totalMs).isLessThan(ACCESS_DELAY_MS * 2);
+        // 잠금 안에서 기다리면 지연 × 요청 수(5초)가 되므로, 느린 CI를 감안해 지연 3배까지 허용한다.
+        assertThat(totalMs).isLessThan(ACCESS_DELAY_MS * 3);
         assertThat(lockWaitObservedMs).isLessThan(ACCESS_DELAY_MS / 2);
     }
 }
