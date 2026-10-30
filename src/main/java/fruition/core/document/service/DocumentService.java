@@ -1557,13 +1557,21 @@ public class DocumentService {
                 ));
     }
 
-    @Transactional
+    /**
+     * DB 작업은 짧은 트랜잭션으로 끝내고 AI 위키 연결 조회는 트랜잭션 밖에서 한다. 연결을 쥔 채 AI 응답을 기다리면
+     * AI가 느릴 때 연결 풀이 바닥나 AI와 무관한 API까지 멈춘다.
+     */
     public DocumentDetailResponse findById(String workspaceId, String userId, String documentId) {
         verifyWorkspaceOwnership(workspaceId, userId);
-        Document doc = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
-                .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        editStateInitializer.initializeIfNeeded(doc);
-        Optional<DocumentEditState> editState = postgresDocumentEditStore.findState(documentId);
+        record Loaded(Document doc, Optional<DocumentEditState> editState) {}
+        Loaded loaded = transactionTemplate.execute(status -> {
+            Document found = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                    .orElseThrow(() -> new DocumentNotFoundException(documentId));
+            editStateInitializer.initializeIfNeeded(found);
+            return new Loaded(found, postgresDocumentEditStore.findState(documentId));
+        });
+        Document doc = loaded.doc();
+        Optional<DocumentEditState> editState = loaded.editState();
         long editRevision = editState.map(DocumentEditState::getRevision).orElseGet(() -> {
             if (doc.getDocumentRole() == DocumentRole.EDITABLE) {
                 throw new InvalidMarkdownContentException("현재 Markdown 편집 상태를 찾을 수 없습니다.");
