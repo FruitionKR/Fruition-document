@@ -229,6 +229,8 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
 
     boolean existsByWorkspaceIdAndFolderIdAndDeletedAtIsNull(String workspaceId, java.util.UUID folderId);
 
+    boolean existsByFolderIdAndDeleteOperationId(java.util.UUID folderId, java.util.UUID deleteOperationId);
+
     @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId AND d.deletedAt IS NULL "
             + "AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
             + "AND (LOWER(d.displayName) LIKE :pattern OR d.normalizedFilename LIKE :pattern) "

@@ -5,10 +5,13 @@ import fruition.core.agent.security.AgentServiceTokenFilter;
 import fruition.core.agent.service.AgentToolService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.net.URI;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -94,6 +97,41 @@ class AgentToolControllerTest {
                 .andExpect(status().isUnauthorized());
 
         verifyNoInteractions(toolService);
+    }
+
+    // 필터가 디코딩 전 URI를 비교하면 한 글자만 인코딩해도 토큰 검사를 건너뛰고 핸들러에 닿았다(#8).
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "/internal/agent/%74ools/read/list_root_items",
+            "/internal/agent/tools/%72ead/list_root_items",
+            "/internal/%61gent/tools/read/list_root_items"})
+    void read_rejectsPercentEncodedPathWithoutToken(String path) throws Exception {
+        mockMvc.perform(post(URI.create(path))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"run_id":"run-1","workspace_id":"workspace-1",
+                                 "user_id":"user-1","arguments":{}}
+                                """))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(toolService);
+    }
+
+    /** 대조군: 인코딩한 경로도 같은 핸들러로 가므로 위 401은 필터가 막은 결과다. */
+    @Test
+    void read_forwardsPercentEncodedPathWithToken() throws Exception {
+        when(toolService.read(eq("list_root_items"), any(AgentToolReadRequest.class)))
+                .thenReturn(Map.of("items", "ok"));
+
+        mockMvc.perform(post(URI.create("/internal/agent/%74ools/read/list_root_items"))
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"run_id":"run-1","workspace_id":"workspace-1",
+                                 "user_id":"user-1","arguments":{}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items").value("ok"));
     }
 
     @Test

@@ -16,6 +16,21 @@ public interface DocumentAssetRepository extends JpaRepository<DocumentAsset, UU
     Optional<DocumentAsset> findByIdAndWorkspaceId(UUID id, String workspaceId);
     List<DocumentAsset> findAllByIdInAndWorkspaceId(Collection<UUID> ids, String workspaceId);
     List<DocumentAsset> findTop100ByUnreferencedSinceLessThanEqualOrderByUnreferencedSinceAsc(Instant threshold);
+    boolean existsByStorageKey(String storageKey);
+
+    /** 같은 결정적 ID의 동시 재전송이 기존 객체 참조를 덮어쓰지 못하게 한다. */
+    @Modifying
+    @Query(value = """
+            INSERT INTO document_assets
+              (id, workspace_id, uploaded_by, original_filename, content_type, byte_size,
+               width, height, content_hash, storage_key, created_at)
+            VALUES (:#{#asset.id}, :#{#asset.workspaceId}, :#{#asset.uploadedBy},
+                    :#{#asset.originalFilename}, :#{#asset.contentType}, :#{#asset.byteSize},
+                    :#{#asset.width}, :#{#asset.height}, :#{#asset.contentHash},
+                    :#{#asset.storageKey}, :#{#asset.createdAt})
+            ON CONFLICT (id) DO NOTHING
+            """, nativeQuery = true)
+    int insertIfAbsent(@Param("asset") DocumentAsset asset);
 
     /**
      * 후보 조회 이후 다시 참조된 asset을 지우지 않도록, 삭제 시점에 미참조 조건을 한 번 더 확인한다.

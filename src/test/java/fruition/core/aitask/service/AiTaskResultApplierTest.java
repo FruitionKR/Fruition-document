@@ -70,6 +70,9 @@ class AiTaskResultApplierTest {
         org.mockito.Mockito.lenient().when(jdbcTemplate.queryForList(
                 eq("SELECT status FROM ai_task_runs WHERE id = ? FOR UPDATE"), eq(String.class), anyString()))
                 .thenReturn(java.util.List.of("running"));
+        org.mockito.Mockito.lenient().when(jdbcTemplate.queryForList(
+                eq("SELECT id FROM chat_sessions WHERE id = ? FOR KEY SHARE"), eq(String.class), anyString()))
+                .thenReturn(java.util.List.of("session-1"));
         applier = new AiTaskResultApplier(jdbcTemplate, objectMapper, queryService,
                 operationIngestService, lintOperationStarter, wikiMaintenanceService,
                 operationLogRepository, restoreApplier, restoreLifecycle, documentService, chatTurnRecorder,
@@ -108,6 +111,25 @@ class AiTaskResultApplierTest {
         assertThat(projection.error()).isNull();
         verify(queryService).completeAsync(eq("session-1"), eq("question"), eq("query-1"), any(), any());
         verify(usageCharges).enqueue("query-1");
+    }
+
+    // 세션 삭제 뒤 도착한 결과가 예외로 rollback되면 같은 파티션이 무한 재시도로 멈췄다(#10).
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"succeeded", "failed"})
+    void queryResultForDeletedSessionEndsAsCancelledWithoutTouchingMessages(String status) throws Exception {
+        when(jdbcTemplate.queryForList(eq("SELECT id FROM chat_sessions WHERE id = ? FOR KEY SHARE"),
+                eq(String.class), eq("session-1"))).thenReturn(java.util.List.of());
+        when(jdbcTemplate.update(any(String.class), any(), any(), any())).thenReturn(1);
+        String answer = "succeeded".equals(status) ? "answer" : null;
+        String error = "failed".equals(status) ? "provider_unavailable" : null;
+
+        var projection = applier.applyQuery(objectMapper.readTree(event("event-1", status, answer, error)));
+
+        assertThat(projection.response()).isNull();
+        assertThat(projection.error()).isEqualTo("cancelled");
+        verify(queryService, never()).completeAsync(any(), any(), any(), any(), any());
+        verify(queryService, never()).failAsync(any(), any(), any());
+        verify(chatTurnRecorder, never()).recordContextSummary(any(), any());
     }
 
     @Test

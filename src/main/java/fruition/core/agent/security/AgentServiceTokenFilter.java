@@ -12,6 +12,8 @@ import java.security.MessageDigest;
 
 public class AgentServiceTokenFilter extends OncePerRequestFilter {
 
+    private static final String PROTECTED_PREFIX = "/internal/agent/tools";
+
     private final byte[] serviceToken;
 
     public AgentServiceTokenFilter(String serviceToken) {
@@ -20,11 +22,9 @@ public class AgentServiceTokenFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String uri = request.getRequestURI();
-        String contextPath = request.getContextPath();
-        return !uri.startsWith(contextPath + "/internal/agent/tools/")
-                && !uri.startsWith(contextPath + "/internal/agent/skill-execution/")
-                && !uri.startsWith(contextPath + "/internal/agent/folder-lookup/");
+        String path = InternalRequestPaths.canonicalPath(request);
+        return java.util.stream.Stream.of(PROTECTED_PREFIX, "/internal/agent/skill-execution", "/internal/agent/folder-lookup")
+                .noneMatch(prefix -> path.equals(prefix) || path.startsWith(prefix + "/"));
     }
 
     @Override

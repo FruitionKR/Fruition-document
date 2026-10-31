@@ -529,6 +529,15 @@ public class AiTaskResultApplier {
         QueryService.QueryMessageContext context = objectMapper.convertValue(
                 required(request, "message_context"), QueryService.QueryMessageContext.class);
 
+        // 결과가 오기 전에 세션을 지우면 메시지도 CASCADE로 사라져 반영이 매번 예외로 rollback된다.
+        // 그러면 같은 레코드를 무한 재시도해 파티션의 다른 사용자 결과까지 멈추므로, receipt를 남긴 채
+        // 취소로 끝내 offset을 넘긴다. FOR KEY SHARE로 반영이 끝날 때까지 동시 세션 삭제를 기다리게 한다.
+        if (jdbcTemplate.queryForList("SELECT id FROM chat_sessions WHERE id = ? FOR KEY SHARE",
+                String.class, sessionId).isEmpty()) {
+            log.warn("[AI task 결과 건너뜀] runId={} reason=chat_session_not_found", runId);
+            return new QueryProjection(runId, null, "cancelled");
+        }
+
         if ("succeeded".equals(status)) {
             PipelineQueryResponse result = objectMapper.convertValue(
                     required(canonical, "payload"), PipelineQueryResponse.class);

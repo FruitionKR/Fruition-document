@@ -1,5 +1,6 @@
 package fruition.core.skill.controller;
 
+import fruition.core.agent.security.InternalRequestPaths;
 import fruition.core.aihistory.exception.InvalidCallbackTokenException;
 import fruition.core.skill.dto.SkillReferenceReadRequest;
 import fruition.core.skill.dto.SkillReferenceReadResponse;
@@ -60,7 +61,7 @@ class SkillReferenceTokenFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !"POST".equals(request.getMethod()) || !PATH.equals(request.getRequestURI());
+        return !"POST".equals(request.getMethod()) || !PATH.equals(InternalRequestPaths.canonicalPath(request));
     }
 
     @Override

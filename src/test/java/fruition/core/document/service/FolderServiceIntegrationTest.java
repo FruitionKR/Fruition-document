@@ -497,6 +497,55 @@ class FolderServiceIntegrationTest {
         assertThat(res.deleted()).isTrue();
     }
 
+    // MEMBER가 직접 복구는 403인 하위 문서를 폴더 복구로 되살릴 수 있었다(#17).
+    @Test
+    void folder_restoreNonEmptyByMemberForbiddenAndKeepsSubtreeDeleted() {
+        String memberId = insertMember("MEMBER");
+        FolderResponse folder = folderService.create(workspaceId, userId, "kf", new FolderCreateRequest("자료", null));
+        String documentId = "doc_r_" + UUID.randomUUID();
+        insertDocumentInFolder(documentId, "r.md", "EDITABLE", folder.id(), 0);
+        FolderLifecycleResponse deleted = folderService.delete(workspaceId, userId, folder.id(), "dk",
+                folder.currentVersion());
+
+        assertThatThrownBy(() -> folderService.restore(workspaceId, memberId, folder.id(), "rk",
+                deleted.currentVersion()))
+                .isInstanceOf(HierarchyWriteForbiddenException.class);
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT deleted_at IS NOT NULL FROM folders WHERE id = ?", Boolean.class, folder.id())).isTrue();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT deleted_at IS NOT NULL FROM documents WHERE id = ?", Boolean.class, documentId)).isTrue();
+    }
+
+    /** 대조군: 빈 폴더는 MEMBER도 지울 수 있으므로 복구도 할 수 있다. */
+    @Test
+    void folder_restoreEmptyByMemberAllowed() {
+        String memberId = insertMember("MEMBER");
+        FolderResponse folder = folderService.create(workspaceId, memberId, "kf", new FolderCreateRequest("빈 폴더", null));
+        FolderLifecycleResponse deleted = folderService.delete(workspaceId, memberId, folder.id(), "dk",
+                folder.currentVersion());
+
+        FolderLifecycleResponse restored = folderService.restore(workspaceId, memberId, folder.id(), "rk",
+                deleted.currentVersion());
+
+        assertThat(restored.deleted()).isFalse();
+    }
+
+    /** 대조군: OWNER는 내용이 있는 폴더를 하위 문서까지 복구한다. */
+    @Test
+    void folder_restoreNonEmptyByOwnerRestoresDocuments() {
+        FolderResponse folder = folderService.create(workspaceId, userId, "kf", new FolderCreateRequest("자료", null));
+        String documentId = "doc_r_" + UUID.randomUUID();
+        insertDocumentInFolder(documentId, "r.md", "EDITABLE", folder.id(), 0);
+        FolderLifecycleResponse deleted = folderService.delete(workspaceId, userId, folder.id(), "dk",
+                folder.currentVersion());
+
+        folderService.restore(workspaceId, userId, folder.id(), "rk", deleted.currentVersion());
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT deleted_at IS NULL FROM documents WHERE id = ?", Boolean.class, documentId)).isTrue();
+    }
+
     @Test
     void createMarkdown_placesDocumentInSelectedFolder() {
         FolderResponse folder = folderService.create(workspaceId, userId, "kf", new FolderCreateRequest("자료", null));

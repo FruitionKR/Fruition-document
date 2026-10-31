@@ -97,8 +97,13 @@ public class MeetingRecordingService {
         return new StartResponse(started.ticket(), started.partSize(), started.partCount());
     }
 
+    /**
+     * ticket은 하루 동안 유효하므로 발급 뒤 탈퇴·제거된 사용자가 새 PUT URL을 받지 못하게 멤버십과 회의 소유를 다시 확인한다(#41·#42).
+     * 문서 직접 업로드(DocumentDirectUploadService)와 같은 규칙이다.
+     */
     public PartsResponse partUrls(String workspaceId, String userId, String meetingId, PartsRequest request) throws Exception {
         Claims claims = verify(workspaceId, userId, meetingId, request.ticket());
+        meetingService.requireOwned(workspaceId, userId, meetingId);
         List<String> urls = upload.partUrls(claims, request.first_part(), request.count());
         List<PartUrl> parts = new ArrayList<>();
         for (int index = 0; index < urls.size(); index++) {
@@ -107,8 +112,11 @@ public class MeetingRecordingService {
         return new PartsResponse(parts);
     }
 
+    /** 멤버가 아니게 된 사용자의 미완료 multipart는 버킷 lifecycle(7일)이 정리한다. */
     public void abort(String workspaceId, String userId, String meetingId, CompleteRequest request) throws Exception {
-        upload.abort(verify(workspaceId, userId, meetingId, request.ticket()));
+        Claims claims = verify(workspaceId, userId, meetingId, request.ticket());
+        meetingService.requireOwned(workspaceId, userId, meetingId);
+        upload.abort(claims);
     }
 
     /**

@@ -3,6 +3,7 @@ package fruition.core.meeting;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.usage.service.CreditService;
 import fruition.core.usage.service.UsageChargeService;
 import org.slf4j.Logger;
@@ -61,7 +62,10 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
     }
 
     private static final String LIMIT_MESSAGE = "글로 옮길 수 있는 분량을 다 채웠습니다. 지금까지의 대화 내용으로 회의록을 만들거나 새 회의를 시작해 주세요.";
+    private static final String NOT_MEMBER_MESSAGE = "워크스페이스 멤버가 아니어서 받아쓰기를 끝냈습니다.";
     private static final Duration SEND_TIMEOUT = Duration.ofSeconds(5);
+    /** 멤버십 재확인 간격 상한. 설정을 크게 잡아 확인이 사실상 꺼지지 않게 한다. */
+    private static final long MAX_MEMBER_RECHECK_SECONDS = 60;
     private static final Pattern SEGMENT_ID = Pattern.compile("[A-Za-z0-9_-]{1,128}");
     private static final Set<String> COMMANDS = Set.of("commit", "finish");
     private static final Logger log = LoggerFactory.getLogger(MeetingLiveHandler.class);
@@ -72,6 +76,8 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
     private final Environment environment;
     private final String internalToken;
     private final UsageChargeService usageCharges;
+    private final WorkspaceAccessGuard accessGuard;
+    private final long memberRecheckNanos;
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final ScheduledExecutorService lockRenewer = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "meeting-live-lock");
@@ -99,8 +105,13 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
     public MeetingLiveHandler(MeetingRepository repository, MeetingLiveLock liveLock, ObjectMapper objectMapper,
                               Environment environment,
                               @Value("${app.internal.callback-token}") String internalToken,
-                              UsageChargeService usageCharges) {
+                              UsageChargeService usageCharges, WorkspaceAccessGuard accessGuard) {
         this.usageCharges = usageCharges;
+        this.accessGuard = accessGuard;
+        // 음수는 0(frame마다 확인), 상한을 넘으면 상한으로 맞춘다.
+        this.memberRecheckNanos = TimeUnit.SECONDS.toNanos(Math.clamp(
+                environment.getProperty("app.meeting.live-membership-recheck-seconds", Long.class, 5L),
+                0L, MAX_MEMBER_RECHECK_SECONDS));
         this.repository = repository;
         this.liveLock = liveLock;
         this.objectMapper = objectMapper;
@@ -123,6 +134,8 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         /** 종료 처리는 한 번만 한다. 전송 시간 초과(Tomcat 스레드)와 ai-svc 오류(listener 스레드)가 겹칠 수 있다. */
         final AtomicBoolean closing = new AtomicBoolean();
         ScheduledFuture<?> renewal;
+        /** 마지막으로 멤버십을 확인한 시각(System.nanoTime). handshake(consumeTicket)에서 확인했으므로 연결 시각에서 시작한다. */
+        volatile long memberCheckedAt = System.nanoTime();
 
         Live(MeetingService.Ticket ticket, WebSocketSession browser) {
             this.ticket = ticket;
@@ -200,7 +213,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
     @Override
     protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
         Live live = sessions.get(session.getId());
-        if (live == null || !requireReady(live)) {
+        if (live == null || !requireReady(live) || !requireMember(live)) {
             return;
         }
         forward(live, () -> live.upstream.sendBinary(message.getPayload(), true));
@@ -209,7 +222,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
         Live live = sessions.get(session.getId());
-        if (live == null || !requireReady(live)) {
+        if (live == null || !requireReady(live) || !requireMember(live)) {
             return;
         }
         String payload = message.getPayload();
@@ -261,6 +274,11 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         if (live.closing.get()) {
             return;
         }
+        // 음성을 보내지 않는 연결도 탈퇴 뒤에 다음 구간을 예약하지 않고 닫는다.
+        if (!isMember(live)) {
+            fail(live, "not_member", NOT_MEMBER_MESSAGE, CloseStatus.POLICY_VIOLATION);
+            return;
+        }
         try {
             usageCharges.renewRun(live.runId, live.ticket.userId(), "meeting_live", ++live.billingSeq);
         } catch (CreditService.InsufficientCreditException e) {
@@ -282,6 +300,36 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
             return false;
         }
         return true;
+    }
+
+    /**
+     * 탈퇴·제거된 사용자가 열린 연결로 ai-svc(유료 전사)에 계속 음성을 보내지 못하게 멤버십을 다시 확인한다(#41).
+     * 매 frame마다 Redis를 읽지 않도록 app.meeting.live-membership-recheck-seconds(기본 5초, 0–60초)마다 확인한다.
+     * 멤버가 아니거나 확인할 수 없으면 전달하지 않고 닫는다. 확정 구간은 남고, 멤버라면 새 ticket으로 이어서 녹음한다.
+     * gotcha: 판정은 권한 projection(TTL 300초)을 읽으므로 탈퇴 뒤 전달이 멈추기까지 projection 무효화 시점 + 이 간격이 걸린다.
+     * 음성을 보내지 않는 연결은 구간 정산(renewCredit) 때 같은 확인으로 닫는다.
+     */
+    private boolean requireMember(Live live) {
+        long now = System.nanoTime();
+        if (now - live.memberCheckedAt < memberRecheckNanos) {
+            return true;
+        }
+        if (!isMember(live)) {
+            fail(live, "not_member", NOT_MEMBER_MESSAGE, CloseStatus.POLICY_VIOLATION);
+            return false;
+        }
+        live.memberCheckedAt = now;
+        return true;
+    }
+
+    /** 역할 조회가 실패하면(access 장애) 멤버가 아닌 것으로 본다(WorkspaceAccessGuard와 같은 fail-closed). */
+    private boolean isMember(Live live) {
+        try {
+            return !"NONE".equals(accessGuard.getRole(live.ticket.workspaceId(), live.ticket.userId()));
+        } catch (RuntimeException e) {
+            log.warn("[회의 실시간 전사 멤버십 확인 실패] meetingId={} error={}", live.ticket.meetingId(), e.toString());
+            return false;
+        }
     }
 
     /** ai-svc 전송이 끝날 때까지 기다린다. 이 대기가 브라우저 읽기를 멈춰 속도를 맞춘다. */

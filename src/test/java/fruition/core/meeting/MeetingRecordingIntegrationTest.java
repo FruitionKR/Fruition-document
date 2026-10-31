@@ -166,6 +166,21 @@ class MeetingRecordingIntegrationTest {
     }
 
     @Test
+    void ticketIssuedBeforeLeavingWorkspace_cannotGetPartUrlsOrAbort() throws Exception {
+        // ticket은 하루 동안 유효하다. 발급 뒤 탈퇴하면(권한 projection NONE) 새 PUT URL을 받지 못한다(#42).
+        String meetingId = createMeeting("upload");
+        String ticket = json(start(meetingId, "audio/wav", 3), 200).path("ticket").asText();
+        String parts = "{\"ticket\":\"" + ticket + "\",\"first_part\":1,\"count\":1}";
+        uploadPost(meetingId, "parts", parts).andExpect(status().isOk());
+
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"NONE\",\"permissions\":[]}");
+
+        uploadPost(meetingId, "parts", parts).andExpect(status().isNotFound());
+        uploadPost(meetingId, "abort", "{\"ticket\":\"" + ticket + "\"}").andExpect(status().isNotFound());
+        uploadPost(meetingId, "complete", "{\"ticket\":\"" + ticket + "\"}").andExpect(status().isNotFound());
+    }
+
+    @Test
     void statusRules_matchTheOldUploadRules() throws Exception {
         String meetingId = createMeeting("upload");
         uploadRecording(meetingId, "audio/wav", new byte[]{1}, 202);

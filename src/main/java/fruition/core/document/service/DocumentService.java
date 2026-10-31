@@ -1966,6 +1966,9 @@ public class DocumentService {
         DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(markdown);
         Instant updatedAt = Instant.now();
         List<DocumentAsset> assets = storedAssets.values().stream()
+                // 이미 커밋된 asset 행은 건드리지 않는다. 다시 저장하면 이 요청의 메타데이터로 덮이고,
+                // 본문 무변경이면 아래 deleteAllInBatch가 다른 문서가 참조하는 행까지 지우려 한다.
+                .filter(stored -> !stored.preexisting())
                 .map(stored -> new DocumentAsset(
                         stored.assetId(), workspaceId, userId,
                         stored.validated().originalFilename(), stored.validated().contentType(),
@@ -1976,13 +1979,19 @@ public class DocumentService {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
         try {
             saved = executeWithSaveRetry(() -> saveTransaction.execute(status -> {
-                assetRepository.saveAll(assets);
+                // 같은 요청이 겹쳐도 먼저 커밋된 asset의 storage_key를 merge로 덮지 않는다.
+                // 이 트랜잭션이 새로 만든 행만 무변경 응답 때 정리한다.
+                List<DocumentAsset> insertedAssets = new java.util.ArrayList<>();
+                for (DocumentAsset asset : assets) {
+                    int inserted = assetRepository.insertIfAbsent(asset);
+                    if (inserted == 1) insertedAssets.add(asset);
+                }
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),
                         baseVersion, revisionWriteId, null, applyOperationId, false, null, true);
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
-                    assetRepository.deleteAllInBatch(assets);
+                    assetRepository.deleteAllInBatch(insertedAssets);
                 }
                 return value;
             }));

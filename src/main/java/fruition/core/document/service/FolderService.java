@@ -210,6 +210,12 @@ public class FolderService {
                         throw new TrashRetentionExpiredException("휴지통 보관 기간이 지나 복구할 수 없습니다.");
                     }
                     UUID operationId = deleted.getDeleteOperationId();
+                    // 삭제와 대칭: 내용과 함께 지운 폴더는 OWNER만 지울 수 있었으므로 복구도 OWNER만 한다.
+                    // 막지 않으면 직접 복구가 거부되는 하위 문서를 폴더 복구로 되살릴 수 있다.
+                    if (operationId != null && hasDeletedChildren(folderId, operationId)
+                            && !isWorkspaceOwner(workspaceId, userId)) {
+                        throw new HierarchyWriteForbiddenException("내용이 있는 폴더는 워크스페이스 소유자만 복구할 수 있습니다.");
+                    }
                     UUID originalParent = deleted.getParentFolderId();
                     boolean parentActive = originalParent == null
                             || folderRepository.findActiveForUpdate(
@@ -385,6 +391,12 @@ public class FolderService {
     private boolean hasChildren(String workspaceId, UUID folderId) {
         return folderRepository.existsByWorkspaceIdAndParentFolderIdAndDeletedAtIsNull(workspaceId, folderId)
                 || documentRepository.existsByWorkspaceIdAndFolderIdAndDeletedAtIsNull(workspaceId, folderId);
+    }
+
+    /** 같은 삭제 작업으로 함께 지운 직속 자식이 있으면 삭제 당시 내용이 있던 폴더다. */
+    private boolean hasDeletedChildren(UUID folderId, UUID operationId) {
+        return folderRepository.existsByParentFolderIdAndDeleteOperationId(folderId, operationId)
+                || documentRepository.existsByFolderIdAndDeleteOperationId(folderId, operationId);
     }
 
     private long nextSortOrder(String workspaceId, UUID parentFolderId) {

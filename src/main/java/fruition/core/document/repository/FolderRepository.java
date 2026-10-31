@@ -28,6 +28,8 @@ public interface FolderRepository extends JpaRepository<Folder, UUID> {
 
     boolean existsByWorkspaceIdAndParentFolderIdAndDeletedAtIsNull(String workspaceId, UUID parentFolderId);
 
+    boolean existsByParentFolderIdAndDeleteOperationId(UUID parentFolderId, UUID deleteOperationId);
+
     @Query("SELECT COALESCE(MAX(f.sortOrder), -1) FROM Folder f "
             + "WHERE f.workspaceId = :workspaceId "
             + "AND ((:parentFolderId IS NULL AND f.parentFolderId IS NULL) "

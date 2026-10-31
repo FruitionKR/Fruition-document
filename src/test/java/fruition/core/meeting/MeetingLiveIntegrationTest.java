@@ -46,7 +46,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /** 브라우저 ↔ document ↔ 가짜 ai-svc 실시간 전사 중계와 저장을 실제 WebSocket으로 확인한다. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "app.speech.live-endpoint=ws://localhost:${local.server.port}/internal/test-ai/live")
+        properties = {"app.speech.live-endpoint=ws://localhost:${local.server.port}/internal/test-ai/live",
+                // 탈퇴 회귀 테스트가 시간에 기대지 않도록 frame마다 멤버십을 확인한다.
+                "app.meeting.live-membership-recheck-seconds=0"})
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, MeetingLiveIntegrationTest.FakeAiConfig.class})
 class MeetingLiveIntegrationTest {
@@ -68,6 +70,32 @@ class MeetingLiveIntegrationTest {
         workspaceId = "ws_" + suffix;
         redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"OWNER\",\"permissions\":[]}");
         FakeAi.mode = "normal";
+        FakeAi.audioFrames.set(0);
+    }
+
+    @Test
+    void memberWhoLeftDuringOpenConnection_isClosedBeforeMoreAudioReachesAi() throws Exception {
+        // handshake 뒤 탈퇴해도 열린 연결이 ai-svc(유료 전사)로 음성을 계속 보내면 안 된다(#41).
+        String meetingId = createMeeting();
+        Browser browser = connect(meetingId);
+        browser.next();
+        browser.audio();
+        browser.command("commit");
+        browser.untilType("completed");
+        assertThat(FakeAi.audioFrames.get()).isEqualTo(1);
+
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"NONE\",\"permissions\":[]}");
+        browser.audio();
+
+        assertThat(browser.untilType("error").path("code").asText()).isEqualTo("not_member");
+        browser.untilClosed();
+        assertThat(browser.closeStatus().getCode()).isEqualTo(CloseStatus.POLICY_VIOLATION.getCode());
+        assertThat(FakeAi.audioFrames.get()).isEqualTo(1);
+        // 확정 구간은 남고 연결은 실패로 기록된다. 조회는 멤버만 할 수 있으므로 DB로 확인한다.
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM meeting_segments WHERE meeting_id = ? AND text IS NOT NULL",
+                Integer.class, meetingId)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT end_reason FROM meeting_streams WHERE meeting_id = ?",
+                String.class, meetingId)).isEqualTo("failed");
     }
 
     @Test
@@ -369,6 +397,7 @@ class MeetingLiveIntegrationTest {
         static volatile String mode = "normal";
         static volatile String lastRequestId;
         static volatile String lastQuery;
+        static final java.util.concurrent.atomic.AtomicInteger audioFrames = new java.util.concurrent.atomic.AtomicInteger();
 
         /** 연결마다 ai-svc 구간 번호가 1부터 다시 시작한다. */
         private static final class State {
@@ -416,6 +445,11 @@ class MeetingLiveIntegrationTest {
                 }
                 default -> completed(session, item, item + " 전사");
             }
+        }
+
+        @Override
+        protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
+            audioFrames.incrementAndGet();
         }
 
         private void completed(WebSocketSession session, String item, String text) throws Exception {
