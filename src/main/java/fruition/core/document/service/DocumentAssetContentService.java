@@ -57,7 +57,9 @@ public class DocumentAssetContentService {
             DocumentContentSaveResponse saved = documentService.saveContentWithAssets(
                     workspaceId, userId, documentId, finalMarkdown, request.baseVersion(),
                     revisionWriteId, stored, applyOperationId);
-            if (!saved.changed()) storageCoordinator.compensate(stored.values());
+            // 성공한 재전송도 다른 시도가 먼저 커밋했다면 자기 객체는 쓰이지 않는다.
+            // coordinator는 DB가 참조하는 key를 남기므로 정상 저장의 객체는 지우지 않는다.
+            storageCoordinator.compensate(stored.values());
             return new DocumentContentSaveResponse(
                     saved.documentId(), saved.currentVersion(), saved.contentHash(), saved.updatedAt(),
                     saved.changed(), saved.markdown(), attachmentResponses(workspaceId, stored), saved.merge());

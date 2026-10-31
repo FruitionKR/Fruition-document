@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * 탈퇴 사용자와 영구 삭제된 워크스페이스의 core_db 행과 object storage 객체를 지운다.
@@ -120,27 +121,47 @@ public class DataPurgeService {
         // ponytail: 목록을 읽은 뒤 행을 지우기 전에 새로 올라온 asset 객체는 남는다. 휴지통·탈퇴로 쓰지 않는 워크스페이스라 창이 작다.
         // 답변 음성(assets/{workspace}/speech/)도 이 접두사 아래라 함께 지워진다. 행은 chat_sessions CASCADE로 사라진다.
         keys.addAll(listKeys("assets/" + workspaceId + "/"));
-        return purge("workspace", workspaceId, keys, WORKSPACE_STEPS);
+        return purge("workspace", workspaceId, keys, () -> List.of(), WORKSPACE_STEPS);
     }
 
     public PurgeResult purgeUser(String userId) {
-        // 답변 음성 행은 chat_sessions 삭제 때 CASCADE로 사라지므로 객체 키를 먼저 읽는다.
         List<String> keys = new ArrayList<>(recordingKeys("created_by", userId));
-        keys.addAll(jdbc.queryForList("SELECT object_key FROM chat_message_speech WHERE user_id = ?", String.class, userId));
-        return purge("user", userId, keys, USER_STEPS);
+        return purge("user", userId, keys, () -> lockedSpeechKeys(userId), USER_STEPS);
     }
 
-    private PurgeResult purge(String scope, String id, List<String> keys, List<Step> steps) {
+    /**
+     * 답변 음성 행은 chat_sessions 삭제 때 CASCADE로 사라지므로 행을 지우는 트랜잭션 안에서 키를 읽는다(#43).
+     * 세션 삭제(SpeechAudioStore.deleteForSession)와 같은 순서로 세션 행(새 메시지를 막는다)과 메시지 행(새 음성 행을 막는다)을
+     * 먼저 잠근다. 잠그기 전에 커밋된 저장은 키가 읽혀 지워지고, 잠근 뒤의 저장은 메시지가 사라져 FK로 실패해 자기 객체를 지운다.
+     * 트랜잭션 밖에서 키를 읽으면 그 뒤 커밋된 저장의 객체가 행 없이 남는다.
+     */
+    private List<String> lockedSpeechKeys(String userId) {
+        jdbc.queryForList("SELECT id FROM chat_sessions WHERE user_id = ? FOR UPDATE", String.class, userId);
+        jdbc.queryForList("SELECT id FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE user_id = ?)"
+                + " FOR UPDATE", String.class, userId);
+        return jdbc.queryForList("SELECT object_key FROM chat_message_speech WHERE user_id = ?", String.class, userId);
+    }
+
+    /**
+     * {@code lockedKeys}는 행 삭제 트랜잭션 안에서 잠근 뒤 읽고 지운다. 그 삭제가 실패하면 트랜잭션이 롤백돼 행이 남고
+     * access가 다시 호출하면 이어서 지운다.
+     */
+    private PurgeResult purge(String scope, String id, List<String> keys, Supplier<List<String>> lockedKeys,
+                              List<Step> steps) {
         removeObjects(keys);
+        List<String> locked = new ArrayList<>();
         Map<String, Integer> rows = transactionTemplate.execute(status -> {
+            locked.addAll(lockedKeys.get());
+            removeObjects(locked);
             Map<String, Integer> deleted = new LinkedHashMap<>();
             for (Step step : steps) {
                 deleted.put(step.table(), jdbc.update(step.sql(), Collections.nCopies(step.parameters(), id).toArray()));
             }
             return deleted;
         });
-        log.info("[데이터 파기] scope={} id={} objects={} rows={}", scope, id, keys.size(), rows);
-        return new PurgeResult(rows, keys.size());
+        int objects = keys.size() + locked.size();
+        log.info("[데이터 파기] scope={} id={} objects={} rows={}", scope, id, objects, rows);
+        return new PurgeResult(rows, objects);
     }
 
     private List<String> recordingKeys(String column, String value) {

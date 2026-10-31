@@ -14,8 +14,8 @@ import fruition.core.purge.DataPurgeService;
 import fruition.shared.security.JwtTokenProvider;
 import fruition.shared.util.StorageProperties;
 import io.minio.GetObjectArgs;
+import io.minio.ListObjectsArgs;
 import io.minio.MinioClient;
-import io.minio.StatObjectArgs;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +26,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 
 import java.io.BufferedReader;
@@ -39,11 +41,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -143,6 +147,7 @@ class SpeechSynthesisIntegrationTest {
     @Autowired MinioClient minio;
     @Autowired StorageProperties storage;
     @Autowired javax.sql.DataSource dataSource;
+    @Autowired PlatformTransactionManager transactionManager;
 
     final HttpClient http = HttpClient.newHttpClient();
     String userId;
@@ -224,17 +229,28 @@ class SpeechSynthesisIntegrationTest {
                 String.class, userId);
     }
 
-    boolean objectExists(String key) {
-        try {
-            minio.statObject(StatObjectArgs.builder().bucket(storage.getBucket()).object(key).build());
-            return true;
-        } catch (Exception e) {
-            return false;
+    /** 메시지의 음성 객체 키들. 저장마다 새 키({message}/{uuid}.wav)라 행이 사라진 뒤에도 남은 객체를 찾을 수 있다. */
+    List<String> objectsOf(String message) {
+        List<String> keys = new ArrayList<>();
+        for (var item : minio.listObjects(ListObjectsArgs.builder().bucket(storage.getBucket())
+                .prefix("assets/" + workspaceId + "/speech/" + message + "/").recursive(true).build())) {
+            try {
+                keys.add(item.get().objectName());
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
         }
+        return keys;
     }
 
-    String keyOf(String message) {
-        return "assets/" + workspaceId + "/speech/" + message + ".wav";
+    String storedKey(String message) {
+        return jdbc.queryForObject("SELECT object_key FROM chat_message_speech WHERE message_id = ?", String.class, message);
+    }
+
+    /** 다른 연결이 행 잠금을 기다리는 중이다(이 DB에서). 순서를 시간이 아니라 잠금 대기로 맞춘다. */
+    void awaitLockWaiters(int count) throws InterruptedException {
+        eventually(() -> jdbc.queryForObject("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                + "AND wait_event_type = 'Lock'", Integer.class) >= count);
     }
 
     int speechRows(String message) {
@@ -262,7 +278,7 @@ class SpeechSynthesisIntegrationTest {
 
         // done을 받은 시점에 WAV가 저장돼 있다.
         assertThat(speechRows(messageId)).isEqualTo(1);
-        byte[] wav = minio.getObject(GetObjectArgs.builder().bucket(storage.getBucket()).object(keyOf(messageId)).build())
+        byte[] wav = minio.getObject(GetObjectArgs.builder().bucket(storage.getBucket()).object(storedKey(messageId)).build())
                 .readAllBytes();
         assertThat(new String(wav, 0, 4, StandardCharsets.US_ASCII)).isEqualTo("RIFF");
         assertThat(java.util.Arrays.copyOfRange(wav, 44, wav.length)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8);
@@ -347,7 +363,7 @@ class SpeechSynthesisIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM usage_collect_queue WHERE run_id LIKE 'speech_synthesis:%' "
                 + "AND run_id IN (SELECT id FROM ai_task_runs WHERE user_id = ?)", Integer.class, userId)).isPositive();
         assertThat(speechRows(messageId)).isZero();
-        assertThat(objectExists(keyOf(messageId))).isFalse();
+        assertThat(objectsOf(messageId)).isEmpty();
     }
 
     @Test
@@ -419,11 +435,11 @@ class SpeechSynthesisIntegrationTest {
     @Test
     void sessionDelete_removesStoredAudio() throws Exception {
         readAll(post(userId, messageId));
-        assertThat(objectExists(keyOf(messageId))).isTrue();
+        assertThat(objectsOf(messageId)).hasSize(1);
 
         sessionService.delete(workspaceId, userId, sessionId);
 
-        assertThat(objectExists(keyOf(messageId))).isFalse();
+        assertThat(objectsOf(messageId)).isEmpty();
         assertThat(speechRows(messageId)).isZero();
     }
 
@@ -433,7 +449,7 @@ class SpeechSynthesisIntegrationTest {
 
         purge.purgeUser(userId);
 
-        assertThat(objectExists(keyOf(messageId))).isFalse();
+        assertThat(objectsOf(messageId)).isEmpty();
         assertThat(speechRows(messageId)).isZero();
     }
 
@@ -443,7 +459,7 @@ class SpeechSynthesisIntegrationTest {
 
         purge.purgeWorkspace(workspaceId);
 
-        assertThat(objectExists(keyOf(messageId))).isFalse();
+        assertThat(objectsOf(messageId)).isEmpty();
         assertThat(speechRows(messageId)).isZero();
     }
 
@@ -457,9 +473,9 @@ class SpeechSynthesisIntegrationTest {
         store.cleanupExpired();
 
         assertThat(speechRows(messageId)).isZero();
-        assertThat(objectExists(keyOf(messageId))).isFalse();
+        assertThat(objectsOf(messageId)).isEmpty();
         assertThat(speechRows(fresh)).isEqualTo(1);
-        assertThat(objectExists(keyOf(fresh))).isTrue();
+        assertThat(objectsOf(fresh)).hasSize(1);
     }
 
     @Test
@@ -478,7 +494,7 @@ class SpeechSynthesisIntegrationTest {
 
         assertThat(speechRows(broken)).isEqualTo(1);  // 실패한 행은 다음 실행이 다시 시도한다
         assertThat(speechRows(healthy)).isZero();
-        assertThat(objectExists(keyOf(healthy))).isFalse();
+        assertThat(objectsOf(healthy)).isEmpty();
     }
 
     @Test
@@ -493,6 +509,166 @@ class SpeechSynthesisIntegrationTest {
         assertThat(lines).contains(audio(PCM_A)).endsWith("{\"type\":\"done\"}");
         assertThat(lines).noneMatch(l -> l.contains("internal_error"));
         assertThat(speechRows(messageId)).isEqualTo(1);
+    }
+
+    @Test
+    void save_replacingAudio_removesOnlyThePreviousObject() throws Exception {
+        store.save(workspaceId, userId, messageId, pcmFile(1, 2));
+        String first = storedKey(messageId);
+        store.save(workspaceId, userId, messageId, pcmFile(3, 4));
+
+        assertThat(storedKey(messageId)).isNotEqualTo(first);
+        assertThat(objectsOf(messageId)).containsExactly(storedKey(messageId));
+    }
+
+    @Test
+    void concurrentSaves_leaveExactlyTheTrackedObject() throws Exception {
+        // 두 저장이 같은 메시지 잠금 앞에 줄을 선다. 나중 저장이 앞 저장 객체를 교체해 지우고, 자기 객체는 남긴다.
+        try (Connection holder = dataSource.getConnection()) {
+            holder.setAutoCommit(false);
+            holder.createStatement().execute("SELECT id FROM chat_messages WHERE id = '" + messageId + "' FOR UPDATE");
+            var first = CompletableFuture.runAsync(() -> saveQuietly(messageId, 1, 2));
+            var second = CompletableFuture.runAsync(() -> saveQuietly(messageId, 3, 4));
+            awaitLockWaiters(2);
+            assertThat(objectsOf(messageId)).hasSize(2);  // 둘 다 PUT을 마쳤다
+            holder.commit();
+            first.get(10, TimeUnit.SECONDS);
+            second.get(10, TimeUnit.SECONDS);
+        }
+
+        assertThat(speechRows(messageId)).isEqualTo(1);
+        assertThat(objectsOf(messageId)).containsExactly(storedKey(messageId));
+    }
+
+    @Test
+    void sessionDelete_removesAudioSavedWhileTheDeleteWasInFlight() throws Exception {
+        // 쓰기 먼저: 삭제가 시작된 뒤(세션 잠금 대기) 저장이 커밋된다. 삭제는 잠근 뒤에 키를 읽으므로 이 객체도 지운다.
+        try (Connection holder = dataSource.getConnection()) {
+            holder.setAutoCommit(false);
+            holder.createStatement().execute("SELECT id FROM chat_sessions WHERE id = '" + sessionId + "' FOR UPDATE");
+            var delete = CompletableFuture.runAsync(() -> sessionService.delete(workspaceId, userId, sessionId));
+            awaitLockWaiters(1);
+
+            store.save(workspaceId, userId, messageId, pcmFile(1, 2));
+            assertThat(speechRows(messageId)).isEqualTo(1);
+            assertThat(delete).isNotDone();
+
+            holder.commit();
+            delete.get(10, TimeUnit.SECONDS);
+        }
+
+        assertThat(sessions.existsById(sessionId)).isFalse();
+        assertThat(speechRows(messageId)).isZero();
+        assertThat(objectsOf(messageId)).isEmpty();
+    }
+
+    @Test
+    void saveAfterSessionDeleteLocked_failsAndRemovesItsOwnObject() throws Exception {
+        // 삭제 먼저: 삭제가 잠그고 커밋하기 전에 저장이 PUT을 마친다. 저장은 잠금을 기다렸다가 FK로 실패해 자기 객체를 지운다.
+        CountDownLatch deleted = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        var delete = CompletableFuture.runAsync(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s -> {
+            sessionService.delete(workspaceId, userId, sessionId);
+            deleted.countDown();
+            try {
+                commit.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                throw new IllegalStateException(e);
+            }
+        }));
+        assertThat(deleted.await(10, TimeUnit.SECONDS)).isTrue();
+        var save = CompletableFuture.runAsync(() -> saveQuietly(messageId, 1, 2));
+        awaitLockWaiters(1);
+        assertThat(objectsOf(messageId)).hasSize(1);  // PUT은 끝났고 행 쓰기가 잠금을 기다린다
+
+        commit.countDown();
+        delete.get(10, TimeUnit.SECONDS);
+        save.get(10, TimeUnit.SECONDS);
+
+        assertThat(sessions.existsById(sessionId)).isFalse();
+        assertThat(speechRows(messageId)).isZero();
+        assertThat(objectsOf(messageId)).isEmpty();
+    }
+
+    @Test
+    void userPurge_removesAudioSavedWhileThePurgeWasInFlight() throws Exception {
+        // 쓰기 먼저: 사용자 파기가 세션 잠금을 기다리는 동안 저장이 커밋된다. 파기는 잠근 뒤에 키를 읽으므로 이 객체도 지운다(#43).
+        try (Connection holder = dataSource.getConnection()) {
+            holder.setAutoCommit(false);
+            holder.createStatement().execute("SELECT id FROM chat_sessions WHERE id = '" + sessionId + "' FOR UPDATE");
+            var purged = CompletableFuture.runAsync(() -> purge.purgeUser(userId));
+            awaitLockWaiters(1);
+
+            store.save(workspaceId, userId, messageId, pcmFile(1, 2));
+            assertThat(speechRows(messageId)).isEqualTo(1);
+            assertThat(purged).isNotDone();
+
+            holder.commit();
+            purged.get(10, TimeUnit.SECONDS);
+        }
+
+        assertThat(sessions.existsById(sessionId)).isFalse();
+        assertThat(speechRows(messageId)).isZero();
+        assertThat(objectsOf(messageId)).isEmpty();
+    }
+
+    @Test
+    void saveAfterUserPurgeLocked_failsAndRemovesItsOwnObject() throws Exception {
+        // 파기 먼저: 파기가 잠그고 커밋하기 전에 저장이 PUT을 마친다. 저장은 메시지 잠금을 기다렸다가 FK로 실패해 자기 객체를 지운다.
+        CountDownLatch purged = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        var purging = CompletableFuture.runAsync(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s -> {
+            purge.purgeUser(userId);
+            purged.countDown();
+            try {
+                commit.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                throw new IllegalStateException(e);
+            }
+        }));
+        assertThat(purged.await(10, TimeUnit.SECONDS)).isTrue();
+        var save = CompletableFuture.runAsync(() -> saveQuietly(messageId, 1, 2));
+        awaitLockWaiters(1);
+        assertThat(objectsOf(messageId)).hasSize(1);  // PUT은 끝났고 행 쓰기가 잠금을 기다린다
+
+        commit.countDown();
+        purging.get(10, TimeUnit.SECONDS);
+        save.get(10, TimeUnit.SECONDS);
+
+        assertThat(sessions.existsById(sessionId)).isFalse();
+        assertThat(speechRows(messageId)).isZero();
+        assertThat(objectsOf(messageId)).isEmpty();
+    }
+
+    @Test
+    void refreshDuringExpiry_leavesExactlyTheTrackedObject() throws Exception {
+        store.save(workspaceId, userId, messageId, pcmFile(1, 2));
+        jdbc.update("UPDATE chat_message_speech SET created_at = now() - interval '31 days' WHERE message_id = ?", messageId);
+        // 만료 정리가 객체를 지우고 행 삭제를 기다리는 동안 다시 합성한 저장이 행을 교체하려 한다. 어느 쪽이 먼저든
+        // 행이 가리키는 객체 하나만 남아야 한다.
+        try (Connection holder = dataSource.getConnection()) {
+            holder.setAutoCommit(false);
+            holder.createStatement().execute(
+                    "SELECT message_id FROM chat_message_speech WHERE message_id = '" + messageId + "' FOR UPDATE");
+            var cleanup = CompletableFuture.runAsync(store::cleanupExpired);
+            awaitLockWaiters(1);
+            var refresh = CompletableFuture.runAsync(() -> saveQuietly(messageId, 3, 4));
+            awaitLockWaiters(2);
+            holder.commit();
+            cleanup.get(10, TimeUnit.SECONDS);
+            refresh.get(10, TimeUnit.SECONDS);
+        }
+
+        assertThat(speechRows(messageId)).isEqualTo(1);
+        assertThat(objectsOf(messageId)).containsExactly(storedKey(messageId));
+    }
+
+    void saveQuietly(String message, int... pcm) {
+        try {
+            store.save(workspaceId, userId, message, pcmFile(pcm));
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

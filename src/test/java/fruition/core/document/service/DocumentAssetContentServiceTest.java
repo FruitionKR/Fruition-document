@@ -71,7 +71,8 @@ class DocumentAssetContentServiceTest {
             assertThat(mapping.assetId()).isEqualTo(assetId);
             assertThat(mapping.contentPath()).isEqualTo(expectedPath);
         });
-        verify(storageCoordinator, never()).compensate(any());
+        // 성공한 저장 뒤에도 미사용 재전송 객체를 정리한다. 참조된 객체는 coordinator가 보존한다.
+        verify(storageCoordinator).compensate(any());
     }
 
     @Test
