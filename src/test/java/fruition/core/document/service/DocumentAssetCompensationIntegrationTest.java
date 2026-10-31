@@ -4,7 +4,7 @@ import fruition.TestcontainersConfiguration;
 import fruition.core.document.dto.DocumentContentSaveResponse;
 import fruition.core.document.dto.MarkdownDocumentCreateRequest;
 import fruition.core.document.exception.DocumentAssetStorageException;
-import fruition.core.document.exception.DocumentVersionConflictException;
+import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.shared.util.StorageProperties;
 import io.minio.ListObjectsArgs;
 import io.minio.MinioClient;
@@ -81,8 +81,8 @@ class DocumentAssetCompensationIntegrationTest {
                 "SELECT count(*) FROM document_asset_references WHERE asset_id = ? AND document_id = ?",
                 Integer.class, assetId, duplicateId)).isEqualTo(1);
 
-        assertThatThrownBy(() -> save(documentId, base, placeholder, png(Color.BLUE)))
-                .isInstanceOf(DocumentVersionConflictException.class);
+        // 최신 본문 저장은 오래된 base도 자동 병합한다. 이때도 이미 참조된 객체를 바꾸면 안 된다.
+        save(documentId, base, placeholder, png(Color.BLUE));
 
         try (InputStream content = objectStorage.get(storageKey)) {
             assertThat(content.readAllBytes()).isEqualTo(original);
@@ -92,8 +92,8 @@ class DocumentAssetCompensationIntegrationTest {
     }
 
     /**
-     * 같은 asset ID로 겹친 두 저장: 둘 다 행이 커밋되기 전에 객체를 쓰고, 이긴 쪽이 커밋한 뒤 진 쪽이 409로
-     * 보상한다. key가 결정적이던 때는 진 쪽 put이 이긴 쪽 객체를 덮어쓰고 보상이 그 객체를 지웠다.
+     * 같은 asset ID로 겹친 두 저장: 둘 다 행이 커밋되기 전에 객체를 쓰고, 먼저 커밋한 뒤 뒤늦은 쪽이 자동 병합되고
+     * 미사용 객체를 정리한다. key가 결정적이던 때는 진 쪽 put이 이긴 쪽 객체를 덮어쓰고 보상이 그 객체를 지웠다.
      */
     @Test
     void interleavedSaveLoserCompensationKeepsWinnerObject() throws Exception {
@@ -109,9 +109,8 @@ class DocumentAssetCompensationIntegrationTest {
 
         documentService.saveContentWithAssets(workspaceId, authorId, documentId, markdown, base,
                 "write-winner-" + UUID.randomUUID(), winner, null);
-        assertThatThrownBy(() -> documentService.saveContentWithAssets(workspaceId, authorId, documentId,
-                markdown + "\n늦은 저장", base, "write-loser-" + UUID.randomUUID(), loser, null))
-                .isInstanceOf(DocumentVersionConflictException.class);
+        documentService.saveContentWithAssets(workspaceId, authorId, documentId,
+                markdown + "\n늦은 저장", base, "write-loser-" + UUID.randomUUID(), loser, null);
         coordinator.compensate(loser.values());
 
         String committedKey = jdbcTemplate.queryForObject(
@@ -150,14 +149,14 @@ class DocumentAssetCompensationIntegrationTest {
 
     /** 대조군: 충돌한 저장이 새로 쓴 객체는 여전히 보상으로 지운다. */
     @Test
-    void staleSaveWithNewPlaceholderCompensatesItsOwnObject() throws Exception {
+    void rejectedSaveWithNewPlaceholderCompensatesItsOwnObject() throws Exception {
         String documentId = createDocument();
         long base = revision(documentId);
         save(documentId, base, UUID.randomUUID(), png(Color.RED));
         UUID newPlaceholder = UUID.randomUUID();
 
-        assertThatThrownBy(() -> save(documentId, base, newPlaceholder, png(Color.GREEN)))
-                .isInstanceOf(DocumentVersionConflictException.class);
+        assertThatThrownBy(() -> save(documentId, base, newPlaceholder, png(Color.GREEN), "invalid-apply-operation"))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
 
         String seed = workspaceId + "\0" + documentId + "\0" + base + "\0" + newPlaceholder;
         UUID staleAssetId = UUID.nameUUIDFromBytes(seed.getBytes(StandardCharsets.UTF_8));
@@ -179,11 +178,16 @@ class DocumentAssetCompensationIntegrationTest {
     }
 
     private DocumentContentSaveResponse save(String documentId, long base, UUID placeholder, byte[] image) {
+        return save(documentId, base, placeholder, image, null);
+    }
+
+    private DocumentContentSaveResponse save(String documentId, long base, UUID placeholder, byte[] image,
+                                            String applyOperationId) {
         String metadata = "{\"markdown\":\"![그림](attachment://" + placeholder + ")\",\"base_version\":" + base + "}";
         MultiValueMap<String, MultipartFile> parts = new LinkedMultiValueMap<>();
         parts.add("attachment_" + placeholder, new MockMultipartFile(
                 "attachment_" + placeholder, "image.png", "image/png", image));
-        return contentService.save(workspaceId, authorId, documentId, metadata, parts, null);
+        return contentService.save(workspaceId, authorId, documentId, metadata, parts, applyOperationId);
     }
 
     private void seedRole(String userId, String role) {
