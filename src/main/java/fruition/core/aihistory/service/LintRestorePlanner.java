@@ -87,7 +87,8 @@ public class LintRestorePlanner {
         }
 
         // 대상 lint의 행(자기 기록·이은 기록)만 빼고 남은 활성 기여로 다시 쓴다. 대상이 만든 페이지라도 뒤
-        // 독립 기여가 있으면 남기고, lint 기록 말고 받치는 기여가 없으면 지운다.
+        // 기여가 남으면 재조립에 맡기고, 남은 활성 행이 없을 때만 지운다. lint 기록만 남은 페이지를 지울지는
+        // ai 재생이 정해 결과의 deleted_pages로 알린다.
         List<PageRestorePlan> pages = new ArrayList<>();
         for (String pageId : pageIds) {
             List<WikiPageContribution> kept = contributions.get(pageId).stream()
@@ -96,7 +97,7 @@ public class LintRestorePlanner {
                             && !lintId.equals(item.getLintOperationId()))
                     .sorted(Comparator.comparingLong(WikiPageContribution::getSequenceRevision))
                     .toList();
-            if (kept.stream().allMatch(WikiPageContribution::isLintRecord)) {
+            if (kept.isEmpty()) {
                 pages.add(PageRestorePlan.delete(pageId));
                 continue;
             }

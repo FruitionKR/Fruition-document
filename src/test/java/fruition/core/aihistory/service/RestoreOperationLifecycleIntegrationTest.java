@@ -142,6 +142,24 @@ class RestoreOperationLifecycleIntegrationTest {
     }
 
     @Test
+    void restoreConflictFailureShowsConflictSummary() {
+        String targetId = "op_target_" + UUID.randomUUID();
+        OperationLog target = OperationLog.completed(
+                targetId, "ws_" + UUID.randomUUID(), "user_1", OperationType.lint,
+                null, "lint", 1, Instant.now());
+        operationLogRepository.save(target);
+        Optional<OperationLog> restore = lifecycle.startQueued(target, "user_1", "{}", "d".repeat(64), Instant.now());
+
+        lifecycle.fail(restore.orElseThrow().getOperationId(), "restore_conflict", Instant.now());
+
+        assertThat(operationLogRepository.findById(restore.orElseThrow().getOperationId()))
+                .get()
+                .extracting(OperationLog::getStatus, OperationLog::getSummary)
+                .containsExactly(OperationStatus.failed,
+                        "뒤에 실행한 작업과 충돌해 되돌리지 않았습니다. 뒤 작업부터 되돌려 주세요.");
+    }
+
+    @Test
     void lateFailureLeavesSucceededRestoreUntouched() {
         String targetId = "op_target_" + UUID.randomUUID();
         String workspaceId = "ws_" + UUID.randomUUID();

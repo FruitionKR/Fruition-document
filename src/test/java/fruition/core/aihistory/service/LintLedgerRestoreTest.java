@@ -70,7 +70,7 @@ class LintLedgerRestoreTest {
     }
 
     @Test
-    @DisplayName("분리 뒤 ingest 복구는 부모와 자식 양쪽에서 그 작업을 빼고, lint 기록만 남은 자식은 지운다")
+    @DisplayName("분리 뒤 ingest 복구는 부모와 자식 양쪽에서 그 작업을 빼고, lint 기록만 남은 자식은 재생에 맡긴다")
     void ingestRestoreAfterSplitCoversChildPage() {
         when(wiki.lookup(any(), eq(WS))).thenReturn(List.of());
         Map<String, List<WikiPageContribution>> state = splitState();
@@ -78,7 +78,8 @@ class LintLedgerRestoreTest {
         RestorePlan plan = new RestorePlanner(wiki).plan(Set.of("X"), state, WS);
 
         assertThat(kept(plan, "P")).containsExactly("Y", "L1");
-        assertThat(page(plan, "C").action()).isEqualTo(RestoreAction.delete);
+        // 지울지는 ai 재생이 정한다. 남은 유효 근거가 없으면 결과의 deleted_pages로 돌아온다.
+        assertThat(kept(plan, "C")).containsExactly("L1");
 
         restoreApplier(state).apply(restoreOperation(), plan, Set.of("X"), signatures(state), T);
         assertThat(state.get("P").get(0).isActive()).isFalse();
@@ -143,6 +144,19 @@ class LintLedgerRestoreTest {
 
         assertThat(kept(plan, "C")).containsExactly("B");
         assertThat(kept(plan, "P")).containsExactly("X", "Y");
+    }
+
+    @Test
+    @DisplayName("lint 기록만 근거인 승격 페이지는 다른 lint를 되돌려도 지우지 않고 재조립한다")
+    void lintRestoreRebuildsPromotedPageSupportedOnlyByLintRecord() {
+        Map<String, List<WikiPageContribution>> state = new LinkedHashMap<>();
+        state.put("N", List.of(lintRecord("N", "LP", 1), lintRecord("N", "L1", 2)));
+        givenChanges("L1", change(1L, "N", ChangeType.updated));
+        givenContributions(state);
+
+        RestorePlan plan = new LintRestorePlanner(changes, contributions, logs).plan(lint("L1")).plan();
+
+        assertThat(kept(plan, "N")).containsExactly("LP");
     }
 
     @Test

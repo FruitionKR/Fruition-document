@@ -18,7 +18,7 @@ import java.time.Instant;
  *
  * <p>lint는 결과의 {@code ledger_contributions}로 두 종류 행을 남긴다(ai ADR 0042). 자기 하위 항목
  * 기록(작업 id = lint)과, 원래 편입 작업 id로 다른 페이지에 이은 편입 기록이다. 둘 다
- * {@code lintOperationId}에 그 lint를 적어 lint 복원이 함께 끈다. lint 기록만으로는 페이지를 받치지 않는다.
+ * {@code lintOperationId}에 그 lint를 적어 lint 복원이 함께 끈다.
  */
 @Entity
 @Table(name = "wiki_page_contributions")
@@ -102,7 +102,5 @@ public class WikiPageContribution {
     public String getDeactivatedBy() { return deactivatedBy; }
     public String getLintOperationId() { return lintOperationId; }
 
-    /** lint 자기 기록. 개념·항목 이동만 담아 이것만 남은 페이지는 받치는 기여가 없는 것으로 본다. */
-    public boolean isLintRecord() { return getIngestOperationId().equals(lintOperationId); }
     public Instant getCreatedAt() { return createdAt; }
 }

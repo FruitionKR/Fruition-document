@@ -209,11 +209,11 @@ class LintOperationApplierTest {
         assertThat(rows.getAllValues())
                 .extracting(WikiPageContribution::getPageId, WikiPageContribution::getIngestOperationId,
                         WikiPageContribution::getSequenceRevision, WikiPageContribution::getSourceDocumentId,
-                        WikiPageContribution::getLintOperationId, WikiPageContribution::isLintRecord)
+                        WikiPageContribution::getLintOperationId)
                 .containsExactly(
-                        tuple("C", "op_lint_1", 1L, null, "op_lint_1", true),
-                        tuple("C", "op_x", 2L, "doc_x", "op_lint_1", false),
-                        tuple("P", "op_lint_1", 3L, null, "op_lint_1", true));
+                        tuple("C", "op_lint_1", 1L, null, "op_lint_1"),
+                        tuple("C", "op_x", 2L, "doc_x", "op_lint_1"),
+                        tuple("P", "op_lint_1", 3L, null, "op_lint_1"));
         ArgumentCaptor<WikiPageVersion> versions = ArgumentCaptor.forClass(WikiPageVersion.class);
         verify(versionRepository, times(2)).save(versions.capture());
         assertThat(versions.getAllValues()).extracting(WikiPageVersion::getPageId, WikiPageVersion::getRevision)

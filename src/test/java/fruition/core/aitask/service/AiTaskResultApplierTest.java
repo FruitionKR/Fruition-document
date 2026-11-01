@@ -592,6 +592,23 @@ class AiTaskResultApplierTest {
         verify(operationIngestService, never()).accept(any(), any());
     }
 
+    @Test
+    void restoreConflictFromAiFailsRestoreWithoutTouchingLedger() {
+        OperationLog operation = org.mockito.Mockito.mock(OperationLog.class);
+        when(jdbcTemplate.update(any(String.class),
+                eq("restore-event-1"), eq("restore-run-1"))).thenReturn(1);
+        when(operationLogRepository.findById("restore-op")).thenReturn(Optional.of(operation));
+        var event = (com.fasterxml.jackson.databind.node.ObjectNode) restoreEvent();
+        event.put("status", "failed");
+        event.put("error", "restore_conflict");
+
+        applier.applyRestore(event);
+
+        verify(restoreLifecycle).fail(eq("restore-op"), eq("restore_conflict"), any());
+        verify(restoreApplier, never()).apply(any(), any(), any(), any(), any());
+        verify(operationIngestService, never()).accept(any(), any());
+    }
+
     private JsonNode restoreEvent() {
         var root = objectMapper.createObjectNode();
         root.put("event_id", "restore-event-1");

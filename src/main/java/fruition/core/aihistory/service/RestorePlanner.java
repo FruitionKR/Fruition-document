@@ -73,9 +73,9 @@ public class RestorePlanner {
             return Optional.empty();
         }
 
-        // 받치는 기여가 하나도 남지 않으면 페이지가 존재할 이유가 사라진다.
-        // lint 기록(분리한 자식의 개념, 부모의 항목 이동)만 남은 페이지도 같다.
-        if (kept.stream().allMatch(WikiPageContribution::isLintRecord)) {
+        // 남은 활성 행이 하나도 없을 때만 지운다. lint 기록만 남은 페이지를 지울지는 ai 재생이 정한다
+        // (클러스터 승격 페이지는 lint 기록이 근거다, ai ADR 0042 결정 3).
+        if (kept.isEmpty()) {
             return Optional.of(PageRestorePlan.delete(pageId));
         }
 
