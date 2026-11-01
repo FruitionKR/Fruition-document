@@ -65,6 +65,13 @@ public interface WikiPageContributionRepository
 
     long countByIdPageIdAndActiveTrue(String pageId);
 
+    /** 그 작업이 끈 행이 있는 페이지. 재편입이 대체한 이전 편입 기여의 페이지를 찾는다. */
+    @Query("""
+            SELECT DISTINCT c.id.pageId FROM WikiPageContribution c
+            WHERE c.active = false AND c.deactivatedBy = :operationId
+            """)
+    List<String> findPageIdsDeactivatedBy(@Param("operationId") String operationId);
+
     /**
      * 휴지통으로 옮긴 문서의 기여를 끈다. 복구 작업이 아니므로 deactivated_by는 비워 둔다.
      *

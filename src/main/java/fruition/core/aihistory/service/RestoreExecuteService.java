@@ -215,7 +215,7 @@ public class RestoreExecuteService {
         return deletedPages(plan).stream().filter(id -> !id.equals(sourcePageId)).toList();
     }
 
-    private Map<String, List<String>> contributionSignatures(
+    static Map<String, List<String>> contributionSignatures(
             Map<String, List<WikiPageContribution>> contributions) {
         Map<String, List<String>> signatures = new java.util.LinkedHashMap<>();
         contributions.forEach((pageId, rows) -> signatures.put(pageId, rows.stream()

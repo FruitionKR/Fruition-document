@@ -52,11 +52,13 @@ class ReingestSupersedeIntegrationTest {
     @Autowired WikiPageContributionRepository contributionRepository;
     @Autowired DocumentRepository documentRepository;
     @Autowired RestorePreviewService previewService;
+    @Autowired ReingestRebuildStarter reingestRebuildStarter;
+    @Autowired com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     @Autowired JdbcTemplate jdbc;
     @Autowired TransactionTemplate transactionTemplate;
 
     @Test
-    void reingestSupersedesEarlierRowsAndRestoreBringsThemBack() {
+    void reingestSupersedesEarlierRowsAndRestoreBringsThemBack() throws Exception {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         String ws = "ws_" + suffix;
         String doc = "doc_" + suffix;
@@ -82,7 +84,7 @@ class ReingestSupersedeIntegrationTest {
         var lines = mock(LineCounter.class);
         when(lines.count(anyString(), any(), any(), anyLong(), anyString())).thenReturn(LineCounter.LineCount.none());
         var applier = new OperationApplier(operationLogRepository, operationChangeRepository, wiki,
-                versionRepository, contributionRepository, lines, documentRepository);
+                versionRepository, contributionRepository, lines, documentRepository, reingestRebuildStarter);
 
         // 처음 편입: S·P·Q. 다른 문서가 Q에 기여하고, lint가 첫 편입의 Q 기록을 자식 C에 이었다.
         transactionTemplate.executeWithoutResult(status -> {
@@ -115,6 +117,47 @@ class ReingestSupersedeIntegrationTest {
                         tuple(kept, second, true, null), tuple(dropped, other, true, null),
                         tuple(child, lint, true, null));
 
+        // 다시 편입 결과에 없는 Q·C는 남은 활성 기여(첫 편입 행 제외)로 다시 만들라는 명령을 보냈다.
+        var command = objectMapper.readTree(jdbc.queryForObject(
+                "SELECT payload FROM ai_command_outbox WHERE payload LIKE ? ", String.class,
+                "%\"target_operation_id\":\"" + second + "\"%"));
+        assertThat(command.path("kind").asText()).isEqualTo("restore_rebuild");
+        assertThat(command.path("cancel_operation_ids").isNull()).isTrue();
+        assertThat(command.path("deleted_pages")).isEmpty();
+        assertThat(command.path("rebuild_pages")).hasSize(2);
+        Map<String, List<String>> rebuild = new LinkedHashMap<>();
+        command.path("rebuild_pages").forEach(page -> rebuild.put(page.path("page_id").asText(),
+                java.util.stream.StreamSupport.stream(page.path("keep_contributions").spliterator(), false)
+                        .map(item -> item.path("operation_id").asText()).toList()));
+        assertThat(rebuild).containsExactly(Map.entry(child, List.of(lint)), Map.entry(dropped, List.of(other)));
+
+        // ai 결과를 복구와 같은 경로로 받아 새 버전으로 기록한다. 원장은 바뀌지 않는다.
+        String rebuildId = command.path("operation_id").asText();
+        var before = rows(source, kept, dropped, child);
+        transactionTemplate.executeWithoutResult(status -> {
+            OperationLog rebuildOp = operationLogRepository.findById(rebuildId).orElseThrow();
+            assertThat(rebuildOp.getOperationType()).isEqualTo(OperationType.restore);
+            assertThat(rebuildOp.getRestoredFrom()).isNull();
+            var manifest = readManifest(rebuildOp.getRestoreManifest());
+            new RestoreApplier(operationLogRepository, operationChangeRepository, wiki, versionRepository,
+                    contributionRepository).apply(rebuildOp, manifest.plan(), manifest.excludedOperationIds(),
+                    manifest.expectedContributions(), now);
+            new RestoreRebuildApplier(operationLogRepository, operationChangeRepository, wiki, versionRepository,
+                    lines, objectMapper).apply(rebuildId,
+                    new OperationResultRequest(rebuildId, "restore_rebuild", "succeeded", ws, "user_1", null, null,
+                            List.of(), List.of(), List.of(child), null, null, null),
+                    List.of(new RestoreRebuildApplier.RebuiltPage(dropped,
+                            "wiki/" + ws + "/pages/" + dropped + "/ops/" + rebuildId + ".md", "# Q 다시", "sha256:q")),
+                    "hash-rebuild", now);
+        });
+        assertThat(rows(source, kept, dropped, child)).containsExactlyInAnyOrderElementsOf(before);
+        assertThat(versionRepository.findTopByIdPageIdOrderByIdRevisionDesc(dropped).orElseThrow().getOperationId())
+                .isEqualTo(rebuildId);
+        assertThat(operationChangeRepository.findByOperationIdOrderByIdAsc(rebuildId))
+                .extracting(change -> change.getResourceId() + ":" + change.getChangeType())
+                .contains(dropped + ":rebuilt", child + ":deleted");
+        assertThat(operationLogRepository.findById(rebuildId).orElseThrow().getStatus().name()).isEqualTo("succeeded");
+
         // 다른 편입을 되돌려 Q를 다시 쓰면 첫 편입의 Q 기여는 남길 기여에 들어가지 않는다.
         Map<String, List<WikiPageContribution>> otherPages = previewService.loadContributions(Set.of(other));
         RestorePlan undoOther = new RestorePlanner(wiki).plan(Set.of(other), otherPages, ws);
@@ -137,6 +180,14 @@ class ReingestSupersedeIntegrationTest {
         assertThat(rows(source, kept, dropped, child))
                 .contains(tuple(dropped, first, true, null), tuple(kept, first, true, null),
                         tuple(child, first, true, null), tuple(kept, second, false, "op_restore_" + suffix));
+    }
+
+    private RestoreExecuteService.RestoreManifest readManifest(String json) {
+        try {
+            return objectMapper.readValue(json, RestoreExecuteService.RestoreManifest.class);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private List<org.assertj.core.groups.Tuple> rows(String... pageIds) {
