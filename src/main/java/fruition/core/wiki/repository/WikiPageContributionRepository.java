@@ -61,12 +61,18 @@ public interface WikiPageContributionRepository
 
     long countByIdPageIdAndActiveTrue(String pageId);
 
-    /** 휴지통으로 옮긴 문서의 기여를 끈다. 복구 작업이 아니므로 deactivated_by는 비워 둔다. */
+    /**
+     * 휴지통으로 옮긴 문서의 기여를 끈다. 복구 작업이 아니므로 deactivated_by는 비워 둔다.
+     *
+     * <p>이미 꺼진 행의 deactivated_by도 비운다. lint 복원은 그 lint가 끈 행(deactivated_by=lint)을 다시
+     * 켜므로, 남겨 두면 다시 합치기로 꺼진 휴지통 문서의 기여가 lint 복원으로 살아난다.
+     */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query(value = """
             UPDATE wiki_page_contributions
-            SET active = false
-            WHERE source_document_id IN (:documentIds) AND active = true
+            SET active = false, deactivated_by = NULL
+            WHERE source_document_id IN (:documentIds)
+              AND (active = true OR deactivated_by IS NOT NULL)
             """, nativeQuery = true)
     int deactivateBySourceDocumentIds(@Param("documentIds") Collection<String> documentIds);
 }

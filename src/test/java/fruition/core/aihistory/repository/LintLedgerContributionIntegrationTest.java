@@ -12,6 +12,7 @@ import fruition.core.aihistory.service.RestoreApplier;
 import fruition.core.aihistory.service.LineCounter;
 import fruition.core.aihistory.service.LintOperationApplier;
 import fruition.core.wiki.domain.WikiPageContribution;
+import fruition.core.wiki.domain.WikiPageVersion;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.wiki.repository.WikiPageContributionRepository;
 import fruition.core.wiki.repository.WikiPageVersionRepository;
@@ -119,6 +120,75 @@ class LintLedgerContributionIntegrationTest {
                 lintPlanner.plan(operationLogRepository.findById("op_lint2_" + suffix).orElseThrow()).plan());
         assertThat(plan.pages()).extracting(PageRestorePlan::pageId, PageRestorePlan::action)
                 .containsExactly(tuple(child, RestoreAction.delete));
+    }
+
+    @Test
+    void lintRestoreDoesNotReviveContributionsOfTrashedDocument() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String ws = "ws_" + suffix;
+        String trashedIngest = "op_x_" + suffix;
+        String keptIngest = "op_z_" + suffix;
+        String lintId = "op_lint_" + suffix;
+        String child = "child_" + suffix;
+        String trashedDocument = "doc_x_" + suffix;
+        Instant now = Instant.now();
+        var wiki = mock(PipelineWikiStateRequester.class);
+        when(wiki.lookup(List.of(child), ws)).thenReturn(List.of(
+                new PipelineWikiStateRequester.WikiPageSnapshot(child, "concept", "자식", child, ws, "deleted")));
+        var lines = mock(LineCounter.class);
+        when(lines.count(anyString(), any(), any(), anyLong(), anyString())).thenReturn(LineCounter.LineCount.none());
+        var applier = new LintOperationApplier(operationLogRepository, operationChangeRepository,
+                wiki, versionRepository, contributionRepository, lines);
+        String prefix = "wiki/" + ws + "/pages/" + child + "/ops/";
+        transactionTemplate.executeWithoutResult(status -> {
+            operationLogRepository.save(OperationLog.completed(
+                    trashedIngest, ws, "user_1", OperationType.ingest, null, "편입", 1, now));
+            operationLogRepository.save(OperationLog.completed(
+                    keptIngest, ws, "user_1", OperationType.ingest, null, "편입", 1, now));
+            contributionRepository.save(new WikiPageContribution(
+                    child, trashedIngest, trashedDocument, 1L, prefix + trashedIngest + ".json", now));
+            contributionRepository.save(new WikiPageContribution(
+                    child, keptIngest, "doc_z_" + suffix, 2L, prefix + keptIngest + ".json", now));
+            versionRepository.save(new WikiPageVersion(child, 2L, 2, "# 자식", prefix + keptIngest + ".md",
+                    "sha256:child", keptIngest, "user_1", now));
+        });
+
+        // 다시 합치기로 자식을 지운 뒤 한 문서를 휴지통으로 옮긴다.
+        List<OperationResultRequest.LedgerContribution> ledger = List.of(
+                new OperationResultRequest.LedgerContribution(child, lintId, null, prefix + lintId + ".json", null));
+        transactionTemplate.executeWithoutResult(status -> {
+            operationLogRepository.save(OperationLog.processing(lintId, ws, "user_1", OperationType.lint, null, now));
+            applier.apply(lintId, new OperationResultRequest(lintId, "lint", "succeeded", ws, "user_1", null,
+                            "lint", List.of(), List.of(), List.of(child), null, null, ledger),
+                    List.of(new LintOperationApplier.LoadedPage(child, prefix + lintId + ".md", "# 합침", "sha256:m")),
+                    ledger, "payload-hash", now);
+        });
+        transactionTemplate.executeWithoutResult(status ->
+                contributionRepository.deactivateBySourceDocumentIds(List.of(trashedDocument)));
+
+        var planner = new LintRestorePlanner(operationChangeRepository, contributionRepository);
+        var restoreApplier = new RestoreApplier(operationLogRepository, operationChangeRepository,
+                wiki, versionRepository, contributionRepository);
+        transactionTemplate.executeWithoutResult(status -> {
+            RestorePlan plan = planner.plan(operationLogRepository.findById(lintId).orElseThrow()).plan();
+            assertThat(plan.pages()).singleElement().satisfies(page -> {
+                assertThat(page.action()).isEqualTo(RestoreAction.rebuild);
+                assertThat(page.keepContributions()).extracting(PageRestorePlan.Kept::operationId)
+                        .containsExactly(keptIngest);
+            });
+            OperationLog restore = operationLogRepository.save(
+                    OperationLog.applying("op_restore_" + suffix, ws, "user_1", null, lintId, "{}", now));
+            List<String> signature = contributionRepository.findByPageIds(List.of(child)).stream()
+                    .map(row -> row.getIngestOperationId() + ":" + row.getSequenceRevision()
+                            + ":" + (row.isActive() ? "1" : "0"))
+                    .toList();
+            restoreApplier.apply(restore, plan, Set.of(lintId), Map.of(child, signature), now);
+        });
+
+        assertThat(contributionRepository.findByPageIds(List.of(child)))
+                .extracting(WikiPageContribution::getIngestOperationId, WikiPageContribution::isActive)
+                .containsExactlyInAnyOrder(
+                        tuple(trashedIngest, false), tuple(keptIngest, true), tuple(lintId, false));
     }
 
     private void split(LintOperationApplier applier, String ws, String lintId, String ingestId,
