@@ -2,9 +2,11 @@ package fruition.core.aihistory.repository;
 
 import fruition.core.aihistory.domain.ChangeType;
 import fruition.core.aihistory.domain.OperationChange;
+import fruition.core.aihistory.domain.ResourceType;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface OperationChangeRepository extends JpaRepository<OperationChange, Long> {
 
@@ -19,4 +21,8 @@ public interface OperationChangeRepository extends JpaRepository<OperationChange
 
     /** 대상 작업 이후 같은 리소스가 다시 변경됐는지 확인한다. */
     boolean existsByResourceIdAndIdGreaterThan(String resourceId, Long id);
+
+    /** 리소스의 마지막 변경. lint가 지워진 페이지를 다시 만들었는지 가린다. */
+    Optional<OperationChange> findTopByResourceTypeAndResourceIdOrderByIdDesc(
+            ResourceType resourceType, String resourceId);
 }

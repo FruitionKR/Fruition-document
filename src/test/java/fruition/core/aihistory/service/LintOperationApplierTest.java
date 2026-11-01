@@ -74,8 +74,6 @@ class LintOperationApplierTest {
         when(previous.getMarkdown()).thenReturn("# 이전 본문");
         when(versionRepository.findMaxRevision("page_1")).thenReturn(3L);
         when(contributionRepository.countByIdPageIdAndActiveTrue("page_1")).thenReturn(2L);
-        when(contributionRepository.findByPageIds(List.of("page_1"))).thenReturn(List.of(new WikiPageContribution(
-                "page_1", "op_ingest", "doc_1", 1L, "wiki/ws_1/pages/page_1/ops/op_ingest.json", Instant.now())));
         when(lineCounter.count("page_1", 3L, "# 이전 본문", 4L, "# 정리된 본문"))
                 .thenReturn(new LineCounter.LineCount(1, 1));
         OperationResultRequest request = new OperationResultRequest(
@@ -140,8 +138,6 @@ class LintOperationApplierTest {
         when(previous.getMarkdown()).thenReturn("# 이전 본문");
         when(versionRepository.findMaxRevision("page_1")).thenReturn(3L);
         when(contributionRepository.countByIdPageIdAndActiveTrue("page_1")).thenReturn(2L);
-        when(contributionRepository.findByPageIds(List.of("page_1"))).thenReturn(List.of(new WikiPageContribution(
-                "page_1", "op_ingest", "doc_1", 1L, "wiki/ws_1/pages/page_1/ops/op_ingest.json", Instant.now())));
         when(lineCounter.count("page_1", 3L, "# 이전 본문", 4L, "# 정리된 본문"))
                 .thenReturn(new LineCounter.LineCount(1, 1));
         OperationResultRequest request = new OperationResultRequest(

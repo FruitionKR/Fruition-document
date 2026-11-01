@@ -5,6 +5,7 @@ import fruition.core.aihistory.domain.OperationLog;
 import fruition.core.aihistory.domain.OperationType;
 import fruition.core.aihistory.domain.RestoreAction;
 import fruition.core.aihistory.dto.OperationResultRequest;
+import fruition.core.aihistory.exception.InvalidRestoreRequestException;
 import fruition.core.aihistory.dto.PageRestorePlan;
 import fruition.core.aihistory.dto.RestorePlan;
 import fruition.core.aihistory.service.LintRestorePlanner;
@@ -29,6 +30,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -189,6 +191,52 @@ class LintLedgerContributionIntegrationTest {
                 .extracting(WikiPageContribution::getIngestOperationId, WikiPageContribution::isActive)
                 .containsExactlyInAnyOrder(
                         tuple(trashedIngest, false), tuple(keptIngest, true), tuple(lintId, false));
+    }
+
+    @Test
+    void lintOnConceptPageOfTrashedDocumentsIsUpdateAndRestoreKeepsPage() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String ws = "ws_" + suffix;
+        String ingestId = "op_x_" + suffix;
+        String lintId = "op_lint_" + suffix;
+        String page = "concept_" + suffix;
+        String document = "doc_x_" + suffix;
+        Instant now = Instant.now();
+        var wiki = mock(PipelineWikiStateRequester.class);
+        when(wiki.lookup(List.of(page), ws)).thenReturn(List.of(
+                new PipelineWikiStateRequester.WikiPageSnapshot(page, "concept", "개념", page, ws, "active")));
+        var lines = mock(LineCounter.class);
+        when(lines.count(anyString(), any(), any(), anyLong(), anyString())).thenReturn(LineCounter.LineCount.none());
+        var applier = new LintOperationApplier(operationLogRepository, operationChangeRepository,
+                wiki, versionRepository, contributionRepository, lines);
+        String prefix = "wiki/" + ws + "/pages/" + page + "/ops/";
+        transactionTemplate.executeWithoutResult(status -> {
+            operationLogRepository.save(OperationLog.completed(
+                    ingestId, ws, "user_1", OperationType.ingest, null, "편입", 1, now));
+            contributionRepository.save(new WikiPageContribution(
+                    page, ingestId, document, 1L, prefix + ingestId + ".json", now));
+            versionRepository.save(new WikiPageVersion(page, 1L, 1, "# 개념", prefix + ingestId + ".md",
+                    "sha256:concept", ingestId, "user_1", now));
+            operationLogRepository.save(OperationLog.processing(lintId, ws, "user_1", OperationType.lint, null, now));
+        });
+        // 원문 문서를 모두 휴지통으로 옮겨 기여만 꺼지고 개념 페이지는 남은 상태에서 lint가 그 페이지를 고친다.
+        transactionTemplate.executeWithoutResult(status ->
+                contributionRepository.deactivateBySourceDocumentIds(List.of(document)));
+        transactionTemplate.executeWithoutResult(status -> applier.apply(lintId,
+                new OperationResultRequest(lintId, "lint", "succeeded", ws, "user_1", null, "lint",
+                        List.of(), List.of(), List.of(), null, null, List.of()),
+                List.of(new LintOperationApplier.LoadedPage(page, prefix + lintId + ".md", "# 정리", "sha256:l")),
+                List.of(), "payload-hash", now));
+
+        assertThat(operationChangeRepository.findByOperationIdOrderByIdAsc(lintId))
+                .extracting(change -> change.getChangeType().name())
+                .containsExactly("updated");
+        // 다시 쓸 기여가 없어 복원을 거절한다. 페이지를 지우지 않고 그대로 둔다.
+        var planner = new LintRestorePlanner(operationChangeRepository, contributionRepository);
+        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status ->
+                planner.plan(operationLogRepository.findById(lintId).orElseThrow())))
+                .isInstanceOf(InvalidRestoreRequestException.class)
+                .hasMessageContaining("재조립할 활성 기여가 없습니다");
     }
 
     private void split(LintOperationApplier applier, String ws, String lintId, String ingestId,

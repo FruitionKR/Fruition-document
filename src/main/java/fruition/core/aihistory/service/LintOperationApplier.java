@@ -157,10 +157,13 @@ public class LintOperationApplier {
 
         Optional<WikiPageVersion> previous =
                 versionRepository.findTopByIdPageIdOrderByIdRevisionDesc(pageId);
-        // 예전 버전이 있어도 받치는 기여가 없으면 지워진 페이지를 이 lint가 다시 만든 것이다(예: lint 복원으로
+        // 예전 버전이 있어도 마지막 변경이 삭제면 지워진 페이지를 이 lint가 다시 만든 것이다(예: lint 복원으로
         // 지운 자식을 다음 lint가 다시 나눔). created로 남겨야 이 lint를 복원할 때 다시 지운다.
-        if (page != null && previous.isPresent() && contributionRepository.findByPageIds(List.of(pageId))
-                .stream().noneMatch(item -> item.isActive() && !item.isLintRecord())) {
+        // 기여 수로 가르지 않는다. 문서를 휴지통으로 옮기면 기여만 꺼지고 개념 페이지는 남는다.
+        if (page != null && previous.isPresent() && operationChangeRepository
+                .findTopByResourceTypeAndResourceIdOrderByIdDesc(ResourceType.wiki_page, pageId)
+                .map(change -> change.getChangeType() == ChangeType.deleted)
+                .orElse(false)) {
             previous = Optional.empty();
         }
         long maxRevision = versionRepository.findMaxRevision(pageId);
