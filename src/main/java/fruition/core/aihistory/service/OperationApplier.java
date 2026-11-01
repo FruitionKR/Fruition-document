@@ -27,6 +27,8 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 읽어둔 결과를 DB에 반영한다. 저장소 읽기를 마친 뒤 <b>한 트랜잭션</b>으로 처리한다.
@@ -101,8 +103,13 @@ public class OperationApplier {
         // 이전 기여를 지울 근거가 없어 대체하지 않는다.
         if (status == OperationStatus.succeeded && operation.getTargetDocumentId() != null && !documentDeleted) {
             contributionRepository.supersedeEarlierIngests(operation.getTargetDocumentId(), operationId);
-            // 이 편입이 더는 다루지 않는 페이지는 ai가 남은 기여로 다시 만들게 한다.
-            reingestRebuildStarter.start(operation, loaded.stream().map(LoadedPage::pageId).toList(), now);
+            // 이전 기여가 꺼진 개념 페이지는 ai가 남은 기여로 다시 만들게 한다.
+            Set<String> sourcePageIds = wikiStateRequester.lookup(
+                            loaded.stream().map(LoadedPage::pageId).toList(), operation.getWorkspaceId()).stream()
+                    .filter(page -> "source".equals(page.pageType()))
+                    .map(PipelineWikiStateRequester.WikiPageSnapshot::id)
+                    .collect(Collectors.toSet());
+            reingestRebuildStarter.start(operation, sourcePageIds, now);
         }
         return new OperationResultResponse(operationId, status.name(), recorded);
     }

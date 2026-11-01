@@ -117,19 +117,21 @@ class ReingestSupersedeIntegrationTest {
                         tuple(kept, second, true, null), tuple(dropped, other, true, null),
                         tuple(child, lint, true, null));
 
-        // 다시 편입 결과에 없는 Q·C는 남은 활성 기여(첫 편입 행 제외)로 다시 만들라는 명령을 보냈다.
+        // 이전 기여가 꺼진 개념 페이지는 남은 활성 기여(첫 편입 행 제외)로 다시 만들라는 명령을 보냈다. 다시 편입이 쓴 P도
+        // 대상이다. ai는 P를 현재 상태 위에 새 편입을 더해 썼으므로 첫 편입만 뽑은 항목이 남아 있다. 소스 페이지 S는 뺀다.
         var command = objectMapper.readTree(jdbc.queryForObject(
                 "SELECT payload FROM ai_command_outbox WHERE payload LIKE ? ", String.class,
                 "%\"target_operation_id\":\"" + second + "\"%"));
         assertThat(command.path("kind").asText()).isEqualTo("restore_rebuild");
         assertThat(command.path("cancel_operation_ids").isNull()).isTrue();
         assertThat(command.path("deleted_pages")).isEmpty();
-        assertThat(command.path("rebuild_pages")).hasSize(2);
+        assertThat(command.path("rebuild_pages")).hasSize(3);
         Map<String, List<String>> rebuild = new LinkedHashMap<>();
         command.path("rebuild_pages").forEach(page -> rebuild.put(page.path("page_id").asText(),
                 java.util.stream.StreamSupport.stream(page.path("keep_contributions").spliterator(), false)
                         .map(item -> item.path("operation_id").asText()).toList()));
-        assertThat(rebuild).containsExactly(Map.entry(child, List.of(lint)), Map.entry(dropped, List.of(other)));
+        assertThat(rebuild).containsExactly(Map.entry(child, List.of(lint)), Map.entry(kept, List.of(second)),
+                Map.entry(dropped, List.of(other)));
 
         // ai 결과를 복구와 같은 경로로 받아 새 버전으로 기록한다. 원장은 바뀌지 않는다.
         String rebuildId = command.path("operation_id").asText();
