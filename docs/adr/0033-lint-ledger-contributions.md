@@ -14,6 +14,7 @@ ai는 lint 결과에 `ledger_contributions`(`page_id`·`operation_id`·`document
 - **행 기록.** lint 결과 반영(`LintOperationApplier`)이 `ledger_contributions`를 받은 순서대로 원장에 더한다. 자기 기록은 `ingest_operation_id`=lint id, `source_document_id`=NULL이다. 이은 기록은 원래 작업 id와 문서이며 같은 워크스페이스 작업이어야 한다. 두 종류 모두 새 컬럼 `lint_operation_id`(V84)에 그 lint를 적는다. 자기 기록은 `ingest_operation_id = lint_operation_id`로 구분한다.
 - **순서 값.** 한 페이지에 행이 여러 개라 행마다 다른 `sequence_revision`이 필요하다. 그 페이지 최대 revision 다음부터 행마다 하나씩 쓰고, lint가 만드는 새 버전은 마지막 값에 둔다. 다음 편입의 revision이 항상 뒤에 오도록 원장 행은 lint가 새 revision을 남기는 페이지(`changed_pages`)에만 받는다. 그 사이 revision 번호에는 버전이 없다.
 - **멱등.** 페이지에 이 lint가 만든 버전이 이미 있으면 재전송으로 보고 건너뛴다. 같은 (페이지, 작업) 행이 켜져 있으면 그대로 두고, 꺼져 있으면(예: 다시 합치기를 lint 복원한 뒤 다시 합치기) 그 행을 이 lint로 다시 잇는다. 기록이 페이지·작업마다 하나라 새 행을 만들 수 없다.
+- **다시 만든 페이지.** 예전 버전이 있어도 lint 직전에 받치는 기여가 없던 페이지(지워진 페이지)를 lint가 바꾸면 `created`로 남긴다. 그래야 그 lint를 복원할 때 다시 지운다(예: lint 복원으로 지운 자식을 다음 lint가 다시 나눔).
 - **합쳐 지운 페이지.** `deleted_pages`의 활성 기여를 `deactivated_by`=lint로 끄고 `deleted` 변경을 남긴다.
 - **받치는 기여.** lint 자기 기록(개념, 항목 이동)만 남은 페이지는 받치는 기여가 없는 것으로 본다. ingest 복원이 그런 페이지를 삭제한다.
 - **ingest 복원.** 남은 활성 행에 lint 행이 순서대로 들어간다. 이은 기록은 원래 작업 id라 그 작업을 제외하면 자식 페이지에서도 빠진다.
