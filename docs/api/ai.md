@@ -708,7 +708,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 
 사람이 고친 본문(`wiki_edit`)은 수동 기여로 남는다. ingest·lint를 되돌릴 때 이 기여는 남길 기여(`keep_contributions`)에 포함되고, 원문 문서가 없어 `document_id`를 `null`로 보낸다(ai `RestoreContributionIn.document_id: str | None`). `wiki_edit` 작업 자체를 되돌리는 것은 지원하지 않는다(`400`, 정책 결정 사항).
 
-lint가 기여 원장에 남긴 행([ADR-0033](../adr/0033-lint-ledger-contributions.md))은 순서대로 `keep_contributions`에 들어 재조립이 lint 변경(하위 항목 분리·다시 합치기)을 재생한다. lint 자기 기록은 `document_id: null`이다. ingest를 되돌리면 lint가 그 작업 id로 다른 페이지(분리한 자식)에 이은 행도 함께 빠지고, lint 기록만 남는 페이지는 삭제한다. lint를 되돌리면 그 lint의 자기 기록과 이은 행을 끄고, 그 lint가 만든 페이지는 삭제, 합쳐 지운 페이지는 그 lint가 끈 기여를 다시 켜 `rebuild_pages`로 다시 만든다.
+lint가 기여 원장에 남긴 행([ADR-0033](../adr/0033-lint-ledger-contributions.md))은 순서대로 `keep_contributions`에 들어 재조립이 lint 변경(하위 항목 분리·다시 합치기)을 재생한다. lint 자기 기록은 `document_id: null`이다. ingest를 되돌리면 lint가 그 작업 id로 다른 페이지(분리한 자식)에 이은 행도 함께 빠지고, lint 기록만 남는 페이지는 삭제한다. lint를 되돌리면 그 lint의 자기 기록과 이은 행만 끄고, 그 lint가 바꾼 페이지를 남은 기여로 `rebuild_pages`에 넣는다. lint 기록 말고 받치는 기여가 없는 페이지는 `deleted_pages`로 지운다. 대상 lint가 만든 페이지라도 뒤 독립 기여가 있으면 남기고, 합쳐 지운 페이지는 남은 기여로 다시 만든다. 대상 lint 뒤에 되돌리지 않은 다른 lint가 같은 페이지를 바꿨으면 `400`으로 거절한다(뒤 lint부터 되돌린다). 재조립한 페이지가 재생 결과 삭제로 끝나면 ai 결과의 `deleted_pages`로 받아 삭제로 기록한다.
 
 #### 3. Auth 필요 여부
 

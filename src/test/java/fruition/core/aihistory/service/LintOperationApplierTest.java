@@ -238,26 +238,20 @@ class LintOperationApplierTest {
     }
 
     @Test
-    @DisplayName("합쳐 지운 페이지의 기여를 이 lint 이름으로 끄고 삭제 변경을 남긴다")
-    void apply_deactivatesDeletedPageContributions() {
+    @DisplayName("합쳐 지운 페이지는 기존 기여를 끄지 않고 lint 기록과 삭제 변경만 남긴다")
+    void apply_keepsContributionsOfDeletedPage() {
         givenLint();
         givenPage("C", 3L);
         WikiPageVersion previous = org.mockito.Mockito.mock(WikiPageVersion.class);
         when(previous.getRevision()).thenReturn(3L);
         when(versionRepository.findTopByIdPageIdOrderByIdRevisionDesc("C")).thenReturn(Optional.of(previous));
-        WikiPageContribution ingest = new WikiPageContribution(
-                "C", "op_z", "doc_z", 3L, "wiki/ws_1/pages/C/ops/op_z.json", Instant.now());
-        WikiPageContribution merge = WikiPageContribution.lint(
-                "C", "op_lint_1", null, 4L, "wiki/ws_1/pages/C/ops/op_lint_1.json", "op_lint_1", Instant.now());
-        when(contributionRepository.findByPageIds(List.of("C"))).thenReturn(List.of(ingest, merge));
 
         applier.apply("op_lint_1", lintRequest(List.of("C")), List.of(loaded("C")),
                 List.of(ledger("C", "op_lint_1", null, null)), "payload-hash", Instant.now());
 
-        assertThat(List.of(ingest, merge)).allSatisfy(row -> {
-            assertThat(row.isActive()).isFalse();
-            assertThat(row.getDeactivatedBy()).isEqualTo("op_lint_1");
-        });
+        // 삭제는 이 lint 기록을 재생한 결과다. 기존 기여를 끄면 그 사이 취소한 편입을 복원이 가릴 수 없다.
+        verify(contributionRepository, never()).findByPageIds(any());
+        verify(contributionRepository).save(any(WikiPageContribution.class));
         ArgumentCaptor<OperationChange> changes = ArgumentCaptor.forClass(OperationChange.class);
         verify(operationChangeRepository, times(2)).save(changes.capture());
         assertThat(changes.getAllValues()).extracting(OperationChange::getChangeType)

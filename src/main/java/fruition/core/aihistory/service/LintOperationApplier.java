@@ -173,14 +173,6 @@ public class LintOperationApplier {
         for (OperationResultRequest.LedgerContribution row : rows) {
             record(operation, row, ++sequence, now);
         }
-        if (deletedPage) {
-            // 다시 합치기로 지운 자식 페이지. lint 복원이 deactivated_by로 찾아 다시 켠다.
-            for (WikiPageContribution contribution : contributionRepository.findByPageIds(List.of(pageId))) {
-                if (contribution.isActive()) {
-                    contribution.deactivate(operation.getOperationId());
-                }
-            }
-        }
 
         Long beforeRevision = previous.map(WikiPageVersion::getRevision).orElse(null);
         if (page != null) {
@@ -198,6 +190,8 @@ public class LintOperationApplier {
                     null, lines.additions(), lines.deletions()));
             beforeRevision = revision;
         }
+        // 다시 합치기로 지운 자식. 삭제는 이 lint 기록을 재생한 결과라 기존 기여는 끄지 않는다(ai ADR 0042).
+        // 끄면 그 사이 취소한 편입을 lint 복원이 다시 살려야 하는지 가릴 수 없다.
         if (deletedPage && !operationChangeRepository.existsByOperationIdAndResourceIdAndChangeType(
                 operation.getOperationId(), pageId, ChangeType.deleted)) {
             operationChangeRepository.save(new OperationChange(

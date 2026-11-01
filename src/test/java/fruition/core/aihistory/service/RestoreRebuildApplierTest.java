@@ -273,6 +273,21 @@ class RestoreRebuildApplierTest {
     }
 
     @Test
+    @DisplayName("재조립 대상이 재생 결과 삭제로 끝나면 삭제로 기록한다")
+    void recordsDeletionOfRebuildPage() {
+        givenOperation(manifest(PageRestorePlan.rebuild(PAGE_ID, keptOf(2))));
+        OperationResultRequest request = new OperationResultRequest(
+                OPERATION_ID, "lint_restore", "succeeded", WORKSPACE_ID, USER_ID, "doc_A",
+                null, List.of(), List.of(), List.of(PAGE_ID), null, List.of(), null);
+
+        applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
+
+        ArgumentCaptor<OperationChange> captor = ArgumentCaptor.forClass(OperationChange.class);
+        verify(operationChangeRepository).save(captor.capture());
+        assertThat(captor.getValue().getChangeType()).isEqualTo(ChangeType.deleted);
+    }
+
+    @Test
     @DisplayName("복구 지시서에 없는 삭제 페이지를 callback이 보고하면 거절한다")
     void rejectsDeletedPageNotInManifest() {
         givenOperation(manifest(PageRestorePlan.delete("C9")));

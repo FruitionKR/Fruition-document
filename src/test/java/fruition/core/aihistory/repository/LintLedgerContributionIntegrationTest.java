@@ -5,7 +5,6 @@ import fruition.core.aihistory.domain.OperationLog;
 import fruition.core.aihistory.domain.OperationType;
 import fruition.core.aihistory.domain.RestoreAction;
 import fruition.core.aihistory.dto.OperationResultRequest;
-import fruition.core.aihistory.exception.InvalidRestoreRequestException;
 import fruition.core.aihistory.dto.PageRestorePlan;
 import fruition.core.aihistory.dto.RestorePlan;
 import fruition.core.aihistory.service.LintRestorePlanner;
@@ -30,7 +29,6 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -107,7 +105,7 @@ class LintLedgerContributionIntegrationTest {
         when(lines.count(anyString(), any(), any(), anyLong(), anyString())).thenReturn(LineCounter.LineCount.none());
         var applier = new LintOperationApplier(operationLogRepository, operationChangeRepository,
                 wiki, versionRepository, contributionRepository, lines);
-        var lintPlanner = new LintRestorePlanner(operationChangeRepository, contributionRepository);
+        var lintPlanner = new LintRestorePlanner(operationChangeRepository, contributionRepository, operationLogRepository);
         var restoreApplier = new RestoreApplier(operationLogRepository, operationChangeRepository,
                 wiki, versionRepository, contributionRepository);
         transactionTemplate.executeWithoutResult(status -> operationLogRepository.save(OperationLog.completed(
@@ -155,7 +153,7 @@ class LintLedgerContributionIntegrationTest {
                     "sha256:child", keptIngest, "user_1", now));
         });
 
-        // 다시 합치기로 자식을 지운 뒤 한 문서를 휴지통으로 옮긴다.
+        // 다시 합치기로 자식을 지운 뒤(기존 기여는 켜 둔다) 한 문서를 휴지통으로 옮긴다.
         List<OperationResultRequest.LedgerContribution> ledger = List.of(
                 new OperationResultRequest.LedgerContribution(child, lintId, null, prefix + lintId + ".json", null));
         transactionTemplate.executeWithoutResult(status -> {
@@ -168,7 +166,7 @@ class LintLedgerContributionIntegrationTest {
         transactionTemplate.executeWithoutResult(status ->
                 contributionRepository.deactivateBySourceDocumentIds(List.of(trashedDocument)));
 
-        var planner = new LintRestorePlanner(operationChangeRepository, contributionRepository);
+        var planner = new LintRestorePlanner(operationChangeRepository, contributionRepository, operationLogRepository);
         var restoreApplier = new RestoreApplier(operationLogRepository, operationChangeRepository,
                 wiki, versionRepository, contributionRepository);
         transactionTemplate.executeWithoutResult(status -> {
@@ -194,7 +192,7 @@ class LintLedgerContributionIntegrationTest {
     }
 
     @Test
-    void lintOnConceptPageOfTrashedDocumentsIsUpdateAndRestoreKeepsPage() {
+    void lintOnConceptPageOfTrashedDocumentsIsUpdateAndRestoreDeletesPage() {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         String ws = "ws_" + suffix;
         String ingestId = "op_x_" + suffix;
@@ -231,12 +229,12 @@ class LintLedgerContributionIntegrationTest {
         assertThat(operationChangeRepository.findByOperationIdOrderByIdAsc(lintId))
                 .extracting(change -> change.getChangeType().name())
                 .containsExactly("updated");
-        // 다시 쓸 기여가 없어 복원을 거절한다. 페이지를 지우지 않고 그대로 둔다.
-        var planner = new LintRestorePlanner(operationChangeRepository, contributionRepository);
-        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status ->
-                planner.plan(operationLogRepository.findById(lintId).orElseThrow())))
-                .isInstanceOf(InvalidRestoreRequestException.class)
-                .hasMessageContaining("재조립할 활성 기여가 없습니다");
+        // 되돌리기는 lint 효과만 뺀다. 남은 유효 근거가 없으므로 lint 기록만으로 페이지를 남기지 않는다(ai ADR 0042).
+        var planner = new LintRestorePlanner(operationChangeRepository, contributionRepository, operationLogRepository);
+        RestorePlan plan = transactionTemplate.execute(status ->
+                planner.plan(operationLogRepository.findById(lintId).orElseThrow()).plan());
+        assertThat(plan.pages()).extracting(PageRestorePlan::pageId, PageRestorePlan::action)
+                .containsExactly(tuple(page, RestoreAction.delete));
     }
 
     private void split(LintOperationApplier applier, String ws, String lintId, String ingestId,

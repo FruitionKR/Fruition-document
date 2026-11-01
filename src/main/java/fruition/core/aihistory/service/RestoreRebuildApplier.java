@@ -206,8 +206,10 @@ public class RestoreRebuildApplier {
         return counts;
     }
 
+    /** 재조립 대상도 받는다. 재생한 기록이 페이지 삭제로 끝날 수 있다(다시 합치기로 지운 자식, ai ADR 0042). */
     private void validateDeletedPages(OperationResultRequest request, RestorePlan plan) {
-        Set<String> targets = plan.byAction(RestoreAction.delete).stream()
+        Set<String> targets = plan.pages().stream()
+                .filter(page -> page.action() == RestoreAction.delete || page.action() == RestoreAction.rebuild)
                 .map(PageRestorePlan::pageId)
                 .collect(java.util.stream.Collectors.toSet());
         for (String pageId : request.deletedPagesOrEmpty()) {

@@ -93,12 +93,6 @@ public class WikiPageContribution {
         this.deactivatedBy = restoreOperationId;
     }
 
-    /** lint 복원이 그 lint가 끈 기여를 다시 켠다. */
-    public void reactivate() {
-        this.active = true;
-        this.deactivatedBy = null;
-    }
-
     public String getPageId() { return id.getPageId(); }
     public String getIngestOperationId() { return id.getIngestOperationId(); }
     public String getSourceDocumentId() { return sourceDocumentId; }
