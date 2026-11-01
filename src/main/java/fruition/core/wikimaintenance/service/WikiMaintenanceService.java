@@ -110,8 +110,9 @@ public class WikiMaintenanceService {
         String status = (String) row.get("status");
         String code = (String) row.get("error_code");
         var node = objectMapper.createObjectNode().put("id", runId);
-        // 취소 처리 중인 run은 아직 끝나지 않았다. 끝난 취소는 실패가 아니라 취소 문구로 알린다.
-        if (code == null && java.util.Set.of("running", "cancel_requested", "rolling_back").contains(status)) {
+        // 취소 처리 중인 run은 아직 끝나지 않았다(롤백 재시도 대기 중에는 error_code가 붙어 있다).
+        // 끝난 취소는 실패가 아니라 취소 문구로 알린다.
+        if (java.util.Set.of("running", "cancel_requested", "rolling_back").contains(status)) {
             return node.put("status", "queued");
         }
         if (code == null && "cancelled".equals(status)) code = "cancelled";

@@ -73,9 +73,11 @@ public class WikiMaintenanceController {
 
     @Operation(summary = "Wiki 정합성 검사 결과 조회", description = "실행 중이거나 완료된 Wiki 정합성 검사 결과를 반환합니다.")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "결과 조회 성공",
+        @ApiResponse(responseCode = "200", description = "결과 조회 성공. status는 queued·running·succeeded·failed다. "
+                + "ai가 아직 명령을 꺼내지 않았거나 그 전에 실패·취소된 run은 core 기록으로 {id, status, error_code?, error?}만 답한다. "
+                + "ai가 처리한 run은 ai 응답(id, mode, status, error, manifest.task_result 등)이고, 실패면 error_code에 코드, error에 한국어 문구를 둔다.",
             content = @Content(schema = @Schema(implementation = JsonNode.class))),
-        @ApiResponse(responseCode = "404", description = "검사 실행 또는 워크스페이스를 찾을 수 없음",
+        @ApiResponse(responseCode = "404", description = "검사 실행 또는 워크스페이스를 찾을 수 없음. run_id가 UUID가 아니어도 같다",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @GetMapping("/runs/{run_id}")

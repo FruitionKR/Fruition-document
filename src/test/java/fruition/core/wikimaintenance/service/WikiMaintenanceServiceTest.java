@@ -195,6 +195,19 @@ class WikiMaintenanceServiceTest {
     }
 
     @Test
+    void run_rollbackRetryPending_isStillQueued() {
+        when(runStatusRequester.find("77777777-7777-7777-7777-777777777777")).thenReturn(Optional.empty());
+        var row = new java.util.HashMap<String, Object>();
+        row.put("status", "rolling_back");
+        row.put("error_code", "rollback_retry_pending");
+        when(outboxWriter.findRun("77777777-7777-7777-7777-777777777777", "ws_1", "user_1"))
+                .thenReturn(Optional.of(row));
+
+        assertThat(service.run("ws_1", "user_1", "77777777-7777-7777-7777-777777777777")
+                .path("status").asText()).isEqualTo("queued");
+    }
+
+    @Test
     void run_otherUsersRun_isNotFound() {
         when(runStatusRequester.find("66666666-6666-6666-6666-666666666666")).thenReturn(Optional.of(
                 new PipelineRunStatusRequester.PipelineRunStatus(
