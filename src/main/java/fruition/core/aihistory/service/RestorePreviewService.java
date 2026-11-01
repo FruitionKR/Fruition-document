@@ -108,7 +108,7 @@ public class RestorePreviewService {
             return Map.of();
         }
         List<String> pageIds =
-                contributionRepository.findActivePageIdsByOperationIds(excludedOperationIds);
+                contributionRepository.findRestorePageIdsByOperationIds(excludedOperationIds);
         if (pageIds.isEmpty()) {
             return Map.of();
         }

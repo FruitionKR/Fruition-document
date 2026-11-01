@@ -13,12 +13,16 @@ import java.util.List;
 public interface WikiPageContributionRepository
         extends JpaRepository<WikiPageContribution, WikiPageContributionId> {
 
-    /** 복구 대상 페이지 수집. 제외할 작업들이 건드린 페이지만 후보가 된다. */
+    /**
+     * 복구 대상 페이지 수집. 제외할 작업들이 건드린 페이지와, 그 작업이 대체해 끈 기여(재편입이 끈 같은 문서의
+     * 이전 편입 기여)가 있는 페이지가 후보가 된다.
+     */
     @Query("""
             SELECT DISTINCT c.id.pageId FROM WikiPageContribution c
-            WHERE c.id.ingestOperationId IN :operationIds AND c.active = true
+            WHERE (c.id.ingestOperationId IN :operationIds AND c.active = true)
+               OR (c.active = false AND c.deactivatedBy IN :operationIds)
             """)
-    List<String> findActivePageIdsByOperationIds(
+    List<String> findRestorePageIdsByOperationIds(
             @Param("operationIds") Collection<String> operationIds);
 
     /**
@@ -61,12 +65,39 @@ public interface WikiPageContributionRepository
 
     long countByIdPageIdAndActiveTrue(String pageId);
 
-    /** 휴지통으로 옮긴 문서의 기여를 끈다. 복구 작업이 아니므로 deactivated_by는 비워 둔다. */
+    /**
+     * 휴지통으로 옮긴 문서의 기여를 끈다. 복구 작업이 아니므로 deactivated_by는 비워 둔다.
+     *
+     * <p>재편입이 대체해 끈 행의 deactivated_by도 비운다. 남겨 두면 그 재편입을 되돌릴 때 휴지통 문서의
+     * 기여가 다시 켜진다.
+     */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query(value = """
             UPDATE wiki_page_contributions
-            SET active = false
-            WHERE source_document_id IN (:documentIds) AND active = true
+            SET active = false, deactivated_by = NULL
+            WHERE source_document_id IN (:documentIds)
+              AND (active = true OR deactivated_by IS NOT NULL)
             """, nativeQuery = true)
     int deactivateBySourceDocumentIds(@Param("documentIds") Collection<String> documentIds);
+
+    /**
+     * 같은 문서를 다시 편입한 결과를 기록할 때, 그 문서의 이전 편입 기여(lint가 다른 페이지에 이은 사본 포함)를
+     * 이 작업이 대체한 것으로 끈다. 새 편입이 더는 다루지 않는 페이지의 행도 끈다. 이 편입을 되돌리면
+     * deactivated_by로 정확히 이 행들을 다시 켠다. 결과가 늦게 와도 뒤 편입의 행은 끄지 않도록 먼저 시작한
+     * 작업의 행만 대상으로 한다. 결과 반영 트랜잭션이 이어서 다른 엔티티를 쓰므로 영속성 컨텍스트는 비우지 않는다.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE wiki_page_contributions contribution
+            SET active = false, deactivated_by = :operationId
+            WHERE contribution.source_document_id = :documentId
+              AND contribution.active = true
+              AND contribution.ingest_operation_id <> :operationId
+              AND contribution.ingest_operation_id IN (
+                  SELECT earlier.operation_id FROM ai_operation_logs earlier
+                  WHERE earlier.created_at < (SELECT current.created_at FROM ai_operation_logs current
+                                              WHERE current.operation_id = :operationId))
+            """, nativeQuery = true)
+    int supersedeEarlierIngests(@Param("documentId") String documentId,
+                                @Param("operationId") String operationId);
 }

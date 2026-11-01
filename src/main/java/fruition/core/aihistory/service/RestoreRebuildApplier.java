@@ -84,8 +84,11 @@ public class RestoreRebuildApplier {
         Map<String, PipelineWikiStateRequester.WikiPageSnapshot> pageSnapshots = pageSnapshots(
                 operation, loaded, request.deletedPagesOrEmpty());
         pageSnapshots.forEach((pageId, page) -> pageTitles.putIfAbsent(pageId, page.title()));
+        Set<String> plannedDeletions = plan.byAction(RestoreAction.delete).stream()
+                .map(PageRestorePlan::pageId)
+                .collect(java.util.stream.Collectors.toSet());
         for (RebuiltPage page : loaded) {
-            applyPage(operation, page, targetCounts, pageSnapshots.get(page.pageId()), now);
+            applyPage(operation, page, targetCounts, plannedDeletions, pageSnapshots.get(page.pageId()), now);
         }
         for (OperationResultRequest.FailedPage failed : request.failedPagesOrEmpty()) {
             recordFailure(operation, failed, targetCounts, pageTitles);
@@ -221,11 +224,17 @@ public class RestoreRebuildApplier {
     }
 
     private void applyPage(OperationLog operation, RebuiltPage page,
-                           Map<String, Integer> targetCounts,
+                           Map<String, Integer> targetCounts, Set<String> plannedDeletions,
                            PipelineWikiStateRequester.WikiPageSnapshot wikiPage,
                            Instant now) {
         String pageId = page.pageId();
-        int contributionCount = targetCount(targetCounts, pageId);
+        // 지시서에 없는 페이지는 ai가 사라진 하위 항목을 가리키던 참조를 정리해 다시 그린 살아 있는 페이지다
+        // (ai ADR 0042 결정 3). 원장은 바뀌지 않았으므로 기여 수는 직전 버전 값을 그대로 쓴다.
+        boolean referenceCleanup = !targetCounts.containsKey(pageId);
+        if (referenceCleanup && plannedDeletions.contains(pageId)) {
+            throw new InvalidCallbackPayloadException(
+                    "삭제하기로 한 페이지를 다시 그렸다고 보고했습니다: pageId=" + pageId);
+        }
 
         versionRepository.lockPage(pageId);
         if (wikiPage == null) {
@@ -245,6 +254,9 @@ public class RestoreRebuildApplier {
             return;
         }
 
+        int contributionCount = referenceCleanup
+                ? previous.map(WikiPageVersion::getContributionCount).orElse(0)
+                : targetCounts.get(pageId);
         long revision = versionRepository.findMaxRevision(pageId) + 1;
         versionRepository.save(new WikiPageVersion(
                 pageId, revision, contributionCount, page.markdown(), page.markdownKey(),
@@ -256,7 +268,8 @@ public class RestoreRebuildApplier {
         operationChangeRepository.save(new OperationChange(
                 operation.getOperationId(), ResourceType.wiki_page, pageId,
                 wikiPage.title(), beforeRevision, revision, ChangeType.rebuilt,
-                "남은 기여 " + contributionCount + "개로 다시 만들었습니다.",
+                referenceCleanup ? "사라진 하위 항목을 가리키던 참조를 정리했습니다."
+                        : "남은 기여 " + contributionCount + "개로 다시 만들었습니다.",
                 lines.additions(), lines.deletions()));
     }
 

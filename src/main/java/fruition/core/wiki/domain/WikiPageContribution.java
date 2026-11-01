@@ -16,6 +16,9 @@ import java.time.Instant;
  * <p>복구는 행을 지우지 않고 {@code active}를 끈다. 지우면 연속 복구에서 이전에 제외한 기여가
  * 다시 살아난다.
  *
+ * <p>같은 문서를 다시 편입하면 이전 편입의 행을 {@code deactivatedBy}=새 편입으로 끈다. 새 편입을 되돌리면
+ * 그 행만 다시 켠다.
+ *
  * <p>lint는 결과의 {@code ledger_contributions}로 두 종류 행을 남긴다(ai ADR 0042). 자기 하위 항목
  * 기록(작업 id = lint)과, 원래 편입 작업 id로 다른 페이지에 이은 편입 기록이다. 둘 다
  * {@code lintOperationId}에 그 lint를 적어 lint 복원이 함께 끈다.
@@ -91,6 +94,12 @@ public class WikiPageContribution {
     public void deactivate(String restoreOperationId) {
         this.active = false;
         this.deactivatedBy = restoreOperationId;
+    }
+
+    /** 대체한 재편입을 되돌리면 그 재편입이 끈 이전 편입 기여를 다시 켠다. */
+    public void reactivate() {
+        this.active = true;
+        this.deactivatedBy = null;
     }
 
     public String getPageId() { return id.getPageId(); }

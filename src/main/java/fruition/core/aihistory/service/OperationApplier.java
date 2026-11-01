@@ -93,6 +93,12 @@ public class OperationApplier {
                 ? (recorded == 0 ? OperationStatus.failed : OperationStatus.partially_succeeded)
                 : OperationStatus.succeeded;
         operation.complete(status, summaryFor(operation, request, status), recorded, payloadHash, now);
+        // 같은 문서를 다시 편입했으면 이 결과가 그 문서의 내용 전체다. 이전 편입 기여를 이 작업으로 대체해 끈다.
+        // 새 편입이 빠뜨린 개념의 이전 기여가 재생에서 다시 살아나지 않게 한다. 일부만 반영한 결과는 빠진 페이지의
+        // 이전 기여를 지울 근거가 없어 대체하지 않는다.
+        if (status == OperationStatus.succeeded && operation.getTargetDocumentId() != null && !documentDeleted) {
+            contributionRepository.supersedeEarlierIngests(operation.getTargetDocumentId(), operationId);
+        }
         return new OperationResultResponse(operationId, status.name(), recorded);
     }
 
