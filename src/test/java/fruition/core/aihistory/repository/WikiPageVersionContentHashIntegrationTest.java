@@ -65,7 +65,7 @@ class WikiPageVersionContentHashIntegrationTest {
                     List.of(new LintOperationApplier.LoadedPage(
                             PAGE_ID, "wiki/ws_1/pages/hash-width-page/ops/op_hash_width.md",
                             "# 본문", CONTENT_HASH)),
-                    "payload-hash", Instant.now());
+                    List.of(), "payload-hash", Instant.now());
         });
 
         WikiPageVersion saved = versionRepository.findById(new WikiPageVersionId(PAGE_ID, 1L))

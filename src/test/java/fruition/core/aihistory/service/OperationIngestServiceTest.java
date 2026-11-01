@@ -116,7 +116,7 @@ class OperationIngestServiceTest {
                 "op_lint_1", WORKSPACE_ID, USER_ID, OperationType.lint, null, Instant.now());
         when(operationLogRepository.findById("op_lint_1")).thenReturn(Optional.of(lint));
         givenObject("# 정리된 개념", "sha256:lint");
-        when(lintApplier.apply(anyString(), any(), anyList(), anyString(), any()))
+        when(lintApplier.apply(anyString(), any(), anyList(), anyList(), anyString(), any()))
                 .thenReturn(new OperationResultResponse("op_lint_1", "succeeded", 1));
         OperationResultRequest request = new OperationResultRequest(
                 "op_lint_1", "lint", "succeeded", WORKSPACE_ID, USER_ID, null,
@@ -128,7 +128,7 @@ class OperationIngestServiceTest {
 
         service.accept("op_lint_1", request);
 
-        verify(lintApplier).apply(anyString(), any(), anyList(), anyString(), any());
+        verify(lintApplier).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
         verify(applier, never()).apply(anyString(), any(), anyList(), anyString(), any());
     }
 
@@ -142,7 +142,7 @@ class OperationIngestServiceTest {
         when(operationLogRepository.findById("op_lint_1")).thenReturn(Optional.of(done));
 
         assertThat(service.accept("op_lint_1", request).recordedChanges()).isEqualTo(2);
-        verify(lintApplier, never()).apply(anyString(), any(), anyList(), anyString(), any());
+        verify(lintApplier, never()).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
     }
 
     @Test
@@ -155,7 +155,7 @@ class OperationIngestServiceTest {
 
         assertThatThrownBy(() -> service.accept("op_lint_1", lintRequest("sha256:lint")))
                 .isInstanceOf(OperationPayloadConflictException.class);
-        verify(lintApplier, never()).apply(anyString(), any(), anyList(), anyString(), any());
+        verify(lintApplier, never()).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
     }
 
     @Test

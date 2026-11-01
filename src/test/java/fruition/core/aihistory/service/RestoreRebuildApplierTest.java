@@ -185,7 +185,7 @@ class RestoreRebuildApplierTest {
                 new OperationResultRequest.LinkChanges(
                         List.of(new OperationResultRequest.Link("C3", "C9", "related")),
                         List.of(new OperationResultRequest.Link("C3", "C4", "supports"))),
-                List.of(new OperationResultRequest.FailedAction("delete_page", "C8", "page_not_found")));
+                List.of(new OperationResultRequest.FailedAction("delete_page", "C8", "page_not_found")), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -203,7 +203,7 @@ class RestoreRebuildApplierTest {
                 OPERATION_ID, "lint_restore", "partially_succeeded", WORKSPACE_ID, USER_ID, "doc_A",
                 null, List.of(), List.of(), List.of(), null,
                 List.of(new OperationResultRequest.FailedAction(
-                        "restore_links", "op_lint_1", "operation_log_missing")));
+                        "restore_links", "op_lint_1", "operation_log_missing")), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -226,7 +226,7 @@ class RestoreRebuildApplierTest {
                 new OperationResultRequest.LinkChanges(
                         List.of(new OperationResultRequest.Link("C3", "C9", "related")),
                         List.of(new OperationResultRequest.Link("C3", "C4", "supports"))),
-                List.of());
+                List.of(), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -247,7 +247,7 @@ class RestoreRebuildApplierTest {
         givenOperation(manifest(PageRestorePlan.delete(PAGE_ID)));
         OperationResultRequest request = new OperationResultRequest(
                 OPERATION_ID, "lint_restore", "succeeded", WORKSPACE_ID, USER_ID, "doc_A",
-                null, List.of(), List.of(), List.of(PAGE_ID), null, List.of());
+                null, List.of(), List.of(), List.of(PAGE_ID), null, List.of(), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -265,7 +265,7 @@ class RestoreRebuildApplierTest {
                 OPERATION_ID, "C9", ChangeType.deleted)).thenReturn(true);
         OperationResultRequest request = new OperationResultRequest(
                 OPERATION_ID, "lint_restore", "succeeded", WORKSPACE_ID, USER_ID, "doc_A",
-                null, List.of(), List.of(), List.of("C9"), null, List.of());
+                null, List.of(), List.of(), List.of("C9"), null, List.of(), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -278,7 +278,7 @@ class RestoreRebuildApplierTest {
         givenOperation(manifest(PageRestorePlan.delete("C9")));
         OperationResultRequest request = new OperationResultRequest(
                 OPERATION_ID, "lint_restore", "succeeded", WORKSPACE_ID, USER_ID, "doc_A",
-                null, List.of(), List.of(), List.of("C_OTHER"), null, List.of());
+                null, List.of(), List.of(), List.of("C_OTHER"), null, List.of(), null);
 
         assertThatThrownBy(() -> applier.apply(OPERATION_ID, request, List.of(), "hash", NOW))
                 .isInstanceOf(InvalidCallbackPayloadException.class)
@@ -326,7 +326,7 @@ class RestoreRebuildApplierTest {
                 OPERATION_ID, "lint_restore", "partially_succeeded", WORKSPACE_ID, USER_ID, "doc_A",
                 null, List.of(), List.of(), List.of(), null,
                 List.of(new OperationResultRequest.FailedAction(
-                        "restore_links", "op_lint_1", "operation_log_missing")));
+                        "restore_links", "op_lint_1", "operation_log_missing")), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -341,7 +341,7 @@ class RestoreRebuildApplierTest {
                 OPERATION_ID, "lint_restore", "partially_succeeded", WORKSPACE_ID, USER_ID, "doc_A",
                 null, List.of(), List.of(), List.of(), null,
                 List.of(new OperationResultRequest.FailedAction(
-                        "restore_links", "op_lint_1", "https://provider/payload?token=secret")));
+                        "restore_links", "op_lint_1", "https://provider/payload?token=secret")), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
