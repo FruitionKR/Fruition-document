@@ -145,9 +145,15 @@ public class AiTaskResultApplier {
                 INSERT INTO ai_task_result_receipts (event_id, run_id, task_kind)
                 VALUES (?, ?, 'lint') ON CONFLICT (event_id) DO NOTHING
                 """, eventId, runId) == 1;
+        boolean succeeded = "succeeded".equals(text(event, "status"));
+        // ai가 run 행을 만들기 전에 실패하면 ai 폴링은 404뿐이다. core에 코드를 남겨 폴링이 실패를 볼 수 있게 한다.
+        if (first && !succeeded) {
+            jdbcTemplate.update("UPDATE ai_task_runs SET error_code = ?, updated_at = now() WHERE id = ?",
+                    event.path("error").asText("LINT_FAILED"), runId);
+        }
         if (!first || operationId == null) return;
 
-        if (!"succeeded".equals(text(event, "status"))) {
+        if (!succeeded) {
             lintOperationStarter.markFailed(operationId,
                     event.path("error").asText("Wiki lint 처리에 실패했습니다."));
             return;
