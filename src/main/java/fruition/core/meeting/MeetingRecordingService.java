@@ -151,8 +151,8 @@ public class MeetingRecordingService {
                 }
                 return saved;
             });
-        } catch (CreditService.InsufficientCreditException e) {
-            removeQuietly(key);  // 크레딧을 채운 뒤 다시 올리게 한다. 기록되지 않은 원본(음성 개인정보)을 남기지 않는다.
+        } catch (CreditService.InsufficientCreditException | fruition.core.usage.limit.AiUsageLimitExceededException e) {
+            removeQuietly(key);  // 크레딧을 채우거나 한도가 풀린 뒤 다시 올리게 한다. 기록되지 않은 원본(음성 개인정보)을 남기지 않는다.
             throw e;
         }
         if (swap.isEmpty()) {

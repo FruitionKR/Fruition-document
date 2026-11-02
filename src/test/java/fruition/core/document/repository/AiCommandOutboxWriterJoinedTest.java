@@ -22,7 +22,8 @@ class AiCommandOutboxWriterJoinedTest {
         var repository = mock(AiCommandOutboxRepository.class);
         var jdbc = mock(JdbcTemplate.class);
         var credits = mock(CreditService.class);
-        var writer = new AiCommandOutboxWriter(repository, new ObjectMapper(), jdbc, mock(EntityManager.class), credits);
+        var writer = new AiCommandOutboxWriter(repository, new ObjectMapper(), jdbc, mock(EntityManager.class), credits,
+                mock(fruition.core.usage.limit.AiUsageLimiter.class));
 
         writer.enqueueJoined("convert:doc_1:0", "ai.convert.command", "convert:doc_1:0", "{\"kind\":\"convert_batch\"}");
 

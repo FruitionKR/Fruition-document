@@ -203,6 +203,21 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
                 .body(ErrorResponse.of("INSUFFICIENT_CREDIT", e.getMessage()));
     }
 
+    /** 사용자별 AI 사용 한도 초과. 하루 한도는 풀리는 시각(KST)을 reset_at과 Retry-After(초)로 알린다. */
+    @ExceptionHandler(fruition.core.usage.limit.AiUsageLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleAiUsageLimit(fruition.core.usage.limit.AiUsageLimitExceededException e) {
+        logHandled(e, HttpStatus.TOO_MANY_REQUESTS, "AI_USAGE_LIMIT_EXCEEDED");
+        var response = ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS);
+        String resetAt = null;
+        if (e.getResetAt() != null) {
+            resetAt = java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
+                    .format(e.getResetAt().atZone(fruition.core.usage.limit.AiUsageLimitPolicy.ZONE));
+            long seconds = Math.max(1, java.time.Duration.between(java.time.Instant.now(), e.getResetAt()).toSeconds());
+            response.header(org.springframework.http.HttpHeaders.RETRY_AFTER, Long.toString(seconds));
+        }
+        return response.body(ErrorResponse.ofUsageLimit("AI_USAGE_LIMIT_EXCEEDED", e.getMessage(), e.getType().name(), resetAt));
+    }
+
     @ExceptionHandler(MeetingException.class)
     public ResponseEntity<ErrorResponse> handleMeeting(MeetingException e) {
         logHandled(e, e.getStatus(), e.getCode());
@@ -553,7 +568,7 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
     public ResponseEntity<ErrorResponse> handleWikiPageVersionConflict(WikiPageVersionConflictException e) {
         logHandled(e, HttpStatus.CONFLICT, "WIKI_PAGE_VERSION_CONFLICT");
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(new ErrorResponse.ErrorDetail(
-                "WIKI_PAGE_VERSION_CONFLICT", e.getMessage(), null, e.getCurrentRevision())));
+                "WIKI_PAGE_VERSION_CONFLICT", e.getMessage(), null, e.getCurrentRevision(), null, null)));
     }
 
     @ExceptionHandler(WikiPageVersionNotFoundException.class)

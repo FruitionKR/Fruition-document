@@ -55,7 +55,8 @@ class WikiMaintenanceServiceTest {
         outboxWriter = spy(new AiCommandOutboxWriter(outboxRepository, objectMapper,
                 org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class),
                 org.mockito.Mockito.mock(jakarta.persistence.EntityManager.class),
-                org.mockito.Mockito.mock(fruition.core.usage.service.CreditService.class)));
+                org.mockito.Mockito.mock(fruition.core.usage.service.CreditService.class),
+                org.mockito.Mockito.mock(fruition.core.usage.limit.AiUsageLimiter.class)));
         service = new WikiMaintenanceService(workspaceAccessGuard, operationStarter, outboxWriter,
                 runStatusRequester, lintStateRepository, wikiStateRequester, objectMapper,
                 "ai.maintenance.command", workspaceAiModelClient);

@@ -7623,10 +7623,22 @@ components:
           description: 검증 실패(400 INVALID_REQUEST)일 때만 존재한다. 값이 없으면 키 자체가 빠지므로 null 체크가 아니라 존재 여부로 확인한다.
           items:
             $ref: "#/components/schemas/FieldError"
+        limit_type:
+          type: string
+          description: AI 사용 한도 초과(429 AI_USAGE_LIMIT_EXCEEDED)일 때만 존재한다. 넘은 한도 종류.
+          enum:
+          - CONCURRENT
+          - DAILY_COST
+          - DAILY_TOKENS
+          example: DAILY_COST
         message:
           type: string
           description: 사용자에게 그대로 보여도 되는 한국어 문구
           example: 요청 형식이 올바르지 않습니다.
+        reset_at:
+          type: string
+          description: "AI 하루 한도 초과(limit_type이 DAILY_COST·DAILY_TOKENS)일 때만 존재한다. 한도가 풀리는 다음 0시(Asia/Seoul), ISO-8601 offset 시각."
+          example: 2026-11-03T00:00:00+09:00
     ErrorResponse:
       type: object
       description: 컨트롤러까지 도달한 요청이 실패했을 때 모든 API가 공유하는 에러 응답 형식. 인증 필터가 막는 401은 HttpStatusEntryPoint가 상태 코드만 내보내므로 이 본문이 없다.

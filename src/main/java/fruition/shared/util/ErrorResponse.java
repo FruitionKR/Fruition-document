@@ -28,7 +28,17 @@ public record ErrorResponse(
             @JsonProperty("current_revision")
             @Schema(description = "본문 저장 충돌(409 DOCUMENT_VERSION_CONFLICT·WIKI_PAGE_VERSION_CONFLICT)일 때만 존재한다. 서버의 현재 revision으로, 충돌 등록에 쓴다.",
                     example = "5")
-            Long currentRevision) {
+            Long currentRevision,
+
+            @JsonProperty("limit_type")
+            @Schema(description = "AI 사용 한도 초과(429 AI_USAGE_LIMIT_EXCEEDED)일 때만 존재한다. 넘은 한도 종류.",
+                    allowableValues = {"CONCURRENT", "DAILY_COST", "DAILY_TOKENS"}, example = "DAILY_COST")
+            String limitType,
+
+            @JsonProperty("reset_at")
+            @Schema(description = "AI 하루 한도 초과(limit_type이 DAILY_COST·DAILY_TOKENS)일 때만 존재한다. 한도가 풀리는 다음 0시(Asia/Seoul), ISO-8601 offset 시각.",
+                    example = "2026-11-03T00:00:00+09:00")
+            String resetAt) {
 
         public record FieldError(
                 @Schema(description = "문제가 된 요청 필드명", example = "email")
@@ -39,14 +49,18 @@ public record ErrorResponse(
     }
 
     public static ErrorResponse of(String code, String message) {
-        return new ErrorResponse(new ErrorDetail(code, message, null, null));
+        return new ErrorResponse(new ErrorDetail(code, message, null, null, null, null));
     }
 
     public static ErrorResponse ofVersionConflict(String message, Long currentRevision) {
-        return new ErrorResponse(new ErrorDetail("DOCUMENT_VERSION_CONFLICT", message, null, currentRevision));
+        return new ErrorResponse(new ErrorDetail("DOCUMENT_VERSION_CONFLICT", message, null, currentRevision, null, null));
+    }
+
+    public static ErrorResponse ofUsageLimit(String code, String message, String limitType, String resetAt) {
+        return new ErrorResponse(new ErrorDetail(code, message, null, null, limitType, resetAt));
     }
 
     public static ErrorResponse ofValidation(List<ErrorDetail.FieldError> details) {
-        return new ErrorResponse(new ErrorDetail("INVALID_REQUEST", "요청 형식이 올바르지 않습니다.", details, null));
+        return new ErrorResponse(new ErrorDetail("INVALID_REQUEST", "요청 형식이 올바르지 않습니다.", details, null, null, null));
     }
 }

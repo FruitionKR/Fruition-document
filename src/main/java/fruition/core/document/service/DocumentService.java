@@ -1285,7 +1285,10 @@ public class DocumentService {
                 });
             } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
                 // 변환은 성공했고 다시 시도하지 않는다. 자동 ingest만 크레딧 부족으로 시작하지 못했음을 문서에 남긴다.
-                markAutoIngestRejected(part, e);
+                markAutoIngestRejected(part, "INSUFFICIENT_CREDIT");
+            } catch (fruition.core.usage.limit.AiUsageLimitExceededException e) {
+                // 사용자별 AI 사용 한도도 같은 방식으로 남긴다. 예외를 올리면 변환 결과 이벤트가 다시 처리된다.
+                markAutoIngestRejected(part, "AI_USAGE_LIMIT_EXCEEDED");
             }
         }
     }
@@ -1332,16 +1335,16 @@ public class DocumentService {
         });
     }
 
-    /** 변환 뒤 자동 ingest가 크레딧 부족으로 거절됐을 때 문서에 INSUFFICIENT_CREDIT으로 기록한다. 변환 결과는 그대로 둔다. */
-    private void markAutoIngestRejected(Document part, fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+    /** 변환 뒤 자동 ingest가 크레딧 부족·AI 사용 한도로 거절됐을 때 문서에 그 코드로 기록한다. 변환 결과는 그대로 둔다. */
+    private void markAutoIngestRejected(Document part, String code) {
         Instant now = Instant.now();
         transactionTemplate.execute(status -> {
             documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
                     .filter(value -> value.getDeletedAt() == null)
-                    .ifPresent(doc -> doc.markProcessingFailed(AiErrorMessages.query("INSUFFICIENT_CREDIT"), now));
+                    .ifPresent(doc -> doc.markProcessingFailed(AiErrorMessages.query(code), now));
             return null;
         });
-        log.warn("[변환 뒤 자동 ingest 거절] documentId={} reason=INSUFFICIENT_CREDIT", part.getId());
+        log.warn("[변환 뒤 자동 ingest 거절] documentId={} reason={}", part.getId(), code);
     }
 
     /**

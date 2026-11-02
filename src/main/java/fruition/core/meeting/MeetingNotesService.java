@@ -197,6 +197,9 @@ public class MeetingNotesService {
         } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
             inserted = Optional.empty();
             failure = "INSUFFICIENT_CREDIT";
+        } catch (fruition.core.usage.limit.AiUsageLimitExceededException e) {
+            inserted = Optional.empty();
+            failure = "AI_USAGE_LIMIT_EXCEEDED";
         } catch (RuntimeException e) {
             log.warn("[회의록 초안 요청 실패] meetingId={} requestId={}", meetingId, requestId, e);
             inserted = Optional.empty();

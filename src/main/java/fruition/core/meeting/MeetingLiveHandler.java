@@ -187,6 +187,9 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         } catch (CreditService.InsufficientCreditException e) {
             fail(live, "insufficient_credit", e.getMessage(), CloseStatus.POLICY_VIOLATION);
             return;
+        } catch (fruition.core.usage.limit.AiUsageLimitExceededException e) {
+            fail(live, "ai_usage_limit_exceeded", e.getMessage(), CloseStatus.POLICY_VIOLATION);
+            return;
         }
         long interval = environment.getProperty("app.billing.live-renew-seconds", Long.class, 60L);
         live.billing = billingRenewer.scheduleWithFixedDelay(() -> renewCredit(live), interval, interval, TimeUnit.SECONDS);
