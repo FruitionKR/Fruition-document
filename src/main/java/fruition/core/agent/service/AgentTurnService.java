@@ -284,7 +284,7 @@ public class AgentTurnService {
                             AgentRunApproveRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         // 고른 작업은 예약하기 전에 검사한다. 잘못된 선택이면 크레딧을 건드리지 않고 400으로 끝난다.
-        return rerun(workspaceId, userId, runId, current -> {
+        return rerun(workspaceId, userId, runId, APPROVABLE, current -> {
             List<String> operationIds = selectedOperationIds(current, request.operationIds());
             return () -> operationIds == null
                     ? statusRequester.approve(workspaceId, userId, runId, request.planVersion(), request.operationHash())
@@ -344,7 +344,7 @@ public class AgentTurnService {
     public JsonNode revise(String workspaceId, String userId, String runId,
                            AgentRunReviseRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return rerun(workspaceId, userId, runId,
+        return rerun(workspaceId, userId, runId, REVISABLE,
                 current -> () -> statusRequester.revise(workspaceId, userId, runId, request.instruction()));
     }
 
@@ -355,12 +355,19 @@ public class AgentTurnService {
      * 닫지 않아 다음 시도가 잔액을 다시 확인한다. 실행의 종료는 AgentRun 응답의 상태로 알아챈다({@link #closeIfTerminal}).
      * enforce가 꺼져 있으면 아무것도 하지 않는다(#102).
      */
-    private JsonNode rerun(String workspaceId, String userId, String runId,
+    /** ai-svc가 승인을 받는 run 상태({@code approve_and_enqueue}). */
+    private static final Set<String> APPROVABLE = Set.of("awaiting_approval");
+    /** ai-svc가 계획 수정을 받는 run 상태({@code revise}). */
+    private static final Set<String> REVISABLE = Set.of("awaiting_approval", "clarification_required");
+
+    private JsonNode rerun(String workspaceId, String userId, String runId, Set<String> accepting,
                            java.util.function.Function<JsonNode, java.util.function.Supplier<JsonNode>> prepare) {
         JsonNode current = statusRequester.getAutonomousRun(workspaceId, userId, runId);
         // 현재 run으로 요청을 검사·준비한다(예약 전). 전달은 아래에서 한다.
         java.util.function.Supplier<JsonNode> forward = prepare.apply(current);
-        if (usageCharges.isAutonomousTerminal(current)) {  // 이미 끝난 실행은 ai-svc가 거절한다. 예약하지 않는다.
+        // 이미 끝났거나 이 요청을 받지 않는 상태(예: 이미 승인돼 실행 중)면 ai-svc가 거절한다. 예약을 건드리지 않는다.
+        // 여기서 예약하면 거절(409)을 받은 뒤 실행 중인 run의 예약을 풀게 된다(#167).
+        if (current == null || !accepting.contains(current.path("status").asText())) {
             closeIfTerminal(runId, current);
             return forward.get();
         }
@@ -380,10 +387,16 @@ public class AgentTurnService {
 
     /**
      * 전달이 실패한 요청을 ai-svc가 받지 않았음이 확정됐는지. 409를 뺀 4xx·없는 run은 요청을 처리하지 않은 거절이다.
-     * 시간 초과·5xx·409(이미 승인됨일 수 있음)는 결과를 알 수 없어 run을 다시 조회한다. 상태와 계획이 그대로면 받지 않은 것이다.
+     * 응답이 없으면(시간 초과) 확정할 수 없다. 응답을 받은 5xx·409는 ai-svc 처리가 끝났으므로 run을 다시 조회해,
+     * 상태와 계획이 그대로면 받지 않은 것이다.
      */
     private boolean notAccepted(String workspaceId, String userId, String runId, JsonNode before, RuntimeException failure) {
         if (failure instanceof AgentRunNotFoundException) return true;
+        // 응답을 받지 못했으면 ai-svc가 아직 커밋 전일 수 있어 다시 조회해도 확정할 수 없다. 예약을 둔다.
+        if (failure instanceof fruition.core.agent.exception.PipelineAgentNoResponseException) {
+            log.warn("[Agent 전달 응답 없음] runId={} 예약 유지", runId);
+            return false;
+        }
         if (failure instanceof PipelineAgentException rejected) {
             int status = rejected.getHttpStatus();
             if (status >= 400 && status < 500 && status != 409) return true;

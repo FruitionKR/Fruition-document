@@ -781,15 +781,31 @@ class AgentTurnServiceTest {
     void approveResponseLostAfterAiAccepted_keepsReservation() throws Exception {
         // #167: ai-svc가 승인·실행 등록을 커밋한 뒤 응답이 유실됐다. 실행 중인데 예약을 풀면 안 된다.
         String runId = "run-lost-response";
-        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(
-                autonomousRun(runId, "awaiting_approval", "plan-1"), autonomousRun(runId, "queued", null));
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId))
+                .thenReturn(autonomousRun(runId, "awaiting_approval", "plan-1"));
         when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64)))
-                .thenThrow(new PipelineAgentException("AgentRun 요청 시간이 초과되었습니다.", 503, null));
+                .thenThrow(new fruition.core.agent.exception.PipelineAgentNoResponseException("AgentRun 요청 시간이 초과되었습니다."));
 
         assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
                 .isInstanceOf(PipelineAgentException.class);
 
         verify(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
+        verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
+        // 응답이 없으면 ai-svc가 커밋 전일 수 있어 다시 조회해도 확정할 수 없다. 조회는 진입 때 한 번뿐이다.
+        verify(statusRequester, org.mockito.Mockito.times(1)).getAutonomousRun("ws_1", "user_1", runId);
+    }
+
+    @Test
+    void serverErrorAfterAiAccepted_keepsReservation() throws Exception {
+        String runId = "run-5xx-accepted";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(
+                autonomousRun(runId, "awaiting_approval", "plan-1"), autonomousRun(runId, "executing", "plan-1"));
+        when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64)))
+                .thenThrow(new PipelineAgentException("AgentRun 요청이 거부되었습니다.", 503, null));
+
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(PipelineAgentException.class);
+
         verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
     }
 
@@ -805,6 +821,22 @@ class AgentTurnServiceTest {
         assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
                 .isInstanceOf(PipelineAgentException.class);
 
+        verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
+    }
+
+    @Test
+    void retryApproveAfterLostResponse_doesNotTouchRunningReservation() throws Exception {
+        // #167 재현: 응답 유실 뒤 다시 누르면 run은 이미 실행 중이고 ai-svc는 409를 준다. 예약을 건드리면 안 된다.
+        String runId = "run-retry-after-lost";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId))
+                .thenReturn(autonomousRun(runId, "executing", "plan-1"));
+        when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64)))
+                .thenThrow(new PipelineAgentException("AgentRun 요청이 거부되었습니다.", 409, null));
+
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(PipelineAgentException.class);
+
+        verify(usageCharges, never()).reserveAutonomousRun(anyString(), anyString(), anyString());
         verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
     }
 
@@ -868,6 +900,9 @@ class AgentTurnServiceTest {
     void reviseAndApproveReserveAutonomousRunBeforeForwardingAndDoNotForwardWhenShort() {
         String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";  // ai가 새로 만든 AgentRun id
         JsonNode response = new ObjectMapper().createObjectNode().put("id", runId).put("status", "executing");
+        // 승인·수정을 받는 상태의 run이어야 예약한다.
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(
+                new ObjectMapper().createObjectNode().put("id", runId).put("status", "awaiting_approval"));
         when(statusRequester.revise("ws_1", "user_1", runId, "좁혀줘")).thenReturn(response);
         when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64))).thenReturn(response);
 
@@ -992,7 +1027,6 @@ class AgentTurnServiceTest {
         JsonNode done = new ObjectMapper().createObjectNode().put("id", runId).put("status", "completed");
         org.mockito.Mockito.reset(statusRequester);
         when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(done);
-        when(usageCharges.isAutonomousTerminal(done)).thenReturn(true);
         service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("좁혀줘"));
         verify(usageCharges, never()).reserveAutonomousRun(anyString(), anyString(), anyString());
         verify(statusRequester).revise("ws_1", "user_1", runId, "좁혀줘");
