@@ -99,8 +99,13 @@ public class OperationIngestService {
         List<OperationApplier.LoadedPage> loaded = request.changedPages().stream()
                 .map(page -> load(operation, page))
                 .toList();
+        List<OperationApplier.DeletedPage> deleted = request.deletedPagesOrEmpty().stream()
+                .distinct()
+                .map(pageId -> new OperationApplier.DeletedPage(pageId,
+                        objectReader.contributionKey(operation.getWorkspaceId(), pageId, operation.getOperationId())))
+                .toList();
 
-        return applier.apply(operationId, request, loaded, payloadHash, Instant.now());
+        return applier.apply(operationId, request, loaded, deleted, payloadHash, Instant.now());
     }
 
     private LintOperationApplier.LoadedPage loadLint(
