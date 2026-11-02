@@ -120,7 +120,7 @@ public class PipelineSkillRequester {
                             String markdown, WorkspaceAiModelClient.AiModelSelection aiModel, String runId) {
         ObjectNode body = mapper.valueToTree(new TestRunPayload(workspaceId, userId, aiModel.provider(), aiModel.model(),
                 new TestRunDefinition(request.name(), request.description(), request.instructionsMarkdown(),
-                        request.capabilities()),
+                        request.capabilities(), request.requiresSource()),
                 new TestRunDocument(request.documentId(), baseVersion, markdown), request.target()));
         ObjectNode recorded = body.deepCopy();
         ((ObjectNode) recorded.path("document")).remove("markdown");
@@ -344,7 +344,10 @@ public class PipelineSkillRequester {
             String name,
             String description,
             @JsonProperty("instructions_markdown") String instructionsMarkdown,
-            java.util.List<String> capabilities) {}
+            java.util.List<String> capabilities,
+            @JsonProperty("requires_source")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            Boolean requiresSource) {}
 
     private record TestRunDocument(
             @JsonProperty("document_id") String documentId,
