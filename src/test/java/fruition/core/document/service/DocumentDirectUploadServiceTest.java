@@ -47,7 +47,7 @@ class DocumentDirectUploadServiceTest {
         var response = start(100 * MB);
         assertThat(response.part_size()).isEqualTo(64L * 1024 * 1024);
         assertThat(response.part_count()).isEqualTo(2);
-        verify(multipart).start(startsWith("tmp/document-uploads/"), eq("application/pdf"));
+        verify(multipart).start(startsWith("tmp/document-uploads/ws_test/user_test/"), eq("application/pdf"));
         verify(access).requireMember("ws_test", "user_test");
     }
     @Test void partUrlsCannotEscapeDeclaredRange() throws Exception {
@@ -101,6 +101,31 @@ class DocumentDirectUploadServiceTest {
                 new DocumentDirectUploadService.CompleteRequest("tampered"))).isInstanceOf(ResponseStatusException.class);
         verifyNoInteractions(documents);
         verify(storage, never()).statObject(any());
+    }
+    @Test void validlySignedTicketWithForeignKeyIsRejected() throws Exception {
+        // 서명 키가 새도 발급 형식이 아닌 키는 쓸 수 없다.
+        var signing = io.jsonwebtoken.security.Keys.hmacShaKeyFor(java.security.MessageDigest.getInstance("SHA-256")
+                .digest((SECRET + ":document-upload-ticket:v1").getBytes(StandardCharsets.UTF_8)));
+        String uuid = java.util.UUID.randomUUID().toString();
+        for (String key : new String[]{"documents/doc_other/original.pdf", "tmp/document-uploads/../x",
+                "tmp/document-uploads/ws_test/user_test/not-a-uuid",
+                // 서버 발급 형식이지만 다른 사용자·워크스페이스의 임시 객체
+                "tmp/document-uploads/ws_test/user_other/" + uuid, "tmp/document-uploads/ws_other/user_test/" + uuid,
+                "tmp/document-uploads/" + uuid}) {
+            String forged = io.jsonwebtoken.Jwts.builder().subject("user_test").audience().add("document-upload-ticket").and()
+                    .claim("workspace", "ws_test").claim("key", key).claim("size", 5).claim("upload", "u")
+                    .claim("partSize", 64 * MB).claim("filename", "a.pdf").claim("folder", "")
+                    .expiration(new java.util.Date(System.currentTimeMillis() + 60_000)).signWith(signing).compact();
+            assertThatThrownBy(() -> uploads.complete("ws_test", "user_test", "key",
+                    new DocumentDirectUploadService.CompleteRequest(forged)))
+                    .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
+                            .isIn(HttpStatus.BAD_REQUEST, HttpStatus.FORBIDDEN));
+            assertThatThrownBy(() -> uploads.partUrls("ws_test", "user_test",
+                    new DocumentDirectUploadService.PartsRequest(forged, 1, 1))).isInstanceOf(ResponseStatusException.class);
+        }
+        verify(storage, never()).statObject(any());
+        verify(storage, never()).getPresignedObjectUrl(any());
+        verifyNoInteractions(documents);
     }
     @Test void anotherUserOrWorkspaceCannotCompleteTicket() throws Exception {
         var ticket = new DocumentDirectUploadService.CompleteRequest(start(5).ticket());

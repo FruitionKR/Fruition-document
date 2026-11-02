@@ -37,7 +37,8 @@ public class DocumentDirectUploadService {
         this.properties = properties;
         this.access = access;
         this.documents = documents;
-        this.upload = new DirectMultipartUpload(storage, multipart, properties, secret, "document-upload-ticket");
+        this.upload = new DirectMultipartUpload(storage, multipart, properties, secret, "document-upload-ticket",
+                java.util.regex.Pattern.compile("tmp/document-uploads/[^/]+/[^/]+/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"));
     }
 
     public record StartRequest(String filename, long size, UUID folder_id) {}
@@ -61,14 +62,22 @@ public class DocumentDirectUploadService {
         // 알린 크기로 먼저 거절한다. 실제 크기는 확정 때 조립한 객체로 다시 확인한다.
         limits.requirePdfSize(request.size());
         limits.precheck(userId, request.size());
-        var started = upload.start(userId, workspaceId, "tmp/document-uploads/" + UUID.randomUUID(),
+        var started = upload.start(userId, workspaceId, keyPrefix(workspaceId, userId) + UUID.randomUUID(),
                 "application/pdf", request.size(), Map.of("filename", filename,
                         "folder", request.folder_id() == null ? "" : request.folder_id().toString()));
         return new StartResponse(started.ticket(), started.partSize(), started.partCount());
     }
 
+    /** 임시 원본은 발급 대상 경로에 둔다. ticket이 같은 형식의 남의 임시 객체를 가리키지 못하게 확정 때 대조한다. */
+    private static String keyPrefix(String workspaceId, String userId) {
+        return "tmp/document-uploads/" + workspaceId + "/" + userId + "/";
+    }
+
     private Claims verify(String workspaceId, String userId, String ticket) {
         Claims claims = upload.verify(workspaceId, userId, ticket);
+        if (!claims.get("key", String.class).startsWith(keyPrefix(workspaceId, userId))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "다른 사용자의 업로드를 사용할 수 없습니다.");
+        }
         access.requireMember(workspaceId, userId);
         return claims;
     }

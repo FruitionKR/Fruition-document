@@ -69,6 +69,7 @@ class MeetingRecordingIntegrationTest {
     private final HttpClient http = HttpClient.newHttpClient();
     private String userId;
     private String workspaceId;
+    @org.springframework.beans.factory.annotation.Value("${app.jwt.secret}") String jwtSecret;
 
     @BeforeEach
     void setUp() {
@@ -163,6 +164,24 @@ class MeetingRecordingIntegrationTest {
         uploadPost(meetingId, "complete", "{\"ticket\":\"tampered\"}").andExpect(status().isBadRequest());
 
         uploadPost(meetingId, "abort", "{\"ticket\":\"" + ticket + "\"}").andExpect(status().isNoContent());
+    }
+
+    @Test
+    void validlySignedTicketPointingAtAnotherMeetingsRecording_isRejected() throws Exception {
+        String meetingId = createMeeting("upload");
+        String other = createMeeting("upload");
+        var signing = io.jsonwebtoken.security.Keys.hmacShaKeyFor(java.security.MessageDigest.getInstance("SHA-256")
+                .digest((jwtSecret + ":meeting-recording-ticket:v1").getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        String forged = io.jsonwebtoken.Jwts.builder().subject(userId).audience().add("meeting-recording-ticket").and()
+                .claim("meeting", meetingId).claim("contentType", "audio/wav").claim("workspace", workspaceId)
+                .claim("key", "meetings/" + other + "/recording-" + UUID.randomUUID() + ".wav")
+                .claim("size", 3).claim("upload", "u").claim("partSize", 64L * 1024 * 1024)
+                .expiration(new java.util.Date(System.currentTimeMillis() + 60_000)).signWith(signing).compact();
+
+        uploadPost(meetingId, "complete", "{\"ticket\":\"" + forged + "\"}").andExpect(status().isForbidden());
+        uploadPost(meetingId, "parts", "{\"ticket\":\"" + forged + "\",\"first_part\":1,\"count\":1}")
+                .andExpect(status().isForbidden());
+        assertThat(meetingStatus(meetingId)).isEqualTo("awaiting_upload");
     }
 
     @Test
