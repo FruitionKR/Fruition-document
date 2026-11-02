@@ -777,10 +777,31 @@ class DocumentServiceConvertTest {
         assertThat(queue.getCompletedPages()).isEqualTo(20);
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
         assertThat(parent.getErrorMessage()).contains("크레딧이 부족해 작업을 시작하지 않았습니다").doesNotContain("INSUFFICIENT_CREDIT", "PDF 변환에 실패했습니다");
+        assertThat(parent.getErrorCode()).isEqualTo("INSUFFICIENT_CREDIT");
         // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 풀었다.
         var order = org.mockito.Mockito.inOrder(taskWriter, ingestCommandOutbox);
         order.verify(taskWriter).completeAndSettle("convert:" + parent.getId());
         order.verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+    }
+
+    @Test
+    @DisplayName("변환 뒤 자동 ingest가 AI 사용 한도로 거절되면 문서에 error_code AI_USAGE_LIMIT_EXCEEDED와 문구를 함께 남긴다")
+    void autoIngestRejectedForAiUsageLimitRecordsMachineReadableCode() throws Exception {
+        enableAutoIngest(true);
+        startScenario("<!-- page 10 -->\n\n# first pages\n");
+        queue.checkpoint(10, 20);
+        seedDispatched(10);
+        stubResult(10, "<!-- page 1 -->\n\n# next pages\n");
+        org.mockito.Mockito.doThrow(new fruition.core.usage.limit.AiUsageLimitExceededException(
+                        fruition.core.usage.limit.AiUsageLimitType.DAILY_COST, null, "한도"))
+                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+
+        documentService.applyConvertBatch(succeeded(10, 20, 20));
+
+        assertThat(queue.getCompletedPages()).isEqualTo(20);
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
+        assertThat(parent.getErrorCode()).isEqualTo("AI_USAGE_LIMIT_EXCEEDED");
+        assertThat(parent.getErrorMessage()).isEqualTo(fruition.core.aitask.AiErrorMessages.AI_USAGE_LIMIT_EXCEEDED);
     }
 
     @Test

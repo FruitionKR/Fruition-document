@@ -1064,7 +1064,7 @@ class AgentTurnServiceTest {
     private DocumentDetailResponse document(String filename, String mimeType, long currentVersion) {
         return new DocumentDetailResponse(
                 "doc_1", filename, mimeType, 10, DocumentStatus.completed,
-                "s3://source", null, Instant.now(), Instant.now(), null, List.of(),
+                "s3://source", null, Instant.now(), Instant.now(), null, null, List.of(),
                 null, null, null, filename.substring(0, filename.lastIndexOf('.')),
                 filename.substring(filename.lastIndexOf('.') + 1), null, false, currentVersion,
                 currentVersion, null, Instant.now(), null, null, null, true, false, false, null, null, null, null);

@@ -1352,7 +1352,7 @@ public class DocumentService {
         transactionTemplate.execute(status -> {
             documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
                     .filter(value -> value.getDeletedAt() == null)
-                    .ifPresent(doc -> doc.markProcessingFailed(AiErrorMessages.query(code), now));
+                    .ifPresent(doc -> doc.markProcessingFailed(code, AiErrorMessages.query(code), now));
             return null;
         });
         log.warn("[변환 뒤 자동 ingest 거절] documentId={} reason={}", part.getId(), code);
@@ -1611,6 +1611,7 @@ public class DocumentService {
                 doc.getUploadedAt(),
                 doc.getProcessedAt(),
                 doc.getErrorMessage(),
+                doc.getErrorCode(),
                 wikiPages,
                 doc.getPipelineRunId(),
                 DocumentItemAssembler.resolveProcessingState(doc),

@@ -90,6 +90,7 @@
       "display_name": "설계문서",
       "document_role": "EDITABLE",
       "editable": false,
+      "error_code": "string",
       "error_message": "string",
       "extracted_text_uri": "string",
       "file_type": "pdf",
@@ -155,6 +156,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
       "display_name": "설계문서",
       "document_role": "EDITABLE",
       "editable": false,
+      "error_code": "string",
       "error_message": "string",
       "extracted_text_uri": "string",
       "file_type": "pdf",
@@ -991,6 +993,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
   },
   "edit_revision": 12,
   "editable": true,
+  "error_code": "string",
   "error_message": "string",
   "extracted_text_uri": "string",
   "file_type": "pdf"
@@ -1047,6 +1050,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
   },
   "edit_revision": 12,
   "editable": true,
+  "error_code": "string",
   "error_message": "string",
   "extracted_text_uri": "string",
   "file_type": "pdf"

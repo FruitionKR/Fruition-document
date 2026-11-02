@@ -68,4 +68,20 @@ class DocumentItemAssemblerTest {
 
         assertThat(DocumentItemAssembler.needsReingest(document)).isFalse();
     }
+
+    @Test
+    @DisplayName("거절 코드는 문서 목록 항목의 error_code로 내려가고, 재ingest나 코드 없는 실패로 바뀌면 비워진다")
+    void errorCode_exposedOnItemAndClearedOnLaterTransitions() {
+        Document document = markdownDocument("hash");
+        document.markProcessingFailed("AI_USAGE_LIMIT_EXCEEDED", "한도 문구", java.time.Instant.now());
+        assertThat(document.getErrorCode()).isEqualTo("AI_USAGE_LIMIT_EXCEEDED");
+        assertThat(document.getErrorMessage()).isEqualTo("한도 문구");
+
+        document.reopenForReingest("hash", 10);
+        assertThat(document.getErrorCode()).isNull();
+
+        document.markProcessingFailed("AI_USAGE_LIMIT_EXCEEDED", "한도 문구", java.time.Instant.now());
+        document.markProcessingFailed("파이프라인 실패", java.time.Instant.now());
+        assertThat(document.getErrorCode()).isNull();
+    }
 }
