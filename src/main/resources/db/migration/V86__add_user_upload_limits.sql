@@ -2,6 +2,7 @@
 -- 하루 업로드 개수는 아래 기록 테이블로 센다. 원본 행이 삭제돼도 그날 올린 개수는 줄지 않아야 하므로 별도 기록을 둔다.
 -- 기존 테이블 인덱스는 CONCURRENTLY가 필요해 V87로 나눈다. 새 테이블의 인덱스는 같은 트랜잭션에서 만든 빈 테이블이라
 -- 다른 세션과 잠금을 다투지 않으므로 여기서 함께 만든다.
+-- 이 파일의 DDL은 잡는 동안 다른 쓰기를 막으므로 짧게 기다리고 실패한다(CONCURRENTLY 파일은 120s).
 SET LOCAL lock_timeout = '5s';
 
 CREATE TABLE IF NOT EXISTS user_upload_events (
