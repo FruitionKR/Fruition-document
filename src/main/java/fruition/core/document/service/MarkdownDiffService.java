@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.regex.Pattern;
 
 @Service
 public class MarkdownDiffService {
@@ -21,6 +22,9 @@ public class MarkdownDiffService {
     // 편집 거리와 무관하게 O(n+m) 메모리만 쓰므로, 여기서는 편집 거리가 아니라
     // 입력 자체의 크기로 "정말로 너무 큰 입력"만 막는다.
     private static final long MAX_INPUT_CHARS = 20_000_000L;
+    /** 노트 첫 줄의 식별 주석. 저장 본문에는 남지만 편집기에도 diff에도 보이지 않아야 한다. */
+    public static final Pattern NOTE_MARKER = Pattern.compile(
+            "^(<!--\\s*fruition-(?:note|workspace):\\s*[^\\r\\n]+?\\s*-->)\\r?\\n?");
 
     /** 문서용 어댑터. 기존 응답 스키마를 그대로 유지한다. */
     public DocumentContentDiffResponse compare(
@@ -33,6 +37,9 @@ public class MarkdownDiffService {
 
     /** 리소스에 매이지 않는 계산. Wiki 페이지도 이것을 쓴다. */
     public MarkdownDiff diff(long fromVersion, String before, long toVersion, String after) {
+        // 줄 번호도 편집기 snapshot(주석 없음) 기준과 맞춘다.
+        before = NOTE_MARKER.matcher(before).replaceFirst("");
+        after = NOTE_MARKER.matcher(after).replaceFirst("");
         if (before.equals(after)) {
             return new MarkdownDiff(fromVersion, toVersion, 0, 0, List.of());
         }

@@ -43,8 +43,8 @@ public class AiTaskResultApplier {
     private fruition.core.analytics.DocumentAnalytics analytics;
 
     private static final Set<String> MARKDOWN_ACTIONS = Set.of("markdown_create", "markdown_edit");
-    private static final java.util.regex.Pattern NOTE_MARKER = java.util.regex.Pattern.compile(
-            "^(<!--\\s*fruition-(?:note|workspace):\\s*[^\\r\\n]+?\\s*-->)\\r?\\n?");
+    private static final java.util.regex.Pattern NOTE_MARKER =
+            fruition.core.document.service.MarkdownDiffService.NOTE_MARKER;
     private static final Set<String> NON_MUTATING_ACTIONS = Set.of(
             "chat_answer", "conversation_reply", "clarify", "reject", "skill_authoring", "skill_draft_proposal",
             "folder_lookup");

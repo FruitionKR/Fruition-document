@@ -35,6 +35,19 @@ class MarkdownDiffServiceTest {
     }
 
     @Test
+    void diff_hidesNoteMarkerAndNumbersLinesFromBody() {
+        var created = service.diff(0, "", 1, "<!-- fruition-note: doc_1 -->\n# 제목");
+        assertThat(created.additions()).isEqualTo(1);
+        assertThat(created.hunks().getFirst().lines())
+                .extracting(DocumentContentDiffResponse.Line::content).containsExactly("# 제목");
+        assertThat(created.hunks().getFirst().lines().getFirst().newLine()).isEqualTo(1);
+
+        var edited = service.diff(1, "<!-- fruition-note: doc_1 -->\n가\n나", 2,
+                "<!-- fruition-note: doc_1 -->\n가\n다");
+        assertThat(edited.hunks().getFirst().lines().get(1).oldLine()).isEqualTo(2);
+    }
+
+    @Test
     void compare_sameMarkdown_returnsEmptyHunks() {
         DocumentContentDiffResponse response =
                 service.compare("doc_1", 1, "동일", 2, "동일");
