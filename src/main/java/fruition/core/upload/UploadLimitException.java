@@ -7,7 +7,6 @@ public class UploadLimitException extends RuntimeException {
     public static final String FILE_TOO_LARGE = "FILE_TOO_LARGE";
     public static final String TOO_MANY_FILES = "TOO_MANY_FILES";
     public static final String STORAGE_QUOTA_EXCEEDED = "STORAGE_QUOTA_EXCEEDED";
-    public static final String UPLOAD_DAILY_LIMIT_EXCEEDED = "UPLOAD_DAILY_LIMIT_EXCEEDED";
 
     private final HttpStatus status;
     private final String code;

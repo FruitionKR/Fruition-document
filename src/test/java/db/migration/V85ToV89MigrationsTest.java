@@ -59,7 +59,6 @@ class V85ToV89MigrationsTest {
     void appliesContiguouslyWithValidIndexesAndRerunIsNoOp() throws SQLException {
         MigrateResult first = flyway().migrate();
 
-        assertThat(first.targetSchemaVersion).isEqualTo("89");
         assertThat(first.migrations.stream().map(m -> m.version).toList())
                 .contains("84", "85", "86", "87", "88", "89");
         assertThat(validIndexes()).containsAll(NEW_INDEXES);

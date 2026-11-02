@@ -38,16 +38,18 @@ import java.util.UUID;
 public class FolderController {
 
     private final FolderService folderService;
+    private final fruition.core.imports.ImportSessionStore importSessions;
 
-    public FolderController(FolderService folderService) {
+    public FolderController(FolderService folderService, fruition.core.imports.ImportSessionStore importSessions) {
         this.folderService = folderService;
+        this.importSessions = importSessions;
     }
 
     @Operation(summary = "폴더 생성", description = "워크스페이스의 최상위 또는 지정한 상위 폴더 아래에 새 폴더를 생성합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "201", description = "생성 성공 또는 멱등 재요청",
             content = @Content(schema = @Schema(implementation = FolderResponse.class))),
-        @ApiResponse(responseCode = "400", description = "잘못된 이름 또는 위치, 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음)",
+        @ApiResponse(responseCode = "400", description = "잘못된 이름 또는 위치, INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음), 또는 열린 가져오기 세션이 아님(IMPORT_INVALID)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "워크스페이스 또는 상위 폴더를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -60,7 +62,12 @@ public class FolderController {
             @AuthenticationPrincipal String userId,
             @Parameter(description = "요청 멱등 키", required = true)
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Parameter(description = "가져오기 세션 ID. 있으면 열린 세션이어야 합니다(아니면 400 IMPORT_INVALID). 폴더는 항목 상한에 세지 않습니다.")
+            @RequestHeader(value = fruition.core.imports.ImportSessionStore.HEADER, required = false) String importId,
             @Valid @RequestBody FolderCreateRequest request) {
+        if (importId != null) {
+            importSessions.requireOpen(workspaceId, userId, importId);
+        }
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(folderService.create(workspaceId, userId, idempotencyKey, request));
     }

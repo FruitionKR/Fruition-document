@@ -13,6 +13,7 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Agent](agent.md) | 11 | Agent 실행·승인과 내부 Tool·Skill 폴더 원문 호출 |
 | [Chat](chat.md) | 7 | 채팅 세션·메시지와 Wiki 내보내기 |
 | [Documents](documents/README.md) | 29 | 문서 관리·본문·편집·이력 |
+| [Imports](imports.md) | 5 | Notion 내보내기 가져오기 세션(한도·완료·편입 예상·일괄 편입) |
 | [Meetings](meetings.md) | 15 + WS 1 | 회의 생성·조회·삭제, 실시간 받아쓰기 WebSocket, 녹음 원본 직접 업로드·비동기 파일 전사·취소, 회의록 초안·저장 |
 | [Navigation](navigation.md) | 10 | 폴더와 문서 트리 탐색 |
 | [Notifications](notifications.md) | 3 | 앱 안 알림 목록과 읽음 처리 |
@@ -22,7 +23,7 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 | [Wiki](wiki.md) | 8 | Wiki 조회·사람의 본문 수정·기여·유지보수 |
 | [Usage](agent.md#본인-모델-사용량-조회) | 1 | 본인 모델별 토큰 사용량 조회 |
 
-기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 116개(`/api/**` 104 + `/internal/**` 12), operation 128개**다.
+기계 판독 원본은 `api-specs/openapi.yaml`이며 **path 126개(`/api/**` 112 + `/internal/**` 14), operation 139개**다.
 위 표의 "API 수"는 각 도메인 문서가 다루는 API 수이고, 충돌할 경우 실행 코드와 생성된 OpenAPI를 우선한다.
 표의 도메인별 API 수 합계는 같은 path의 여러 method를 세는 단위가 섞여 operation 수와 다를 수 있다. 정확한 수는 OpenAPI를 본다.
 

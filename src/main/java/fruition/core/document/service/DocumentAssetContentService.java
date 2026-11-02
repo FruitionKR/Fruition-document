@@ -23,6 +23,10 @@ public class DocumentAssetContentService {
     private final DocumentAssetStorageCoordinator storageCoordinator;
     private final DocumentService documentService;
 
+    /** 가져오기 세션 확인. 단위 테스트처럼 주입되지 않으면 가져오기 저장을 받지 않는다. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.imports.ImportSessionStore importSessions;
+
     public DocumentAssetContentService(
             DocumentAssetSaveRequestParser requestParser,
             DocumentAssetValidator assetValidator,
@@ -43,8 +47,26 @@ public class DocumentAssetContentService {
             MultiValueMap<String, MultipartFile> fileParts,
             String applyOperationId
     ) {
+        return save(workspaceId, userId, documentId, metadataJson, fileParts, applyOperationId, null);
+    }
+
+    /**
+     * @param importId {@code X-Fruition-Import-Id}. 있으면 그 가져오기 세션이 만든 문서에만 저장할 수 있고, 새 이미지는
+     *                 세션 항목으로 센다. 이미지 크기·개수·저장 용량 한도는 그대로다.
+     */
+    public DocumentContentSaveResponse save(
+            String workspaceId,
+            String userId,
+            String documentId,
+            String metadataJson,
+            MultiValueMap<String, MultipartFile> fileParts,
+            String applyOperationId,
+            String importId
+    ) {
         var request = requestParser.parse(metadataJson, fileParts);
         documentService.validateContentSavePreconditions(workspaceId, userId, documentId);
+        var importSession = importId == null ? null : importSessions.requireOpen(workspaceId, userId, importId);
+        if (importSession != null) importSessions.requireDocument(importSession, documentId);
 
         Map<UUID, DocumentAssetValidator.ValidatedAsset> validated =
                 assetValidator.validateAll(request.attachments());
@@ -56,7 +78,7 @@ public class DocumentAssetContentService {
         try {
             DocumentContentSaveResponse saved = documentService.saveContentWithAssets(
                     workspaceId, userId, documentId, finalMarkdown, request.baseVersion(),
-                    revisionWriteId, stored, applyOperationId);
+                    revisionWriteId, stored, applyOperationId, importSession);
             // 성공한 재전송도 다른 시도가 먼저 커밋했다면 자기 객체는 쓰이지 않는다.
             // coordinator는 DB가 참조하는 key를 남기므로 정상 저장의 객체는 지우지 않는다.
             storageCoordinator.compensate(stored.values());

@@ -45,6 +45,7 @@ class FolderControllerTest {
     @Autowired ObjectMapper objectMapper;
     @Autowired JwtTokenProvider jwtTokenProvider;
     @MockBean FolderService folderService;
+    @MockBean fruition.core.imports.ImportSessionStore importSessions;
 
     @Test
     void create_authenticatedReturnsCreated() throws Exception {
