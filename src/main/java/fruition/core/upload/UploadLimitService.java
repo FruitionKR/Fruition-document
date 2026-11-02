@@ -16,7 +16,9 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>동시성: {@link #enforce}는 사용자별 트랜잭션 advisory lock을 잡은 뒤 사용량을 읽는다. 호출자는 같은 트랜잭션에서
  * 행을 쓰고 커밋하므로, 같은 사용자의 병렬 업로드는 이 지점에서 직렬화되어 함께 한도를 넘지 못한다.
- * 직접 업로드 시작 때의 {@link #precheck}는 잠금 없이 일찍 거절하기 위한 것이고, 확정 때 {@link #enforce}가 최종 판단한다.
+ * 직접 업로드 시작 때·원본 저장 전의 {@link #precheck}는 잠금 없이 일찍 거절하기 위한 것이고, {@link #enforce}가 최종 판단한다.
+ * {@link #enforce}는 object storage 쓰기가 끝난 뒤 행을 쓰기 직전에 불러, 큰 파일을 쓰는 동안 잠금을 쥐지 않게 한다.
+ * 거절되면 호출자가 방금 저장한 객체를 지운다.
  */
 @Service
 public class UploadLimitService {

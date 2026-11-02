@@ -1,6 +1,6 @@
 package db.migration;
 
-import org.flywaydb.core.Flyway;
+import fruition.core.config.FlywayDefaults;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -59,7 +59,7 @@ class V79ReplaceNonCheapModelOutboxSnapshotsTest {
     }
 
     private static void migrate(String target) {
-        var configuration = Flyway.configure()
+        var configuration = FlywayDefaults.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
         if (target != null) {
             configuration.target(MigrationVersion.fromVersion(target));

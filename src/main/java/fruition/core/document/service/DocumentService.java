@@ -302,11 +302,9 @@ public class DocumentService {
             if (replay.isPresent()) {
                 return replay.get();
             }
-            // 멱등 재요청은 위에서 돌려줬다. 새 업로드만 사용자 잠금 아래에서 용량·하루 개수를 확인하고 기록한다.
+            // 멱등 재요청은 위에서 돌려줬다. 새 업로드는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
             if (uploadLimits != null) {
-                uploadLimits.enforce(userId, file.getSize(), 1);
-                uploadLimits.record(userId, workspaceId, fruition.core.upload.UploadLimitService.KIND_DOCUMENT,
-                        file.getSize());
+                uploadLimits.precheck(userId, file.getSize(), 1);
             }
 
             // 같은 폴더에 같은 이름이 있으면 거절하지 않고 "이름 (2).pdf"처럼 번호를 붙인다.
@@ -340,6 +338,15 @@ public class DocumentService {
             objectStored = true;
             registerMinioRollbackCleanup(objectPath);
             log.info("[문서 원본 저장 완료] documentId={} objectPath={}", documentId, objectPath);
+
+            // 사용자 잠금은 저장이 끝난 뒤 문서 행을 쓰기 직전에 잡아 커밋까지 짧게 쥔다. 큰 원본을 쓰는 동안 잡으면
+            // 같은 사용자의 다른 업로드가 그 시간 내내 줄을 선다. 잠금 아래에서 다시 확인해 병렬 업로드가 함께 한도를
+            // 넘지 못하게 하고, 거절되면 롤백 정리(registerMinioRollbackCleanup)가 방금 저장한 원본을 지운다.
+            if (uploadLimits != null) {
+                uploadLimits.enforce(userId, file.getSize(), 1);
+                uploadLimits.record(userId, workspaceId, fruition.core.upload.UploadLimitService.KIND_DOCUMENT,
+                        file.getSize());
+            }
 
             Document document = new Document(
                     documentId,
@@ -1994,16 +2001,16 @@ public class DocumentService {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
         try {
             saved = executeWithSaveRetry(() -> saveTransaction.execute(status -> {
-                if (uploadLimits != null && !assets.isEmpty()) {
-                    uploadLimits.enforce(userId, assets.stream().mapToLong(DocumentAsset::getByteSize).sum(),
-                            assets.size());
-                }
                 // 같은 요청이 겹쳐도 먼저 커밋된 asset의 storage_key를 merge로 덮지 않는다.
                 // 이 트랜잭션이 새로 만든 행만 무변경 응답 때 정리한다.
                 List<DocumentAsset> insertedAssets = new java.util.ArrayList<>();
                 for (DocumentAsset asset : assets) {
                     int inserted = assetRepository.insertIfAbsent(asset);
                     if (inserted == 1) insertedAssets.add(asset);
+                }
+                // 새로 들어간 행만 업로드로 센다(먼저 커밋된 재전송 행은 이미 세었다). 행을 이미 썼으므로 추가분은 0이다.
+                if (uploadLimits != null && !insertedAssets.isEmpty()) {
+                    uploadLimits.enforce(userId, 0, insertedAssets.size());
                 }
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),

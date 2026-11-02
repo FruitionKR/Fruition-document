@@ -1,7 +1,7 @@
 package fruition.core;
 
 import java.util.Arrays;
-import org.flywaydb.core.Flyway;
+import fruition.core.config.FlywayDefaults;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -16,7 +16,7 @@ public class DocumentApplication {
 
     public static void main(String[] args) {
         if (Arrays.asList(args).contains("--migrate-only")) {
-            Flyway.configure()
+            FlywayDefaults.configure()
                     .dataSource("jdbc:postgresql://" + requiredEnv("POSTGRES_HOST") + ":"
                                     + requiredEnv("POSTGRES_PORT") + "/" + requiredEnv("CORE_DB_NAME")
                                     + "?sslmode=" + System.getenv().getOrDefault("PGSSLMODE", "prefer")

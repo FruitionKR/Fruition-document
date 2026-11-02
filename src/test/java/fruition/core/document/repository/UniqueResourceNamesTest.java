@@ -1,6 +1,6 @@
 package fruition.core.document.repository;
 
-import org.flywaydb.core.Flyway;
+import fruition.core.config.FlywayDefaults;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -29,7 +29,7 @@ class UniqueResourceNamesTest {
     @BeforeAll
     static void migrate() {
         var source = new DriverManagerDataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
-        Flyway.configure().dataSource(source).load().migrate();
+        FlywayDefaults.configure().dataSource(source).load().migrate();
         jdbc = new JdbcTemplate(source);
     }
 

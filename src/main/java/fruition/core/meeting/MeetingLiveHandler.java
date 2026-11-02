@@ -44,6 +44,10 @@ import java.util.regex.Pattern;
  *
  * <p>녹음 종료·일시정지는 이 연결의 finish 메시지로만 받는다. ai-svc 연결을 가진 Pod만 finish를 보낼 수 있기 때문이다.
  * 오디오는 ai-svc 전송이 끝난 뒤 다음 frame을 읽어 서버 메모리에 쌓이지 않게 한다.
+ *
+ * <p>업로드 한도(UploadLimitService)는 여기서 보지 않는다. 이 연결은 오디오를 전사로만 흘려보내고 object storage에
+ * 저장하지 않으므로 사용자 저장 용량이 늘지 않는다. 실시간 회의의 녹음 원본은 끝난 뒤 MeetingRecordingService로
+ * 따로 올리며, 그 확정 단계가 다른 녹음 업로드와 같이 한도를 확인하고 기록한다.
  */
 @Component
 public class MeetingLiveHandler extends AbstractWebSocketHandler {
