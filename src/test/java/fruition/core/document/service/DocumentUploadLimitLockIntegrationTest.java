@@ -41,7 +41,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Import(TestcontainersConfiguration.class)
 class DocumentUploadLimitLockIntegrationTest {
     static final long QUOTA = 5L * 1024 * 1024 * 1024;
-    static final int DAILY_LIMIT = 200;
 
     @Autowired DocumentService documents;
     @Autowired UploadLimitService limits;
@@ -90,7 +89,6 @@ class DocumentUploadLimitLockIntegrationTest {
             pool.shutdownNow();
         }
         assertThat(documentCount()).isEqualTo(2);
-        assertThat(limits.uploadsToday(userId)).isEqualTo(2);
         assertThat(limits.usedBytes(userId)).isEqualTo(20);
     }
 
@@ -111,7 +109,6 @@ class DocumentUploadLimitLockIntegrationTest {
         assertThat(storedKey.get()).isNotNull();
         assertThat(objectExists(storedKey.get())).isFalse();
         assertThat(documentCount()).isZero();
-        assertThat(limits.uploadsToday(userId)).isZero();
     }
 
     @Test
@@ -127,7 +124,7 @@ class DocumentUploadLimitLockIntegrationTest {
     }
 
     @Test
-    void contentSave_countsOnlyNewlyInsertedAssetsAgainstDailyLimit() {
+    void contentSave_doesNotCountRetransmittedAssetTwiceAgainstQuota() {
         String documentId = documents.createMarkdown(workspaceId, userId, "create-" + UUID.randomUUID(),
                 new MarkdownDocumentCreateRequest("이미지 문서", "# 본문", null)).id();
         long base = jdbc.queryForObject("SELECT revision FROM document_edit_states WHERE document_id = ?",
@@ -140,7 +137,7 @@ class DocumentUploadLimitLockIntegrationTest {
                                              width, height, content_hash, storage_key, created_at)
                 VALUES (?, ?, ?, 'image.png', 'image/png', 4, 1, 1, ?, ?, now())
                 """, assetId, workspaceId, userId, "0".repeat(64), key);
-        seedEvents(DAILY_LIMIT);
+        seedUsage(QUOTA - limits.usedBytes(userId));  // 이미 커밋된 asset까지 넣어 정확히 한도
         var stored = new DocumentAssetStorageCoordinator.StoredAsset(assetId, key,
                 new DocumentAssetValidator.ValidatedAsset("image.png", "image/png", new byte[4], 1, 1, "0".repeat(64)),
                 false);
@@ -150,7 +147,7 @@ class DocumentUploadLimitLockIntegrationTest {
                 base, "write-" + UUID.randomUUID(), Map.of(assetId, stored), null);
 
         assertThat(saved.changed()).isTrue();
-        assertThat(limits.uploadsToday(userId)).isEqualTo(DAILY_LIMIT);
+        assertThat(limits.usedBytes(userId)).isEqualTo(QUOTA);
     }
 
     // ---------- helpers
@@ -196,13 +193,6 @@ class DocumentUploadLimitLockIntegrationTest {
                                              width, height, content_hash, storage_key, created_at)
                 VALUES (?, ?, ?, 'seed.png', 'image/png', ?, 1, 1, ?, ?, now())
                 """, UUID.randomUUID(), workspaceId, userId, bytes, "0".repeat(64), "seed/" + UUID.randomUUID());
-    }
-
-    private void seedEvents(int count) {
-        jdbc.update("""
-                INSERT INTO user_upload_events (user_id, workspace_id, kind, byte_size, created_at)
-                SELECT ?, ?, 'document', 1, now() FROM generate_series(1, ?)
-                """, userId, workspaceId, count);
     }
 
     private int documentCount() {

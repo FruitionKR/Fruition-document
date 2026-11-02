@@ -120,9 +120,22 @@ public class DocumentService {
     @org.springframework.beans.factory.annotation.Autowired
     private AgentRunCommandRepository agentRuns;
 
-    /** 사용자별 저장 용량·하루 업로드 개수. 단위 테스트처럼 주입되지 않으면 검사하지 않는다. */
+    /** 사용자별 저장 용량. 단위 테스트처럼 주입되지 않으면 검사하지 않는다. */
     @org.springframework.beans.factory.annotation.Autowired
     private fruition.core.upload.UploadLimitService uploadLimits;
+
+    /** 가져오기 세션 확인·항목 집계. 가져오기 쓰기(세션이 넘어온 호출)에서만 쓴다. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.imports.ImportSessionStore importSessions;
+
+    /**
+     * 생성 경로의 업로드 한도 적용 방식. 내부 생성(AI 도구·회의록·초기 노트)은 {@link #NONE}으로 저장 용량을 보지 않는다.
+     * 가져오기 쓰기도 저장 용량을 그대로 보고, 만든 문서를 그 세션으로 표시한다.
+     */
+    private record UploadAccounting(boolean limited, fruition.core.imports.ImportSessionStore.OpenSession importSession) {
+        static final UploadAccounting NONE = new UploadAccounting(false, null);
+        static final UploadAccounting UPLOAD = new UploadAccounting(true, null);
+    }
 
     private static final int MAX_SAVE_ATTEMPTS = 3;
 
@@ -304,7 +317,7 @@ public class DocumentService {
             }
             // 멱등 재요청은 위에서 돌려줬다. 새 업로드는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
             if (uploadLimits != null) {
-                uploadLimits.precheck(userId, file.getSize(), 1);
+                uploadLimits.precheck(userId, file.getSize());
             }
 
             // 같은 폴더에 같은 이름이 있으면 거절하지 않고 "이름 (2).pdf"처럼 번호를 붙인다.
@@ -343,9 +356,7 @@ public class DocumentService {
             // 같은 사용자의 다른 업로드가 그 시간 내내 줄을 선다. 잠금 아래에서 다시 확인해 병렬 업로드가 함께 한도를
             // 넘지 못하게 하고, 거절되면 롤백 정리(registerMinioRollbackCleanup)가 방금 저장한 원본을 지운다.
             if (uploadLimits != null) {
-                uploadLimits.enforce(userId, file.getSize(), 1);
-                uploadLimits.record(userId, workspaceId, fruition.core.upload.UploadLimitService.KIND_DOCUMENT,
-                        file.getSize());
+                uploadLimits.enforce(userId, file.getSize());
             }
 
             Document document = new Document(
@@ -408,9 +419,50 @@ public class DocumentService {
             String idempotencyKey,
             MarkdownDocumentCreateRequest request
     ) {
+        return createMarkdownWithDraft(workspaceId, userId, idempotencyKey, request, UploadAccounting.NONE);
+    }
+
+    /**
+     * {@code POST /documents/markdown} 진입점. 사용자가 올린 문서로 보고 다른 업로드처럼 저장 용량 한도를 적용한다
+     * (잠금 없는 사전 확인 → 원본 저장 → 사용자 잠금 아래 재확인).
+     *
+     * @param importId {@code X-Fruition-Import-Id}. 있으면 그 가져오기 세션의 문서로 만든다: 저장 용량은 그대로 보고,
+     *                 세션 항목 수를 세며, 자동 편입하지 않는다. 열린 세션이 아니면 400 IMPORT_INVALID다.
+     */
+    @Transactional
+    public DocumentUploadResponse createMarkdownAsUpload(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            MarkdownDocumentCreateRequest request,
+            String importId
+    ) {
+        if (importId == null) {
+            return createMarkdownWithDraft(workspaceId, userId, idempotencyKey, request, UploadAccounting.UPLOAD);
+        }
+        var session = importSessions.requireOpen(workspaceId, userId, importId);
+        if (request != null && (request.origin() != null || request.agentRunId() != null)) {
+            throw new InvalidDocumentOriginException("가져오기 문서에는 origin·agent_run_id를 지정할 수 없습니다.");
+        }
+        return createMarkdown(workspaceId, userId, idempotencyKey, request, null,
+                new UploadAccounting(true, session));
+    }
+
+    /** 가져오기 세션으로 기존 문서 본문을 저장할 때: 열린 세션이고 그 세션이 만든 문서여야 한다. 아니면 400 IMPORT_INVALID. */
+    public void requireImportDocument(String workspaceId, String userId, String documentId, String importId) {
+        importSessions.requireDocument(importSessions.requireOpen(workspaceId, userId, importId), documentId);
+    }
+
+    private DocumentUploadResponse createMarkdownWithDraft(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            MarkdownDocumentCreateRequest request,
+            UploadAccounting accounting
+    ) {
         String agentRun = request == null ? null : ownAgentDraft(workspaceId, userId, request.agentRunId());
         DocumentUploadResponse response = createMarkdown(workspaceId, userId, idempotencyKey, request,
-                agentRun == null ? null : Document.AGENT_ORIGIN);
+                agentRun == null ? null : Document.AGENT_ORIGIN, accounting);
         if (agentRun != null && analytics != null) {
             // 같은 멱등 키의 재요청은 처음 만든 문서를 돌려주므로 실제 AI 문서일 때만 기록한다.
             documentRepository.findById(response.id())
@@ -441,6 +493,17 @@ public class DocumentService {
             MarkdownDocumentCreateRequest request,
             String aiOrigin
     ) {
+        return createMarkdown(workspaceId, userId, idempotencyKey, request, aiOrigin, UploadAccounting.NONE);
+    }
+
+    private DocumentUploadResponse createMarkdown(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            MarkdownDocumentCreateRequest request,
+            String aiOrigin,
+            UploadAccounting accounting
+    ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         validateIdempotencyKey(idempotencyKey);
         if (request == null) {
@@ -465,10 +528,16 @@ public class DocumentService {
         if (replay.isPresent()) {
             return replay.get();
         }
+        // 멱등 재요청은 위에서 돌려줬다. 새 문서는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
+        if (accounting.limited() && uploadLimits != null) {
+            uploadLimits.precheck(userId, content.bytes().length);
+        }
 
+        String origin = skillReference ? Document.SKILL_REFERENCE_ORIGIN
+                : accounting.importSession() != null ? Document.NOTION_IMPORT_ORIGIN : "direct";
         DocumentUploadResponse response =
                 createMarkdownDocument(workspaceId, userId, filename.filename(), content,
-                        skillReference ? Document.SKILL_REFERENCE_ORIGIN : "direct", request.folderId(), aiOrigin, true);
+                        origin, request.folderId(), aiOrigin, true, accounting);
         saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
         return response;
     }
@@ -559,7 +628,8 @@ public class DocumentService {
                     "direct",
                     null,
                     null,
-                    false
+                    false,
+                    UploadAccounting.NONE
             );
         } catch (Exception e) {
             log.warn("초기 노트 저장 실패로 건너뜁니다. workspaceId={}", workspaceId, e);
@@ -635,7 +705,8 @@ public class DocumentService {
             String origin,
             UUID folderId,
             String aiOrigin,
-            boolean recordUpload
+            boolean recordUpload,
+            UploadAccounting accounting
     ) {
         String documentId = newDocumentId();
         Document document = new Document(
@@ -657,11 +728,29 @@ public class DocumentService {
         );
         document.place(folderId, sortOrder);
         document.markAiOrigin(aiOrigin);
+        enforceMarkdownUpload(accounting, userId, content.bytes().length);
+        if (accounting.importSession() != null) {
+            document.markImported(accounting.importSession().id());
+        }
         documentRepository.save(document);
         if (recordUpload && analytics != null) analytics.uploaded(document);
         editStateRepository.save(new DocumentEditState(
                 documentId, content.markdown(), content.contentHash(), 1));
         return toUploadResponse(document, true);
+    }
+
+    /**
+     * 원본 저장이 끝난 뒤 문서 행을 쓰기 직전에 사용자 잠금을 잡고 한도를 다시 확인한다(잠금은 커밋까지 짧게 쥔다).
+     * 거절되면 롤백 정리(registerMinioRollbackCleanup)가 방금 저장한 원본을 지운다. 가져오기는 세션 항목을 하나 센다
+     * (세션이 그 사이 완료·만료됐으면 400 IMPORT_INVALID).
+     */
+    private void enforceMarkdownUpload(UploadAccounting accounting, String userId, long bytes) {
+        if (accounting.importSession() != null) {
+            importSessions.countItems(accounting.importSession(), 1);
+        }
+        if (accounting.limited() && uploadLimits != null) {
+            uploadLimits.enforce(userId, bytes);
+        }
     }
 
     private long nextRootSortOrder(String workspaceId, DocumentRole documentRole) {
@@ -1985,6 +2074,24 @@ public class DocumentService {
             Map<UUID, DocumentAssetStorageCoordinator.StoredAsset> storedAssets,
             String applyOperationId
     ) {
+        return saveContentWithAssets(workspaceId, userId, documentId, markdown, baseVersion, revisionWriteId,
+                storedAssets, applyOperationId, null);
+    }
+
+    /**
+     * @param importSession 가져오기 세션 쓰기면 그 세션. 새 이미지를 세션 항목으로 세고, 저장 용량은 그대로 본다.
+     */
+    public DocumentContentSaveResponse saveContentWithAssets(
+            String workspaceId,
+            String userId,
+            String documentId,
+            String markdown,
+            long baseVersion,
+            String revisionWriteId,
+            Map<UUID, DocumentAssetStorageCoordinator.StoredAsset> storedAssets,
+            String applyOperationId,
+            fruition.core.imports.ImportSessionStore.OpenSession importSession
+    ) {
         DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(markdown);
         Instant updatedAt = Instant.now();
         List<DocumentAsset> assets = storedAssets.values().stream()
@@ -2008,9 +2115,12 @@ public class DocumentService {
                     int inserted = assetRepository.insertIfAbsent(asset);
                     if (inserted == 1) insertedAssets.add(asset);
                 }
-                // 새로 들어간 행만 업로드로 센다(먼저 커밋된 재전송 행은 이미 세었다). 행을 이미 썼으므로 추가분은 0이다.
+                // 새로 들어간 행이 있을 때만 용량을 다시 본다(먼저 커밋된 재전송 행은 이미 확인했다). 행을 이미 썼으므로 추가분은 0이다.
+                if (importSession != null && !insertedAssets.isEmpty()) {
+                    importSessions.countItems(importSession, insertedAssets.size());
+                }
                 if (uploadLimits != null && !insertedAssets.isEmpty()) {
-                    uploadLimits.enforce(userId, 0, insertedAssets.size());
+                    uploadLimits.enforce(userId, 0);
                 }
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),
@@ -2018,11 +2128,6 @@ public class DocumentService {
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
                     assetRepository.deleteAllInBatch(insertedAssets);
-                } else if (uploadLimits != null) {
-                    for (DocumentAsset asset : insertedAssets) {
-                        uploadLimits.record(userId, workspaceId,
-                                fruition.core.upload.UploadLimitService.KIND_DOCUMENT_ASSET, asset.getByteSize());
-                    }
                 }
                 return value;
             }));

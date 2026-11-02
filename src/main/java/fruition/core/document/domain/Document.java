@@ -124,6 +124,10 @@ public class Document {
     @Column(name = "ai_origin", length = 32)
     private String aiOrigin;
 
+    /** 이 문서를 만든 가져오기 세션(document_imports.id). 가져온 문서가 아니면 null. */
+    @Column(name = "import_id")
+    private UUID importId;
+
     /** 채팅 export의 선택 모드("full"/"partial"). 파이프라인에 전달한다. 일반 업로드는 null. */
     @Column(name = "selection_mode")
     private String selectionMode;
@@ -161,6 +165,8 @@ public class Document {
     public static final String SKILL_REFERENCE_ORIGIN = "skill_reference";
     public static final String AGENT_ORIGIN = "agent";
     public static final String MEETING_NOTES_ORIGIN = "meeting_notes";
+    /** Notion 내보내기 가져오기로 만든 문서의 origin. */
+    public static final String NOTION_IMPORT_ORIGIN = "notion_import";
 
     protected Document() {}
 
@@ -380,6 +386,10 @@ public class Document {
     }
 
     public void markAiOrigin(String aiOrigin) { this.aiOrigin = aiOrigin; }
+
+    public UUID getImportId() { return importId; }
+
+    public void markImported(UUID importId) { this.importId = importId; }
 
     public void assignSelectionMode(String selectionMode) { this.selectionMode = selectionMode; }
 

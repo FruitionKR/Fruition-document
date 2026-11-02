@@ -30,6 +30,8 @@ tags:
   name: Documents
 - description: "워크스페이스 문서 폴더의 생성, 이동, 삭제 및 복구 API"
   name: Folders
+- description: 외부 내보내기(Notion Markdown & CSV) 가져오기 세션
+  name: Imports
 - description: 회의 실시간 받아쓰기. 회의는 만든 사람만 조회·변경할 수 있다.
   name: Meetings
 - description: 워크스페이스 문서·폴더 계층 탐색 API
@@ -1581,7 +1583,7 @@ paths:
       - Documents
   /api/workspaces/{workspace_id}/documents/markdown:
     post:
-      description: 표시 이름과 전체 Markdown 본문으로 즉시 편집 가능한 문서를 생성합니다.
+      description: 표시 이름과 전체 Markdown 본문으로 즉시 편집 가능한 문서를 생성합니다. 다른 업로드처럼 저장 용량(5GB) 한도를 적용합니다. X-Fruition-Import-Id가 있으면 그 가져오기 세션의 문서로 만들고 자동 편입하지 않습니다.
       operationId: createMarkdown
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -1595,6 +1597,12 @@ paths:
         in: header
         name: Idempotency-Key
         required: true
+        schema:
+          type: string
+      - description: 가져오기 세션 ID(POST /imports 응답의 import_id)
+        in: header
+        name: X-Fruition-Import-Id
+        required: false
         schema:
           type: string
       requestBody:
@@ -1615,7 +1623,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 잘못된 본문 또는 Idempotency-Key
+          description: "잘못된 본문 또는 Idempotency-Key, 열린 가져오기 세션이 아님(IMPORT_INVALID)"
         "404":
           content:
             '*/*':
@@ -1633,7 +1641,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: Markdown 5MB 초과
+          description: Markdown 5MB 초과 또는 저장 용량 초과(STORAGE_QUOTA_EXCEEDED)
       summary: Markdown 문서 생성
       tags:
       - Documents
@@ -1989,6 +1997,12 @@ paths:
       - in: path
         name: document_id
         required: true
+        schema:
+          type: string
+      - description: 가져오기 세션 ID. 그 세션이 만든 문서에만 쓸 수 있습니다(아니면 400 IMPORT_INVALID).
+        in: header
+        name: X-Fruition-Import-Id
+        required: false
         schema:
           type: string
       requestBody:
@@ -2891,6 +2905,12 @@ paths:
         required: true
         schema:
           type: string
+      - description: 가져오기 세션 ID. 있으면 열린 세션이어야 합니다(아니면 400 IMPORT_INVALID). 폴더는 항목 상한에 세지 않습니다.
+        in: header
+        name: X-Fruition-Import-Id
+        required: false
+        schema:
+          type: string
       requestBody:
         content:
           application/json:
@@ -2909,7 +2929,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: "잘못된 이름 또는 위치, 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음)"
+          description: "잘못된 이름 또는 위치, INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음), 또는 열린 가져오기 세션이 아님(IMPORT_INVALID)"
         "404":
           content:
             '*/*':
@@ -3253,6 +3273,222 @@ paths:
       summary: 폴더 복구
       tags:
       - Folders
+  /api/workspaces/{workspace_id}/imports:
+    post:
+      description: "세션은 24시간 뒤 만료됩니다. 이 세션의 import_id를 X-Fruition-Import-Id 헤더로 문서 생성·폴더 생성·본문 저장에 붙이면 만든 문서를 이 세션으로 표시하고 자동 편입하지 않습니다. 저장 용량(5GB)과 파일별 한도는 일반 업로드와 같고, 세션 항목 수 상한은 없습니다(max_items는 항상 null)."
+      operationId: createDocumentImport
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentImportCreateRequest"
+      responses:
+        "201":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentImportCreateResponse"
+          description: 세션 생성
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: source가 notion이 아니거나 값이 없거나 음수(INVALID_REQUEST)
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스 멤버가 아님(WORKSPACE_NOT_FOUND)
+        "413":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: used_bytes + total_bytes가 저장 공간 한도 초과(STORAGE_QUOTA_EXCEEDED)
+      summary: 가져오기 세션 시작
+      tags:
+      - Imports
+  /api/workspaces/{workspace_id}/imports/{import_id}:
+    get:
+      operationId: getDocumentImport
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: import_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentImportResponse"
+          description: 조회
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 내 세션이 아님(IMPORT_NOT_FOUND) 또는 워크스페이스 멤버가 아님
+      summary: 가져오기 세션 조회
+      tags:
+      - Imports
+  /api/workspaces/{workspace_id}/imports/{import_id}/complete:
+    post:
+      description: 세션을 닫습니다. 이후 이 세션으로 쓰면 400 IMPORT_INVALID입니다. 이미 완료한 세션은 같은 결과를 돌려줍니다. document_count는 서버가 센 실제 생성 문서 수입니다.
+      operationId: completeDocumentImport
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: import_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentImportCompleteRequest"
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentImportCompleteResponse"
+          description: 완료
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 음수 값(INVALID_REQUEST)
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 내 세션이 아님(IMPORT_NOT_FOUND) 또는 워크스페이스 멤버가 아님
+      summary: 가져오기 세션 완료
+      tags:
+      - Imports
+  /api/workspaces/{workspace_id}/imports/{import_id}/ingest:
+    post:
+      description: "문서마다 수동 위키 편입(POST /documents/{id}/ingest)과 같은 경로로 큐에 넣습니다(권한·AI 한도·크레딧 동일). 한 번에 20개까지 넣으며, document_ids를 생략하면 아직 편입하지 않은 문서 중 앞 20개를 넣습니다. remaining이 0이 될 때까지 다시 부르면 됩니다. 첫 문서부터 거절되면 그 오류(403·402·429 등)를 그대로 돌려줍니다."
+      operationId: ingestDocumentImport
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: import_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentImportIngestRequest"
+      responses:
+        "202":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentImportIngestResponse"
+          description: 큐 등록
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "document_ids가 비었거나 20개 초과, 또는 이 세션 문서가 아님(INVALID_REQUEST)"
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT)
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: wiki.ingest 권한 없음(WORKSPACE_PERMISSION_REQUIRED)
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 내 세션이 아님(IMPORT_NOT_FOUND) 또는 워크스페이스 멤버가 아님
+        "429":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: AI 사용 한도 초과(AI_USAGE_LIMIT_EXCEEDED)
+      summary: 가져온 문서 위키 편입
+      tags:
+      - Imports
+  /api/workspaces/{workspace_id}/imports/{import_id}/ingest-estimate:
+    get:
+      description: 아직 편입하지 않은 가져온 문서를 모두 편입할 때의 예상치입니다(문서 편입 1건 예상치 × 문서 수). 실제 비용은 문서 길이에 따라 다릅니다.
+      operationId: estimateDocumentImportIngest
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: import_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentImportIngestEstimateResponse"
+          description: 예상치
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 내 세션이 아님(IMPORT_NOT_FOUND) 또는 워크스페이스 멤버가 아님
+      summary: 가져온 문서 편입 예상 비용
+      tags:
+      - Imports
   /api/workspaces/{workspace_id}/meetings:
     get:
       description: "내가 만든 회의를 최근 생성 순으로 반환합니다. 새로고침 뒤 진행 중이던 회의를 다시 여는 데 씁니다. 전사 구간 같은 무거운 내용은 넣지 않으므로 GET /{meeting_id}로 이어서 조회합니다."
@@ -7061,6 +7297,170 @@ components:
         updated_by:
           type: string
           description: 마지막으로 본문을 저장한 사용자
+    DocumentImportCompleteRequest:
+      type: object
+      properties:
+        created:
+          type: integer
+          format: int32
+          description: 클라이언트가 만든 항목 수(기록용)
+        failed:
+          type: integer
+          format: int32
+          description: 클라이언트가 실패한 항목 수(기록용)
+        skipped:
+          type: integer
+          format: int32
+          description: 클라이언트가 건너뛴 항목 수(기록용)
+    DocumentImportCompleteResponse:
+      type: object
+      properties:
+        document_count:
+          type: integer
+          format: int32
+          description: "서버가 센, 이 세션에서 실제로 만든 문서 수"
+        import_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: completed
+    DocumentImportCreateRequest:
+      type: object
+      properties:
+        item_count:
+          type: integer
+          format: int32
+          description: "가져올 항목(문서+이미지) 수(기록용, 0 이상). 상한은 없다"
+          example: 120
+        source:
+          type: string
+          description: 가져올 원본 서비스. 지금은 notion만 받는다.
+          example: notion
+        total_bytes:
+          type: integer
+          format: int64
+          description: 가져올 파일 바이트 합. 저장 용량을 넘으면 413 STORAGE_QUOTA_EXCEEDED
+          example: 52428800
+    DocumentImportCreateResponse:
+      type: object
+      properties:
+        expires_at:
+          type: string
+          format: date-time
+          description: 세션 만료 시각(생성 24시간 뒤). 그 뒤 이 세션으로 쓰면 400 IMPORT_INVALID
+        import_id:
+          type: string
+          format: uuid
+        max_items:
+          type: integer
+          format: int32
+          description: 세션 항목 상한. 상한이 없어 항상 null(계약 안정성을 위해 필드는 유지)
+        quota:
+          $ref: "#/components/schemas/DocumentImportQuota"
+        status:
+          type: string
+          description: 항상 open
+          example: open
+    DocumentImportIngestEstimateResponse:
+      type: object
+      properties:
+        document_count:
+          type: integer
+          format: int32
+          description: 아직 편입하지 않은(편입 요청한 적 없는) 휴지통 밖 가져온 문서 수
+        estimated_cost_usd:
+          type: number
+          description: 예상 비용(USD) = 문서 편입 1건 예상 비용 × document_count. 환율을 못 읽으면 null
+        estimated_credits:
+          type: integer
+          format: int64
+          description: "예상 크레딧(milli-KRW, /users/me/credits의 *_krw_milli와 같은 단위) = app.billing.estimate.document × document_count"
+    DocumentImportIngestRequest:
+      type: object
+      properties:
+        document_ids:
+          type: array
+          description: "편입할 문서 ID(최대 20개, 모두 이 세션 문서여야 함). 생략하면 아직 편입하지 않은 가져온 문서 중 앞 20개"
+          items:
+            type: string
+    DocumentImportIngestResponse:
+      type: object
+      properties:
+        queued:
+          type: integer
+          format: int32
+          description: 이번 요청에서 편입 큐에 넣은 문서 수
+        remaining:
+          type: integer
+          format: int32
+          description: 아직 편입하지 않은 가져온 문서 수. 0이 될 때까지 document_ids 없이 다시 부르면 된다
+    DocumentImportQuota:
+      type: object
+      properties:
+        limit_bytes:
+          type: integer
+          format: int64
+          description: 저장 공간 한도(바이트). 한도가 꺼져 있으면 null
+        used_bytes:
+          type: integer
+          format: int64
+          description: 지금 쓰고 있는 저장 공간(바이트)
+    DocumentImportResponse:
+      type: object
+      properties:
+        completed_at:
+          type: string
+          format: date-time
+        created:
+          type: integer
+          format: int32
+          description: 완료 때 클라이언트가 알린 만든 수. 완료 전 null
+        created_at:
+          type: string
+          format: date-time
+        document_count:
+          type: integer
+          format: int32
+          description: 이 세션에서 만든 문서 수(휴지통 포함)
+        document_ids:
+          type: array
+          description: "이 세션에서 만든 문서 ID(휴지통 포함), 만든 순서"
+          items:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+        failed:
+          type: integer
+          format: int32
+          description: 완료 때 클라이언트가 알린 실패 수. 완료 전 null
+        import_id:
+          type: string
+          format: uuid
+        item_count:
+          type: integer
+          format: int32
+          description: 세션 생성 때 알린 항목 수
+        items_used:
+          type: integer
+          format: int32
+          description: 지금까지 센 항목 수(문서+이미지)
+        max_items:
+          type: integer
+          format: int32
+          description: 세션 항목 상한. 상한이 없어 항상 null
+        skipped:
+          type: integer
+          format: int32
+          description: 완료 때 클라이언트가 알린 건너뛴 수. 완료 전 null
+        source:
+          type: string
+          example: notion
+        status:
+          type: string
+          description: open | completed | expired(열린 채 만료)
+          example: completed
     DocumentIngestResponse:
       type: object
       description: ingest 요청 접수 결과. 실제 처리는 비동기로 진행되며 run_id로 상태를 추적한다.

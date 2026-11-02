@@ -14,7 +14,7 @@ class UploadLimitServiceTest {
 
     @Test
     void pdfCapAllowsBoundaryAndRejectsOneByteOver() {
-        var limits = new UploadLimitService(mock(JdbcTemplate.class), true, 100 * MB, 5 * 1024 * MB, 200);
+        var limits = new UploadLimitService(mock(JdbcTemplate.class), true, 100 * MB, 5 * 1024 * MB);
         limits.requirePdfSize(100 * MB);
         assertThatThrownBy(() -> limits.requirePdfSize(100 * MB + 1))
                 .isInstanceOfSatisfying(UploadLimitException.class, e -> {
@@ -27,7 +27,7 @@ class UploadLimitServiceTest {
     @Test
     void disabledLimitsSkipDatabaseChecks() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
-        new UploadLimitService(jdbc, false, 100 * MB, 1, 0).precheck("user", Long.MAX_VALUE, 1000);
+        new UploadLimitService(jdbc, false, 100 * MB, 1).precheck("user", Long.MAX_VALUE);
         verifyNoInteractions(jdbc);
     }
 

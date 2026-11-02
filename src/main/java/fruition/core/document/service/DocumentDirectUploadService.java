@@ -60,7 +60,7 @@ public class DocumentDirectUploadService {
         }
         // 알린 크기로 먼저 거절한다. 실제 크기는 확정 때 조립한 객체로 다시 확인한다.
         limits.requirePdfSize(request.size());
-        limits.precheck(userId, request.size(), 1);
+        limits.precheck(userId, request.size());
         var started = upload.start(userId, workspaceId, "tmp/document-uploads/" + UUID.randomUUID(),
                 "application/pdf", request.size(), Map.of("filename", filename,
                         "folder", request.folder_id() == null ? "" : request.folder_id().toString()));
@@ -96,7 +96,7 @@ public class DocumentDirectUploadService {
                 || !"application/pdf".equals(stat.contentType())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "업로드한 파일 정보가 일치하지 않습니다.");
         }
-        // 한도를 낮추기 전에 발급된 ticket도 실제 크기로 막는다. 용량·하루 개수는 문서 등록 트랜잭션이 잠금 아래에서 확인한다.
+        // 한도를 낮추기 전에 발급된 ticket도 실제 크기로 막는다. 용량은 문서 등록 트랜잭션이 잠금 아래에서 확인한다.
         limits.requirePdfSize(stat.size());
         String filename = claims.get("filename", String.class);
         String folder = claims.get("folder", String.class);

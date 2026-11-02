@@ -30,7 +30,7 @@ class UploadLimitKillSwitchIntegrationTest {
     @Autowired TransactionTemplate transaction;
 
     @Test
-    void disabledLimits_allowUploadOverQuotaAndDailyLimit_butStillRecord_andReportNullLimit() {
+    void disabledLimits_allowUploadOverQuota_andReportNullLimit() {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         String userId = "user_off_" + suffix;
         String workspaceId = "ws_off_" + suffix;
@@ -39,22 +39,14 @@ class UploadLimitKillSwitchIntegrationTest {
                                              width, height, content_hash, storage_key, created_at)
                 VALUES (?, ?, ?, 'seed.png', 'image/png', ?, 1, 1, ?, ?, now())
                 """, UUID.randomUUID(), workspaceId, userId, QUOTA + 1, "0".repeat(64), "seed/" + suffix);
-        jdbc.update("""
-                INSERT INTO user_upload_events (user_id, workspace_id, kind, byte_size)
-                SELECT ?, ?, 'document', 1 FROM generate_series(1, 200)
-                """, userId, workspaceId);
-        var enabled = new UploadLimitService(jdbc, true, 100L * 1024 * 1024, QUOTA, 200);
-        var disabled = new UploadLimitService(jdbc, false, 100L * 1024 * 1024, QUOTA, 200);
+        var enabled = new UploadLimitService(jdbc, true, 100L * 1024 * 1024, QUOTA);
+        var disabled = new UploadLimitService(jdbc, false, 100L * 1024 * 1024, QUOTA);
 
-        assertThatThrownBy(() -> transaction.executeWithoutResult(status -> enabled.enforce(userId, 1, 1)))
+        assertThatThrownBy(() -> transaction.executeWithoutResult(status -> enabled.enforce(userId, 1)))
                 .isInstanceOf(UploadLimitException.class);
-        transaction.executeWithoutResult(status -> {
-            disabled.enforce(userId, 1, 1);
-            disabled.record(userId, workspaceId, UploadLimitService.KIND_DOCUMENT, 1);
-        });
-        disabled.precheck(userId, Long.MAX_VALUE / 2, 1000);
+        transaction.executeWithoutResult(status -> disabled.enforce(userId, 1));
+        disabled.precheck(userId, Long.MAX_VALUE / 2);
 
-        assertThat(disabled.uploadsToday(userId)).isEqualTo(201);
         assertThatThrownBy(() -> disabled.requirePdfSize(100L * 1024 * 1024 + 1))
                 .isInstanceOfSatisfying(UploadLimitException.class,
                         e -> assertThat(e.getCode()).isEqualTo("FILE_TOO_LARGE"));

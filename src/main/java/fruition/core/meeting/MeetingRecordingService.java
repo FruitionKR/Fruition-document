@@ -92,7 +92,7 @@ public class MeetingRecordingService {
         requireSize(request.size(), request.size());
         requireUploadable(meeting);
         // 재업로드는 기존 원본을 교체하므로 늘어나는 만큼만 본다. 최종 판단은 확정 때 잠금 아래에서 한다.
-        limits.precheck(userId, request.size() - recordingBytes(meeting), 1);
+        limits.precheck(userId, request.size() - recordingBytes(meeting));
         // 500 MiB를 올린 뒤에야 거절되지 않도록 전사를 시작할 수 있는 잔액인지 먼저 본다(예약은 확정 때).
         if ("upload".equals(meeting.source())) {
             credits.checkAdmission(userId, "meeting_transcription");
@@ -155,8 +155,7 @@ public class MeetingRecordingService {
                         transcribe ? "transcribing" : "open", !transcribe, runId);
                 if (saved.isPresent()) {
                     // 같은 트랜잭션에서 원본 크기를 이미 바꿨으므로(이전 원본 제외) 추가분 0으로 합계를 확인한다.
-                    limits.enforce(userId, 0, 1);
-                    limits.record(userId, workspaceId, UploadLimitService.KIND_MEETING_RECORDING, size);
+                    limits.enforce(userId, 0);
                 }
                 if (saved.isPresent() && transcribe) {
                     transcription.begin(runId, meeting, key, contentType);

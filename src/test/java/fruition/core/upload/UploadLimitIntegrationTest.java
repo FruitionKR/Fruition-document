@@ -51,7 +51,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** 사용자별 업로드 한도(용량 5GB·하루 200개·PDF 100MB·요청당 개수)를 실제 Postgres·MinIO와 API로 확인한다. */
+/** 사용자별 업로드 한도(용량 5GB·PDF 100MB·요청당 개수)를 실제 Postgres·MinIO와 API로 확인한다. */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
@@ -59,9 +59,6 @@ class UploadLimitIntegrationTest {
     static final long QUOTA = 5L * 1024 * 1024 * 1024;
     static final String QUOTA_BODY = """
             {"error":{"code":"STORAGE_QUOTA_EXCEEDED","message":"내 저장 공간(5GB)이 부족합니다. 문서나 녹음을 지운 뒤 다시 시도해 주세요. 휴지통 문서는 영구 삭제될 때까지 용량에 포함됩니다."}}
-            """;
-    static final String DAILY_BODY = """
-            {"error":{"code":"UPLOAD_DAILY_LIMIT_EXCEEDED","message":"하루에 올릴 수 있는 파일 수(200개)를 모두 사용했습니다. 내일 다시 시도해 주세요."}}
             """;
 
     @Autowired MockMvc mockMvc;
@@ -138,7 +135,6 @@ class UploadLimitIntegrationTest {
         documents.upload(workspaceId, userId, key, null, file);
         documents.upload(workspaceId, userId, key, null, file);
         assertThat(documentCount()).isEqualTo(1);
-        assertThat(limits.uploadsToday(userId)).isEqualTo(1);
     }
 
     @Test
@@ -149,40 +145,12 @@ class UploadLimitIntegrationTest {
         seedUsage(QUOTA - limits.usedBytes(userId) - png.length);
         saveImage(documentId, png);
         assertThat(limits.usedBytes(userId)).isEqualTo(QUOTA);
-        assertThat(limits.uploadsToday(userId)).isEqualTo(1);
 
         int objectsBefore = assetObjects();
         assertThatThrownBy(() -> saveImage(documentId, png(7)))
                 .isInstanceOfSatisfying(UploadLimitException.class,
                         e -> assertThat(e.getCode()).isEqualTo("STORAGE_QUOTA_EXCEEDED"));
         assertThat(assetObjects()).isEqualTo(objectsBefore);  // 거절된 저장의 객체는 보상 삭제된다
-    }
-
-    // ---------- 하루 개수
-
-    @Test
-    void dailyLimit_countsOnlyTodayInSeoul_andRejectsWith429() throws Exception {
-        seedEvents(199, "0 seconds");
-        // 서울 기준 어제 마지막 순간 기록은 오늘 개수에 들어가지 않는다.
-        jdbc.update("""
-                INSERT INTO user_upload_events (user_id, workspace_id, kind, byte_size, created_at)
-                VALUES (?, ?, 'document', 1,
-                        (date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul') - interval '1 second')
-                """, userId, workspaceId);
-        upload("200.md", "x".getBytes()).andExpect(status().isCreated());
-        upload("201.md", "x".getBytes()).andExpect(status().isTooManyRequests())
-                .andExpect(content().json(DAILY_BODY, true));
-    }
-
-    @Test
-    void concurrentUploads_doNotJointlyExceedDailyLimit() throws Exception {
-        seedEvents(198, "0 seconds");
-        List<Throwable> failures = race(6, index -> documents.upload(workspaceId, userId, "idem-" + UUID.randomUUID(),
-                null, new MockMultipartFile("file", "d" + index + ".md", "text/markdown", "x".getBytes())));
-        assertThat(failures).hasSize(4).allSatisfy(error -> assertThat(error)
-                .isInstanceOfSatisfying(UploadLimitException.class,
-                        e -> assertThat(e.getCode()).isEqualTo("UPLOAD_DAILY_LIMIT_EXCEEDED")));
-        assertThat(limits.uploadsToday(userId)).isEqualTo(200);
     }
 
     // ---------- 요청당 개수·PDF 크기
@@ -223,8 +191,6 @@ class UploadLimitIntegrationTest {
         recordingPost(meetingId, "complete", "{\"ticket\":\"" + ticket + "\"}")
                 .andExpect(status().isPayloadTooLarge()).andExpect(content().json(QUOTA_BODY, true));
         assertThat(jdbc.queryForObject("SELECT recording_key FROM meetings WHERE id = ?", String.class, meetingId)).isNull();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_upload_events WHERE user_id = ?", Integer.class, userId))
-                .isZero();
 
         startRecording(meetingId, audio.length).andExpect(status().isPayloadTooLarge())
                 .andExpect(content().json(QUOTA_BODY, true));
@@ -239,7 +205,6 @@ class UploadLimitIntegrationTest {
         put(recordingPartUrl(meetingId, ticket), audio);
         recordingPost(meetingId, "complete", "{\"ticket\":\"" + ticket + "\"}").andExpect(status().isOk());
         assertThat(limits.usedBytes(userId)).isEqualTo(QUOTA);
-        assertThat(limits.uploadsToday(userId)).isEqualTo(1);
         String key = jdbc.queryForObject("SELECT recording_key FROM meetings WHERE id = ?", String.class, meetingId);
         assertThat(minio.statObject(StatObjectArgs.builder().bucket(storage.getBucket()).object(key).build()).size())
                 .isEqualTo(audio.length);
@@ -310,13 +275,6 @@ class UploadLimitIntegrationTest {
                                              width, height, content_hash, storage_key, created_at)
                 VALUES (?, ?, ?, 'seed.png', 'image/png', ?, 1, 1, ?, ?, now())
                 """, UUID.randomUUID(), workspaceId, userId, bytes, "0".repeat(64), "seed/" + UUID.randomUUID());
-    }
-
-    private void seedEvents(int count, String age) {
-        jdbc.update("""
-                INSERT INTO user_upload_events (user_id, workspace_id, kind, byte_size, created_at)
-                SELECT ?, ?, 'document', 1, now() - CAST(? AS interval) FROM generate_series(1, ?)
-                """, userId, workspaceId, age, count);
     }
 
     private int documentCount() {

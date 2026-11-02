@@ -35,7 +35,7 @@ class DocumentDirectUploadServiceTest {
         when(multipart.start(anyString(), anyString())).thenReturn("upload-id");
     }
     DocumentDirectUploadService service(long maxPdfBytes) throws Exception {
-        return service(new UploadLimitService(mock(JdbcTemplate.class), true, maxPdfBytes, 5L * 1024 * MB, 200));
+        return service(new UploadLimitService(mock(JdbcTemplate.class), true, maxPdfBytes, 5L * 1024 * MB));
     }
     DocumentDirectUploadService service(UploadLimitService limits) throws Exception {
         return new DocumentDirectUploadService(storage, multipart, props, access, documents, limits, SECRET);
@@ -77,7 +77,7 @@ class DocumentDirectUploadServiceTest {
     @Test void quotaPrecheckRejectsBeforeStartingMultipart() throws Exception {
         UploadLimitService limits = mock(UploadLimitService.class);
         doThrow(new UploadLimitException(HttpStatus.PAYLOAD_TOO_LARGE, "STORAGE_QUOTA_EXCEEDED", "full"))
-                .when(limits).precheck("user_test", 5, 1);
+                .when(limits).precheck("user_test", 5);
         assertThatThrownBy(() -> service(limits).start("ws_test", "user_test",
                 new DocumentDirectUploadService.StartRequest("a.pdf", 5, null)))
                 .isInstanceOf(UploadLimitException.class).hasMessage("full");
