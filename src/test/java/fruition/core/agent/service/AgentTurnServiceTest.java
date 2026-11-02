@@ -7,6 +7,7 @@ import fruition.core.agent.dto.AgentRunReviseRequest;
 import fruition.core.agent.dto.AgentTurnRequest;
 import fruition.core.agent.exception.AgentRunNotFoundException;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
+import fruition.core.agent.exception.PipelineAgentException;
 import fruition.core.agent.repository.AgentRunCommandRepository;
 import fruition.core.aihistory.service.AgentApplyOperationStore;
 import fruition.core.authz.WorkspaceAccessGuard;
@@ -770,6 +771,99 @@ class AgentTurnServiceTest {
         verify(workspaceAccessGuard, org.mockito.Mockito.times(5)).requireMember("ws_1", "user_1");
     }
 
+    private JsonNode autonomousRun(String runId, String status, String planId) throws Exception {
+        return new ObjectMapper().readTree("""
+                {"id":"%s","status":"%s","plan":{"id":"%s","version":1,"operations":[]}}
+                """.formatted(runId, status, planId));
+    }
+
+    @Test
+    void approveResponseLostAfterAiAccepted_keepsReservation() throws Exception {
+        // #167: ai-svc가 승인·실행 등록을 커밋한 뒤 응답이 유실됐다. 실행 중인데 예약을 풀면 안 된다.
+        String runId = "run-lost-response";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(
+                autonomousRun(runId, "awaiting_approval", "plan-1"), autonomousRun(runId, "queued", null));
+        when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64)))
+                .thenThrow(new PipelineAgentException("AgentRun 요청 시간이 초과되었습니다.", 503, null));
+
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(PipelineAgentException.class);
+
+        verify(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
+        verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
+    }
+
+    @Test
+    void approveConflictForAlreadyApprovedRun_keepsReservation() throws Exception {
+        // 다시 눌러 409(이미 승인됨)를 받아도 실행 중이면 예약을 두어야 한다.
+        String runId = "run-already-approved";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(
+                autonomousRun(runId, "awaiting_approval", "plan-1"), autonomousRun(runId, "executing", "plan-1"));
+        when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64)))
+                .thenThrow(new PipelineAgentException("AgentRun 요청이 거부되었습니다.", 409, null));
+
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(PipelineAgentException.class);
+
+        verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
+    }
+
+    @Test
+    void ambiguousFailureWithRunUnchanged_releasesReservation() throws Exception {
+        String runId = "run-not-accepted";
+        JsonNode waiting = autonomousRun(runId, "awaiting_approval", "plan-1");
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(waiting, waiting);
+        when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64)))
+                .thenThrow(new PipelineAgentException("AgentRun 요청 시간이 초과되었습니다.", 503, null));
+
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(PipelineAgentException.class);
+
+        verify(usageCharges).abortAutonomousAttempt(runId, "user_1");
+    }
+
+    @Test
+    void reviseAcceptedAndReplannedBeforeRecheck_keepsReservation() throws Exception {
+        // 수정이 받아들여져 새 계획이 이미 나왔으면 상태는 같아도 계획 ID가 다르다.
+        String runId = "run-replanned";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(
+                autonomousRun(runId, "awaiting_approval", "plan-1"), autonomousRun(runId, "awaiting_approval", "plan-2"));
+        when(statusRequester.revise("ws_1", "user_1", runId, "좁혀줘"))
+                .thenThrow(new PipelineAgentException("AgentRun 요청 시간이 초과되었습니다.", 503, null));
+
+        assertThatThrownBy(() -> service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("좁혀줘")))
+                .isInstanceOf(PipelineAgentException.class);
+
+        verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
+    }
+
+    @Test
+    void definiteRejectionOrUnknownRecheck_releasesOnlyWhenRejectionIsCertain() throws Exception {
+        String runId = "run-rejected";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId))
+                .thenReturn(autonomousRun(runId, "awaiting_approval", "plan-1"));
+        when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64)))
+                .thenThrow(new PipelineAgentException("AgentRun 요청이 거부되었습니다.", 422, null));
+
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(PipelineAgentException.class);
+        // 409가 아닌 4xx는 처리하지 않은 거절이라 다시 조회하지 않고 푼다.
+        verify(usageCharges).abortAutonomousAttempt(runId, "user_1");
+        verify(statusRequester, org.mockito.Mockito.times(1)).getAutonomousRun("ws_1", "user_1", runId);
+
+        // 시간 초과 뒤 다시 조회도 실패하면 결과를 알 수 없으므로 예약을 둔다(오래 남으면 releaseStale이 정리).
+        String unknown = "run-recheck-fails";
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", unknown))
+                .thenReturn(autonomousRun(unknown, "awaiting_approval", "plan-1"))
+                .thenThrow(new PipelineAgentException("AgentRun 조회 시간이 초과되었습니다.", 503, null));
+        when(statusRequester.approve("ws_1", "user_1", unknown, 1, "a".repeat(64)))
+                .thenThrow(new PipelineAgentException("AgentRun 요청 시간이 초과되었습니다.", 503, null));
+
+        assertThatThrownBy(() -> service.approve("ws_1", "user_1", unknown, new AgentRunApproveRequest(1, "a".repeat(64))))
+                .isInstanceOf(PipelineAgentException.class);
+        verify(usageCharges, never()).abortAutonomousAttempt(org.mockito.ArgumentMatchers.eq(unknown), anyString());
+    }
+
     @Test
     void reviseAndApproveReserveAutonomousRunBeforeForwardingAndDoNotForwardWhenShort() {
         String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";  // ai가 새로 만든 AgentRun id
@@ -870,8 +964,11 @@ class AgentTurnServiceTest {
     }
 
     @Test
-    void failedForwardReleasesOnlyThisAttemptAndKeepsRunOpen() {
+    void failedForwardReleasesOnlyThisAttemptAndKeepsRunOpen() throws Exception {
         String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
+        // 다시 조회한 run이 그대로면(받지 않음 확정) 이번 시도의 예약만 푼다.
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", runId))
+                .thenReturn(autonomousRun(runId, "awaiting_approval", "plan-1"));
         when(statusRequester.revise("ws_1", "user_1", runId, "좁혀줘")).thenThrow(new IllegalStateException("conflict"));
 
         assertThatThrownBy(() -> service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("좁혀줘")))
