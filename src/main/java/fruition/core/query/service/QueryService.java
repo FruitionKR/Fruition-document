@@ -13,6 +13,7 @@ import fruition.core.query.repository.PipelineQueryResponse;
 import fruition.core.query.dto.QueryResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,6 +29,8 @@ public class QueryService {
 
     private static final Logger log = LoggerFactory.getLogger(QueryService.class);
     private static final int MAX_RECENT_MESSAGE_CONTENT_LENGTH = 4000;
+    /** 최근 구간에서 읽어 올 메시지 수. 미완결·실패 문답이 섞여도 완결 문답 3개를 찾을 만큼 여유를 둔다. */
+    private static final int RECENT_MESSAGE_WINDOW = 40;
 
     private final ChatMessageRepository chatMessageRepository;
     private final ChatSessionRepository chatSessionRepository;
@@ -81,7 +84,10 @@ public class QueryService {
     }
 
     private List<QueryService.RecentMessage> recentMessages(String sessionId) {
-        List<ChatMessage> messages = chatMessageRepository.findAllBySessionIdInTurnOrder(sessionId);
+        // 세션 전체를 읽지 않는다. 쓰는 건 완결 문답의 마지막 6개뿐이라 최근 구간만 읽는다(ChatConversationReader와 같은 구간).
+        // 구간보다 짧은 세션은 전체를 읽은 것과 같다. 아래에서 다시 정렬하므로 최근 순으로 받아도 된다.
+        List<ChatMessage> messages = chatMessageRepository.findRecentBySessionId(
+                sessionId, PageRequest.of(0, RECENT_MESSAGE_WINDOW));
         Set<String> completePairIds = messages.stream()
                 .collect(Collectors.groupingBy(ChatMessage::getPairId))
                 .entrySet().stream()

@@ -55,6 +55,10 @@ class QueryServiceTest {
 
     QueryService queryService;
 
+    /** 세션 전체가 아니라 최근 구간만 읽는다(ChatConversationReader와 같은 40개). */
+    private static final org.springframework.data.domain.PageRequest RECENT_WINDOW =
+            org.springframework.data.domain.PageRequest.of(0, 40);
+
     @BeforeEach
     void setUp() {
         // 근거 저장은 recorder 로 옮겼지만 규칙은 그대로다. 실제 구현을 물려 기존 검증을 유지한다.
@@ -334,7 +338,7 @@ class QueryServiceTest {
     @DisplayName("새 pair 저장 전에 같은 세션의 완료된 최근 6개 메시지만 시간순으로 전달한다")
     void query_forwardsRecentCompletedMessagesBeforeCreatingPendingPair() {
         ChatSession session = new ChatSession(SESSION_ID, WORKSPACE_ID, "user_1f9a74af", null);
-        when(chatMessageRepository.findAllBySessionIdInTurnOrder(SESSION_ID)).thenReturn(List.of(
+        when(chatMessageRepository.findRecentBySessionId(SESSION_ID, RECENT_WINDOW)).thenReturn(newestFirst(
                 message(session, "old_user", "pair_old", "user", "오래된 질문", "completed", 1),
                 message(session, "old_assistant", "pair_old", "assistant", "오래된 답변", "completed", 2),
                 message(session, "pending_user", "pair_pending", "user", "진행 중인 질문", "completed", 3),
@@ -355,7 +359,7 @@ class QueryServiceTest {
                 .containsExactly("질문2", "답변2", "질문3", "답변3", "질문4", "답변4");
 
         InOrder order = org.mockito.Mockito.inOrder(chatMessageRepository, chatTurnRecorder);
-        order.verify(chatMessageRepository).findAllBySessionIdInTurnOrder(SESSION_ID);
+        order.verify(chatMessageRepository).findRecentBySessionId(SESSION_ID, RECENT_WINDOW);
         order.verify(chatTurnRecorder).createPendingPair(
                 eq(SESSION_ID), anyString(), anyString(), anyString(), eq("새 질문"), any(),
                 eq("openai"), eq("gpt-6-luna"));
@@ -366,7 +370,7 @@ class QueryServiceTest {
     void prepareMessages_ordersSameTimestampPairsByPairIdThenRole() {
         ChatSession session = new ChatSession(SESSION_ID, WORKSPACE_ID, "user_1f9a74af", null);
         java.time.Instant createdAt = java.time.Instant.parse("2026-06-20T10:00:00Z");
-        when(chatMessageRepository.findAllBySessionIdInTurnOrder(SESSION_ID)).thenReturn(List.of(
+        when(chatMessageRepository.findRecentBySessionId(SESSION_ID, RECENT_WINDOW)).thenReturn(newestFirst(
                 message(session, "assistant_pair_b", "pair_b", "assistant", "답변B", "completed", createdAt),
                 message(session, "user_pair_a", "pair_a", "user", "질문A", "completed", createdAt),
                 message(session, "assistant_pair_a", "pair_a", "assistant", "답변A", "completed", createdAt),
@@ -381,13 +385,32 @@ class QueryServiceTest {
                 .containsExactly("user", "assistant", "user", "assistant");
     }
 
+    /** 저장소가 최근 순(created_at DESC)으로 돌려주는 모양을 흉내 낸다. 인자는 대화 순서로 적는다. */
+    private static List<ChatMessage> newestFirst(ChatMessage... inTurnOrder) {
+        List<ChatMessage> reversed = new ArrayList<>(List.of(inTurnOrder));
+        java.util.Collections.reverse(reversed);
+        return reversed;
+    }
+
+    @Test
+    @DisplayName("질문마다 세션 전체가 아니라 최근 40개 메시지만 읽는다")
+    void prepareMessages_readsOnlyRecentWindowNotWholeSession() {
+        when(chatMessageRepository.findRecentBySessionId(SESSION_ID, RECENT_WINDOW)).thenReturn(List.of());
+
+        var context = queryService.prepareMessages(SESSION_ID, "새 질문", "query_test");
+
+        assertThat(context.recentMessages()).isEmpty();
+        org.mockito.Mockito.verify(chatMessageRepository, org.mockito.Mockito.never())
+                .findAllBySessionIdInTurnOrder(anyString());
+    }
+
     @Test
     @DisplayName("최근 완료 pair의 각 메시지는 파이프라인 스키마 최대 길이로 잘라 전달한다")
     void query_capsRecentMessageContentBeforeSynchronousPipelineRequest() {
         ChatSession session = new ChatSession(SESSION_ID, WORKSPACE_ID, "user_1f9a74af", null);
         String longUserContent = "u".repeat(4001);
         String longAssistantContent = "a".repeat(4001);
-        when(chatMessageRepository.findAllBySessionIdInTurnOrder(SESSION_ID)).thenReturn(List.of(
+        when(chatMessageRepository.findRecentBySessionId(SESSION_ID, RECENT_WINDOW)).thenReturn(newestFirst(
                 message(session, "user_long", "pair_long", "user", longUserContent, "completed", 1),
                 message(session, "assistant_long", "pair_long", "assistant", longAssistantContent, "completed", 2)
         ));
