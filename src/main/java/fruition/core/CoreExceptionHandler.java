@@ -218,6 +218,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return response.body(ErrorResponse.ofUsageLimit("AI_USAGE_LIMIT_EXCEEDED", e.getMessage(), e.getType().name(), resetAt));
     }
 
+    @ExceptionHandler(fruition.core.upload.UploadLimitException.class)
+    public ResponseEntity<ErrorResponse> handleUploadLimit(fruition.core.upload.UploadLimitException e) {
+        logHandled(e, e.getStatus(), e.getCode());
+        return ResponseEntity
+                .status(e.getStatus())
+                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
+    }
+
     @ExceptionHandler(MeetingException.class)
     public ResponseEntity<ErrorResponse> handleMeeting(MeetingException e) {
         logHandled(e, e.getStatus(), e.getCode());

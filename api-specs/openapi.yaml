@@ -46,6 +46,8 @@ tags:
   name: Skills
 - description: 채팅 음성 입력(음성과 전사 결과를 저장하지 않는다)과 답변 음성 듣기(완료된 합성만 30일 저장).
   name: Speech
+- description: 사용자별 업로드 저장 공간
+  name: Storage
 - description: Wiki 그래프·페이지 조회와 페이지 본문 수정 API
   name: Wiki
 - description: Wiki 정합성 검사와 유지보수 실행 API
@@ -4925,6 +4927,28 @@ paths:
       summary: 음성 받아쓰기
       tags:
       - Speech
+  /api/workspaces/{workspace_id}/storage:
+    get:
+      description: 워크스페이스 멤버만 부를 수 있습니다. 멤버가 아니면 404 WORKSPACE_NOT_FOUND입니다.
+      operationId: getStorageUsage
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/StorageUsageResponse"
+          description: OK
+      summary: 내 저장 공간 사용량
+      tags:
+      - Storage
   /api/workspaces/{workspace_id}/usage/models:
     get:
       description: AI 저장소에서 사용량을 조회합니다. 기본 기간은 UTC 이번 달이며 실제 청구액은 포함하지 않습니다.
@@ -9747,6 +9771,21 @@ components:
           format: int64
         ticket:
           type: string
+    StorageUsageResponse:
+      type: object
+      properties:
+        limit_bytes:
+          type: integer
+          format: int64
+          description: 저장 공간 한도(바이트). 한도가 꺼져 있으면 null
+        scope:
+          type: string
+          description: 한도 적용 단위. 항상 user
+          example: user
+        used_bytes:
+          type: integer
+          format: int64
+          description: "내가 올린 문서·이미지·회의 녹음의 바이트 합(모든 워크스페이스, 휴지통 포함)"
     Target:
       type: object
       description: 적용 범위(1-based 줄 번호). Agent 턴 editor_snapshot.target과 같은 형식이다.

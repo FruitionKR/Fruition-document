@@ -120,6 +120,10 @@ public class DocumentService {
     @org.springframework.beans.factory.annotation.Autowired
     private AgentRunCommandRepository agentRuns;
 
+    /** 사용자별 저장 용량·하루 업로드 개수. 단위 테스트처럼 주입되지 않으면 검사하지 않는다. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.upload.UploadLimitService uploadLimits;
+
     private static final int MAX_SAVE_ATTEMPTS = 3;
 
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
@@ -298,6 +302,12 @@ public class DocumentService {
             if (replay.isPresent()) {
                 return replay.get();
             }
+            // 멱등 재요청은 위에서 돌려줬다. 새 업로드만 사용자 잠금 아래에서 용량·하루 개수를 확인하고 기록한다.
+            if (uploadLimits != null) {
+                uploadLimits.enforce(userId, file.getSize(), 1);
+                uploadLimits.record(userId, workspaceId, fruition.core.upload.UploadLimitService.KIND_DOCUMENT,
+                        file.getSize());
+            }
 
             // 같은 폴더에 같은 이름이 있으면 거절하지 않고 "이름 (2).pdf"처럼 번호를 붙인다.
             // 스킬 참고 문서는 참고 문서끼리만 비교한다. 동시에 같은 이름을 고르는 경합은 DB 고유 제약이 막는다.
@@ -373,7 +383,8 @@ public class DocumentService {
                  | IdempotencyInProgressException
                  | InvalidMarkdownContentException
                  | MarkdownContentTooLargeException
-                 | UnsupportedDocumentFileException e) {
+                 | UnsupportedDocumentFileException
+                 | fruition.core.upload.UploadLimitException e) {
             throw e;
         } catch (Exception e) {
             if (objectStored) {
@@ -1982,6 +1993,10 @@ public class DocumentService {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
         try {
             saved = executeWithSaveRetry(() -> saveTransaction.execute(status -> {
+                if (uploadLimits != null && !assets.isEmpty()) {
+                    uploadLimits.enforce(userId, assets.stream().mapToLong(DocumentAsset::getByteSize).sum(),
+                            assets.size());
+                }
                 // 같은 요청이 겹쳐도 먼저 커밋된 asset의 storage_key를 merge로 덮지 않는다.
                 // 이 트랜잭션이 새로 만든 행만 무변경 응답 때 정리한다.
                 List<DocumentAsset> insertedAssets = new java.util.ArrayList<>();
@@ -1995,6 +2010,11 @@ public class DocumentService {
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
                     assetRepository.deleteAllInBatch(insertedAssets);
+                } else if (uploadLimits != null) {
+                    for (DocumentAsset asset : insertedAssets) {
+                        uploadLimits.record(userId, workspaceId,
+                                fruition.core.upload.UploadLimitService.KIND_DOCUMENT_ASSET, asset.getByteSize());
+                    }
                 }
                 return value;
             }));

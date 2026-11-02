@@ -2,6 +2,7 @@ package fruition.core.document.service;
 
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.document.dto.DocumentUploadResponse;
+import fruition.core.upload.UploadLimitService;
 import fruition.shared.util.StorageProperties;
 import fruition.shared.util.DirectMultipartUpload;
 import fruition.shared.util.MultipartStorage;
@@ -26,11 +27,13 @@ public class DocumentDirectUploadService {
     private final StorageProperties properties;
     private final WorkspaceAccessGuard access;
     private final DocumentService documents;
+    private final UploadLimitService limits;
 
     public DocumentDirectUploadService(MinioClient storage, MultipartStorage multipart, StorageProperties properties,
-            WorkspaceAccessGuard access, DocumentService documents,
+            WorkspaceAccessGuard access, DocumentService documents, UploadLimitService limits,
             @Value("${app.jwt.secret}") String secret) throws Exception {
         this.storage = storage;
+        this.limits = limits;
         this.properties = properties;
         this.access = access;
         this.documents = documents;
@@ -52,10 +55,12 @@ public class DocumentDirectUploadService {
                 || filename.codePoints().anyMatch(Character::isISOControl)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "올바른 PDF 파일명이 필요합니다.");
         }
-        // SDK 8.x의 객체 처리 범위. byte[]/int 길이와 무관하게 long으로 계산한다.
-        if (request.size() <= 0 || request.size() > 5L * 1024 * 1024 * 1024 * 1024) {
-            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "PDF 크기는 0보다 크고 5TiB 이하여야 합니다.");
+        if (request.size() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "PDF 크기는 0보다 커야 합니다.");
         }
+        // 알린 크기로 먼저 거절한다. 실제 크기는 확정 때 조립한 객체로 다시 확인한다.
+        limits.requirePdfSize(request.size());
+        limits.precheck(userId, request.size(), 1);
         var started = upload.start(userId, workspaceId, "tmp/document-uploads/" + UUID.randomUUID(),
                 "application/pdf", request.size(), Map.of("filename", filename,
                         "folder", request.folder_id() == null ? "" : request.folder_id().toString()));
@@ -91,6 +96,8 @@ public class DocumentDirectUploadService {
                 || !"application/pdf".equals(stat.contentType())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "업로드한 파일 정보가 일치하지 않습니다.");
         }
+        // 한도를 낮추기 전에 발급된 ticket도 실제 크기로 막는다. 용량·하루 개수는 문서 등록 트랜잭션이 잠금 아래에서 확인한다.
+        limits.requirePdfSize(stat.size());
         String filename = claims.get("filename", String.class);
         String folder = claims.get("folder", String.class);
         // 버전 ID(로컬 비버전 버킷은 ETag)를 고정하여 해시 계산과 원본 저장 사이 덮어쓰기를 차단한다.
