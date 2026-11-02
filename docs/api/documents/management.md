@@ -326,7 +326,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `StartRequest` |
 | 출력 | `200` 티켓 발급 — `StartResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` PDF 파일명이 올바르지 않음 — `ErrorResponse`<br>`400` 크기가 0 이하 — `ErrorResponse`<br>`413` 100MB 초과(`FILE_TOO_LARGE`) 또는 내 저장 공간 5GB 초과(`STORAGE_QUOTA_EXCEEDED`) — `ErrorResponse`<br>`429` 하루 업로드 200개 초과(`UPLOAD_DAILY_LIMIT_EXCEEDED`) — `ErrorResponse` |
+| 주요 오류 | `400` PDF 파일명이 올바르지 않음 — `ErrorResponse`<br>`400` 크기가 0 이하 — `ErrorResponse`<br>`413` 100MB 초과(`FILE_TOO_LARGE`) 또는 내 저장 공간 5GB 초과(`STORAGE_QUOTA_EXCEEDED`) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -387,7 +387,6 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | `400` | 크기가 0 이하 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
 | `413` | 100MB 초과 | `ErrorResponse` (`FILE_TOO_LARGE`) |
 | `413` | 내 저장 공간(5GB) 초과 | `ErrorResponse` (`STORAGE_QUOTA_EXCEEDED`) |
-| `429` | 오늘(Asia/Seoul) 업로드 200개 초과 | `ErrorResponse` (`UPLOAD_DAILY_LIMIT_EXCEEDED`) |
 
 ```json
 {
@@ -801,10 +800,10 @@ HTTP/1.1 204 No Content
 | 항목 | 내용 |
 |---|---|
 | 목적 | 표시 이름과 전체 Markdown 본문으로 즉시 편집 가능한 문서를 생성합니다. |
-| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `MarkdownDocumentCreateRequest` |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`, `X-Fruition-Import-Id`(선택): `string`<br>**Body** — `MarkdownDocumentCreateRequest` |
 | 출력 | `201` 생성 성공 또는 멱등 재요청 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 본문, Idempotency-Key 또는 origin — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 또는 같은 이름 — `ErrorResponse`<br>`413` Markdown 5MB 초과 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 본문, Idempotency-Key 또는 origin, 열린 가져오기 세션이 아님(`IMPORT_INVALID`) — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 또는 같은 이름 — `ErrorResponse`<br>`413` Markdown 5MB 초과 또는 내 저장 공간 5GB 초과(`STORAGE_QUOTA_EXCEEDED`) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -822,6 +821,14 @@ HTTP/1.1 204 No Content
 
 `origin: "skill_reference"`를 주면 스킬 참고 문서로 만든다. `folder_id`와 함께 쓸 수 없고, 그 밖의 `origin` 값은 `400 INVALID_DOCUMENT_ORIGIN`이다. 이름은 참고 문서끼리만 비교한다.
 
+업로드 한도: 파일 업로드(`POST /documents`)와 같이 내 저장 공간(5GB, 본문 UTF-8 바이트)을 적용한다. 하루 업로드 개수 한도는 없다.
+새 문서는 원본을 저장하기 전에 잠금 없이 미리 확인하고, 원본 저장 뒤 문서 행을 쓰기 직전에 사용자 잠금 아래에서 다시 확인한다.
+같은 `Idempotency-Key` 재요청은 한도를 보지 않는다. 서버 내부 생성(Agent 문서 생성 도구, 회의록 저장, 새 워크스페이스 첫 노트)은 이 한도를 적용하지 않는다.
+
+`X-Fruition-Import-Id`(가져오기 세션, [Imports](../imports.md))를 주면 그 세션의 문서(`origin=notion_import`)로 만든다.
+저장 용량은 그대로 보고 세션 항목 수를 센다(상한 없음). 워크스페이스의 업로드 자동 편입 설정과 무관하게 편입하지 않는다.
+열린 내 세션(같은 워크스페이스·만료 전·완료 전)이 아니면 일반 한도로 대신 처리하지 않고 `400 IMPORT_INVALID`다. 이 헤더와 `origin`·`agent_run_id`를 함께 쓰면 `400 INVALID_DOCUMENT_ORIGIN`이다.
+
 #### 3. Auth 필요 여부
 
 - 필요
@@ -833,6 +840,7 @@ HTTP/1.1 204 No Content
 |---|---|---|---|---|
 | path | `workspace_id` | `string` | 예 | - |
 | header | `Idempotency-Key` | `string` | 예 | 요청 멱등 키 |
+| header | `X-Fruition-Import-Id` | `string` | 아니오 | 가져오기 세션 ID(`POST /imports` 응답의 `import_id`) |
 
 - Content-Type: `application/json` (`MarkdownDocumentCreateRequest`)
 
@@ -868,10 +876,10 @@ HTTP/1.1 204 No Content
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
-| `400` | 잘못된 본문 또는 Idempotency-Key. 허용하지 않는 origin, 참고 문서에 `folder_id` 지정은 `INVALID_DOCUMENT_ORIGIN` | `ErrorResponse` |
+| `400` | 잘못된 본문 또는 Idempotency-Key. 허용하지 않는 origin, 참고 문서에 `folder_id` 지정은 `INVALID_DOCUMENT_ORIGIN`. 열린 가져오기 세션이 아니면 `IMPORT_INVALID` | `ErrorResponse` |
 | `404` | 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 또는 같은 이름(`DUPLICATE_NAME`) | `ErrorResponse` |
-| `413` | Markdown 5MB 초과 | `ErrorResponse` |
+| `413` | Markdown 5MB 초과, 또는 내 저장 공간(5GB) 초과(`STORAGE_QUOTA_EXCEEDED`) | `ErrorResponse` |
 
 ```json
 {
