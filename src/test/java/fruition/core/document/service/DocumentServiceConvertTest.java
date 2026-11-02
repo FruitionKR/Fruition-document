@@ -55,6 +55,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -147,6 +148,9 @@ class DocumentServiceConvertTest {
         lenient().when(idempotencyService.replay(
                 anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(Optional.empty());
+        // 변환 요청은 execute로 선점한 뒤 실행한다. 선점 성공을 흉내 내 action을 그대로 돌린다.
+        lenient().when(idempotencyService.execute(anyString(), anyString(), anyString(), anyString(), any(),
+                anyInt(), any(), any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(7)).get());
         lenient().doCallRealMethod().when(idempotencyService).validateKey(any());
         lenient().doCallRealMethod().when(idempotencyService).requestHash(any(String[].class));
         lenient().when(idempotencyService.currentExecutionId()).thenReturn(Optional.empty());
@@ -321,9 +325,9 @@ class DocumentServiceConvertTest {
         assertThat(savedQueue.getValue().getSourceDocumentId()).isEqualTo(SOURCE_DOCUMENT_ID);
         assertThat(savedQueue.getValue().getStatus()).isEqualTo("processing");
 
-        verify(idempotencyService).save(
+        verify(idempotencyService).execute(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
-                eq(201), anyString(), any());
+                eq(DocumentUploadResponse.class), eq(201), any(), any());
         assertThat(response.id()).isEqualTo(placeholder.getId());
         assertThat(response.status()).isEqualTo(DocumentStatus.processing);
         assertThat(response.editable()).isTrue();
@@ -367,9 +371,9 @@ class DocumentServiceConvertTest {
         DocumentUploadResponse stored = new DocumentUploadResponse(
                 "doc_replay", "보고서.md", "text/markdown", 10,
                 DocumentStatus.processing, null, now, true, 1, DocumentRole.EDITABLE, null);
-        when(idempotencyService.replay(
+        when(idempotencyService.execute(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
-                eq(DocumentUploadResponse.class))).thenReturn(Optional.of(stored));
+                eq(DocumentUploadResponse.class), anyInt(), any(), any())).thenReturn(stored);
 
         DocumentUploadResponse response = documentService.convertToMarkdown(
                 WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key");
@@ -385,9 +389,9 @@ class DocumentServiceConvertTest {
         stubOwnedWorkspace();
         when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
                 .thenReturn(Optional.of(sourcePdf()));
-        when(idempotencyService.replay(
+        when(idempotencyService.execute(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
-                eq(DocumentUploadResponse.class)))
+                eq(DocumentUploadResponse.class), anyInt(), any(), any()))
                 .thenThrow(new IdempotencyConflictException("충돌"));
 
         assertThatThrownBy(() -> documentService.convertToMarkdown(

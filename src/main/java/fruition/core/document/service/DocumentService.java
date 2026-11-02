@@ -1123,8 +1123,11 @@ public class DocumentService {
     /**
      * PDF 원본 문서의 Markdown 변환을 요청한다. 변환 결과를 담을 placeholder Markdown 문서를 즉시 만들어
      * 반환하고, 실제 변환은 첫 batch command를 Kafka로 발행해 converter worker가 비동기로 수행한다.
+     *
+     * <p>바깥 트랜잭션을 두지 않고 {@link IdempotencyService#execute}로 멱등 선점 → 실행 트랜잭션 순서로 연다.
+     * 바깥 트랜잭션이 연결을 쥔 채 선점(REQUIRES_NEW)이 연결을 하나 더 잡으면, 풀 크기만큼 동시에 들어올 때
+     * 모두가 두 번째 연결을 기다리며 풀이 교착한다(connectionTimeout까지 무관한 API도 멈춤).
      */
-    @Transactional
     public DocumentUploadResponse convertToMarkdown(
             String workspaceId,
             String userId,
@@ -1140,12 +1143,13 @@ public class DocumentService {
 
         String endpointScope = convertEndpointScope(workspaceId);
         String requestHash = requestHash(documentId, "convert-markdown", "");
-        Optional<DocumentUploadResponse> replay =
-                replayIdempotentRequest(userId, endpointScope, idempotencyKey, requestHash);
-        if (replay.isPresent()) {
-            return replay.get();
-        }
+        return idempotencyService.execute(userId, endpointScope, idempotencyKey, requestHash,
+                DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
+                () -> startConvertPlaceholder(workspaceId, userId, documentId, source));
+    }
 
+    private DocumentUploadResponse startConvertPlaceholder(String workspaceId, String userId, String documentId,
+                                                           Document source) {
         // placeholder: display_name은 원본에서 확장자를 뗀 이름, filename은 <이름>.md
         DocumentEditingRules.Filename filename =
                 DocumentEditingRules.rename(source.getDisplayName(), "document.md");
@@ -1180,7 +1184,6 @@ public class DocumentService {
         startConvert(placeholder, source);
 
         DocumentUploadResponse response = toUploadResponse(placeholder, true);
-        saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
         log.info("[문서 변환 요청 등록] workspaceId={} sourceDocumentId={} placeholderDocumentId={}",
                 workspaceId, documentId, placeholderId);
         return response;
