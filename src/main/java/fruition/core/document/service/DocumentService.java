@@ -260,7 +260,6 @@ public class DocumentService {
         workspaceAccessGuard.requireMember(workspaceId, userId);
     }
 
-    @Transactional
     public DocumentUploadResponse upload(
             String workspaceId,
             String userId,
@@ -271,8 +270,24 @@ public class DocumentService {
         return upload(workspaceId, userId, idempotencyKey, folderId, file, null);
     }
 
-    @Transactional
+    /**
+     * 바깥 트랜잭션 없이 {@link IdempotencyService#execute}로 멱등 선점 → 실행 트랜잭션 순서로 연다.
+     * 바깥 트랜잭션이 연결을 쥔 채 선점(REQUIRES_NEW)이 연결을 하나 더 잡으면, 풀 크기만큼 동시에 들어올 때
+     * 모두가 두 번째 연결을 기다리며 풀이 교착한다. 폴더를 지정하면 {@link #inFolderLockTransaction}을 본다.
+     */
     public DocumentUploadResponse upload(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            UUID folderId,
+            MultipartFile file,
+            String origin
+    ) {
+        return inFolderLockTransaction(folderId,
+                () -> uploadOnce(workspaceId, userId, idempotencyKey, folderId, file, origin));
+    }
+
+    private DocumentUploadResponse uploadOnce(
             String workspaceId,
             String userId,
             String idempotencyKey,
@@ -285,8 +300,6 @@ public class DocumentService {
         requireNoFolderForSkillReference(skillReference, folderId);
         verifyFolder(workspaceId, folderId);
         validateIdempotencyKey(idempotencyKey);
-        String objectPath = null;
-        boolean objectStored = false;
         try {
             String filename = file.getOriginalFilename();
             validateFilename(filename);
@@ -309,13 +322,38 @@ public class DocumentService {
             String requestHash = skillReference
                     ? requestHash(filename.trim(), mimeType, contentHash, String.valueOf(folderId), origin)
                     : requestHash(filename.trim(), mimeType, contentHash, String.valueOf(folderId));
+            String uploadFilename = filename;
 
-            Optional<DocumentUploadResponse> replay = replayIdempotentRequest(
-                    userId, endpointScope, idempotencyKey, requestHash);
-            if (replay.isPresent()) {
-                return replay.get();
+            // 멱등 재요청은 execute가 저장된 응답을 돌려준다.
+            return idempotencyService.execute(userId, endpointScope, idempotencyKey, requestHash,
+                    DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
+                    () -> storeUpload(workspaceId, userId, folderId, file, skillReference, uploadFilename,
+                            mimeType, markdownContent, contentHash));
+        } catch (Exception e) {
+            // storeUpload가 이미 감싼 실패는 그대로 올린다.
+            if (e instanceof DocumentUploadException || isUploadRejection(e)) {
+                throw (RuntimeException) e;
             }
-            // 멱등 재요청은 위에서 돌려줬다. 새 업로드는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
+            throw new DocumentUploadException("파일 저장 중 오류가 발생했습니다.", e);
+        }
+    }
+
+    private DocumentUploadResponse storeUpload(
+            String workspaceId,
+            String userId,
+            UUID folderId,
+            MultipartFile file,
+            boolean skillReference,
+            String filename,
+            String mimeType,
+            DocumentEditingRules.MarkdownContent markdownContent,
+            String contentHash
+    ) {
+        boolean markdownUpload = markdownContent != null;
+        String objectPath = null;
+        boolean objectStored = false;
+        try {
+            // 새 업로드는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
             if (uploadLimits != null) {
                 uploadLimits.precheck(userId, file.getSize());
             }
@@ -383,7 +421,6 @@ public class DocumentService {
                         documentId, markdownContent.markdown(), markdownContent.contentHash(), 1));
             }
             DocumentUploadResponse response = toUploadResponse(document, markdownUpload);
-            saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
             // 스킬 참고 문서는 편입 대상이 아니다. 자동 편입은 업로드 커밋 뒤 별도 트랜잭션에서 한다.
             if (markdownUpload && !skillReference) {
                 autoIngestAfterCommit(workspaceId, userId, documentId,
@@ -394,17 +431,10 @@ public class DocumentService {
                     document.getFilename(), document.getStatus(), document.getSourceUri());
 
             return response;
-        } catch (InvalidDocumentFilenameException
-                 | InvalidDocumentOriginException
-                 | InvalidIdempotencyKeyException
-                 | IdempotencyConflictException
-                 | IdempotencyInProgressException
-                 | InvalidMarkdownContentException
-                 | MarkdownContentTooLargeException
-                 | UnsupportedDocumentFileException
-                 | fruition.core.upload.UploadLimitException e) {
-            throw e;
         } catch (Exception e) {
+            if (isUploadRejection(e)) {
+                throw (RuntimeException) e;
+            }
             if (objectStored) {
                 deleteMinioObject(objectPath);
             }
@@ -412,14 +442,27 @@ public class DocumentService {
         }
     }
 
-    @Transactional
+    /** 업로드 거절(4xx)로 그대로 올리는 예외. 나머지는 DocumentUploadException으로 감싼다. */
+    private static boolean isUploadRejection(Exception e) {
+        return e instanceof InvalidDocumentFilenameException
+                || e instanceof InvalidDocumentOriginException
+                || e instanceof InvalidIdempotencyKeyException
+                || e instanceof IdempotencyConflictException
+                || e instanceof IdempotencyInProgressException
+                || e instanceof InvalidMarkdownContentException
+                || e instanceof MarkdownContentTooLargeException
+                || e instanceof UnsupportedDocumentFileException
+                || e instanceof fruition.core.upload.UploadLimitException;
+    }
+
     public DocumentUploadResponse createMarkdown(
             String workspaceId,
             String userId,
             String idempotencyKey,
             MarkdownDocumentCreateRequest request
     ) {
-        return createMarkdownWithDraft(workspaceId, userId, idempotencyKey, request, UploadAccounting.NONE);
+        return inFolderLockTransaction(folderOf(request), () ->
+                createMarkdownWithDraft(workspaceId, userId, idempotencyKey, request, UploadAccounting.NONE));
     }
 
     /**
@@ -429,8 +472,18 @@ public class DocumentService {
      * @param importId {@code X-Fruition-Import-Id}. 있으면 그 가져오기 세션의 문서로 만든다: 저장 용량은 그대로 보고,
      *                 세션 항목 수를 세며, 자동 편입하지 않는다. 열린 세션이 아니면 400 IMPORT_INVALID다.
      */
-    @Transactional
     public DocumentUploadResponse createMarkdownAsUpload(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            MarkdownDocumentCreateRequest request,
+            String importId
+    ) {
+        return inFolderLockTransaction(folderOf(request), () ->
+                createMarkdownAsUploadOnce(workspaceId, userId, idempotencyKey, request, importId));
+    }
+
+    private DocumentUploadResponse createMarkdownAsUploadOnce(
             String workspaceId,
             String userId,
             String idempotencyKey,
@@ -461,15 +514,8 @@ public class DocumentService {
             UploadAccounting accounting
     ) {
         String agentRun = request == null ? null : ownAgentDraft(workspaceId, userId, request.agentRunId());
-        DocumentUploadResponse response = createMarkdown(workspaceId, userId, idempotencyKey, request,
-                agentRun == null ? null : Document.AGENT_ORIGIN, accounting);
-        if (agentRun != null && analytics != null) {
-            // 같은 멱등 키의 재요청은 처음 만든 문서를 돌려주므로 실제 AI 문서일 때만 기록한다.
-            documentRepository.findById(response.id())
-                    .filter(document -> Document.AGENT_ORIGIN.equals(document.getAiOrigin()))
-                    .ifPresent(document -> analytics.aiDocumentCreated(agentRun, document));
-        }
-        return response;
+        return createMarkdown(workspaceId, userId, idempotencyKey, request,
+                agentRun == null ? null : Document.AGENT_ORIGIN, accounting, agentRun);
     }
 
     /** 작업 탭 초안은 요청자 본인의 markdown_create run일 때만 AI 문서로 본다. 아니면 일반 문서로 만든다. */
@@ -483,9 +529,8 @@ public class DocumentService {
 
     /**
      * @param aiOrigin AI가 만든 문서면 {@link Document#AGENT_ORIGIN} 또는 {@link Document#MEETING_NOTES_ORIGIN}.
-     *                 요청 본문의 origin과 달리 서버 내부 호출만 넘긴다.
+     *                 요청 본문의 origin과 달리 서버 내부 호출만 넘긴다. 호출자 트랜잭션이 있으면 실행이 거기에 합류한다.
      */
-    @Transactional
     public DocumentUploadResponse createMarkdown(
             String workspaceId,
             String userId,
@@ -493,7 +538,22 @@ public class DocumentService {
             MarkdownDocumentCreateRequest request,
             String aiOrigin
     ) {
-        return createMarkdown(workspaceId, userId, idempotencyKey, request, aiOrigin, UploadAccounting.NONE);
+        return inFolderLockTransaction(folderOf(request), () ->
+                createMarkdown(workspaceId, userId, idempotencyKey, request, aiOrigin, UploadAccounting.NONE));
+    }
+
+    /**
+     * 폴더를 지정한 생성은 지금처럼 바깥 트랜잭션에서 폴더 행을 잠근 뒤 멱등 선점을 한다. 같은 키의 동시 재요청이
+     * 이 잠금에서 기다렸다가 첫 요청의 응답을 재생받기 때문이다. 잠금을 선점 뒤로 옮기면 그 사이에 온 재요청이
+     * 409(처리 중)를 받게 되어 동작이 바뀌므로 이 경로는 그대로 둔다. 폴더가 없으면 선점 전에 잡는 잠금이 없어
+     * 바깥 트랜잭션 없이 실행 트랜잭션만 연다(선점과 실행이 연결을 동시에 둘 쥐지 않는다).
+     */
+    private <T> T inFolderLockTransaction(UUID folderId, java.util.function.Supplier<T> work) {
+        return folderId == null ? work.get() : transactionTemplate.execute(status -> work.get());
+    }
+
+    private static UUID folderOf(MarkdownDocumentCreateRequest request) {
+        return request == null ? null : request.folderId();
     }
 
     private DocumentUploadResponse createMarkdown(
@@ -503,6 +563,19 @@ public class DocumentService {
             MarkdownDocumentCreateRequest request,
             String aiOrigin,
             UploadAccounting accounting
+    ) {
+        return createMarkdown(workspaceId, userId, idempotencyKey, request, aiOrigin, accounting, null);
+    }
+
+    /** @param agentRun 작업 탭 초안이면 그 run ID. 새로 만든 AI 문서의 분석 기록을 문서와 같은 트랜잭션에 남긴다. */
+    private DocumentUploadResponse createMarkdown(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            MarkdownDocumentCreateRequest request,
+            String aiOrigin,
+            UploadAccounting accounting,
+            String agentRun
     ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         validateIdempotencyKey(idempotencyKey);
@@ -523,23 +596,25 @@ public class DocumentService {
                 : requestHash(filename.filename(), "text/markdown", content.contentHash(),
                         String.valueOf(request.folderId()));
 
-        Optional<DocumentUploadResponse> replay =
-                replayIdempotentRequest(userId, endpointScope, idempotencyKey, requestHash);
-        if (replay.isPresent()) {
-            return replay.get();
-        }
-        // 멱등 재요청은 위에서 돌려줬다. 새 문서는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
-        if (accounting.limited() && uploadLimits != null) {
-            uploadLimits.precheck(userId, content.bytes().length);
-        }
-
         String origin = skillReference ? Document.SKILL_REFERENCE_ORIGIN
                 : accounting.importSession() != null ? Document.NOTION_IMPORT_ORIGIN : "direct";
-        DocumentUploadResponse response =
-                createMarkdownDocument(workspaceId, userId, filename.filename(), content,
-                        origin, request.folderId(), aiOrigin, true, accounting);
-        saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
-        return response;
+        // 멱등 재요청은 execute가 저장된 응답을 돌려준다.
+        return idempotencyService.execute(userId, endpointScope, idempotencyKey, requestHash,
+                DocumentUploadResponse.class, 201, DocumentUploadResponse::id, () -> {
+                    // 새 문서는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
+                    if (accounting.limited() && uploadLimits != null) {
+                        uploadLimits.precheck(userId, content.bytes().length);
+                    }
+                    DocumentUploadResponse created = createMarkdownDocument(workspaceId, userId, filename.filename(),
+                            content, origin, request.folderId(), aiOrigin, true, accounting);
+                    // 같은 키의 재요청은 저장된 응답만 돌려주므로 처음 만들 때 한 번만 기록한다.
+                    if (agentRun != null && analytics != null) {
+                        documentRepository.findById(created.id())
+                                .filter(document -> Document.AGENT_ORIGIN.equals(document.getAiOrigin()))
+                                .ifPresent(document -> analytics.aiDocumentCreated(agentRun, document));
+                    }
+                    return created;
+                });
     }
 
     @Transactional
@@ -805,17 +880,6 @@ public class DocumentService {
                 userId, endpointScope, idempotencyKey, requestHash, responseType);
     }
 
-    private Optional<DocumentUploadResponse> replayIdempotentRequest(
-            String userId,
-            String endpointScope,
-            String idempotencyKey,
-            String requestHash
-    ) {
-        return replayIdempotentRequest(
-                userId, endpointScope, idempotencyKey, requestHash,
-                DocumentUploadResponse.class);
-    }
-
     private void saveIdempotencyRecord(
             String userId,
             String endpointScope,
@@ -839,17 +903,6 @@ public class DocumentService {
         idempotencyService.save(
                 userId, endpointScope, idempotencyKey, requestHash,
                 200, response.id(), response);
-    }
-
-    private void saveIdempotencyRecord(
-            String userId,
-            String endpointScope,
-            String idempotencyKey,
-            String requestHash,
-            DocumentUploadResponse response
-    ) {
-        saveIdempotencyRecord(
-                userId, endpointScope, idempotencyKey, requestHash, response, response.id());
     }
 
     private void saveIdempotencyRecord(
