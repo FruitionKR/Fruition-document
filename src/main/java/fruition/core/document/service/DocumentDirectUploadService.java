@@ -37,7 +37,8 @@ public class DocumentDirectUploadService {
         this.properties = properties;
         this.access = access;
         this.documents = documents;
-        this.upload = new DirectMultipartUpload(storage, multipart, properties, secret, "document-upload-ticket");
+        this.upload = new DirectMultipartUpload(storage, multipart, properties, secret, "document-upload-ticket",
+                java.util.regex.Pattern.compile("tmp/document-uploads/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"));
     }
 
     public record StartRequest(String filename, long size, UUID folder_id) {}

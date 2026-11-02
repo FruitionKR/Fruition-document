@@ -80,7 +80,8 @@ public class MeetingRecordingService {
         this.liveLock = liveLock;
         this.minio = minio;
         this.storage = storage;
-        this.upload = new DirectMultipartUpload(minio, multipart, storage, secret, "meeting-recording-ticket");
+        this.upload = new DirectMultipartUpload(minio, multipart, storage, secret, "meeting-recording-ticket",
+                java.util.regex.Pattern.compile("meetings/[^/]+/recording-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(?:wav|mp3|m4a|webm)"));
         this.transcription = transcription;
         this.transaction = transaction;
         this.credits = credits;
@@ -196,7 +197,9 @@ public class MeetingRecordingService {
 
     private Claims verify(String workspaceId, String userId, String meetingId, String ticket) {
         Claims claims = upload.verify(workspaceId, userId, ticket);
-        if (!meetingId.equals(claims.get("meeting", String.class))) {
+        // 키도 이 회의의 경로여야 한다. ticket의 meeting만 맞추고 키는 다른 회의 녹음을 가리키는 위조를 막는다.
+        if (!meetingId.equals(claims.get("meeting", String.class))
+                || !claims.get("key", String.class).startsWith("meetings/" + meetingId + "/")) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "다른 회의의 업로드를 사용할 수 없습니다.");
         }
         return claims;
