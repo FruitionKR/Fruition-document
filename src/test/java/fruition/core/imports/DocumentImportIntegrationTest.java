@@ -445,6 +445,45 @@ class DocumentImportIntegrationTest {
         assertThat(ingestRuns()).isEqualTo(2);
     }
 
+    @Test
+    void importedPdf_isNotConvertedUntilRequested_andConvertEndpointQueuesOnlyUnconvertedPdfs() throws Exception {
+        String importId = openImport();
+        createMarkdown("본문.md", importId).andExpect(status().isCreated());
+        String first = json(uploadPdf("하나.pdf", importId, UUID.randomUUID().toString()), 201).path("id").asText();
+        String second = json(uploadPdf("둘.pdf", importId, UUID.randomUUID().toString()), 201).path("id").asText();
+        json(uploadPdf("일반.pdf", null, UUID.randomUUID().toString()), 201);
+        complete(importId, "{}").andExpect(status().isOk());
+
+        // 업로드만으로는 변환하지 않는다. 변환 예상은 변환 1건 예상치 × 아직 변환하지 않은 PDF 수다.
+        assertThat(convertedFrom(first)).isZero();
+        JsonNode before = json(estimate(importId), 200);
+        assertThat(before.path("pdf_unconverted_count").asInt()).isEqualTo(2);
+        assertThat(before.path("convert_estimated_credits").asLong()).isEqualTo(2 * credits.estimate("convert"));
+        assertThat(before.path("convert_estimated_cost_usd").decimalValue()).isEqualByComparingTo(
+                BigDecimal.valueOf(aiUsageLimiter.estimateUsdMicro("convert") * 2).movePointLeft(6));
+        assertThat(before.path("document_count").asInt()).isEqualTo(1);
+
+        mockMvc.perform(post(imports() + "/" + importId + "/convert").header("Authorization", bearer(userId)))
+                .andExpect(status().isAccepted()).andExpect(content().json("{\"queued\":2,\"remaining\":0}", true));
+        mockMvc.perform(post(imports() + "/" + importId + "/convert").header("Authorization", bearer(userId)))
+                .andExpect(status().isAccepted()).andExpect(content().json("{\"queued\":0,\"remaining\":0}", true));
+        assertThat(convertedFrom(first)).isEqualTo(1);
+        assertThat(convertedFrom(second)).isEqualTo(1);
+        JsonNode after = json(estimate(importId), 200);
+        assertThat(after.path("pdf_unconverted_count").asInt()).isZero();
+        assertThat(after.path("converting_count").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void convert_failedConversionCanBeRequestedAgain() throws Exception {
+        String importId = openImport();
+        String pdfId = json(uploadPdf("하나.pdf", importId, UUID.randomUUID().toString()), 201).path("id").asText();
+        mockMvc.perform(post(imports() + "/" + importId + "/convert").header("Authorization", bearer(userId)))
+                .andExpect(status().isAccepted());
+        jdbc.update("UPDATE documents SET status = 'failed' WHERE source_document_id = ?", pdfId);
+        assertThat(json(estimate(importId), 200).path("pdf_unconverted_count").asInt()).isEqualTo(1);
+    }
+
     // ---------- 일반 POST /documents/markdown 업로드 한도
 
     @Test
@@ -537,6 +576,11 @@ class DocumentImportIntegrationTest {
         event.putObject("payload").put("page_start", 1).put("page_end", 1).put("total_pages", 1)
                 .put("result_key", resultKey);
         documentService.applyConvertBatch(event);
+    }
+
+    private int convertedFrom(String pdfId) {
+        return jdbc.queryForObject("SELECT count(*) FROM documents WHERE source_document_id = ? AND deleted_at IS NULL",
+                Integer.class, pdfId);
     }
 
     private int ingestRuns() {

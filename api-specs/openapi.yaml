@@ -3473,6 +3473,51 @@ paths:
       summary: 가져오기 세션 완료
       tags:
       - Imports
+  /api/workspaces/{workspace_id}/imports/{import_id}/convert:
+    post:
+      description: "아직 변환하지 않은 가져온 PDF를 문서마다 수동 변환(POST /documents/{id}/convert-markdown)과 같은 경로로 변환 큐에 넣습니다(권한·크레딧 동일). 한 번에 20개까지 넣으며 remaining이 0이 될 때까지 다시 부르면 됩니다. 변환본은 이 가져오기 문서로 표시되고 자동 편입하지 않습니다. 첫 PDF부터 거절되면 그 오류를 그대로 돌려줍니다."
+      operationId: convertDocumentImportPdfs
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: import_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "202":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentImportIngestResponse"
+          description: 큐 등록
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT)
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 변환 권한 없음(WORKSPACE_PERMISSION_REQUIRED)
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 내 세션이 아님(IMPORT_NOT_FOUND) 또는 워크스페이스 멤버가 아님
+      summary: 가져온 PDF Markdown 변환
+      tags:
+      - Imports
   /api/workspaces/{workspace_id}/imports/{import_id}/ingest:
     post:
       description: "문서마다 수동 위키 편입(POST /documents/{id}/ingest)과 같은 경로로 큐에 넣습니다(권한·AI 한도·크레딧 동일). 한 번에 20개까지 넣으며, document_ids를 생략하면 아직 편입하지 않은 문서 중 앞 20개를 넣습니다. remaining이 0이 될 때까지 다시 부르면 됩니다. 첫 문서부터 거절되면 그 오류(403·402·429 등)를 그대로 돌려줍니다."
@@ -7495,6 +7540,13 @@ components:
     DocumentImportIngestEstimateResponse:
       type: object
       properties:
+        convert_estimated_cost_usd:
+          type: number
+          description: PDF 변환 예상 비용(USD) = 변환 1건 예상 비용 × pdf_unconverted_count. 환율을 못 읽으면 null
+        convert_estimated_credits:
+          type: integer
+          format: int64
+          description: PDF 변환 예상 크레딧(milli-KRW) = app.billing.estimate.convert(없으면 기본값) × pdf_unconverted_count
         converting_count:
           type: integer
           format: int32
@@ -7510,6 +7562,10 @@ components:
           type: integer
           format: int64
           description: "예상 크레딧(milli-KRW, /users/me/credits의 *_krw_milli와 같은 단위) = app.billing.estimate.document × document_count"
+        pdf_unconverted_count:
+          type: integer
+          format: int32
+          description: 아직 변환하지 않은(변환본이 없거나 변환에 실패한) 가져온 PDF 수. POST .../convert로 변환한다
     DocumentImportIngestRequest:
       type: object
       properties:

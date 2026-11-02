@@ -129,4 +129,25 @@ public class DocumentImportController {
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(imports.ingest(workspaceId, userId, importId, request == null ? null : request.documentIds()));
     }
+
+    @Operation(operationId = "convertDocumentImportPdfs", summary = "가져온 PDF Markdown 변환",
+            description = "아직 변환하지 않은 가져온 PDF를 문서마다 수동 변환(POST /documents/{id}/convert-markdown)과 같은 경로로 "
+                    + "변환 큐에 넣습니다(권한·크레딧 동일). 한 번에 20개까지 넣으며 remaining이 0이 될 때까지 다시 부르면 됩니다. "
+                    + "변환본은 이 가져오기 문서로 표시되고 자동 편입하지 않습니다. 첫 PDF부터 거절되면 그 오류를 그대로 돌려줍니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "202", description = "큐 등록",
+            content = @Content(schema = @Schema(implementation = IngestResponse.class))),
+        @ApiResponse(responseCode = "402", description = "크레딧 부족(INSUFFICIENT_CREDIT)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "변환 권한 없음(WORKSPACE_PERMISSION_REQUIRED)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "404", description = "내 세션이 아님(IMPORT_NOT_FOUND) 또는 워크스페이스 멤버가 아님",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PostMapping("/{import_id}/convert")
+    public ResponseEntity<IngestResponse> convert(@PathVariable("workspace_id") String workspaceId,
+                                                  @AuthenticationPrincipal String userId,
+                                                  @PathVariable("import_id") String importId) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(imports.convert(workspaceId, userId, importId));
+    }
 }

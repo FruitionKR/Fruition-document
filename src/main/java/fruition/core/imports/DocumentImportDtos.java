@@ -77,7 +77,13 @@ public final class DocumentImportDtos {
                     nullable = true)
             Long estimatedCredits,
             @Schema(description = "아직 Markdown 변환 중이라 document_count에서 빠진 가져온 PDF 변환본 수. 변환이 끝나면 편입 대상에 들어간다")
-            int convertingCount) {}
+            int convertingCount,
+            @Schema(description = "아직 변환하지 않은(변환본이 없거나 변환에 실패한) 가져온 PDF 수. POST .../convert로 변환한다")
+            int pdfUnconvertedCount,
+            @Schema(description = "PDF 변환 예상 비용(USD) = 변환 1건 예상 비용 × pdf_unconverted_count. 환율을 못 읽으면 null", nullable = true)
+            BigDecimal convertEstimatedCostUsd,
+            @Schema(description = "PDF 변환 예상 크레딧(milli-KRW) = app.billing.estimate.convert(없으면 기본값) × pdf_unconverted_count")
+            Long convertEstimatedCredits) {}
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     @Schema(name = "DocumentImportIngestRequest")
