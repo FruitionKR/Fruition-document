@@ -39,7 +39,7 @@ public class AiCommandOutboxWriter {
         int inserted = jdbcTemplate.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind) VALUES (?, ?, ?, ?) "
                 + "ON CONFLICT(id) DO NOTHING", runId, workspaceId, userId, kind);
         // 새로 등록한 실행만 사용자별 사용 한도를 본다(enqueue가 같은 run으로 begin을 다시 부른다). 넘으면 등록과 함께 롤백된다.
-        if (inserted == 1) limits.check(runId, userId, kind);
+        if (inserted == 1) limits.check(userId, kind);
         // outbox 발행 전에 같은 트랜잭션에서 크레딧을 예약한다. 잔액이 모자라면 작업 등록과 함께 롤백된다(#79).
         credits.reserve(runId, userId, kind);
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
@@ -53,7 +53,7 @@ public class AiCommandOutboxWriter {
                 + "ON CONFLICT(id) DO NOTHING", runId, workspaceId, userId, kind);
         if (inserted != 1) throw new org.springframework.web.server.ResponseStatusException(
                 org.springframework.http.HttpStatus.CONFLICT, "이미 사용한 작업 ID입니다.");
-        limits.check(runId, userId, kind);
+        limits.check(userId, kind);
         credits.reserve(runId, userId, kind);
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
     }

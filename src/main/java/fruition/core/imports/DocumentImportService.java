@@ -12,7 +12,6 @@ import fruition.core.imports.DocumentImportDtos.IngestEstimateResponse;
 import fruition.core.imports.DocumentImportDtos.IngestResponse;
 import fruition.core.imports.DocumentImportDtos.Quota;
 import fruition.core.upload.UploadLimitService;
-import fruition.core.usage.limit.AiUsageLimiter;
 import fruition.core.usage.service.CreditService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -68,16 +67,14 @@ public class DocumentImportService {
     private final UploadLimitService uploadLimits;
     private final DocumentService documents;
     private final CreditService credits;
-    private final AiUsageLimiter aiUsageLimiter;
 
     public DocumentImportService(JdbcTemplate jdbc, WorkspaceAccessGuard access, UploadLimitService uploadLimits,
-                                 DocumentService documents, CreditService credits, AiUsageLimiter aiUsageLimiter) {
+                                 DocumentService documents, CreditService credits) {
         this.jdbc = jdbc;
         this.access = access;
         this.uploadLimits = uploadLimits;
         this.documents = documents;
         this.credits = credits;
-        this.aiUsageLimiter = aiUsageLimiter;
     }
 
     /** 세션을 연다. 알린 바이트가 남은 저장 공간을 넘으면 파일을 하나도 올리기 전에 413으로 거절한다. */
@@ -148,7 +145,7 @@ public class DocumentImportService {
     /** kind 한 건 예상 비용 × 건수(USD). 환율을 못 읽으면 null. */
     private BigDecimal usd(String kind, int count, UUID id) {
         try {
-            return BigDecimal.valueOf(aiUsageLimiter.estimateUsdMicro(kind)).multiply(BigDecimal.valueOf(count)).movePointLeft(6);
+            return BigDecimal.valueOf(credits.estimateUsdMicro(kind)).multiply(BigDecimal.valueOf(count)).movePointLeft(6);
         } catch (RuntimeException e) {
             log.warn("[가져오기 예상] USD 환산 실패 — null로 응답 importId={} kind={} cause={}", id, kind, e.toString());
             return null;
