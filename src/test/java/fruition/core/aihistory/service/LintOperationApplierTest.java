@@ -12,7 +12,11 @@ import fruition.core.wiki.domain.WikiPageVersion;
 import fruition.core.wiki.repository.WikiPageContributionRepository;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.wiki.repository.WikiPageVersionRepository;
+import fruition.core.aihistory.exception.InvalidCallbackPayloadException;
+import fruition.core.wiki.domain.WikiPageContribution;
+import fruition.core.wiki.domain.WikiPageContributionId;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -24,6 +28,11 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -75,7 +84,7 @@ class LintOperationApplierTest {
                 List.of(new LintOperationApplier.LoadedPage(
                         "page_1", "wiki/ws_1/pages/page_1/ops/op_lint_1.md",
                         "# 정리된 본문", CONTENT_HASH)),
-                "payload-hash", Instant.now());
+                List.of(), "payload-hash", Instant.now());
 
         ArgumentCaptor<WikiPageVersion> versionCaptor = ArgumentCaptor.forClass(WikiPageVersion.class);
         verify(versionRepository).save(versionCaptor.capture());
@@ -105,7 +114,7 @@ class LintOperationApplierTest {
                 "500: pipeline lint stage crashed", List.of(),
                 List.of(new OperationResultRequest.FailedPage("page_1", "error")));
 
-        applier.apply("op_lint_1", request, List.of(), "payload-hash", Instant.now());
+        applier.apply("op_lint_1", request, List.of(), List.of(), "payload-hash", Instant.now());
 
         // 0건이면 "일부만 반영"이 아니라 실패다. OperationApplier와 같은 규칙이다.
         assertThat(operation.getStatus()).isEqualTo(OperationStatus.failed);
@@ -140,7 +149,7 @@ class LintOperationApplierTest {
                 List.of(new LintOperationApplier.LoadedPage(
                         "page_1", "wiki/ws_1/pages/page_1/ops/op_lint_1.md",
                         "# 정리된 본문", CONTENT_HASH)),
-                "payload-hash", Instant.now());
+                List.of(), "payload-hash", Instant.now());
 
         assertThat(operation.getStatus()).isEqualTo(OperationStatus.partially_succeeded);
         assertThat(operation.getChangedResourceCount()).isEqualTo(1);
@@ -169,7 +178,7 @@ class LintOperationApplierTest {
                 List.of(new LintOperationApplier.LoadedPage(
                         "page_1", "wiki/ws_1/pages/page_1/ops/op_lint_1.md",
                         "# 새 개념", "sha256:lint")),
-                "payload-hash", Instant.now());
+                List.of(), "payload-hash", Instant.now());
 
         ArgumentCaptor<OperationChange> changeCaptor = ArgumentCaptor.forClass(OperationChange.class);
         verify(operationChangeRepository).save(changeCaptor.capture());
@@ -177,5 +186,145 @@ class LintOperationApplierTest {
         assertThat(changeCaptor.getValue().getAfterRevision()).isEqualTo(1L);
         assertThat(changeCaptor.getValue().getChangeType()).isEqualTo(ChangeType.created);
         verify(contributionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("원장 행을 받은 순서대로 기존 행 뒤에 더하고 새 버전은 마지막 순서 값에 둔다")
+    void apply_writesLedgerRowsInOrder() {
+        OperationLog operation = givenLint();
+        givenPage("P", 2L);
+        givenPage("C", 0L);
+        when(operationLogRepository.findById("op_x")).thenReturn(Optional.of(OperationLog.completed(
+                "op_x", "ws_1", "user_1", OperationType.ingest, "doc_x", "편입", 1, Instant.now())));
+        List<OperationResultRequest.LedgerContribution> ledger = List.of(
+                ledger("P", "op_lint_1", null, null),
+                ledger("C", "op_lint_1", null, null),
+                ledger("C", "op_x", "doc_x", "op_lint_1"));
+
+        applier.apply("op_lint_1", lintRequest(List.of()), List.of(loaded("P"), loaded("C")), ledger,
+                "payload-hash", Instant.now());
+
+        ArgumentCaptor<WikiPageContribution> rows = ArgumentCaptor.forClass(WikiPageContribution.class);
+        verify(contributionRepository, times(3)).save(rows.capture());
+        assertThat(rows.getAllValues())
+                .extracting(WikiPageContribution::getPageId, WikiPageContribution::getIngestOperationId,
+                        WikiPageContribution::getSequenceRevision, WikiPageContribution::getSourceDocumentId,
+                        WikiPageContribution::getLintOperationId)
+                .containsExactly(
+                        tuple("C", "op_lint_1", 1L, null, "op_lint_1"),
+                        tuple("C", "op_x", 2L, "doc_x", "op_lint_1"),
+                        tuple("P", "op_lint_1", 3L, null, "op_lint_1"));
+        ArgumentCaptor<WikiPageVersion> versions = ArgumentCaptor.forClass(WikiPageVersion.class);
+        verify(versionRepository, times(2)).save(versions.capture());
+        assertThat(versions.getAllValues()).extracting(WikiPageVersion::getPageId, WikiPageVersion::getRevision)
+                .containsExactly(tuple("C", 2L), tuple("P", 3L));
+        assertThat(operation.getStatus()).isEqualTo(OperationStatus.succeeded);
+    }
+
+    @Test
+    @DisplayName("같은 lint 결과가 다시 오면 이미 만든 revision을 보고 원장 행을 더하지 않는다")
+    void apply_redeliveryDoesNotDuplicateLedgerRows() {
+        givenLint();
+        when(wikiStateRequester.lookup(List.of("C"), "ws_1")).thenReturn(List.of(snapshot("C")));
+        when(versionRepository.findFirstByIdPageIdAndOperationId("C", "op_lint_1"))
+                .thenReturn(Optional.of(org.mockito.Mockito.mock(WikiPageVersion.class)));
+
+        applier.apply("op_lint_1", lintRequest(List.of()), List.of(loaded("C")),
+                List.of(ledger("C", "op_lint_1", null, null)), "payload-hash", Instant.now());
+
+        verify(contributionRepository, never()).save(any());
+        verify(versionRepository, never()).save(any());
+        verify(operationChangeRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("합쳐 지운 페이지는 기존 기여를 끄지 않고 lint 기록과 삭제 변경만 남긴다")
+    void apply_keepsContributionsOfDeletedPage() {
+        givenLint();
+        givenPage("C", 3L);
+        WikiPageVersion previous = org.mockito.Mockito.mock(WikiPageVersion.class);
+        when(previous.getRevision()).thenReturn(3L);
+        when(versionRepository.findTopByIdPageIdOrderByIdRevisionDesc("C")).thenReturn(Optional.of(previous));
+
+        applier.apply("op_lint_1", lintRequest(List.of("C")), List.of(loaded("C")),
+                List.of(ledger("C", "op_lint_1", null, null)), "payload-hash", Instant.now());
+
+        // 삭제는 이 lint 기록을 재생한 결과다. 기존 기여를 끄면 그 사이 취소한 편입을 복원이 가릴 수 없다.
+        verify(contributionRepository, never()).findByPageIds(any());
+        verify(contributionRepository).save(any(WikiPageContribution.class));
+        ArgumentCaptor<OperationChange> changes = ArgumentCaptor.forClass(OperationChange.class);
+        verify(operationChangeRepository, times(2)).save(changes.capture());
+        assertThat(changes.getAllValues()).extracting(OperationChange::getChangeType)
+                .containsExactly(ChangeType.updated, ChangeType.deleted);
+    }
+
+    @Test
+    @DisplayName("꺼진 같은 (페이지, 작업) 행은 이 lint가 다시 잇는다")
+    void apply_relinksInactiveRow() {
+        givenLint();
+        givenPage("P", 5L);
+        when(operationLogRepository.findById("op_z")).thenReturn(Optional.of(OperationLog.completed(
+                "op_z", "ws_1", "user_1", OperationType.ingest, "doc_z", "편입", 1, Instant.now())));
+        WikiPageContribution previous = WikiPageContribution.lint(
+                "P", "op_z", "doc_z", 2L, "wiki/ws_1/pages/P/ops/op_z.json", "op_lint_0", Instant.now());
+        previous.deactivate("op_restore");
+        when(contributionRepository.findById(new WikiPageContributionId("P", "op_z")))
+                .thenReturn(Optional.of(previous));
+
+        applier.apply("op_lint_1", lintRequest(List.of()), List.of(loaded("P")),
+                List.of(ledger("P", "op_z", "doc_z", "op_lint_1")), "payload-hash", Instant.now());
+
+        assertThat(previous.isActive()).isTrue();
+        assertThat(previous.getSequenceRevision()).isEqualTo(6L);
+        assertThat(previous.getLintOperationId()).isEqualTo("op_lint_1");
+        verify(contributionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("다른 워크스페이스 작업을 잇는 원장 행은 거절한다")
+    void apply_rejectsLinkToOtherWorkspace() {
+        givenLint();
+        when(operationLogRepository.findById("op_x")).thenReturn(Optional.of(OperationLog.completed(
+                "op_x", "ws_other", "user_1", OperationType.ingest, "doc_x", "편입", 1, Instant.now())));
+
+        assertThatThrownBy(() -> applier.apply("op_lint_1", lintRequest(List.of()), List.of(loaded("C")),
+                List.of(ledger("C", "op_x", "doc_x", "op_lint_1")), "payload-hash", Instant.now()))
+                .isInstanceOf(InvalidCallbackPayloadException.class);
+        verify(contributionRepository, never()).save(any());
+    }
+
+    private OperationLog givenLint() {
+        OperationLog operation = OperationLog.processing(
+                "op_lint_1", "ws_1", "user_1", OperationType.lint, null, Instant.now());
+        when(operationLogRepository.findById("op_lint_1")).thenReturn(Optional.of(operation));
+        return operation;
+    }
+
+    private void givenPage(String pageId, long maxRevision) {
+        when(wikiStateRequester.lookup(List.of(pageId), "ws_1")).thenReturn(List.of(snapshot(pageId)));
+        when(versionRepository.findMaxRevision(pageId)).thenReturn(maxRevision);
+        org.mockito.Mockito.lenient().when(lineCounter.count(eq(pageId), any(), any(), anyLong(), any()))
+                .thenReturn(LineCounter.LineCount.none());
+    }
+
+    private static PipelineWikiStateRequester.WikiPageSnapshot snapshot(String pageId) {
+        return new PipelineWikiStateRequester.WikiPageSnapshot(
+                pageId, "concept", "제목", pageId, "ws_1", "active");
+    }
+
+    private static OperationResultRequest lintRequest(List<String> deletedPages) {
+        return new OperationResultRequest("op_lint_1", "lint", "succeeded", "ws_1", "user_1", null,
+                "Wiki lint를 실행했습니다.", List.of(), List.of(), deletedPages, null, null, null);
+    }
+
+    private static LintOperationApplier.LoadedPage loaded(String pageId) {
+        return new LintOperationApplier.LoadedPage(pageId,
+                "wiki/ws_1/pages/" + pageId + "/ops/op_lint_1.md", "# " + pageId, "sha256:" + pageId);
+    }
+
+    private static OperationResultRequest.LedgerContribution ledger(
+            String pageId, String operationId, String documentId, String linkedBy) {
+        return new OperationResultRequest.LedgerContribution(pageId, operationId, documentId,
+                "wiki/ws_1/pages/" + pageId + "/ops/" + operationId + ".json", linkedBy);
     }
 }

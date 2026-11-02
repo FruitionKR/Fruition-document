@@ -131,7 +131,7 @@ class IngestRestoreFlowTest {
     @DisplayName("과거 버전이 있는 Concept도 미리보기와 실행 모두 남은 기여로 재작성한다")
     void conceptWithSnapshotIsRebuiltByPipeline() {
         // 일요일 다른 문서 기여 → 월요일 ingest → 화요일 lint 수정 후의 상태.
-        // lint는 기여를 추가하지 않으므로 복구 원장에는 두 ingest 기여만 남는다.
+        // 하위 항목을 바꾸지 않은 lint는 원장 행을 남기지 않으므로 복구 원장에는 두 ingest 기여만 남는다.
         pages(List.of(contribution("source", INGEST, 1),
                 contribution("concept", "op_sunday", 1), contribution("concept", INGEST, 2)), "active");
         var plan = preview.preview(WORKSPACE, USER, INGEST);

@@ -84,6 +84,7 @@ public class RestoreApplier {
 
         // 제외 대상 기여를 끈다. 행은 지우지 않는다.
         // 지우면 연속 복구에서 이전에 제외한 기여가 다시 살아난다.
+        // lint 복원이면 그 lint가 남긴 행(자기 기록·이은 기록)을 끈다. 다시 켜는 행은 없다.
         deactivate(pageIds, excludedOperationIds, restore.getOperationId());
 
         for (PageRestorePlan page : plan.pages()) {
@@ -100,10 +101,16 @@ public class RestoreApplier {
 
     private void deactivate(List<String> pageIds, Set<String> excluded, String restoreOperationId) {
         for (WikiPageContribution contribution : contributionRepository.findByPageIds(pageIds)) {
-            if (contribution.isActive() && excluded.contains(contribution.getIngestOperationId())) {
+            if (contribution.isActive() && (excluded.contains(contribution.getIngestOperationId())
+                    || contains(excluded, contribution.getLintOperationId()))) {
                 contribution.deactivate(restoreOperationId);
             }
         }
+    }
+
+    /** {@code Set.of}는 null 조회에 예외를 던진다. */
+    private static boolean contains(Set<String> values, String value) {
+        return value != null && values.contains(value);
     }
 
     /**

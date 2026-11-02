@@ -69,7 +69,7 @@ class RestorePreviewServiceTest {
     @BeforeEach
     void setUp() {
         lintRestorePlanner = new LintRestorePlanner(
-                operationChangeRepository, contributionRepository);
+                operationChangeRepository, contributionRepository, operationLogRepository);
         service = new RestorePreviewService(operationLogRepository, contributionRepository,
                 workspaceAccessGuard,
                 scopeResolver, planner, tokenSigner,
@@ -147,10 +147,6 @@ class RestorePreviewServiceTest {
                 "wiki/ws_1/pages/page_existing/ops/op_ingest_1.json", NOW);
         when(operationChangeRepository.findByOperationIdOrderByIdAsc(OPERATION_ID))
                 .thenReturn(List.of(created, updated));
-        when(operationChangeRepository.existsByResourceIdAndIdGreaterThan("page_new", 1L))
-                .thenReturn(false);
-        when(operationChangeRepository.existsByResourceIdAndIdGreaterThan("page_existing", 2L))
-                .thenReturn(false);
         when(contributionRepository.findByPageIds(List.of("page_new", "page_existing")))
                 .thenReturn(List.of(contribution));
         when(tokenSigner.sign(eq(OPERATION_ID),
@@ -176,14 +172,18 @@ class RestorePreviewServiceTest {
     }
 
     @Test
-    @DisplayName("대상 lint 이후 같은 페이지가 바뀌었으면 복구를 거절한다")
+    @DisplayName("대상 lint 이후 되돌리지 않은 다른 lint가 같은 페이지를 바꿨으면 복구를 거절한다")
     void lintPreviewRejectsPageChangedAfterTargetLint() {
         givenTarget(OperationType.lint);
         OperationChange updated = change(2L, "page_existing", 3L, 4L, ChangeType.updated);
         when(operationChangeRepository.findByOperationIdOrderByIdAsc(OPERATION_ID))
                 .thenReturn(List.of(updated));
-        when(operationChangeRepository.existsByResourceIdAndIdGreaterThan("page_existing", 2L))
-                .thenReturn(true);
+        OperationChange later = org.mockito.Mockito.mock(OperationChange.class);
+        when(later.getOperationId()).thenReturn("op_lint_later");
+        when(operationChangeRepository.findByResourceIdAndIdGreaterThan("page_existing", 2L))
+                .thenReturn(List.of(later));
+        when(operationLogRepository.findById("op_lint_later")).thenReturn(Optional.of(OperationLog.completed(
+                "op_lint_later", WORKSPACE, USER, OperationType.lint, null, "lint", 1, NOW)));
 
         assertThatThrownBy(() -> service.preview(WORKSPACE, USER, OPERATION_ID))
                 .isInstanceOf(InvalidRestoreRequestException.class)

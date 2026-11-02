@@ -97,6 +97,9 @@ public interface OperationLogRepository extends JpaRepository<OperationLog, Stri
 
     Optional<OperationLog> findByOperationIdAndWorkspaceId(String operationId, String workspaceId);
 
+    /** 그 작업을 되돌린 복구가 끝났는지. */
+    boolean existsByRestoredFromAndStatusIn(String restoredFrom, Collection<OperationStatus> statuses);
+
     boolean existsByOperationTypeAndRestoredFromAndRestoreTokenHash(
             OperationType operationType, String restoredFrom, String restoreTokenHash);
 
