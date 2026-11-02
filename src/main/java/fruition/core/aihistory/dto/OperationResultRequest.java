@@ -25,7 +25,8 @@ public record OperationResultRequest(
         @JsonProperty("failed_pages") List<FailedPage> failedPages,
         @JsonProperty("deleted_pages") List<String> deletedPages,
         @JsonProperty("link_changes") LinkChanges linkChanges,
-        @JsonProperty("failed_actions") List<FailedAction> failedActions
+        @JsonProperty("failed_actions") List<FailedAction> failedActions,
+        @JsonProperty("ledger_contributions") List<LedgerContribution> ledgerContributions
 ) {
 
     /** 기존 ingest·lint 결과 생성 코드를 위한 호환 생성자다. */
@@ -34,7 +35,7 @@ public record OperationResultRequest(
                                   String summary, List<ChangedPage> changedPages,
                                   List<FailedPage> failedPages) {
         this(operationId, operationType, status, workspaceId, userId, targetDocumentId,
-                summary, changedPages, failedPages, null, null, null);
+                summary, changedPages, failedPages, null, null, null, null);
     }
 
     /** 재조립에만 쓴다. 실패한 페이지는 본문을 건드리지 않고 사유만 기록한다. */
@@ -50,6 +51,10 @@ public record OperationResultRequest(
 
     public List<String> deletedPagesOrEmpty() {
         return deletedPages == null ? List.of() : deletedPages;
+    }
+
+    public List<LedgerContribution> ledgerContributionsOrEmpty() {
+        return ledgerContributions == null ? List.of() : ledgerContributions;
     }
 
     public LinkChanges linkChangesOrEmpty() {
@@ -71,6 +76,20 @@ public record OperationResultRequest(
     }
 
     public record Link(String source, String target, String relation) {}
+
+    /**
+     * lint 결과에만 실린다. 기여 원장에 더할 행으로, 목록 순서가 재생 순서다(ai ADR 0042).
+     *
+     * @param documentId          lint 자기 기록은 null, 이은 편입 기록은 원래 문서
+     * @param linkedByOperationId 이은 편입 기록이면 이은 lint id, lint 자기 기록이면 null
+     */
+    public record LedgerContribution(
+            @JsonProperty("page_id") @NotBlank String pageId,
+            @JsonProperty("operation_id") @NotBlank String operationId,
+            @JsonProperty("document_id") String documentId,
+            @JsonProperty("contribution_key") @NotBlank String contributionKey,
+            @JsonProperty("linked_by_operation_id") String linkedByOperationId
+    ) {}
 
     public record FailedAction(
             String action,

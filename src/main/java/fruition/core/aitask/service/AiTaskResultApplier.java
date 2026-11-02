@@ -162,6 +162,11 @@ public class AiTaskResultApplier {
         String userId = text(request, "user_id");
         JsonNode payload = required(event, "payload");
         var response = PipelineWikiLintResponse.from(payload);
+        // 하위 항목 재검사(ai ADR 0042)가 합쳐 지운 자식 페이지와 원장에 더할 기여.
+        java.util.List<String> deletedPages = objectMapper.convertValue(
+                payload.path("deleted_pages"), new com.fasterxml.jackson.core.type.TypeReference<>() {});
+        java.util.List<OperationResultRequest.LedgerContribution> ledger = objectMapper.convertValue(
+                payload.path("ledger_contributions"), new com.fasterxml.jackson.core.type.TypeReference<>() {});
         operationIngestService.accept(operationId, new OperationResultRequest(
                 response.operationId(), "lint", "succeeded", workspaceId, userId, null,
                 "Wiki lint로 페이지 " + response.changedPages().size() + "개를 변경했습니다.",
@@ -169,7 +174,7 @@ public class AiTaskResultApplier {
                         .map(page -> new OperationResultRequest.ChangedPage(
                                 page.pageId(), page.pageType(), page.markdownKey(),
                                 page.contributionKey(), page.contentHash(), false))
-                        .toList(), java.util.List.of()));
+                        .toList(), java.util.List.of(), deletedPages, null, null, ledger));
         wikiMaintenanceService.markLintSucceeded(workspaceId);
     }
 

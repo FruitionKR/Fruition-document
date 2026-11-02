@@ -19,7 +19,7 @@ import java.util.Set;
  * 조작이기 때문이다. lint도 같은 규칙이라 두 유형의 결과가 어긋나지 않는다.
  * A2까지 살리고 싶으면 그다음 작업인 A3을 지목하면 된다.
  *
- * <p>ingest만 모은다. lint와 restore는 기여를 만들지 않아 판정에 영향이 없다.
+ * <p>ingest만 모은다. lint는 원문 문서에 속하지 않고, lint가 남긴 원장 행은 남길 기여로 함께 재생된다.
  */
 @Component
 public class RestoreScopeResolver {

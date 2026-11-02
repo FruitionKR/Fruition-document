@@ -30,4 +30,14 @@ final class OperationFailureSummary {
             case wiki_edit -> "Wiki 본문 수정을 반영하지 못했습니다.";
         };
     }
+
+    /**
+     * ai가 보낸 복구 실패 코드의 요약문. {@code restore_conflict}는 재생 결과가 뒤 작업과 충돌해 ai가 쓰기 전에
+     * 멈춘 경우다(ai ADR 0042). 원장도 바꾸지 않았으므로 뒤 작업부터 되돌리면 다시 할 수 있다.
+     */
+    static String restoreFailure(String code) {
+        return "restore_conflict".equals(code)
+                ? "뒤에 실행한 작업과 충돌해 되돌리지 않았습니다. 뒤 작업부터 되돌려 주세요."
+                : of(OperationType.restore, OperationStatus.failed);
+    }
 }

@@ -97,8 +97,7 @@ public class RestoreOperationLifecycle {
     public void fail(String restoreOperationId, String reason, Instant now) {
         int failed = operationLogRepository.failRestoreIfNotTerminal(
                 restoreOperationId, OperationStatus.failed,
-                OperationFailureSummary.of(OperationType.restore, OperationStatus.failed),
-                now, TERMINAL_STATUSES);
+                OperationFailureSummary.restoreFailure(reason), now, TERMINAL_STATUSES);
         if (failed == 0) {
             log.warn("[복구 실패 신호 무시] 이미 끝난 복구다. operationId={} reason={}",
                     restoreOperationId, reason);

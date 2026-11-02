@@ -89,6 +89,24 @@ class RestoreRebuildApplierTest {
     }
 
     @Test
+    @DisplayName("지시서에 없는 페이지는 참조를 정리해 다시 그린 것으로 보고 직전 기여 수로 새 버전을 남긴다")
+    void recordsReferenceCleanupPageOutsideManifest() {
+        givenOperation(manifest(PageRestorePlan.delete("C9")));
+        givenPreviousRevision(4, "sha256:old");
+
+        applier.apply(OPERATION_ID, request(), List.of(rebuilt("sha256:new")), "hash", NOW);
+
+        ArgumentCaptor<WikiPageVersion> version = ArgumentCaptor.forClass(WikiPageVersion.class);
+        verify(versionRepository).save(version.capture());
+        assertThat(version.getValue().getRevision()).isEqualTo(5);
+        assertThat(version.getValue().getContributionCount()).isEqualTo(3);
+        ArgumentCaptor<OperationChange> change = ArgumentCaptor.forClass(OperationChange.class);
+        verify(operationChangeRepository).save(change.capture());
+        assertThat(change.getValue().getChangeType()).isEqualTo(ChangeType.rebuilt);
+        assertThat(change.getValue().getChangeSummary()).isEqualTo("사라진 하위 항목을 가리키던 참조를 정리했습니다.");
+    }
+
+    @Test
     @DisplayName("성공한 페이지는 rebuilt로 기록한다")
     void recordsRebuilt() {
         givenOperation(manifest(PageRestorePlan.rebuild(PAGE_ID, keptOf(2))));
@@ -185,7 +203,7 @@ class RestoreRebuildApplierTest {
                 new OperationResultRequest.LinkChanges(
                         List.of(new OperationResultRequest.Link("C3", "C9", "related")),
                         List.of(new OperationResultRequest.Link("C3", "C4", "supports"))),
-                List.of(new OperationResultRequest.FailedAction("delete_page", "C8", "page_not_found")));
+                List.of(new OperationResultRequest.FailedAction("delete_page", "C8", "page_not_found")), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -203,7 +221,7 @@ class RestoreRebuildApplierTest {
                 OPERATION_ID, "lint_restore", "partially_succeeded", WORKSPACE_ID, USER_ID, "doc_A",
                 null, List.of(), List.of(), List.of(), null,
                 List.of(new OperationResultRequest.FailedAction(
-                        "restore_links", "op_lint_1", "operation_log_missing")));
+                        "restore_links", "op_lint_1", "operation_log_missing")), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -226,7 +244,7 @@ class RestoreRebuildApplierTest {
                 new OperationResultRequest.LinkChanges(
                         List.of(new OperationResultRequest.Link("C3", "C9", "related")),
                         List.of(new OperationResultRequest.Link("C3", "C4", "supports"))),
-                List.of());
+                List.of(), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -247,7 +265,7 @@ class RestoreRebuildApplierTest {
         givenOperation(manifest(PageRestorePlan.delete(PAGE_ID)));
         OperationResultRequest request = new OperationResultRequest(
                 OPERATION_ID, "lint_restore", "succeeded", WORKSPACE_ID, USER_ID, "doc_A",
-                null, List.of(), List.of(), List.of(PAGE_ID), null, List.of());
+                null, List.of(), List.of(), List.of(PAGE_ID), null, List.of(), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -265,11 +283,26 @@ class RestoreRebuildApplierTest {
                 OPERATION_ID, "C9", ChangeType.deleted)).thenReturn(true);
         OperationResultRequest request = new OperationResultRequest(
                 OPERATION_ID, "lint_restore", "succeeded", WORKSPACE_ID, USER_ID, "doc_A",
-                null, List.of(), List.of(), List.of("C9"), null, List.of());
+                null, List.of(), List.of(), List.of("C9"), null, List.of(), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
         verify(operationChangeRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("재조립 대상이 재생 결과 삭제로 끝나면 삭제로 기록한다")
+    void recordsDeletionOfRebuildPage() {
+        givenOperation(manifest(PageRestorePlan.rebuild(PAGE_ID, keptOf(2))));
+        OperationResultRequest request = new OperationResultRequest(
+                OPERATION_ID, "lint_restore", "succeeded", WORKSPACE_ID, USER_ID, "doc_A",
+                null, List.of(), List.of(), List.of(PAGE_ID), null, List.of(), null);
+
+        applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
+
+        ArgumentCaptor<OperationChange> captor = ArgumentCaptor.forClass(OperationChange.class);
+        verify(operationChangeRepository).save(captor.capture());
+        assertThat(captor.getValue().getChangeType()).isEqualTo(ChangeType.deleted);
     }
 
     @Test
@@ -278,7 +311,7 @@ class RestoreRebuildApplierTest {
         givenOperation(manifest(PageRestorePlan.delete("C9")));
         OperationResultRequest request = new OperationResultRequest(
                 OPERATION_ID, "lint_restore", "succeeded", WORKSPACE_ID, USER_ID, "doc_A",
-                null, List.of(), List.of(), List.of("C_OTHER"), null, List.of());
+                null, List.of(), List.of(), List.of("C_OTHER"), null, List.of(), null);
 
         assertThatThrownBy(() -> applier.apply(OPERATION_ID, request, List.of(), "hash", NOW))
                 .isInstanceOf(InvalidCallbackPayloadException.class)
@@ -326,7 +359,7 @@ class RestoreRebuildApplierTest {
                 OPERATION_ID, "lint_restore", "partially_succeeded", WORKSPACE_ID, USER_ID, "doc_A",
                 null, List.of(), List.of(), List.of(), null,
                 List.of(new OperationResultRequest.FailedAction(
-                        "restore_links", "op_lint_1", "operation_log_missing")));
+                        "restore_links", "op_lint_1", "operation_log_missing")), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
@@ -341,26 +374,13 @@ class RestoreRebuildApplierTest {
                 OPERATION_ID, "lint_restore", "partially_succeeded", WORKSPACE_ID, USER_ID, "doc_A",
                 null, List.of(), List.of(), List.of(), null,
                 List.of(new OperationResultRequest.FailedAction(
-                        "restore_links", "op_lint_1", "https://provider/payload?token=secret")));
+                        "restore_links", "op_lint_1", "https://provider/payload?token=secret")), null);
 
         applier.apply(OPERATION_ID, request, List.of(), "hash", NOW);
 
         ArgumentCaptor<OperationChange> captor = ArgumentCaptor.forClass(OperationChange.class);
         verify(operationChangeRepository).save(captor.capture());
         assertThat(captor.getValue().getChangeSummary()).isEqualTo("restore_links");
-    }
-
-    @Test
-    @DisplayName("요청하지 않은 페이지가 오면 거절한다")
-    void rejectsPageNotInManifest() {
-        givenOperation(manifest(PageRestorePlan.rebuild("C9", keptOf(2))));
-        givenPreviousRevision(4, "sha256:old");
-
-        assertThatThrownBy(() ->
-                applier.apply(OPERATION_ID, request(), List.of(rebuilt("sha256:new")), "hash", NOW))
-                .isInstanceOf(InvalidCallbackPayloadException.class);
-
-        verify(versionRepository, never()).save(any());
     }
 
     @Test
@@ -377,9 +397,9 @@ class RestoreRebuildApplierTest {
     }
 
     @Test
-    @DisplayName("지시서에 아예 없는 페이지는 거절한다")
-    void rejectsPageNotInPlan() {
-        givenOperation(manifest(PageRestorePlan.delete("C9")));
+    @DisplayName("지시서가 삭제하기로 한 페이지를 다시 그렸다고 보고하면 거절한다")
+    void rejectsChangedPagePlannedForDeletion() {
+        givenOperation(manifest(PageRestorePlan.delete(PAGE_ID)));
         givenPreviousRevision(4, "sha256:old");
 
         assertThatThrownBy(() ->

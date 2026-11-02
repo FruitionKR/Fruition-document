@@ -86,7 +86,14 @@ public class OperationIngestService {
             List<LintOperationApplier.LoadedPage> loaded = request.changedPages().stream()
                     .map(page -> loadLint(operation, page))
                     .toList();
-            return lintApplier.apply(operationId, request, loaded, payloadHash, Instant.now());
+            List<OperationResultRequest.LedgerContribution> ledger = request.ledgerContributionsOrEmpty().stream()
+                    .map(row -> new OperationResultRequest.LedgerContribution(
+                            row.pageId(), row.operationId(), row.documentId(),
+                            objectReader.validateContributionKey(row.contributionKey(),
+                                    operation.getWorkspaceId(), row.pageId(), row.operationId()),
+                            row.linkedByOperationId()))
+                    .toList();
+            return lintApplier.apply(operationId, request, loaded, ledger, payloadHash, Instant.now());
         }
 
         List<OperationApplier.LoadedPage> loaded = request.changedPages().stream()
