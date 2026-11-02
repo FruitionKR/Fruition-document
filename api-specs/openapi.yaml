@@ -9958,6 +9958,10 @@ components:
           example: research-summary
           minLength: 1
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        requires_source:
+          type: boolean
+          description: 원문 문서가 필요한 Skill인지 여부. 작성 초안의 값(게시 때 보낼 값과 같다). 생략(null)하면 키를 보내지 않고 AI가 판단한다.
+          example: true
         target:
           $ref: "#/components/schemas/Target"
           description: 적용 범위. 생략하면 문서 전체다.
