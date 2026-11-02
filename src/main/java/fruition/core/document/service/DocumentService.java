@@ -514,19 +514,8 @@ public class DocumentService {
             UploadAccounting accounting
     ) {
         String agentRun = request == null ? null : ownAgentDraft(workspaceId, userId, request.agentRunId());
-        DocumentUploadResponse response = createMarkdown(workspaceId, userId, idempotencyKey, request,
-                agentRun == null ? null : Document.AGENT_ORIGIN, accounting);
-        if (agentRun != null && analytics != null) {
-            // 같은 멱등 키의 재요청은 처음 만든 문서를 돌려주므로 실제 AI 문서일 때만 기록한다.
-            // 분석 기록은 상품 트랜잭션 안에서만 남으므로(AnalyticsRecorder), 바깥 트랜잭션이 없으면 짧게 연다.
-            transactionTemplate.execute(status -> {
-                documentRepository.findById(response.id())
-                        .filter(document -> Document.AGENT_ORIGIN.equals(document.getAiOrigin()))
-                        .ifPresent(document -> analytics.aiDocumentCreated(agentRun, document));
-                return null;
-            });
-        }
-        return response;
+        return createMarkdown(workspaceId, userId, idempotencyKey, request,
+                agentRun == null ? null : Document.AGENT_ORIGIN, accounting, agentRun);
     }
 
     /** 작업 탭 초안은 요청자 본인의 markdown_create run일 때만 AI 문서로 본다. 아니면 일반 문서로 만든다. */
@@ -575,6 +564,19 @@ public class DocumentService {
             String aiOrigin,
             UploadAccounting accounting
     ) {
+        return createMarkdown(workspaceId, userId, idempotencyKey, request, aiOrigin, accounting, null);
+    }
+
+    /** @param agentRun 작업 탭 초안이면 그 run ID. 새로 만든 AI 문서의 분석 기록을 문서와 같은 트랜잭션에 남긴다. */
+    private DocumentUploadResponse createMarkdown(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            MarkdownDocumentCreateRequest request,
+            String aiOrigin,
+            UploadAccounting accounting,
+            String agentRun
+    ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         validateIdempotencyKey(idempotencyKey);
         if (request == null) {
@@ -603,8 +605,15 @@ public class DocumentService {
                     if (accounting.limited() && uploadLimits != null) {
                         uploadLimits.precheck(userId, content.bytes().length);
                     }
-                    return createMarkdownDocument(workspaceId, userId, filename.filename(), content,
-                            origin, request.folderId(), aiOrigin, true, accounting);
+                    DocumentUploadResponse created = createMarkdownDocument(workspaceId, userId, filename.filename(),
+                            content, origin, request.folderId(), aiOrigin, true, accounting);
+                    // 같은 키의 재요청은 저장된 응답만 돌려주므로 처음 만들 때 한 번만 기록한다.
+                    if (agentRun != null && analytics != null) {
+                        documentRepository.findById(created.id())
+                                .filter(document -> Document.AGENT_ORIGIN.equals(document.getAiOrigin()))
+                                .ifPresent(document -> analytics.aiDocumentCreated(agentRun, document));
+                    }
+                    return created;
                 });
     }
 
