@@ -40,8 +40,7 @@ class OperationApplierStatusTest {
                 mock(WikiPageVersionRepository.class),
                 mock(WikiPageContributionRepository.class),
                 mock(LineCounter.class),
-                mock(DocumentRepository.class),
-                mock(ReingestRebuildStarter.class));
+                mock(DocumentRepository.class));
         OperationResultRequest request = new OperationResultRequest(
                 "op-1", "ingest", "failed", "ws-1", "user-1", "doc-1",
                 "failed", List.of(), List.of(new OperationResultRequest.FailedPage("page-1", "error")));
@@ -65,8 +64,7 @@ class OperationApplierStatusTest {
                 mock(WikiPageVersionRepository.class),
                 mock(WikiPageContributionRepository.class),
                 mock(LineCounter.class),
-                mock(DocumentRepository.class),
-                mock(ReingestRebuildStarter.class));
+                mock(DocumentRepository.class));
         OperationResultRequest request = new OperationResultRequest(
                 "op-1", "ingest", "failed", "ws-1", "user-1", "doc-1",
                 "500: document-svc pipeline source lookup failed", List.of(), List.of());
@@ -98,7 +96,7 @@ class OperationApplierStatusTest {
         when(documents.findDeletedForShare("doc-1")).thenReturn(Optional.of(true));
         OperationApplier applier = new OperationApplier(
                 operations, mock(OperationChangeRepository.class), wikiState, versions,
-                contributions, lineCounter, documents, mock(ReingestRebuildStarter.class));
+                contributions, lineCounter, documents);
         OperationResultRequest request = new OperationResultRequest(
                 "op-1", "ingest", "succeeded", "ws-1", "user-1", "doc-1",
                 "완료", List.of(), List.of());

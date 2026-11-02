@@ -46,7 +46,6 @@ public class OperationApplier {
     private final WikiPageContributionRepository contributionRepository;
     private final LineCounter lineCounter;
     private final DocumentRepository documentRepository;
-    private final ReingestRebuildStarter reingestRebuildStarter;
 
     public OperationApplier(OperationLogRepository operationLogRepository,
                             OperationChangeRepository operationChangeRepository,
@@ -54,8 +53,7 @@ public class OperationApplier {
                             WikiPageVersionRepository versionRepository,
                             WikiPageContributionRepository contributionRepository,
                             LineCounter lineCounter,
-                            DocumentRepository documentRepository,
-                            ReingestRebuildStarter reingestRebuildStarter) {
+                            DocumentRepository documentRepository) {
         this.operationLogRepository = operationLogRepository;
         this.operationChangeRepository = operationChangeRepository;
         this.wikiStateRequester = wikiStateRequester;
@@ -63,7 +61,6 @@ public class OperationApplier {
         this.contributionRepository = contributionRepository;
         this.lineCounter = lineCounter;
         this.documentRepository = documentRepository;
-        this.reingestRebuildStarter = reingestRebuildStarter;
     }
 
     @Transactional
@@ -101,8 +98,6 @@ public class OperationApplier {
         // 이전 기여를 지울 근거가 없어 대체하지 않는다.
         if (status == OperationStatus.succeeded && operation.getTargetDocumentId() != null && !documentDeleted) {
             contributionRepository.supersedeEarlierIngests(operation.getTargetDocumentId(), operationId);
-            // 이 편입이 더는 다루지 않는 페이지는 ai가 남은 기여로 다시 만들게 한다.
-            reingestRebuildStarter.start(operation, loaded.stream().map(LoadedPage::pageId).toList(), now);
         }
         return new OperationResultResponse(operationId, status.name(), recorded);
     }

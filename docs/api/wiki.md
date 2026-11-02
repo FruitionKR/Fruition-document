@@ -54,7 +54,7 @@ lint·복구는 Kafka `ai.maintenance.command`로 전달한다.
 
 | 경로 | 버전을 올리는 곳 |
 |---|---|
-| 편입(`ingest`, 채팅 Wiki 포함)·후속 품질 평가(`post_ingest`)·lint(`dry_run` 제외)·복구(`restore_ingest`·`restore_lint`·`restore_rebuild`) 결과 | `AiTaskResultConsumer` — 결과 반영 뒤. 상태와 무관하게 올린다 |
+| 편입(`ingest`, 채팅 Wiki 포함)·후속 품질 평가(`post_ingest`)·lint(`dry_run` 제외)·복구(`restore_ingest`·`restore_lint`) 결과 | `AiTaskResultConsumer` — 결과 반영 뒤. 상태와 무관하게 올린다 |
 | 문서 삭제 정리(`document_cleanup`)·문서 이름 변경(`document_rename`) 결과 | `AiTaskResultConsumer` |
 | 위키 작업(편입·`post_ingest`·lint·복구) 취소 복구 완료 | `AiTaskCancellationService` — `cancelled`로 바꾸는 트랜잭션 |
 | 사람의 페이지 본문 수정(`PUT .../wiki/pages/{id}/content`, #75) | `WikiPageEditService` — 새 revision을 기록하는 트랜잭션. 같은 본문 no-op·재전송 replay는 올리지 않는다 |
