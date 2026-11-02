@@ -10,7 +10,6 @@ import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.authz.WorkspaceAccessGuard;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -40,7 +39,7 @@ public class DocumentPlacementService {
         this.documentAccessPolicy = documentAccessPolicy;
     }
 
-    @Transactional
+    // 바깥 트랜잭션을 두지 않는다. 선점(REQUIRES_NEW)이 바깥 연결을 쥔 채 연결을 하나 더 잡으면 풀이 교착한다.
     public DocumentPositionResponse move(String workspaceId, String userId, String documentId,
                                          String idempotencyKey, DocumentPositionRequest request) {
         UUID targetFolderId = request.folderId();

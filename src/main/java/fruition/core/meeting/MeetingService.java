@@ -49,7 +49,7 @@ public class MeetingService {
         this.objectMapper = objectMapper;
     }
 
-    @Transactional
+    // 바깥 트랜잭션을 두지 않는다. 선점(REQUIRES_NEW)이 바깥 연결을 쥔 채 연결을 하나 더 잡으면 풀이 교착한다.
     public MeetingResponse create(String workspaceId, String userId, String idempotencyKey,
                                   String displayName, String source, String documentId) {
         String name = displayName == null || displayName.isBlank() ? DEFAULT_NAME : displayName.strip();
