@@ -278,6 +278,73 @@ paths:
           description: OK
       tags:
       - ai-task-cancellation-controller
+  /api/workspaces/{workspace_id}/agent/auto-approval-settings:
+    get:
+      description: 요청한 사용자의 AI 에이전트 계획 자동 승인 설정을 조회합니다. 사용자 단위 설정이며 모든 워크스페이스에 적용됩니다(경로의 워크스페이스는 멤버 확인용). 저장한 적 없으면 모두 false입니다.
+      operationId: getAutoApprovalSettings
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/AgentAutoApprovalSettings"
+          description: 조회 성공
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+      summary: Agent 자동 승인 설정 조회
+      tags:
+      - Agent
+    put:
+      description: "분류별로 계획 자동 승인을 켜고 끕니다. 켜진 분류의 작업만으로 이뤄지고 AI 검토 경고가 없으며 요청자가 모든 대상을 편집할 수 있는 계획은 승인 확인 없이 실행되고, 승인 기록에 approved_by=auto:user-setting이 남습니다. 대상 권한 검사는 건너뛰지 않습니다. 분류에 없는 작업(삭제 등)은 항상 직접 승인해야 합니다. 바뀐 설정은 다음 승인 판단부터 적용됩니다."
+      operationId: updateAutoApprovalSettings
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentAutoApprovalSettings"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/AgentAutoApprovalSettings"
+          description: 변경 후 설정
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 필드 누락 또는 정의되지 않은 필드
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+      summary: Agent 자동 승인 설정 변경
+      tags:
+      - Agent
   /api/workspaces/{workspace_id}/agent/runs/{run_id}:
     get:
       description: 자율 AgentRun 계획과 실행 상태를 조회합니다.
@@ -5646,6 +5713,30 @@ paths:
       summary: Agent 폴더 트리 읽기
       tags:
       - agent-folder-lookup-controller
+  /internal/agent/runs/{run_id}/plan-ready:
+    post:
+      operationId: planReady
+      parameters:
+      - in: path
+        name: run_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentPlanReadyRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/JsonNode"
+          description: OK
+      tags:
+      - agent-plan-ready-controller
   /internal/agent/skill-authoring/references/read:
     post:
       operationId: read_1
@@ -5970,7 +6061,34 @@ components:
       required:
       - user_id
       - workspace_id
+    AgentAutoApprovalSettings:
+      type: object
+      description: "AI 에이전트 계획 자동 승인 설정(사용자 단위, 모든 워크스페이스에 적용). 정의되지 않은 필드가 있으면 거절된다."
+      properties:
+        content_edit:
+          type: boolean
+          description: "문서 편집·생성(apply_document_edit, create_document) 계획을 자동 승인한다. 편집은 버전 기록에서 되돌릴 수 있다."
+          example: false
+        organize:
+          type: boolean
+          description: "폴더 생성·문서/폴더 이동·이름 변경(create_folder, move_document, move_folder, rename_document, rename_folder) 계획을 자동 승인한다."
+          example: false
+      required:
+      - content_edit
+      - organize
     AgentFolderTreeRequest:
+      type: object
+      properties:
+        user_id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+      required:
+      - user_id
+      - workspace_id
+    AgentPlanReadyRequest:
       type: object
       properties:
         user_id:
