@@ -285,7 +285,27 @@ public class DocumentService {
             String origin
     ) {
         return inFolderLockTransaction(folderId,
-                () -> uploadOnce(workspaceId, userId, idempotencyKey, folderId, file, origin));
+                () -> uploadOnce(workspaceId, userId, idempotencyKey, folderId, file, origin, UploadAccounting.UPLOAD));
+    }
+
+    /**
+     * 가져오기 세션의 PDF 직접 업로드 확정({@code X-Fruition-Import-Id}). 열린 세션이어야 하고(아니면 400 IMPORT_INVALID)
+     * 만든 문서를 그 세션으로 표시하며 항목 수를 센다. 저장 용량·멱등성은 일반 업로드와 같고, PDF 업로드는 원래 자동 편입하지 않는다.
+     * 일반 업로드처럼 바깥 트랜잭션 없이 연다({@link #upload} 참고).
+     */
+    public DocumentUploadResponse uploadImported(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            UUID folderId,
+            MultipartFile file,
+            String importId
+    ) {
+        return inFolderLockTransaction(folderId, () -> {
+            var session = importSessions.requireOpen(workspaceId, userId, importId);
+            return uploadOnce(workspaceId, userId, idempotencyKey, folderId, file, null,
+                    new UploadAccounting(true, session));
+        });
     }
 
     private DocumentUploadResponse uploadOnce(
@@ -294,7 +314,8 @@ public class DocumentService {
             String idempotencyKey,
             UUID folderId,
             MultipartFile file,
-            String origin
+            String origin,
+            UploadAccounting accounting
     ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         boolean skillReference = isSkillReferenceOrigin(origin);
@@ -412,6 +433,9 @@ public class DocumentService {
             // 사용자 잠금은 저장이 끝난 뒤 문서 행을 쓰기 직전에 잡아 커밋까지 짧게 쥔다. 큰 원본을 쓰는 동안 잡으면
             // 같은 사용자의 다른 업로드가 그 시간 내내 줄을 선다. 잠금 아래에서 다시 확인해 병렬 업로드가 함께 한도를
             // 넘지 못하게 하고, 거절되면 롤백 정리(registerStoredSourceCleanup)가 방금 저장한 원본을 지운다.
+            if (accounting.importSession() != null) {
+                importSessions.countItems(accounting.importSession(), 1);
+            }
             if (uploadLimits != null) {
                 uploadLimits.enforce(userId, file.getSize());
             }
@@ -425,9 +449,13 @@ public class DocumentService {
                     file.getSize(),
                     objectPath,
                     contentHash,
-                    skillReference ? Document.SKILL_REFERENCE_ORIGIN : "upload"
+                    skillReference ? Document.SKILL_REFERENCE_ORIGIN
+                            : accounting.importSession() != null ? Document.NOTION_IMPORT_ORIGIN : "upload"
             );
             document.place(folderId, placementSortOrder(workspaceId, folderId, document.getDocumentRole()));
+            if (accounting.importSession() != null) {
+                document.markImported(accounting.importSession().id());
+            }
             document.updateStatus(DocumentStatus.uploaded, null, null, null);
             if (!markdownUpload && !(file instanceof StoredOriginal)) {
                 // 서버를 거친 PDF는 위에서 파일 전체 해시를 이미 계산했다. 직접 업로드는 worker가 나중에 채운다.
@@ -441,7 +469,7 @@ public class DocumentService {
             }
             DocumentUploadResponse response = toUploadResponse(document, markdownUpload);
             // 스킬 참고 문서는 편입 대상이 아니다. 자동 편입은 업로드 커밋 뒤 별도 트랜잭션에서 한다.
-            if (markdownUpload && !skillReference) {
+            if (markdownUpload && !skillReference && accounting.importSession() == null) {
                 autoIngestAfterCommit(workspaceId, userId, documentId,
                         markdownContent.contentHash(), markdownContent.bytes().length);
             }
@@ -469,7 +497,8 @@ public class DocumentService {
                 || e instanceof InvalidMarkdownContentException
                 || e instanceof MarkdownContentTooLargeException
                 || e instanceof UnsupportedDocumentFileException
-                || e instanceof fruition.core.upload.UploadLimitException;
+                || e instanceof fruition.core.upload.UploadLimitException
+                || e instanceof fruition.core.imports.DocumentImportException;
     }
 
     public DocumentUploadResponse createMarkdown(
@@ -1349,6 +1378,10 @@ public class DocumentService {
                 sortOrder
         );
         placeholder.markPipelineStarted(convertRunId, Instant.now());
+        // 가져온 PDF의 변환본도 같은 가져오기 문서로 표시한다. 가져온 문서는 자동 편입하지 않고 가져오기 편입으로 고른다.
+        if (source.getImportId() != null) {
+            placeholder.markImported(source.getImportId());
+        }
         documentRepository.save(placeholder);
         editStateRepository.save(new DocumentEditState(
                 placeholderId, content.markdown(), content.contentHash(), 1));
@@ -1545,7 +1578,9 @@ public class DocumentService {
     /** 변환 문서를 AI 큐로 보낸다. 이전 버전에서 생성한 파트도 호환 처리한다. */
     private void ingestConvertedParts(Document placeholder) {
         // 설정·권한은 변환을 요청한 사용자 기준이며, 변환이 끝나는 시점에 판정한다(트랜잭션 밖).
-        boolean autoIngest = autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId());
+        // 가져온 PDF의 변환본(import_id 있음)은 자동 편입하지 않는다. 변환 결과는 그대로 저장한다.
+        boolean autoIngest = placeholder.getImportId() == null
+                && autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId());
         // 모델 설정(access) 조회도 문서 행 잠금·트랜잭션 밖에서 한 번 한다. 실패는 편입 등록 자리에서 던진다.
         Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel = autoIngest
                 ? Prefetched.of(() -> workspaceAiModelClient.get(placeholder.getWorkspaceId())) : null;

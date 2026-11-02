@@ -17,7 +17,7 @@ public class DocumentImportException extends RuntimeException {
         this.code = code;
     }
 
-    static DocumentImportException invalid() {
+    public static DocumentImportException invalid() {
         return new DocumentImportException(HttpStatus.BAD_REQUEST, IMPORT_INVALID,
                 "가져오기 세션이 없거나 만료·완료되었습니다. 가져오기를 다시 시작해 주세요.");
     }

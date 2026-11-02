@@ -69,6 +69,10 @@ class DocumentImportIntegrationTest {
     @Autowired DocumentAssetContentService assetContent;
     @Autowired CreditService credits;
     @Autowired AiUsageLimiter aiUsageLimiter;
+    @Autowired fruition.core.document.service.DocumentService documentService;
+    @Autowired io.minio.MinioClient minio;
+    @Autowired fruition.shared.util.StorageProperties storage;
+    private final java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
 
     private String userId;
     private String workspaceId;
@@ -364,6 +368,83 @@ class DocumentImportIntegrationTest {
                 .andExpect(status().isForbidden());
     }
 
+    // ---------- PDF 직접 업로드
+
+    @Test
+    void importPdf_directUpload_marksDocument_countsItem_andReplaysWithSameKey() throws Exception {
+        String importId = openImport();
+        String key = UUID.randomUUID().toString();
+
+        String documentId = json(uploadPdf("자료.pdf", importId, key), 201).path("id").asText();
+        String replayId = json(uploadPdf("자료.pdf", importId, key), 201).path("id").asText();
+
+        assertThat(replayId).isEqualTo(documentId);
+        var row = jdbc.queryForMap("SELECT import_id, origin, status, pipeline_run_id, mime_type FROM documents WHERE id = ?",
+                documentId);
+        assertThat(row.get("import_id")).isEqualTo(UUID.fromString(importId));
+        assertThat(row.get("origin")).isEqualTo("notion_import");
+        assertThat(row.get("mime_type")).isEqualTo("application/pdf");
+        assertThat(row.get("pipeline_run_id")).isNull();
+        assertThat(aiRuns()).isZero();
+        assertThat(itemsUsed(importId)).isEqualTo(1);  // 멱등 재요청은 다시 세지 않는다
+        assertThat(documentCount()).isEqualTo(1);
+    }
+
+    @Test
+    void importPdf_invalidOrMismatchedSession_isRejected_andQuotaStillApplies() throws Exception {
+        String importId = openImport();
+        String closed = openImport();
+        complete(closed, "{}").andExpect(status().isOk());
+
+        startPdf("a.pdf", 5, closed).andExpect(status().isBadRequest()).andExpect(content().json(INVALID_BODY, true));
+        String importTicket = startPdfTicket("a.pdf", importId);
+        put(partUrl(importTicket), pdf());
+        completePdf(importTicket, null, UUID.randomUUID().toString())
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("IMPORT_INVALID"));
+        String plainTicket = json(startPdf("b.pdf", pdf().length, null), 200).path("ticket").asText();
+        put(partUrl(plainTicket), pdf());
+        completePdf(plainTicket, importId, UUID.randomUUID().toString())
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("IMPORT_INVALID"));
+        assertThat(documentCount()).isZero();
+
+        startPdf("big.pdf", 100L * 1024 * 1024 + 1, importId).andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.error.code").value("FILE_TOO_LARGE"));
+        seedUsage(QUOTA - 3);
+        startPdf("c.pdf", 5, importId).andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.error.code").value("STORAGE_QUOTA_EXCEEDED"));
+    }
+
+    @Test
+    void importedPdf_isConverted_withoutAutoIngest_andJoinsImportIngestOnlyAfterConversion() throws Exception {
+        String importId = openImport();
+        createMarkdown("본문.md", importId).andExpect(status().isCreated());
+        String pdfId = json(uploadPdf("자료.pdf", importId, UUID.randomUUID().toString()), 201).path("id").asText();
+        String converted = json(mockMvc.perform(post("/api/workspaces/" + workspaceId + "/documents/" + pdfId
+                        + "/convert-markdown").header("Authorization", bearer(userId))
+                .header("Idempotency-Key", UUID.randomUUID().toString())), 202).path("id").asText();
+        assertThat(jdbc.queryForObject("SELECT import_id FROM documents WHERE id = ?", UUID.class, converted))
+                .isEqualTo(UUID.fromString(importId));
+
+        // 변환 중: PDF 원본과 변환 중인 문서는 편입 대상이 아니다.
+        JsonNode during = json(estimate(importId), 200);
+        assertThat(during.path("document_count").asInt()).isEqualTo(1);
+        assertThat(during.path("converting_count").asInt()).isEqualTo(1);
+
+        finishConversion(converted);
+        assertThat(jdbc.queryForObject("SELECT status FROM documents WHERE id = ?", String.class, converted))
+                .isEqualTo("completed");
+        assertThat(ingestRuns()).isZero();  // 자동 편입 설정이 켜져 있어도 가져온 변환본은 편입하지 않는다
+
+        JsonNode after = json(estimate(importId), 200);
+        assertThat(after.path("document_count").asInt()).isEqualTo(2);
+        assertThat(after.path("converting_count").asInt()).isZero();
+        ingest(importId, null).andExpect(status().isAccepted())
+                .andExpect(content().json("{\"queued\":2,\"remaining\":0}", true));
+        assertThat(pipelineRun(converted)).doesNotStartWith("convert:");
+        assertThat(pipelineRun(pdfId)).isNull();
+        assertThat(ingestRuns()).isEqualTo(2);
+    }
+
     // ---------- 일반 POST /documents/markdown 업로드 한도
 
     @Test
@@ -393,6 +474,74 @@ class DocumentImportIntegrationTest {
                     .andExpect(status().isCreated());
         }
         assertThat(documentCount()).isEqualTo(1);
+    }
+
+    // ---------- PDF helpers
+
+    private static byte[] pdf() {
+        return "%PDF-1.4\n%test\n".getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private ResultActions startPdf(String name, long size, String importId) throws Exception {
+        var request = post("/api/workspaces/" + workspaceId + "/documents/uploads").header("Authorization", bearer(userId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"filename\":\"" + name + "\",\"size\":" + size + "}");
+        if (importId != null) request = request.header(HEADER, importId);
+        return mockMvc.perform(request);
+    }
+
+    private String startPdfTicket(String name, String importId) throws Exception {
+        return json(startPdf(name, pdf().length, importId), 200).path("ticket").asText();
+    }
+
+    private String partUrl(String ticket) throws Exception {
+        return json(mockMvc.perform(post("/api/workspaces/" + workspaceId + "/documents/uploads/parts")
+                .header("Authorization", bearer(userId)).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"ticket\":\"" + ticket + "\",\"first_part\":1,\"count\":1}")), 200)
+                .path("parts").get(0).path("url").asText();
+    }
+
+    private void put(String url, byte[] bytes) throws Exception {
+        var response = http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
+                .PUT(java.net.http.HttpRequest.BodyPublishers.ofByteArray(bytes))
+                .header("Content-Type", "application/pdf").build(), java.net.http.HttpResponse.BodyHandlers.discarding());
+        assertThat(response.statusCode()).isEqualTo(200);
+    }
+
+    private ResultActions completePdf(String ticket, String importId, String key) throws Exception {
+        var request = post("/api/workspaces/" + workspaceId + "/documents/uploads/complete")
+                .header("Authorization", bearer(userId)).header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"ticket\":\"" + ticket + "\"}");
+        if (importId != null) request = request.header(HEADER, importId);
+        return mockMvc.perform(request);
+    }
+
+    private ResultActions uploadPdf(String name, String importId, String key) throws Exception {
+        String ticket = startPdfTicket(name, importId);
+        put(partUrl(ticket), pdf());
+        return completePdf(ticket, importId, key);
+    }
+
+    private ResultActions estimate(String importId) throws Exception {
+        return mockMvc.perform(get(imports() + "/" + importId + "/ingest-estimate").header("Authorization", bearer(userId)));
+    }
+
+    /** converter worker의 1쪽짜리 결과를 저장하고 완료 이벤트를 반영한다. */
+    private void finishConversion(String documentId) throws Exception {
+        String resultKey = "tmp/convert/" + workspaceId + "/" + documentId + "/0.md";
+        byte[] markdown = "<!-- page 1 -->\n\n# 변환 본문\n".getBytes(StandardCharsets.UTF_8);
+        minio.putObject(io.minio.PutObjectArgs.builder().bucket(storage.getBucket()).object(resultKey)
+                .stream(new java.io.ByteArrayInputStream(markdown), markdown.length, -1).build());
+        var event = objectMapper.createObjectNode().put("run_id", "convert:" + documentId + ":0")
+                .put("kind", "convert_batch").put("status", "succeeded");
+        event.putObject("payload").put("page_start", 1).put("page_end", 1).put("total_pages", 1)
+                .put("result_key", resultKey);
+        documentService.applyConvertBatch(event);
+    }
+
+    private int ingestRuns() {
+        return jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE user_id = ? AND kind <> 'convert'",
+                Integer.class, userId);
     }
 
     // ---------- helpers

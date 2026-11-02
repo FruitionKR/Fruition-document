@@ -24,6 +24,8 @@ class DocumentDirectUploadServiceTest {
     MultipartStorage multipart = mock(MultipartStorage.class);
     WorkspaceAccessGuard access = mock(WorkspaceAccessGuard.class);
     DocumentService documents = mock(DocumentService.class);
+    fruition.core.imports.ImportSessionStore importSessions = mock(fruition.core.imports.ImportSessionStore.class);
+    static final java.util.UUID IMPORT_ID = java.util.UUID.fromString("11111111-2222-3333-4444-555555555555");
     static final long MB = 1024L * 1024;
     static final String SECRET = "test-secret-for-document-upload-ticket-only";
     StorageProperties props = new StorageProperties();
@@ -33,12 +35,15 @@ class DocumentDirectUploadServiceTest {
         props.setBucket("test-bucket");
         uploads = service(100 * MB);
         when(multipart.start(anyString(), anyString())).thenReturn("upload-id");
+        when(importSessions.resolve(anyString(), anyString(), isNull())).thenReturn(null);
+        when(importSessions.resolve("ws_test", "user_test", IMPORT_ID.toString())).thenReturn(
+                new fruition.core.imports.ImportSessionStore.OpenSession(IMPORT_ID, "ws_test", "user_test"));
     }
     DocumentDirectUploadService service(long maxPdfBytes) throws Exception {
         return service(new UploadLimitService(mock(JdbcTemplate.class), true, maxPdfBytes, 5L * 1024 * MB));
     }
     DocumentDirectUploadService service(UploadLimitService limits) throws Exception {
-        return new DocumentDirectUploadService(storage, multipart, props, access, documents, limits, SECRET);
+        return new DocumentDirectUploadService(storage, multipart, props, access, documents, limits, importSessions, SECRET);
     }
     DocumentDirectUploadService.StartResponse start(long size) throws Exception {
         return uploads.start("ws_test", "user_test", new DocumentDirectUploadService.StartRequest("large.pdf", size, null));
@@ -168,5 +173,50 @@ class DocumentDirectUploadServiceTest {
         uploads.complete("ws_test", "user_test", "same-idempotency-key", ticket);
         verify(documents).upload(eq("ws_test"), eq("user_test"), eq("same-idempotency-key"), isNull(),
                 argThat(file -> file.getSize() == 5 && file.getContentType().equals("application/pdf")));
+    }
+
+    StatObjectResponse storedPdf() throws Exception {
+        StatObjectResponse stat = mock(StatObjectResponse.class);
+        when(stat.size()).thenReturn(5L);
+        when(stat.contentType()).thenReturn("application/pdf");
+        when(stat.etag()).thenReturn("etag");
+        when(storage.statObject(any())).thenReturn(stat);
+        when(storage.getObject(any())).thenAnswer(inv -> new GetObjectResponse(new okhttp3.Headers.Builder().build(),
+                "test-bucket", "region", "key", new ByteArrayInputStream("%PDF-".getBytes(StandardCharsets.US_ASCII))));
+        return stat;
+    }
+    DocumentDirectUploadService.CompleteRequest importTicket() throws Exception {
+        return new DocumentDirectUploadService.CompleteRequest(uploads.start("ws_test", "user_test",
+                new DocumentDirectUploadService.StartRequest("a.pdf", 5, null), IMPORT_ID.toString()).ticket());
+    }
+    @Test void invalidImportSessionIsRejectedBeforeStartingMultipart() throws Exception {
+        when(importSessions.resolve("ws_test", "user_test", "closed")).thenThrow(
+                fruition.core.imports.DocumentImportException.invalid());
+        assertThatThrownBy(() -> uploads.start("ws_test", "user_test",
+                new DocumentDirectUploadService.StartRequest("a.pdf", 5, null), "closed"))
+                .isInstanceOfSatisfying(fruition.core.imports.DocumentImportException.class,
+                        error -> assertThat(error.getCode()).isEqualTo("IMPORT_INVALID"));
+        verify(multipart, never()).start(anyString(), anyString());
+    }
+    @Test void importTicketCompletesAsImportedDocument() throws Exception {
+        var ticket = importTicket();
+        storedPdf();
+        uploads.complete("ws_test", "user_test", "import-key", ticket, IMPORT_ID.toString());
+        verify(documents).uploadImported(eq("ws_test"), eq("user_test"), eq("import-key"), isNull(),
+                argThat(file -> file.getSize() == 5), eq(IMPORT_ID.toString()));
+        verify(documents, never()).upload(any(), any(), any(), any(), any());
+    }
+    @Test void importTicketAndHeaderMustMatch() throws Exception {
+        var importTicket = importTicket();
+        var plainTicket = new DocumentDirectUploadService.CompleteRequest(start(5).ticket());
+        // 시작 때 묶은 세션 없이 확정하거나, 일반 ticket에 세션을 붙여 확정하면 IMPORT_INVALID다.
+        for (var call : java.util.List.<org.assertj.core.api.ThrowableAssert.ThrowingCallable>of(
+                () -> uploads.complete("ws_test", "user_test", "k", importTicket, null),
+                () -> uploads.complete("ws_test", "user_test", "k", plainTicket, IMPORT_ID.toString()))) {
+            assertThatThrownBy(call).isInstanceOfSatisfying(fruition.core.imports.DocumentImportException.class,
+                    error -> assertThat(error.getCode()).isEqualTo("IMPORT_INVALID"));
+        }
+        verify(storage, never()).statObject(any());
+        verifyNoInteractions(documents);
     }
 }

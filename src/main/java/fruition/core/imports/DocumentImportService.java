@@ -41,8 +41,17 @@ public class DocumentImportService {
     /** 편입 요청 한 번에 큐에 넣는 문서 수. 많은 문서를 한꺼번에 넣어 AI 한도·크레딧을 몰아 쓰지 않게 한다. */
     static final int INGEST_BATCH = 20;
     private static final String INGEST_KIND = "document";
+    /**
+     * 편입 대상: 이 세션의 휴지통 밖 편집 가능 Markdown 중 편입 요청한 적 없는 문서. PDF 원본(ORIGINAL)은 편입 대상이 아니라
+     * 빼고, PDF 변환본은 변환이 끝난 뒤(completed, 변환 run만 남음)에만 넣는다. 변환 중·변환 실패는 빠진다.
+     */
     private static final String NOT_INGESTED =
-            "import_id = ? AND workspace_id = ? AND deleted_at IS NULL AND pipeline_run_id IS NULL";
+            "import_id = ? AND workspace_id = ? AND deleted_at IS NULL AND document_role = 'EDITABLE'"
+                    + " AND (pipeline_run_id IS NULL OR (pipeline_run_id LIKE 'convert:%' AND status = 'completed'))";
+    /** 아직 변환 중이라 편입 대상에서 빠진 가져온 PDF 변환본. */
+    private static final String CONVERTING =
+            "import_id = ? AND workspace_id = ? AND deleted_at IS NULL AND document_role = 'EDITABLE'"
+                    + " AND pipeline_run_id LIKE 'convert:%' AND status = 'processing'";
 
     private final JdbcTemplate jdbc;
     private final WorkspaceAccessGuard access;
@@ -129,7 +138,8 @@ public class DocumentImportService {
             log.warn("[가져오기 편입 예상] USD 환산 실패 — null로 응답 importId={} cause={}", id, e.toString());
             usd = null;
         }
-        return new IngestEstimateResponse(count, usd, credits.estimate(INGEST_KIND) * count);
+        return new IngestEstimateResponse(count, usd, credits.estimate(INGEST_KIND) * count,
+                count(CONVERTING, id, workspaceId));
     }
 
     /**
@@ -179,7 +189,11 @@ public class DocumentImportService {
     }
 
     private int notIngestedCount(UUID id, String workspaceId) {
-        Integer count = jdbc.queryForObject("SELECT count(*) FROM documents WHERE " + NOT_INGESTED,
+        return count(NOT_INGESTED, id, workspaceId);
+    }
+
+    private int count(String where, UUID id, String workspaceId) {
+        Integer count = jdbc.queryForObject("SELECT count(*) FROM documents WHERE " + where,
                 Integer.class, id, workspaceId);
         return count == null ? 0 : count;
     }

@@ -1751,6 +1751,12 @@ paths:
         schema:
           type: string
           default: ws_9d47a0e9a6324341b47562553b75f92a
+      - description: 가져오기 세션 ID(POST /imports 응답의 import_id). 시작과 확정에 같은 값을 보낸다
+        in: header
+        name: X-Fruition-Import-Id
+        required: false
+        schema:
+          type: string
       requestBody:
         content:
           application/json:
@@ -1802,6 +1808,12 @@ paths:
       - in: header
         name: Idempotency-Key
         required: true
+        schema:
+          type: string
+      - description: 가져오기 세션 ID(POST /imports 응답의 import_id). 시작과 확정에 같은 값을 보낸다
+        in: header
+        name: X-Fruition-Import-Id
+        required: false
         schema:
           type: string
       requestBody:
@@ -7483,10 +7495,14 @@ components:
     DocumentImportIngestEstimateResponse:
       type: object
       properties:
+        converting_count:
+          type: integer
+          format: int32
+          description: 아직 Markdown 변환 중이라 document_count에서 빠진 가져온 PDF 변환본 수. 변환이 끝나면 편입 대상에 들어간다
         document_count:
           type: integer
           format: int32
-          description: 아직 편입하지 않은(편입 요청한 적 없는) 휴지통 밖 가져온 문서 수
+          description: "아직 편입하지 않은(편입 요청한 적 없는) 휴지통 밖 가져온 Markdown 문서 수. PDF 원본은 빼고, PDF 변환본은 변환이 끝난 것만 센다"
         estimated_cost_usd:
           type: number
           description: 예상 비용(USD) = 문서 편입 1건 예상 비용 × document_count. 환율을 못 읽으면 null
