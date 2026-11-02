@@ -841,7 +841,36 @@ class AgentTurnServiceTest {
     }
 
     @Test
-    void ambiguousFailureWithRunUnchanged_releasesReservation() throws Exception {
+    void retryRejectionWhileTimedOutApprovalIsPending_keepsReservationUntilTerminal() throws Exception {
+        // 첫 요청은 클라이언트 시간 초과 뒤에도 커밋 전이다. 재시도 거절과 같은 상태의 재조회는
+        // 첫 요청이 실행되지 않는다는 증거가 아니다. 409·422 모두 공유 예약을 유지해야 한다.
+        for (int rejectionStatus : List.of(409, 422)) {
+            String runId = "pending-approval-" + rejectionStatus;
+            JsonNode waiting = autonomousRun(runId, "awaiting_approval", "plan-1");
+            JsonNode completed = autonomousRun(runId, "completed", "plan-1");
+            when(statusRequester.getAutonomousRun("ws_1", "user_1", runId))
+                    .thenReturn(waiting, waiting, waiting, completed);
+            when(statusRequester.approve("ws_1", "user_1", runId, 1, "a".repeat(64)))
+                    .thenThrow(new fruition.core.agent.exception.PipelineAgentNoResponseException("timeout"));
+            when(statusRequester.approve("ws_1", "user_1", runId, 1, "b".repeat(64)))
+                    .thenThrow(new PipelineAgentException("rejected retry", rejectionStatus, null));
+
+            assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId,
+                    new AgentRunApproveRequest(1, "a".repeat(64))))
+                    .isInstanceOf(PipelineAgentException.class);
+            assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId,
+                    new AgentRunApproveRequest(1, "b".repeat(64))))
+                    .isInstanceOf(PipelineAgentException.class);
+            verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
+
+            // 뒤늦게 첫 요청이 커밋·종료되면 기존 정산 경로로 예약을 해제한다.
+            assertThat(service.getRun("ws_1", "user_1", runId)).isEqualTo(completed);
+            verify(usageCharges).endAutonomousRunIfTerminal(runId, completed);
+        }
+    }
+
+    @Test
+    void ambiguousFailureWithRunUnchanged_keepsReservation() throws Exception {
         String runId = "run-not-accepted";
         JsonNode waiting = autonomousRun(runId, "awaiting_approval", "plan-1");
         when(statusRequester.getAutonomousRun("ws_1", "user_1", runId)).thenReturn(waiting, waiting);
@@ -851,7 +880,7 @@ class AgentTurnServiceTest {
         assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
                 .isInstanceOf(PipelineAgentException.class);
 
-        verify(usageCharges).abortAutonomousAttempt(runId, "user_1");
+        verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
     }
 
     @Test
@@ -870,7 +899,7 @@ class AgentTurnServiceTest {
     }
 
     @Test
-    void definiteRejectionOrUnknownRecheck_releasesOnlyWhenRejectionIsCertain() throws Exception {
+    void rejectionOrUnknownRecheck_keepsSharedReservation() throws Exception {
         String runId = "run-rejected";
         when(statusRequester.getAutonomousRun("ws_1", "user_1", runId))
                 .thenReturn(autonomousRun(runId, "awaiting_approval", "plan-1"));
@@ -879,9 +908,9 @@ class AgentTurnServiceTest {
 
         assertThatThrownBy(() -> service.approve("ws_1", "user_1", runId, new AgentRunApproveRequest(1, "a".repeat(64))))
                 .isInstanceOf(PipelineAgentException.class);
-        // 409가 아닌 4xx는 처리하지 않은 거절이라 다시 조회하지 않고 푼다.
-        verify(usageCharges).abortAutonomousAttempt(runId, "user_1");
-        verify(statusRequester, org.mockito.Mockito.times(1)).getAutonomousRun("ws_1", "user_1", runId);
+        // 이번 요청이 422로 거절돼도 이전 요청이 처리 중일 수 있으므로 공유 예약은 유지한다.
+        verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
+        verify(statusRequester, org.mockito.Mockito.times(2)).getAutonomousRun("ws_1", "user_1", runId);
 
         // 시간 초과 뒤 다시 조회도 실패하면 결과를 알 수 없으므로 예약을 둔다(오래 남으면 releaseStale이 정리).
         String unknown = "run-recheck-fails";
@@ -999,9 +1028,9 @@ class AgentTurnServiceTest {
     }
 
     @Test
-    void failedForwardReleasesOnlyThisAttemptAndKeepsRunOpen() throws Exception {
+    void failedForwardKeepsSharedReservationAndRunOpen() throws Exception {
         String runId = "0b1f6c1e-5b0e-4b53-9a67-3f2f0d8e9a11";
-        // 다시 조회한 run이 그대로면(받지 않음 확정) 이번 시도의 예약만 푼다.
+        // 상태가 같아도 다른 요청이 커밋 전일 수 있으므로 예약을 유지한다.
         when(statusRequester.getAutonomousRun("ws_1", "user_1", runId))
                 .thenReturn(autonomousRun(runId, "awaiting_approval", "plan-1"));
         when(statusRequester.revise("ws_1", "user_1", runId, "좁혀줘")).thenThrow(new IllegalStateException("conflict"));
@@ -1009,7 +1038,7 @@ class AgentTurnServiceTest {
         assertThatThrownBy(() -> service.revise("ws_1", "user_1", runId, new AgentRunReviseRequest("좁혀줘")))
                 .isInstanceOf(IllegalStateException.class);
 
-        verify(usageCharges).abortAutonomousAttempt(runId, "user_1");
+        verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
         verify(usageCharges, never()).endAutonomousRun(anyString());
     }
 

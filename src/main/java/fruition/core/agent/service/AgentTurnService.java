@@ -8,7 +8,6 @@ import fruition.core.agent.dto.AgentRunReviseRequest;
 import fruition.core.agent.exception.AgentRunNotFoundException;
 import fruition.core.agent.exception.AgentTurnAlreadyFinishedException;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
-import fruition.core.agent.exception.PipelineAgentException;
 import fruition.core.agent.repository.AgentRunCommandRepository;
 import fruition.core.agent.repository.PipelineAgentRunStatusRequester;
 import fruition.core.aihistory.service.AgentApplyOperationStore;
@@ -348,18 +347,15 @@ public class AgentTurnService {
                 current -> () -> statusRequester.revise(workspaceId, userId, runId, request.instruction()));
     }
 
-    /**
-     * 계획 수정·승인은 ai-svc가 AgentRun(처음 요청의 turn과 다른 id)으로 모델을 다시 부른다. 먼저 AgentRun을 조회해 호출자의
-     * 것임을 확인하고(남의 id를 크레딧 실행으로 선점하지 못하게), 전달하기 전에 크레딧 실행으로 등록·예약해 처음 요청과 같은
-     * 규칙으로 가용 잔액을 확인한다(부족하면 402, 전달하지 않음). ai-svc가 전달을 거절하면 이번 시도의 예약만 풀고 실행은
-     * 닫지 않아 다음 시도가 잔액을 다시 확인한다. 실행의 종료는 AgentRun 응답의 상태로 알아챈다({@link #closeIfTerminal}).
-     * enforce가 꺼져 있으면 아무것도 하지 않는다(#102).
-     */
     /** ai-svc가 승인을 받는 run 상태({@code approve_and_enqueue}). */
     private static final Set<String> APPROVABLE = Set.of("awaiting_approval");
     /** ai-svc가 계획 수정을 받는 run 상태({@code revise}). */
     private static final Set<String> REVISABLE = Set.of("awaiting_approval", "clarification_required");
 
+    /**
+     * 소유 확인과 요청 검증 뒤 AgentRun 단위로 예약한다. 예약은 동시 요청·시간 초과된 이전 요청도 공유하므로,
+     * 개별 전달 실패로 풀지 않는다. 종료 정산 또는 CreditService.releaseStale이 해제한다.
+     */
     private JsonNode rerun(String workspaceId, String userId, String runId, Set<String> accepting,
                            java.util.function.Function<JsonNode, java.util.function.Supplier<JsonNode>> prepare) {
         JsonNode current = statusRequester.getAutonomousRun(workspaceId, userId, runId);
@@ -375,47 +371,24 @@ public class AgentTurnService {
         try {
             return closeIfTerminal(runId, forward.get());
         } catch (RuntimeException e) {
-            // ai-svc는 승인·수정 기록과 실행 등록을 한 트랜잭션으로 커밋한다. 응답만 유실됐으면 이미 실행 중일 수 있으므로
-            // 받지 않았음이 확정될 때만 이번 예약을 푼다(#167). 확정하지 못하면 예약을 두고, 끝나지 않은 채 남은 예약은
-            // CreditService.releaseStale이 정리한다.
-            if (notAccepted(workspaceId, userId, runId, current, e)) {
-                usageCharges.abortAutonomousAttempt(runId, userId);
-            }
+            // 이번 요청이 거절됐어도 이전 요청이 아직 커밋 전일 수 있다. run 단위 예약은 유지한다.
+            reconcileFailedForward(workspaceId, userId, runId, e);
             throw e;
         }
     }
 
-    /**
-     * 전달이 실패한 요청을 ai-svc가 받지 않았음이 확정됐는지. 409를 뺀 4xx·없는 run은 요청을 처리하지 않은 거절이다.
-     * 응답이 없으면(시간 초과) 확정할 수 없다. 응답을 받은 5xx·409는 ai-svc 처리가 끝났으므로 run을 다시 조회해,
-     * 상태와 계획이 그대로면 받지 않은 것이다.
-     */
-    private boolean notAccepted(String workspaceId, String userId, String runId, JsonNode before, RuntimeException failure) {
-        if (failure instanceof AgentRunNotFoundException) return true;
-        // 응답을 받지 못했으면 ai-svc가 아직 커밋 전일 수 있어 다시 조회해도 확정할 수 없다. 예약을 둔다.
+    /** 재조회는 종료 정산을 시작하는 데만 사용한다. 상태가 그대로여도 미처리라는 증거는 아니다. */
+    private void reconcileFailedForward(String workspaceId, String userId, String runId, RuntimeException failure) {
         if (failure instanceof fruition.core.agent.exception.PipelineAgentNoResponseException) {
             log.warn("[Agent 전달 응답 없음] runId={} 예약 유지", runId);
-            return false;
+            return;
         }
-        if (failure instanceof PipelineAgentException rejected) {
-            int status = rejected.getHttpStatus();
-            if (status >= 400 && status < 500 && status != 409) return true;
-        }
-        JsonNode after;
         try {
-            after = statusRequester.getAutonomousRun(workspaceId, userId, runId);
+            closeIfTerminal(runId, statusRequester.getAutonomousRun(workspaceId, userId, runId));
         } catch (RuntimeException unknown) {
+            // 정산 확인 실패가 원래 전달 오류를 덮어쓰지 않도록 한다.
             log.warn("[Agent 전달 결과 확인 실패] runId={} 예약 유지 error={}", runId, unknown.toString());
-            return false;
         }
-        boolean unchanged = before != null && after != null
-                && before.path("status").asText().equals(after.path("status").asText())
-                && before.path("plan").path("id").asText().equals(after.path("plan").path("id").asText());
-        if (!unchanged) {
-            log.warn("[Agent 전달 응답 유실] runId={} status={} 예약 유지", runId, after == null ? null : after.path("status").asText());
-            closeIfTerminal(runId, after);
-        }
-        return unchanged;
     }
 
     /** AgentRun이 끝났으면 크레딧 실행을 닫아 사용량 수집·정산(예약 해제)을 시작한다. */
