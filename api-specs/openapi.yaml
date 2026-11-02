@@ -46,6 +46,8 @@ tags:
   name: Skills
 - description: 채팅 음성 입력(음성과 전사 결과를 저장하지 않는다)과 답변 음성 듣기(완료된 합성만 30일 저장).
   name: Speech
+- description: 사용자별 업로드 저장 공간
+  name: Storage
 - description: Wiki 그래프·페이지 조회와 페이지 본문 수정 API
   name: Wiki
 - description: Wiki 정합성 검사와 유지보수 실행 API
@@ -4925,6 +4927,28 @@ paths:
       summary: 음성 받아쓰기
       tags:
       - Speech
+  /api/workspaces/{workspace_id}/storage:
+    get:
+      description: 워크스페이스 멤버만 부를 수 있습니다. 멤버가 아니면 404 WORKSPACE_NOT_FOUND입니다.
+      operationId: getStorageUsage
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/StorageUsageResponse"
+          description: OK
+      summary: 내 저장 공간 사용량
+      tags:
+      - Storage
   /api/workspaces/{workspace_id}/usage/models:
     get:
       description: AI 저장소에서 사용량을 조회합니다. 기본 기간은 UTC 이번 달이며 실제 청구액은 포함하지 않습니다.
@@ -6767,6 +6791,10 @@ components:
           type: boolean
           description: 본문 편집이 가능한지 여부
           example: true
+        error_code:
+          type: string
+          description: "status=failed일 때 실패 종류를 가리키는 코드(예: AI_USAGE_LIMIT_EXCEEDED, INSUFFICIENT_CREDIT). 코드 없이 실패했거나 이전에 기록된 문서는 키가 빠진다. 화면은 error_message 문구 대신 이 값으로 판정한다."
+          example: AI_USAGE_LIMIT_EXCEEDED
         error_message:
           type: string
           description: status=failed일 때의 실패 사유
@@ -7102,6 +7130,10 @@ components:
           type: boolean
           description: 본문 편집이 가능한지 여부
           example: false
+        error_code:
+          type: string
+          description: "status=failed일 때 실패 종류를 가리키는 코드(예: AI_USAGE_LIMIT_EXCEEDED, INSUFFICIENT_CREDIT). 코드 없이 실패했거나 이전에 기록된 문서는 키가 빠진다. 화면은 error_message 문구 대신 이 값으로 판정한다."
+          example: AI_USAGE_LIMIT_EXCEEDED
         error_message:
           type: string
           description: status=failed일 때의 실패 사유
@@ -7623,10 +7655,22 @@ components:
           description: 검증 실패(400 INVALID_REQUEST)일 때만 존재한다. 값이 없으면 키 자체가 빠지므로 null 체크가 아니라 존재 여부로 확인한다.
           items:
             $ref: "#/components/schemas/FieldError"
+        limit_type:
+          type: string
+          description: AI 사용 한도 초과(429 AI_USAGE_LIMIT_EXCEEDED)일 때만 존재한다. 넘은 한도 종류.
+          enum:
+          - CONCURRENT
+          - DAILY_COST
+          - DAILY_TOKENS
+          example: DAILY_COST
         message:
           type: string
           description: 사용자에게 그대로 보여도 되는 한국어 문구
           example: 요청 형식이 올바르지 않습니다.
+        reset_at:
+          type: string
+          description: "AI 하루 한도 초과(limit_type이 DAILY_COST·DAILY_TOKENS)일 때만 존재한다. 한도가 풀리는 다음 0시(Asia/Seoul), ISO-8601 offset 시각."
+          example: 2026-11-03T00:00:00+09:00
     ErrorResponse:
       type: object
       description: 컨트롤러까지 도달한 요청이 실패했을 때 모든 API가 공유하는 에러 응답 형식. 인증 필터가 막는 401은 HttpStatusEntryPoint가 상태 코드만 내보내므로 이 본문이 없다.
@@ -9735,6 +9779,21 @@ components:
           format: int64
         ticket:
           type: string
+    StorageUsageResponse:
+      type: object
+      properties:
+        limit_bytes:
+          type: integer
+          format: int64
+          description: 저장 공간 한도(바이트). 한도가 꺼져 있으면 null
+        scope:
+          type: string
+          description: 한도 적용 단위. 항상 user
+          example: user
+        used_bytes:
+          type: integer
+          format: int64
+          description: "내가 올린 문서·이미지·회의 녹음의 바이트 합(모든 워크스페이스, 휴지통 포함)"
     Target:
       type: object
       description: 적용 범위(1-based 줄 번호). Agent 턴 editor_snapshot.target과 같은 형식이다.

@@ -51,6 +51,12 @@ public record DocumentDetailResponse(
         @Schema(description = "status=failed일 때의 실패 사유")
         String errorMessage,
 
+        @JsonProperty("error_code")
+        @Schema(description = "status=failed일 때 실패 종류를 가리키는 코드(예: AI_USAGE_LIMIT_EXCEEDED, INSUFFICIENT_CREDIT). "
+                + "코드 없이 실패했거나 이전에 기록된 문서는 키가 빠진다. 화면은 error_message 문구 대신 이 값으로 판정한다.",
+                example = "AI_USAGE_LIMIT_EXCEEDED")
+        String errorCode,
+
         @JsonProperty("wiki_pages")
         @Schema(description = "이 문서에서 생성된 Wiki 페이지 참조 목록")
         List<DocumentWikiPageRef> wikiPages,

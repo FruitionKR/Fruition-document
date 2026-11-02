@@ -88,6 +88,7 @@ public class DocumentItemAssembler {
                 doc.getProcessedAt(),
                 doc.getProcessingStartedAt(),
                 doc.getErrorMessage(),
+                doc.getErrorCode(),
                 doc.getPipelineRunId(),
                 resolveProcessingState(doc),
                 doc.getProcessingStage(),

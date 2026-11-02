@@ -101,7 +101,7 @@ public class CreditService {
      * 모델을 부르지 않아 비용이 없는 작업(복원: 자체 호스팅 임베딩만 쓰고 원장에 호출이 남지 않는다)은 예약도 사전 승인도 하지 않는다.
      * 실행 추적({@code ai_task_runs})은 그대로 남는다.
      */
-    private static boolean isFree(String kind) {
+    public static boolean isFree(String kind) {
         return kind != null && kind.startsWith("restore_");
     }
 
@@ -110,8 +110,8 @@ public class CreditService {
         return enforce;
     }
 
-    /** kind별 예상 상한. */
-    private long estimate(String kind) {
+    /** kind별 예상 상한(milli-KRW). 사용자별 AI 사용 한도도 이 값으로 실행 한 건의 비용을 어림한다. */
+    public long estimate(String kind) {
         return environment.getProperty("app.billing.estimate." + kind, Long.class, defaultEstimate);
     }
 

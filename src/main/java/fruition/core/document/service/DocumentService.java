@@ -120,6 +120,10 @@ public class DocumentService {
     @org.springframework.beans.factory.annotation.Autowired
     private AgentRunCommandRepository agentRuns;
 
+    /** 사용자별 저장 용량·하루 업로드 개수. 단위 테스트처럼 주입되지 않으면 검사하지 않는다. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private fruition.core.upload.UploadLimitService uploadLimits;
+
     private static final int MAX_SAVE_ATTEMPTS = 3;
 
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
@@ -298,6 +302,10 @@ public class DocumentService {
             if (replay.isPresent()) {
                 return replay.get();
             }
+            // 멱등 재요청은 위에서 돌려줬다. 새 업로드는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
+            if (uploadLimits != null) {
+                uploadLimits.precheck(userId, file.getSize(), 1);
+            }
 
             // 같은 폴더에 같은 이름이 있으면 거절하지 않고 "이름 (2).pdf"처럼 번호를 붙인다.
             // 스킬 참고 문서는 참고 문서끼리만 비교한다. 동시에 같은 이름을 고르는 경합은 DB 고유 제약이 막는다.
@@ -330,6 +338,15 @@ public class DocumentService {
             objectStored = true;
             registerMinioRollbackCleanup(objectPath);
             log.info("[문서 원본 저장 완료] documentId={} objectPath={}", documentId, objectPath);
+
+            // 사용자 잠금은 저장이 끝난 뒤 문서 행을 쓰기 직전에 잡아 커밋까지 짧게 쥔다. 큰 원본을 쓰는 동안 잡으면
+            // 같은 사용자의 다른 업로드가 그 시간 내내 줄을 선다. 잠금 아래에서 다시 확인해 병렬 업로드가 함께 한도를
+            // 넘지 못하게 하고, 거절되면 롤백 정리(registerMinioRollbackCleanup)가 방금 저장한 원본을 지운다.
+            if (uploadLimits != null) {
+                uploadLimits.enforce(userId, file.getSize(), 1);
+                uploadLimits.record(userId, workspaceId, fruition.core.upload.UploadLimitService.KIND_DOCUMENT,
+                        file.getSize());
+            }
 
             Document document = new Document(
                     documentId,
@@ -373,7 +390,8 @@ public class DocumentService {
                  | IdempotencyInProgressException
                  | InvalidMarkdownContentException
                  | MarkdownContentTooLargeException
-                 | UnsupportedDocumentFileException e) {
+                 | UnsupportedDocumentFileException
+                 | fruition.core.upload.UploadLimitException e) {
             throw e;
         } catch (Exception e) {
             if (objectStored) {
@@ -1285,7 +1303,10 @@ public class DocumentService {
                 });
             } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
                 // 변환은 성공했고 다시 시도하지 않는다. 자동 ingest만 크레딧 부족으로 시작하지 못했음을 문서에 남긴다.
-                markAutoIngestRejected(part, e);
+                markAutoIngestRejected(part, "INSUFFICIENT_CREDIT");
+            } catch (fruition.core.usage.limit.AiUsageLimitExceededException e) {
+                // 사용자별 AI 사용 한도도 같은 방식으로 남긴다. 예외를 올리면 변환 결과 이벤트가 다시 처리된다.
+                markAutoIngestRejected(part, "AI_USAGE_LIMIT_EXCEEDED");
             }
         }
     }
@@ -1332,16 +1353,16 @@ public class DocumentService {
         });
     }
 
-    /** 변환 뒤 자동 ingest가 크레딧 부족으로 거절됐을 때 문서에 INSUFFICIENT_CREDIT으로 기록한다. 변환 결과는 그대로 둔다. */
-    private void markAutoIngestRejected(Document part, fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+    /** 변환 뒤 자동 ingest가 크레딧 부족·AI 사용 한도로 거절됐을 때 문서에 그 코드로 기록한다. 변환 결과는 그대로 둔다. */
+    private void markAutoIngestRejected(Document part, String code) {
         Instant now = Instant.now();
         transactionTemplate.execute(status -> {
             documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
                     .filter(value -> value.getDeletedAt() == null)
-                    .ifPresent(doc -> doc.markProcessingFailed(AiErrorMessages.query("INSUFFICIENT_CREDIT"), now));
+                    .ifPresent(doc -> doc.markProcessingFailed(code, AiErrorMessages.query(code), now));
             return null;
         });
-        log.warn("[변환 뒤 자동 ingest 거절] documentId={} reason=INSUFFICIENT_CREDIT", part.getId());
+        log.warn("[변환 뒤 자동 ingest 거절] documentId={} reason={}", part.getId(), code);
     }
 
     /**
@@ -1597,6 +1618,7 @@ public class DocumentService {
                 doc.getUploadedAt(),
                 doc.getProcessedAt(),
                 doc.getErrorMessage(),
+                doc.getErrorCode(),
                 wikiPages,
                 doc.getPipelineRunId(),
                 DocumentItemAssembler.resolveProcessingState(doc),
@@ -1986,12 +2008,21 @@ public class DocumentService {
                     int inserted = assetRepository.insertIfAbsent(asset);
                     if (inserted == 1) insertedAssets.add(asset);
                 }
+                // 새로 들어간 행만 업로드로 센다(먼저 커밋된 재전송 행은 이미 세었다). 행을 이미 썼으므로 추가분은 0이다.
+                if (uploadLimits != null && !insertedAssets.isEmpty()) {
+                    uploadLimits.enforce(userId, 0, insertedAssets.size());
+                }
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),
                         baseVersion, revisionWriteId, null, applyOperationId, false, null, true);
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
                     assetRepository.deleteAllInBatch(insertedAssets);
+                } else if (uploadLimits != null) {
+                    for (DocumentAsset asset : insertedAssets) {
+                        uploadLimits.record(userId, workspaceId,
+                                fruition.core.upload.UploadLimitService.KIND_DOCUMENT_ASSET, asset.getByteSize());
+                    }
                 }
                 return value;
             }));

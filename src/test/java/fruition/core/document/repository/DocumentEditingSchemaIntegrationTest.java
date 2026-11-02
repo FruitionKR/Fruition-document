@@ -30,7 +30,7 @@ import fruition.core.aihistory.dto.DocumentRestorePlan;
 import fruition.core.aihistory.repository.OperationLogRepository;
 import fruition.core.document.dto.DocumentRenameResponse;
 import fruition.shared.idempotency.IdempotencyService;
-import org.flywaydb.core.Flyway;
+import fruition.core.config.FlywayDefaults;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
@@ -840,7 +840,7 @@ class DocumentEditingSchemaIntegrationTest {
 
         String databaseUrl = "jdbc:postgresql://" + postgresContainer.getHost() + ":"
                 + postgresContainer.getMappedPort(PostgreSQLContainer.POSTGRESQL_PORT) + "/" + databaseName;
-        Flyway.configure()
+        FlywayDefaults.configure()
                 .dataSource(databaseUrl, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .target(MigrationVersion.fromVersion("38"))
                 .load()
@@ -859,7 +859,7 @@ class DocumentEditingSchemaIntegrationTest {
                     """);
         }
 
-        Flyway.configure()
+        FlywayDefaults.configure()
                 .dataSource(databaseUrl, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .load()
                 .migrate();
@@ -904,7 +904,7 @@ class DocumentEditingSchemaIntegrationTest {
 
         String databaseUrl = "jdbc:postgresql://" + postgresContainer.getHost() + ":"
                 + postgresContainer.getMappedPort(PostgreSQLContainer.POSTGRESQL_PORT) + "/" + databaseName;
-        Flyway.configure()
+        FlywayDefaults.configure()
                 .dataSource(databaseUrl, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .target(MigrationVersion.fromVersion("38"))
                 .load()
@@ -919,7 +919,7 @@ class DocumentEditingSchemaIntegrationTest {
                     """);
         }
 
-        assertThatThrownBy(() -> Flyway.configure()
+        assertThatThrownBy(() -> FlywayDefaults.configure()
                 .dataSource(databaseUrl, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .load()
                 .migrate()).isInstanceOf(Exception.class);
@@ -936,7 +936,7 @@ class DocumentEditingSchemaIntegrationTest {
 
         String databaseUrl = "jdbc:postgresql://" + postgresContainer.getHost() + ":"
                 + postgresContainer.getMappedPort(PostgreSQLContainer.POSTGRESQL_PORT) + "/" + databaseName;
-        Flyway.configure()
+        FlywayDefaults.configure()
                 .dataSource(databaseUrl, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .target(MigrationVersion.fromVersion("38"))
                 .load()
@@ -951,7 +951,7 @@ class DocumentEditingSchemaIntegrationTest {
                     """);
         }
 
-        assertThatThrownBy(() -> Flyway.configure()
+        assertThatThrownBy(() -> FlywayDefaults.configure()
                 .dataSource(databaseUrl, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .load()
                 .migrate()).isInstanceOf(Exception.class);
@@ -968,7 +968,7 @@ class DocumentEditingSchemaIntegrationTest {
 
         String databaseUrl = "jdbc:postgresql://" + postgresContainer.getHost() + ":"
                 + postgresContainer.getMappedPort(PostgreSQLContainer.POSTGRESQL_PORT) + "/" + databaseName;
-        Flyway.configure()
+        FlywayDefaults.configure()
                 .dataSource(databaseUrl, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .target(MigrationVersion.fromVersion("33"))
                 .load()
@@ -984,7 +984,7 @@ class DocumentEditingSchemaIntegrationTest {
                     + "('doc_v34_duplicate', 1, 'duplicate', 'hash-v34', now())");
         }
 
-        Flyway.configure()
+        FlywayDefaults.configure()
                 .dataSource(databaseUrl, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .target(MigrationVersion.fromVersion("38"))
                 .load()
@@ -1598,7 +1598,7 @@ class DocumentEditingSchemaIntegrationTest {
                 + "/"
                 + databaseName;
 
-        Flyway.configure()
+        FlywayDefaults.configure()
                 .dataSource(databaseUrl, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .target(MigrationVersion.fromVersion("8"))
                 .load()
@@ -1621,7 +1621,7 @@ class DocumentEditingSchemaIntegrationTest {
             ));
         }
 
-        Flyway.configure()
+        FlywayDefaults.configure()
                 .dataSource(databaseUrl, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .load()
                 .migrate();

@@ -23,6 +23,8 @@ public final class AiErrorMessages {
     public static final String INSUFFICIENT_CREDIT = "크레딧이 부족해 작업을 시작하지 않았습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.";
     /** {@code INSUFFICIENT_CREDIT}: 진행 중이던 작업을 이어 가지 못할 때(구간 갱신·Agent 계획 수정·승인). */
     public static final String INSUFFICIENT_CREDIT_STOPPED = "크레딧이 부족해 중단했습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.";
+    /** {@code AI_USAGE_LIMIT_EXCEEDED}: 사용자별 AI 사용 한도에 걸려 비동기 작업을 시작하지 않았을 때. 요청 거절은 한도별 문구로 429를 낸다. */
+    public static final String AI_USAGE_LIMIT_EXCEEDED = "AI 사용 한도에 도달해 작업을 시작하지 않았습니다. 잠시 후 또는 내일 다시 시도해 주세요.";
 
     private static final String QUERY_DEFAULT = "질의 처리 중 오류가 발생했습니다.";
     private static final String AGENT_DEFAULT = "Agent 처리 중 오류가 발생했습니다.";
@@ -76,7 +78,8 @@ public final class AiErrorMessages {
             // document 자체 코드
             Map.entry("PIPELINE_UNAVAILABLE", "AI 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요."),
             Map.entry("PIPELINE_TIMEOUT", "질의 대기 시간이 지나 취소를 요청했습니다."),
-            Map.entry("INSUFFICIENT_CREDIT", INSUFFICIENT_CREDIT));
+            Map.entry("INSUFFICIENT_CREDIT", INSUFFICIENT_CREDIT),
+            Map.entry("AI_USAGE_LIMIT_EXCEEDED", AI_USAGE_LIMIT_EXCEEDED));
 
     /**
      * 접두사로 묶는 코드. 개별 항목(MESSAGES)을 먼저 보고, 없을 때만 이 목록을 위에서부터 본다.

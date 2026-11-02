@@ -90,6 +90,7 @@
       "display_name": "설계문서",
       "document_role": "EDITABLE",
       "editable": false,
+      "error_code": "string",
       "error_message": "string",
       "extracted_text_uri": "string",
       "file_type": "pdf",
@@ -155,6 +156,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
       "display_name": "설계문서",
       "document_role": "EDITABLE",
       "editable": false,
+      "error_code": "string",
       "error_message": "string",
       "extracted_text_uri": "string",
       "file_type": "pdf",
@@ -324,7 +326,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `StartRequest` |
 | 출력 | `200` 티켓 발급 — `StartResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` PDF 파일명이 올바르지 않음 — `ErrorResponse`<br>`413` 크기가 0 이하이거나 5 TiB 초과 — `ErrorResponse` |
+| 주요 오류 | `400` PDF 파일명이 올바르지 않음 — `ErrorResponse`<br>`400` 크기가 0 이하 — `ErrorResponse`<br>`413` 100MB 초과(`FILE_TOO_LARGE`) 또는 내 저장 공간 5GB 초과(`STORAGE_QUOTA_EXCEEDED`) — `ErrorResponse`<br>`429` 하루 업로드 200개 초과(`UPLOAD_DAILY_LIMIT_EXCEEDED`) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -351,7 +353,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 |---|---|---|---|---|
 | path | `workspace_id` | `string` | 예 | - |
 | body | `filename` | `string` | 예 | 255자 이하, `.pdf`로 끝나야 하며 `/`·`\`·제어문자를 포함할 수 없다 |
-| body | `size` | `integer(int64)` | 예 | 0보다 크고 5 TiB 이하 |
+| body | `size` | `integer(int64)` | 예 | 0보다 크고 100MB(`UPLOAD_MAX_PDF_BYTES`) 이하 |
 | body | `folder_id` | `string(uuid)` | 아니요 | 확정 시 문서를 넣을 폴더. 생략하면 최상위 |
 
 ```json
@@ -382,7 +384,10 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 |---|---|---|
 | `400` | 올바른 PDF 파일명이 아님 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
 | `404` | 워크스페이스를 찾을 수 없음(멤버가 아님) | `ErrorResponse` |
-| `413` | 크기가 0 이하이거나 5 TiB 초과 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `400` | 크기가 0 이하 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `413` | 100MB 초과 | `ErrorResponse` (`FILE_TOO_LARGE`) |
+| `413` | 내 저장 공간(5GB) 초과 | `ErrorResponse` (`STORAGE_QUOTA_EXCEEDED`) |
+| `429` | 오늘(Asia/Seoul) 업로드 200개 초과 | `ErrorResponse` (`UPLOAD_DAILY_LIMIT_EXCEEDED`) |
 
 ```json
 {
@@ -988,6 +993,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
   },
   "edit_revision": 12,
   "editable": true,
+  "error_code": "string",
   "error_message": "string",
   "extracted_text_uri": "string",
   "file_type": "pdf"
@@ -1044,6 +1050,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
   },
   "edit_revision": 12,
   "editable": true,
+  "error_code": "string",
   "error_message": "string",
   "extracted_text_uri": "string",
   "file_type": "pdf"

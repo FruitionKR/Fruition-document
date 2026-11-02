@@ -96,6 +96,10 @@ public class Document {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
+    /** 실패 사유의 기계 판독용 코드(예: AI_USAGE_LIMIT_EXCEEDED). 코드 없이 실패했거나 이전에 기록된 행은 null이다. */
+    @Column(name = "error_code", length = 64)
+    private String errorCode;
+
     @Column(name = "pipeline_run_id")
     private String pipelineRunId;
 
@@ -199,6 +203,7 @@ public class Document {
         this.extractedTextUri = extractedTextUri;
         this.processedAt = processedAt;
         this.errorMessage = errorMessage;
+        this.errorCode = null;
     }
 
     public void markPipelineStarted(String pipelineRunId, Instant now) {
@@ -215,8 +220,14 @@ public class Document {
     }
 
     public void markProcessingFailed(String errorMessage, Instant now) {
+        markProcessingFailed(null, errorMessage, now);
+    }
+
+    /** 실패 코드를 함께 남긴다. 화면은 문구 대신 코드로 실패 종류를 판정한다. */
+    public void markProcessingFailed(String errorCode, String errorMessage, Instant now) {
         this.status = DocumentStatus.failed;
         this.errorMessage = errorMessage;
+        this.errorCode = errorCode;
         this.processedAt = now;
         this.processingUpdatedAt = now;
     }
@@ -289,6 +300,7 @@ public class Document {
         this.status = DocumentStatus.completed;
         this.processedAt = now;
         this.errorMessage = null;
+        this.errorCode = null;
         this.updatedAt = now;
     }
 
@@ -313,6 +325,7 @@ public class Document {
         this.status = DocumentStatus.processing;
         this.processedAt = null;
         this.errorMessage = null;
+        this.errorCode = null;
         this.pipelineInputMarkdown = null;
         this.pipelineInputBlocks = null;
         this.reconciledAt = null; // 재처리하므로 완료 후 다시 reconcile 대상이 되게 리셋
@@ -350,6 +363,7 @@ public class Document {
     public Instant getUploadedAt() { return uploadedAt; }
     public Instant getProcessedAt() { return processedAt; }
     public String getErrorMessage() { return errorMessage; }
+    public String getErrorCode() { return errorCode; }
     public String getPipelineRunId() { return pipelineRunId; }
     public Instant getProcessingStartedAt() { return processingStartedAt; }
     public Instant getProcessingUpdatedAt() { return processingUpdatedAt; }

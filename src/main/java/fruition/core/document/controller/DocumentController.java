@@ -116,7 +116,12 @@ public class DocumentController {
             @RequestParam(value = "folder_id", required = false) java.util.UUID folderId,
             @RequestParam(value = "file", required = false) MultipartFile file,
             @Parameter(description = "skill_reference면 스킬 참고 문서로 올린다. Markdown·txt만 받으며 folder_id와 함께 쓸 수 없다. 그 밖의 값은 400이다.")
-            @RequestParam(value = "origin", required = false) String origin) {
+            @RequestParam(value = "origin", required = false) String origin,
+            MultipartHttpServletRequest multipartRequest) {
+        // 파일은 요청마다 하나다. 같은 이름의 part를 여러 개 보내면 첫 번째만 저장되므로 명시적으로 거절한다.
+        if (multipartRequest.getMultiFileMap().values().stream().mapToInt(java.util.List::size).sum() > 1) {
+            throw fruition.core.upload.UploadLimitException.tooManyFiles("파일은 한 번에 1개만 올릴 수 있습니다.");
+        }
         if (file == null || file.isEmpty()) {
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)

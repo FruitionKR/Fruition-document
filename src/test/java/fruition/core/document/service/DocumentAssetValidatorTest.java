@@ -123,7 +123,10 @@ class DocumentAssetValidatorTest {
         for (int index = 0; index < 21; index++) files.put(UUID.randomUUID(), mock(MultipartFile.class));
 
         assertThatThrownBy(() -> validator.validateAll(files))
-                .isInstanceOf(DocumentAssetTooLargeException.class);
+                .isInstanceOfSatisfying(fruition.core.upload.UploadLimitException.class, error -> {
+                    assertThat(error.getStatus()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST);
+                    assertThat(error.getCode()).isEqualTo("TOO_MANY_FILES");
+                });
     }
 
     @Test
