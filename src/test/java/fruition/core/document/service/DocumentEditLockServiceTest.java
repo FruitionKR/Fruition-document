@@ -30,6 +30,7 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -156,6 +157,8 @@ class DocumentEditLockServiceTest {
         when(lockRepository.findById(DOC)).thenReturn(Optional.of(l));
 
         assertThat(service().heartbeat(WS, USER, DOC).ttlMs()).isEqualTo(45_000L);
+        // 보유자는 본인이라 heartbeat마다 Access를 부르지 않는다.
+        verifyNoInteractions(accessUserClient);
     }
 
     @Test

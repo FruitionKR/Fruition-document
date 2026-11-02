@@ -349,11 +349,11 @@ curl -X DELETE "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/doc
 
 - HTTP `200`: 잠금 연장
 - Content-Type: `*/*` (`EditLockResponse`)
+- 보유자는 항상 요청자 본인이라 `holder_display_name`은 조회하지 않고 내려주지 않는다(필드 생략, heartbeat마다 access-svc를 부르지 않는다).
 
 ```json
 {
   "expires_at": "2026-08-13T04:25:24.371948Z",
-  "holder_display_name": "표시 이름",
   "holder_user_id": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081",
   "ttl_ms": 45000
 }

@@ -61,7 +61,11 @@ public class DocumentEditLockService {
         return toResponse(currentLock(documentId));
     }
 
-    /** heartbeat 갱신. 보유자 본인의 유효한 잠금만 연장하며, 상실 시 409. */
+    /**
+     * heartbeat 갱신. 보유자 본인의 유효한 잠금만 연장하며, 상실 시 409.
+     * 보유자는 항상 요청자 본인이라 표시 이름은 조회하지 않는다({@code holder_display_name}=null).
+     * 수 초마다 오는 요청이 DB 연결을 쥔 채 Access를 부르면 Access 지연이 곧 연결 풀 고갈이 된다.
+     */
     @Transactional
     public EditLockResponse heartbeat(String workspaceId, String userId, String documentId) {
         requireEditable(workspaceId, userId, documentId);
@@ -70,7 +74,7 @@ public class DocumentEditLockService {
         if (renewed == 0) {
             throw new EditLockLostException("편집 잠금이 만료되었거나 다른 사용자에게 넘어갔습니다. 다시 획득해 주세요.");
         }
-        return toResponse(currentLock(documentId));
+        return toResponse(currentLock(documentId), null);
     }
 
     /** 보유자 본인의 잠금 해제(멱등). */
@@ -111,10 +115,13 @@ public class DocumentEditLockService {
     }
 
     private EditLockResponse toResponse(DocumentEditLock lock) {
+        return toResponse(lock, holderDisplayName(lock.getHolderUserId()));
+    }
+
+    private EditLockResponse toResponse(DocumentEditLock lock, String holderDisplayName) {
         // 클라이언트 시계와 무관하게 쓸 수 있도록 서버 시계 기준 남은 시간을 함께 내려준다.
         long ttlMs = Math.max(0L, Duration.between(Instant.now(clock), lock.getExpiresAt()).toMillis());
-        return new EditLockResponse(lock.getHolderUserId(), holderDisplayName(lock.getHolderUserId()),
-                lock.getExpiresAt(), ttlMs);
+        return new EditLockResponse(lock.getHolderUserId(), holderDisplayName, lock.getExpiresAt(), ttlMs);
     }
 
     private String holderDisplayName(String userId) {
