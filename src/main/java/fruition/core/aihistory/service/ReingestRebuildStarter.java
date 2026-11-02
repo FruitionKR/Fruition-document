@@ -23,11 +23,9 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * 재편입이 이전 편입 기여를 대체해 끈 개념 페이지를 ai에 남은 활성 기여로 다시 만들게 한다.
+ * 재편입이 이전 편입 기여를 대체해 끈 페이지 중, 재편입 결과에 없는 페이지를 ai에 다시 만들게 한다.
  *
- * <p>ai는 편입할 때 원장의 활성 기여를 모르므로 그 문서 근거가 빠진 페이지를 스스로 고치지 않는다. 재편입이 다시 쓴
- * 페이지도 대상이다. ai는 그 페이지를 현재 상태 위에 새 편입을 더해 쓰므로, 재편입이 더는 뽑지 않은 이전 편입의
- * 하위 항목·근거가 남는다. 소스 페이지는 재편입이 문서 전체로 다시 쓰고 재조립 대상이 아니라 뺀다. 복구 실행과
+ * <p>ai는 편입할 때 원장의 활성 기여를 모르므로 그 문서 근거가 빠진 페이지를 스스로 고치지 않는다. 복구 실행과
  * 같은 경로를 쓴다. 대상 작업이 없는 {@code restore} 작업 로그(restored_from 없음)를 만들고
  * {@code kind: restore_rebuild} 명령을 보낸다. 결과는 다른 복구처럼 받아 새 버전으로 기록하고, 원장은
  * 바꾸지 않는다(제외 작업이 없다).
@@ -59,9 +57,9 @@ public class ReingestRebuildStarter {
     }
 
     /** 결과 반영 트랜잭션 안에서 부른다. 다시 만들 페이지가 없으면 아무것도 하지 않는다. */
-    public void start(OperationLog reingest, Collection<String> sourcePageIds, Instant now) {
+    public void start(OperationLog reingest, Collection<String> changedPageIds, Instant now) {
         List<String> pageIds = contributionRepository.findPageIdsDeactivatedBy(reingest.getOperationId()).stream()
-                .filter(pageId -> !sourcePageIds.contains(pageId))
+                .filter(pageId -> !changedPageIds.contains(pageId))
                 .sorted()
                 .toList();
         if (pageIds.isEmpty()) {
