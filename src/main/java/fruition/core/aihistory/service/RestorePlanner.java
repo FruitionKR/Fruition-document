@@ -57,16 +57,9 @@ public class RestorePlanner {
 
         List<WikiPageContribution> kept = new ArrayList<>();
         List<WikiPageContribution> removed = new ArrayList<>();
-        boolean revived = false;
         for (WikiPageContribution c : ordered) {
             if (!c.isActive()) {
-                // 제외 대상 재편입이 대체해 끈 이전 편입 기여는 되살린다. 그 밖은 이전 복구로 걷어낸 기여다.
-                if (c.getDeactivatedBy() != null && excluded.contains(c.getDeactivatedBy())
-                        && !excluded.contains(c.getIngestOperationId())) {
-                    kept.add(c);
-                    revived = true;
-                }
-                continue;
+                continue;  // 이전 복구로 이미 걷어낸 기여
             }
             if (excluded.contains(c.getIngestOperationId())) {
                 removed.add(c);
@@ -76,7 +69,7 @@ public class RestorePlanner {
         }
 
         // 제외 대상이 이 페이지를 건드린 적이 없으면 복구 후보가 아니다.
-        if (removed.isEmpty() && !revived) {
+        if (removed.isEmpty()) {
             return Optional.empty();
         }
 

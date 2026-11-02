@@ -159,7 +159,7 @@ class IngestRestoreFlowTest {
     @Test
     @DisplayName("이미 기여가 모두 취소되었다면 빈 복구를 접수하지 않는다")
     void rejectsAlreadyCancelledIngest() {
-        when(contributions.findRestorePageIdsByOperationIds(Set.of(INGEST))).thenReturn(List.of());
+        when(contributions.findActivePageIdsByOperationIds(Set.of(INGEST))).thenReturn(List.of());
 
         assertThatThrownBy(() -> preview.preview(WORKSPACE, USER, INGEST))
                 .isInstanceOf(InvalidRestoreRequestException.class)
@@ -168,7 +168,7 @@ class IngestRestoreFlowTest {
     }
 
     private void pages(List<WikiPageContribution> rows, String status) {
-        when(contributions.findRestorePageIdsByOperationIds(Set.of(INGEST)))
+        when(contributions.findActivePageIdsByOperationIds(Set.of(INGEST)))
                 .thenReturn(List.of("source", "concept"));
         when(contributions.findByPageIds(List.of("source", "concept"))).thenReturn(rows);
         when(wiki.lookup(List.of("source", "concept"), WORKSPACE)).thenReturn(List.of(
