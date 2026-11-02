@@ -13,7 +13,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Source는 마지막 남은 ingest 본문으로 복원하고 Concept는 남은 활성 기여로 재작성한다. */
+/**
+ * Source는 마지막 남은 ingest 본문으로 복원하고 Concept는 남은 활성 기여로 재작성한다.
+ *
+ * <p>남은 기여에는 lint 행이 순서대로 들어 재조립이 lint 변경을 재생한다. lint가 제외 대상 작업 id로
+ * 다른 페이지(분리한 자식)에 이은 행도 그 작업 id라 함께 빠진다.
+ */
 @Component
 public class RestorePlanner {
 
@@ -68,7 +73,8 @@ public class RestorePlanner {
             return Optional.empty();
         }
 
-        // 받치는 기여가 하나도 남지 않으면 페이지가 존재할 이유가 사라진다.
+        // 남은 활성 행이 하나도 없을 때만 지운다. lint 기록만 남은 페이지를 지울지는 ai 재생이 정한다
+        // (클러스터 승격 페이지는 lint 기록이 근거다, ai ADR 0042 결정 3).
         if (kept.isEmpty()) {
             return Optional.of(PageRestorePlan.delete(pageId));
         }

@@ -648,13 +648,16 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | `workspace_id` | `string` | 예 | - |
+| body | `dry_run` | `boolean` | 아니오 | `true`면 Wiki를 바꾸지 않고 점검 결과만 낸다. 생략하면 `true`다. |
+| body | `materialize_promotions` | `boolean` | 아니오 | 승격 후보를 개념 페이지로 실제로 반영할지 여부. 생략하면 `dry_run`의 반대다(실제 실행이면 반영). `dry_run`이 `true`면 값과 관계없이 반영하지 않는다. |
 
 - Content-Type: `application/json` (`WikiLintRequest`)
+- 승격을 반영하면 페이지마다 LLM을 호출해 크레딧이 든다. 반영하지 않는 실제 실행도 마지막 lint 시각은 갱신하므로 `needs_lint`가 `false`가 된다.
+- 화면의 "위키 최신화"는 `{"dry_run": false}`만 보내 승격까지 반영한다.
 
 ```json
 {
-  "dry_run": true,
-  "materialize_promotions": false
+  "dry_run": false
 }
 ```
 
@@ -712,7 +715,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
 curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/maintenance/lint" \
   -H 'Authorization: Bearer <access_token>' \
   -H 'Content-Type: application/json' \
-  --data '{"dry_run":true,"materialize_promotions":false}'
+  --data '{"dry_run":false}'
 ```
 
 ```json
@@ -770,7 +773,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | `workspace_id` | `string` | 예 | - |
-| path | `run_id` | `string` | 예 | 조회할 검사 실행 ID |
+| path | `run_id` | `string` | 예 | 조회할 검사 실행 ID(UUID) |
 
 - Body: 없음
 
@@ -778,9 +781,43 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/
 
 - HTTP `200`: 결과 조회 성공
 - Content-Type: `*/*` (`JsonNode`)
+- `status`는 `queued`·`running`·`succeeded`·`failed`다. 화면은 `succeeded`·`failed`가 될 때까지 폴링한다.
+- ai는 워커가 명령을 꺼낼 때 run을 만든다. 그 전에는 core 기록으로 `id`·`status`·`error_code`·`error`만 답한다.
+
+| 상황 | 응답 |
+|---|---|
+| ai가 아직 명령을 꺼내지 않음(취소 처리 중 포함) | `{"id", "status": "queued"}` |
+| ai가 run을 만들기 전에 실패·취소 | `{"id", "status": "failed", "error_code", "error"}`. 취소는 `error_code: "cancelled"` |
+| ai가 처리 중이거나 끝남 | ai 응답 그대로. 실패면 `error_code`에 코드, `error`에 한국어 문구 |
 
 ```json
 {
+  "id": "6a0abf41-d777-4753-8fb9-8f93bd6ddb3a",
+  "mode": "lint",
+  "status": "succeeded",
+  "error": null,
+  "workspace_id": "ws_9d47a0e9a6324341b47562553b75f92a",
+  "user_id": "user_035be0ce610140799c51469d00f0459a",
+  "document_id": null,
+  "manifest": {
+    "task_result": {
+      "operation_id": "op_hJHVxtUxW2xrEfHXXhtLgg",
+      "promotion_candidates": ["canary-deployment"],
+      "materialized_promotions": [{"cluster_id": "canary-deployment", "concept_slug": "canary-deployment", "page_id": "wiki_page_..."}],
+      "merged_promotions": [{"cluster_id": "pod", "concept_slug": "pod", "page_id": "wiki_page_..."}],
+      "materialized_relations": [],
+      "changed_pages": [{"page_id": "wiki_page_...", "page_type": "concept", "markdown_key": "...", "contribution_key": "...", "content_hash": "sha256:..."}]
+    }
+  }
+}
+```
+
+```json
+{
+  "id": "b969b17f-ae31-4df9-960b-7a7597caf161",
+  "status": "failed",
+  "error_code": "deadline_exceeded",
+  "error": "처리 시간이 초과되어 중단했습니다. 다시 시도해 주세요."
 }
 ```
 
@@ -788,13 +825,13 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/
 
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
-| `404` | 검사 실행 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
+| `404` | 검사 실행 또는 워크스페이스를 찾을 수 없음. `run_id`가 UUID가 아니어도 같다 | `ErrorResponse` |
 
 ```json
 {
   "error": {
-    "code": "INVALID_REQUEST",
-    "message": "요청 형식이 올바르지 않습니다."
+    "code": "WIKI_MAINTENANCE_PIPELINE_UNAVAILABLE",
+    "message": "Wiki maintenance run을 찾을 수 없습니다."
   }
 }
 ```

@@ -83,6 +83,12 @@ public class AiCommandOutboxWriter {
         }
     }
 
+    /** core가 기록한 실행 상태(status, error_code). 요청한 workspace·user의 실행만 찾는다. */
+    public java.util.Optional<java.util.Map<String, Object>> findRun(String runId, String workspaceId, String userId) {
+        return jdbcTemplate.queryForList("SELECT status, error_code FROM ai_task_runs WHERE id = ? AND workspace_id = ? AND user_id = ?",
+                runId, workspaceId, userId).stream().findFirst();
+    }
+
     public boolean active(String runId) {
         return !jdbcTemplate.queryForList("SELECT id FROM ai_task_runs WHERE id = ? AND status IN ('running', 'completed')",
                 String.class, runId).isEmpty();

@@ -592,6 +592,23 @@ class AiTaskResultApplierTest {
         verify(operationIngestService, never()).accept(any(), any());
     }
 
+    @Test
+    void restoreConflictFromAiFailsRestoreWithoutTouchingLedger() {
+        OperationLog operation = org.mockito.Mockito.mock(OperationLog.class);
+        when(jdbcTemplate.update(any(String.class),
+                eq("restore-event-1"), eq("restore-run-1"))).thenReturn(1);
+        when(operationLogRepository.findById("restore-op")).thenReturn(Optional.of(operation));
+        var event = (com.fasterxml.jackson.databind.node.ObjectNode) restoreEvent();
+        event.put("status", "failed");
+        event.put("error", "restore_conflict");
+
+        applier.applyRestore(event);
+
+        verify(restoreLifecycle).fail(eq("restore-op"), eq("restore_conflict"), any());
+        verify(restoreApplier, never()).apply(any(), any(), any(), any(), any());
+        verify(operationIngestService, never()).accept(any(), any());
+    }
+
     private JsonNode restoreEvent() {
         var root = objectMapper.createObjectNode();
         root.put("event_id", "restore-event-1");
@@ -719,4 +736,46 @@ class AiTaskResultApplierTest {
         verify(analytics, org.mockito.Mockito.times(1)).queryCompleted(any(), eq(true), any());
     }
 
+    private static final String LINT_ERROR_CODE_SQL =
+            "UPDATE ai_task_runs SET error_code = ?, updated_at = now() WHERE id = ?";
+
+    // ai가 run 행을 만들기 전에 실패하면 core에 남긴 이 코드로만 폴링이 실패를 알 수 있다.
+    @Test
+    void failedLintRecordsErrorCodeOnFirstReceipt() throws Exception {
+        when(jdbcTemplate.update(contains("ai_task_result_receipts"), anyString(), anyString())).thenReturn(1);
+
+        applier.applyLint(lintEvent("failed", "\"deadline_exceeded\"", "\"op_1\""));
+
+        verify(jdbcTemplate).update(LINT_ERROR_CODE_SQL, "deadline_exceeded", "lint-run-1");
+        verify(lintOperationStarter).markFailed("op_1", "deadline_exceeded");
+    }
+
+    @Test
+    void failedLintWithoutErrorRecordsDefaultCode() throws Exception {
+        when(jdbcTemplate.update(contains("ai_task_result_receipts"), anyString(), anyString())).thenReturn(1);
+
+        applier.applyLint(lintEvent("failed", "null", "null"));
+
+        verify(jdbcTemplate).update(LINT_ERROR_CODE_SQL, "LINT_FAILED", "lint-run-1");
+    }
+
+    @Test
+    void redeliveredOrSucceededLintDoesNotTouchErrorCode() throws Exception {
+        when(jdbcTemplate.update(contains("ai_task_result_receipts"), anyString(), anyString())).thenReturn(0, 1);
+
+        applier.applyLint(lintEvent("failed", "\"deadline_exceeded\"", "\"op_1\""));
+        applier.applyLint(lintEvent("succeeded", "null", "null"));
+
+        verify(jdbcTemplate, never()).update(eq(LINT_ERROR_CODE_SQL), anyString(), anyString());
+        verify(lintOperationStarter, never()).markFailed(any(), any());
+    }
+
+    private JsonNode lintEvent(String status, String errorJson, String operationIdJson) throws Exception {
+        return objectMapper.readTree("""
+                {"event_id": "lint:lint-run-1:%s", "run_id": "lint-run-1", "kind": "lint", "status": "%s",
+                 "request": {"run_id": "lint-run-1", "kind": "lint", "workspace_id": "ws_1", "user_id": "user_1",
+                             "operation_id": %s, "dry_run": %s},
+                 "payload": null, "error": %s}
+                """.formatted(status, status, operationIdJson, "null".equals(operationIdJson), errorJson));
+    }
 }
