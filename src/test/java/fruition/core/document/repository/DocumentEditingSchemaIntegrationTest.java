@@ -88,8 +88,7 @@ class DocumentEditingSchemaIntegrationTest {
     @Autowired
     StringRedisTemplate redisTemplate;
 
-    @Autowired
-    PostgreSQLContainer<?> postgresContainer;
+    PostgreSQLContainer<?> postgresContainer = TestcontainersConfiguration.POSTGRES;
 
     @Autowired
     DocumentRepository documentRepository;

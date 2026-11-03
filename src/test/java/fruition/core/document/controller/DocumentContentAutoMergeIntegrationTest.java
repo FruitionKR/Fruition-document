@@ -52,7 +52,7 @@ class DocumentContentAutoMergeIntegrationTest {
     @Autowired AgentRunCommandRepository agentRunCommandRepository;
     @Autowired StringRedisTemplate redis;
     @Autowired JdbcTemplate jdbc;
-    @Autowired PostgreSQLContainer<?> postgresContainer;
+    PostgreSQLContainer<?> postgresContainer = TestcontainersConfiguration.POSTGRES;
 
     final String workspace = "ws_" + UUID.randomUUID();
     final String author = "user_author_" + UUID.randomUUID();
