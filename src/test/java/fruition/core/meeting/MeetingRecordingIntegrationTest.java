@@ -185,6 +185,29 @@ class MeetingRecordingIntegrationTest {
     }
 
     @Test
+    void validlySignedTicketWithNonAudioContentType_isRejectedAndNotRecorded() throws Exception {
+        // 서명 키가 새도 원본 형식을 text/html 등으로 바꿔 재생 주소가 HTML을 내주게 할 수 없다.
+        String meetingId = createMeeting("upload");
+        byte[] bytes = "<html></html>".getBytes();
+        String ticket = json(start(meetingId, "audio/wav", bytes.length), 200).path("ticket").asText();
+        put(partUrl(meetingId, ticket, 1), bytes);
+        Map<?, ?> issued = objectMapper.readValue(java.util.Base64.getUrlDecoder().decode(ticket.split("\\.")[1]), Map.class);
+        var signing = io.jsonwebtoken.security.Keys.hmacShaKeyFor(java.security.MessageDigest.getInstance("SHA-256")
+                .digest((jwtSecret + ":meeting-recording-ticket:v1").getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        for (String contentType : List.of("text/html", "audio/mpeg")) {  // 녹음 형식이어도 키 확장자(wav)와 달라야 거절
+            String forged = io.jsonwebtoken.Jwts.builder().subject(userId).audience().add("meeting-recording-ticket").and()
+                    .claims(Map.of("meeting", meetingId, "workspace", workspaceId, "key", issued.get("key"),
+                            "size", bytes.length, "upload", issued.get("upload"), "partSize", issued.get("partSize")))
+                    .claim("contentType", contentType)
+                    .expiration(new java.util.Date(System.currentTimeMillis() + 60_000)).signWith(signing).compact();
+            complete(meetingId, forged).andExpect(status().isBadRequest());
+        }
+        assertThat(meetingStatus(meetingId)).isEqualTo("awaiting_upload");
+        assertThat(recordingKey(meetingId)).isNull();
+        complete(meetingId, ticket).andExpect(status().isAccepted());
+    }
+
+    @Test
     void ticketIssuedBeforeLeavingWorkspace_cannotGetPartUrlsOrAbort() throws Exception {
         // ticket은 하루 동안 유효하다. 발급 뒤 탈퇴하면(권한 projection NONE) 새 PUT URL을 받지 못한다(#42).
         String meetingId = createMeeting("upload");
