@@ -354,7 +354,7 @@ public class DocumentService {
                     documentId -> {
                         registerStoredSourceCleanup(storedKey);
                         return storeUpload(workspaceId, userId, folderId, file, skillReference, uploadFilename,
-                                mimeType, markdownContent, contentHash, documentId, storedKey.get());
+                                mimeType, markdownContent, contentHash, documentId, storedKey.get(), accounting);
                     }));
         } catch (Exception e) {
             // storeUpload가 이미 감싼 실패는 그대로 올린다.
@@ -418,7 +418,8 @@ public class DocumentService {
             DocumentEditingRules.MarkdownContent markdownContent,
             String contentHash,
             String documentId,
-            String objectPath
+            String objectPath,
+            UploadAccounting accounting
     ) {
         boolean markdownUpload = markdownContent != null;
         try {
