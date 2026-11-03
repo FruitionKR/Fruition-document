@@ -21,9 +21,11 @@ public class DocumentDirectUploadController {
 
     @PostMapping
     public DocumentDirectUploadService.StartResponse start(@PathVariable("workspace_id") String workspace,
-            @AuthenticationPrincipal String user, @RequestBody DocumentDirectUploadService.StartRequest request)
-            throws Exception {
-        return uploads.start(workspace, user, request);
+            @AuthenticationPrincipal String user,
+            @io.swagger.v3.oas.annotations.Parameter(description = "가져오기 세션 ID(POST /imports 응답의 import_id). 시작과 확정에 같은 값을 보낸다")
+            @RequestHeader(value = fruition.core.imports.ImportSessionStore.HEADER, required = false) String importId,
+            @RequestBody DocumentDirectUploadService.StartRequest request) throws Exception {
+        return uploads.start(workspace, user, request, importId);
     }
 
     @PostMapping("/parts")
@@ -45,7 +47,9 @@ public class DocumentDirectUploadController {
     public DocumentUploadResponse complete(@PathVariable("workspace_id") String workspace,
             @AuthenticationPrincipal String user,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @io.swagger.v3.oas.annotations.Parameter(description = "가져오기 세션 ID(POST /imports 응답의 import_id). 시작과 확정에 같은 값을 보낸다")
+            @RequestHeader(value = fruition.core.imports.ImportSessionStore.HEADER, required = false) String importId,
             @RequestBody DocumentDirectUploadService.CompleteRequest request) throws Exception {
-        return uploads.complete(workspace, user, idempotencyKey, request);
+        return uploads.complete(workspace, user, idempotencyKey, request, importId);
     }
 }

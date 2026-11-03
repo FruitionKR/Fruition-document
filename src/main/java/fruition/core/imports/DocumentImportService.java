@@ -41,8 +41,27 @@ public class DocumentImportService {
     /** 편입 요청 한 번에 큐에 넣는 문서 수. 많은 문서를 한꺼번에 넣어 AI 한도·크레딧을 몰아 쓰지 않게 한다. */
     static final int INGEST_BATCH = 20;
     private static final String INGEST_KIND = "document";
+    /** PDF 변환 한 건의 예상 비용 kind. convert-markdown이 예약하는 kind와 같다. */
+    private static final String CONVERT_KIND = "convert";
+    /**
+     * 아직 변환하지 않은 가져온 PDF 원본: 휴지통 밖이고, 변환 중이거나 끝난 변환본이 없다(변환 실패만 있으면 다시 변환할 수 있다).
+     * 가져온 PDF는 업로드만 하고 사용자가 고른 뒤에만 변환한다.
+     */
+    private static final String UNCONVERTED_PDF =
+            "import_id = ? AND workspace_id = ? AND deleted_at IS NULL AND document_role = 'ORIGINAL'"
+                    + " AND mime_type = 'application/pdf' AND NOT EXISTS (SELECT 1 FROM documents c"
+                    + " WHERE c.source_document_id = documents.id AND c.deleted_at IS NULL AND c.status <> 'failed')";
+    /**
+     * 편입 대상: 이 세션의 휴지통 밖 편집 가능 Markdown 중 편입 요청한 적 없는 문서. PDF 원본(ORIGINAL)은 편입 대상이 아니라
+     * 빼고, PDF 변환본은 변환이 끝난 뒤(completed, 변환 run만 남음)에만 넣는다. 변환 중·변환 실패는 빠진다.
+     */
     private static final String NOT_INGESTED =
-            "import_id = ? AND workspace_id = ? AND deleted_at IS NULL AND pipeline_run_id IS NULL";
+            "import_id = ? AND workspace_id = ? AND deleted_at IS NULL AND document_role = 'EDITABLE'"
+                    + " AND (pipeline_run_id IS NULL OR (pipeline_run_id LIKE 'convert:%' AND status = 'completed'))";
+    /** 아직 변환 중이라 편입 대상에서 빠진 가져온 PDF 변환본. */
+    private static final String CONVERTING =
+            "import_id = ? AND workspace_id = ? AND deleted_at IS NULL AND document_role = 'EDITABLE'"
+                    + " AND pipeline_run_id LIKE 'convert:%' AND status = 'processing'";
 
     private final JdbcTemplate jdbc;
     private final WorkspaceAccessGuard access;
@@ -121,15 +140,44 @@ public class DocumentImportService {
         access.requireMember(workspaceId, userId);
         UUID id = find(workspaceId, userId, importId, false).id();
         int count = notIngestedCount(id, workspaceId);
-        BigDecimal usd;
+        int pdfs = count(UNCONVERTED_PDF, id, workspaceId);
+        return new IngestEstimateResponse(count, usd(INGEST_KIND, count, id), credits.estimate(INGEST_KIND) * count,
+                count(CONVERTING, id, workspaceId), pdfs, usd(CONVERT_KIND, pdfs, id), credits.estimate(CONVERT_KIND) * pdfs);
+    }
+
+    /** kind 한 건 예상 비용 × 건수(USD). 환율을 못 읽으면 null. */
+    private BigDecimal usd(String kind, int count, UUID id) {
         try {
-            usd = BigDecimal.valueOf(aiUsageLimiter.estimateUsdMicro(INGEST_KIND))
-                    .multiply(BigDecimal.valueOf(count)).movePointLeft(6);
+            return BigDecimal.valueOf(aiUsageLimiter.estimateUsdMicro(kind)).multiply(BigDecimal.valueOf(count)).movePointLeft(6);
         } catch (RuntimeException e) {
-            log.warn("[가져오기 편입 예상] USD 환산 실패 — null로 응답 importId={} cause={}", id, e.toString());
-            usd = null;
+            log.warn("[가져오기 예상] USD 환산 실패 — null로 응답 importId={} kind={} cause={}", id, kind, e.toString());
+            return null;
         }
-        return new IngestEstimateResponse(count, usd, credits.estimate(INGEST_KIND) * count);
+    }
+
+    /**
+     * 아직 변환하지 않은 가져온 PDF를 변환 큐에 넣는다. 문서마다 수동 변환(convert-markdown)과 같은 경로라 권한·크레딧 처리가 같고,
+     * 변환본은 같은 가져오기 문서로 표시되어 자동 편입하지 않는다. 한 번에 {@value #INGEST_BATCH}개까지 넣고, 첫 PDF부터
+     * 거절되면 그 오류를, 일부를 넣은 뒤 거절되면 거기서 멈추고 넣은 수를 돌려준다. remaining이 0이 될 때까지 다시 부른다.
+     */
+    public IngestResponse convert(String workspaceId, String userId, String importId) {
+        access.requireMember(workspaceId, userId);
+        UUID id = find(workspaceId, userId, importId, false).id();
+        List<String> targets = jdbc.queryForList("SELECT id FROM documents WHERE " + UNCONVERTED_PDF
+                + " ORDER BY uploaded_at, id LIMIT ?", String.class, id, workspaceId, INGEST_BATCH);
+        int queued = 0;
+        for (String documentId : targets) {
+            try {
+                // 요청마다 새 키: 변환에 실패한 PDF를 다시 고르면 새 변환을 시작해야 한다. 중복은 대상 조회가 막는다.
+                documents.convertToMarkdown(workspaceId, userId, documentId, "import-convert:" + UUID.randomUUID());
+                queued++;
+            } catch (RuntimeException e) {
+                if (queued == 0) throw e;
+                log.warn("[가져오기 변환] 일부만 등록하고 멈춤 importId={} queued={} cause={}", id, queued, e.toString());
+                break;
+            }
+        }
+        return new IngestResponse(queued, count(UNCONVERTED_PDF, id, workspaceId));
     }
 
     /**
@@ -179,7 +227,11 @@ public class DocumentImportService {
     }
 
     private int notIngestedCount(UUID id, String workspaceId) {
-        Integer count = jdbc.queryForObject("SELECT count(*) FROM documents WHERE " + NOT_INGESTED,
+        return count(NOT_INGESTED, id, workspaceId);
+    }
+
+    private int count(String where, UUID id, String workspaceId) {
+        Integer count = jdbc.queryForObject("SELECT count(*) FROM documents WHERE " + where,
                 Integer.class, id, workspaceId);
         return count == null ? 0 : count;
     }
