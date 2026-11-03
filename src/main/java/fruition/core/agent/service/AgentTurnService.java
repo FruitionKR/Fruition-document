@@ -63,6 +63,7 @@ public class AgentTurnService {
     private final fruition.core.usage.service.UsageChargeService usageCharges;
     private final FolderRepository folderRepository;
     private final TransactionTemplate transaction;
+    private AgentAutoApprovalService autoApproval;
 
     public AgentTurnService(DocumentService documentService,
                             DocumentEditLockService editLockService,
@@ -98,6 +99,12 @@ public class AgentTurnService {
         this.usageCharges = usageCharges;
         this.folderRepository = folderRepository;
         this.transaction = transaction;
+    }
+
+    /** 자동 승인은 선택 기능이다. 없으면 모든 계획을 사용자가 직접 승인한다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setAutoApproval(AgentAutoApprovalService autoApproval) {
+        this.autoApproval = autoApproval;
     }
 
     /**
@@ -288,7 +295,42 @@ public class AgentTurnService {
 
     public JsonNode getRun(String workspaceId, String userId, String runId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return closeIfTerminal(runId, statusRequester.getAutonomousRun(workspaceId, userId, runId));
+        JsonNode run = statusRequester.getAutonomousRun(workspaceId, userId, runId);
+        // 승인 대기 계획은 사용자의 자동 승인 설정을 지금 다시 적용해 본다. ai-svc의 계획 알림이 실패했거나
+        // 알림 뒤에 설정을 켠 경우에도 화면이 계획을 열 때 판단한다.
+        return closeIfTerminal(runId, autoApproveIfAllowed(workspaceId, userId, runId, run));
+    }
+
+    /**
+     * ai-svc가 계획을 만들어 승인 대기에 들어갔을 때 부른다(내부 API). 사용자의 자동 승인 설정과 대상 권한을 보고
+     * 승인 확인을 건너뛸 수 있으면 사용자 승인과 같은 경로(크레딧 예약 포함)로 승인한다. 아니면 그대로 둔다.
+     */
+    public JsonNode autoApprove(String workspaceId, String userId, String runId) {
+        return getRun(workspaceId, userId, runId);
+    }
+
+    private JsonNode autoApproveIfAllowed(String workspaceId, String userId, String runId, JsonNode run) {
+        if (autoApproval == null || run == null || !"awaiting_approval".equals(run.path("status").asText())) {
+            return run;
+        }
+        AgentAutoApprovalPolicy.Decision decision = autoApproval.decide(workspaceId, userId, run);
+        if (!decision.autoApprove()) {
+            log.debug("Agent 계획 수동 승인 유지: run_id={} reason={}", runId, decision.reason());
+            return run;
+        }
+        try {
+            rerun(workspaceId, userId, runId, APPROVABLE, current -> () -> statusRequester.approveAutomatically(
+                    workspaceId, userId, runId, decision.planVersion(), decision.operationHash(),
+                    AgentAutoApprovalPolicy.AUTO_APPROVED_BY));
+            log.info("Agent 계획 자동 승인: run_id={} user_id={} plan_version={}",
+                    runId, userId, decision.planVersion());
+        } catch (RuntimeException e) {
+            // 크레딧 부족·동시 승인(계획 변경)·ai-svc 오류. 자동 승인만 포기하고 사용자가 직접 승인하게 둔다.
+            log.warn("Agent 계획 자동 승인 실패(수동 승인으로 남김): run_id={} type={} message={}",
+                    runId, e.getClass().getSimpleName(), e.getMessage());
+        }
+        // 승인 응답은 계획을 싣지 않으므로 화면에 보일 최신 run을 다시 읽는다.
+        return statusRequester.getAutonomousRun(workspaceId, userId, runId);
     }
 
     public JsonNode approve(String workspaceId, String userId, String runId,
