@@ -1443,6 +1443,9 @@ public class DocumentService {
         log.info("[문서 변환 batch 발행] documentId={} startPage={} pageCount={}", placeholder.getId(), startPage, pageCount);
     }
 
+    /** 변환 결과 이벤트가 같은 문서의 대기열 행 잠금을 기다리는 최대 시간. */
+    private static final String CONVERT_QUEUE_LOCK_TIMEOUT = "5s";
+
     private static final java.util.regex.Pattern CONVERT_BATCH_RUN_ID =
             java.util.regex.Pattern.compile("^convert:([^:]+):(\\d+)$");
 
@@ -1480,7 +1483,12 @@ public class DocumentService {
 
     private ConvertOutcome mergeConvertBatch(JsonNode event, String documentId, int startPage) {
         // 같은 문서의 이벤트가 동시에 와도 결과 기록·병합·발행을 한 번에 하나씩 처리한다.
+        // 잠금을 쥔 쪽은 MinIO·이미지 작업을 하므로 기다리는 쪽이 DB 연결을 오래 잡지 않게 대기를 제한한다.
+        // 시간이 지나면 예외로 트랜잭션을 되돌리고, ai.task.event error handler가 같은 레코드를 다시 소비한다.
+        String lockTimeout = convertQueueRepository.currentLockTimeout();
+        convertQueueRepository.setLocalLockTimeout(CONVERT_QUEUE_LOCK_TIMEOUT);
         var queue = convertQueueRepository.findByDocumentIdForUpdate(documentId).orElse(null);
+        convertQueueRepository.setLocalLockTimeout(lockTimeout);
         // placeholder는 잠금을 잡은 뒤에 읽는다. 먼저 읽으면 앞 batch가 커밋한 변환 요약을 덮어써 잃는다.
         Document placeholder = documentRepository.findByIdInActiveWorkspace(documentId).orElse(null);
         if (placeholder == null) {
@@ -2705,6 +2713,9 @@ public class DocumentService {
         verifyWorkspaceOwnership(workspaceId, userId);
         validateIdempotencyKey(idempotencyKey);
         validateLifecycleRequest(request);
+        // 변환 결과 반영(mergeConvertBatch)과 같은 순서로 변환 대기열 행을 문서 행보다 먼저 잠근다.
+        // 반대 순서면 삭제와 반영이 서로를 기다려 교착한다. 변환 문서가 아니면 행이 없어 아무것도 잠그지 않는다.
+        convertQueueRepository.findByDocumentIdForUpdate(documentId);
         Document document = documentRepository
                 .findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
