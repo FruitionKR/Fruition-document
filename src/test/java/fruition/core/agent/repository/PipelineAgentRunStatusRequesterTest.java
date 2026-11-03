@@ -169,6 +169,20 @@ class PipelineAgentRunStatusRequesterTest {
         assertThat(body.get()).doesNotContain("operation_ids");
     }
 
+    /** 자동 승인만 approved_by를 싣는다. 사용자 승인은 기존 요청 모양 그대로다. */
+    @Test
+    void automaticApprovalCarriesApproverOnlyThere() {
+        var client = requester();
+
+        assertThatThrownBy(() -> client.approveAutomatically("ws-1", "user-1", "run-1", 1, "hash", "auto:user-setting"))
+                .isInstanceOf(fruition.core.agent.exception.PipelineAgentException.class);
+        assertThat(body.get()).contains("\"approved_by\":\"auto:user-setting\"").doesNotContain("operation_ids");
+
+        assertThatThrownBy(() -> client.approve("ws-1", "user-1", "run-1", 1, "hash"))
+                .isInstanceOf(fruition.core.agent.exception.PipelineAgentException.class);
+        assertThat(body.get()).doesNotContain("approved_by");
+    }
+
     @Test
     void lifecycleMapsNotFoundAndConflict() {
         assertThatThrownBy(() -> requester().getAutonomousRun("foreign", "user-1", "run-1"))

@@ -14,6 +14,7 @@ import fruition.core.document.dto.DocumentRenameResponse;
 import fruition.core.document.dto.MarkdownDocumentCreateRequest;
 import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.domain.DocumentStatus;
+import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.InvalidDocumentConvertRequestException;
 import fruition.core.document.exception.MarkdownDiffTooLargeException;
@@ -676,5 +677,23 @@ class DocumentControllerTest {
                 .andExpect(jsonPath("$.display_name").value("새 제목"))
                 .andExpect(jsonPath("$.current_version").value(2))
                 .andExpect(jsonPath("$.changed").value(true));
+    }
+
+    @Test
+    void rename_chatExportDocument_returnsTitleLockedConflict() throws Exception {
+        when(documentService.rename(
+                eq(WORKSPACE_ID), eq(USER_ID), eq("doc_chat"), any(DocumentRenameRequest.class)))
+                .thenThrow(new DocumentTitleLockedException("채팅에서 만든 문서는 이름을 바꿀 수 없습니다."));
+
+        mockMvc.perform(patch(
+                        "/api/workspaces/" + WORKSPACE_ID + "/documents/doc_chat/rename")
+                        .header("Authorization", bearerToken())
+                        .contentType("application/json")
+                        .content("""
+                                {"display_name":"새 제목","base_version":1}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("DOCUMENT_TITLE_LOCKED"))
+                .andExpect(jsonPath("$.error.message").value("채팅에서 만든 문서는 이름을 바꿀 수 없습니다."));
     }
 }

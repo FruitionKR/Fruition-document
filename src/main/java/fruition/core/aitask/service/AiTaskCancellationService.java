@@ -82,7 +82,7 @@ public class AiTaskCancellationService {
                     String.class, id, command.toString());
             if (matching.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "작업 ID의 요청 내용이 다릅니다.");
             // 새로 등록한 실행만 사용자별 사용 한도를 본다. 넘으면 등록과 함께 롤백된다.
-            if (inserted == 1) limits.check(id, command.path("user_id").asText(), command.path("kind").asText());
+            if (inserted == 1) limits.check(command.path("user_id").asText(), command.path("kind").asText());
             // AI 호출 전에 크레딧을 예약한다. 잔액이 모자라면 실행 등록과 함께 롤백된다(#79).
             credits.reserve(id, command.path("user_id").asText(), command.path("kind").asText());
         });
@@ -227,6 +227,9 @@ public class AiTaskCancellationService {
             if (!result.status().equals("cancelled")) return;
             pipeline.rollbackBackend(id, workspaceId, userId, command);
             transaction.executeWithoutResult(tx -> {
+                // 변환 결과 반영과 같은 순서(대기열 행 → 실행 행)로 잠근다. 반대 순서면 둘이 교착한다.
+                if (converting) jdbc.queryForList("SELECT id FROM document_convert_queue WHERE document_id = ? FOR UPDATE",
+                        Long.class, id.substring("convert:".length()));
                 var current = owned(id, workspaceId, userId, true);
                 if (current.get("status").equals("cancelled")) return;
                 if (!jdbc.queryForList("SELECT id FROM ai_task_changes WHERE run_id = ? AND NOT undone", Long.class, id).isEmpty())

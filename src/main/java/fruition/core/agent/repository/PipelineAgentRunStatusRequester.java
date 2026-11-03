@@ -73,7 +73,17 @@ public class PipelineAgentRunStatusRequester {
     public JsonNode approve(String workspaceId, String userId, String runId,
                             int planVersion, String operationHash, java.util.List<String> operationIds) {
         return postAutonomous(runId,
-                new ApproveRequest(workspaceId, userId, planVersion, operationHash, operationIds), "/approve");
+                new ApproveRequest(workspaceId, userId, planVersion, operationHash, operationIds, null), "/approve");
+    }
+
+    /**
+     * 사용자의 자동 승인 설정에 따라 계획 전체를 대신 승인한다. 승인 기록에는 approvedBy(auto:user-setting)가 남는다.
+     * 버전·해시 확인은 사용자 승인과 같아, 그 사이 계획이 바뀌었으면 ai-svc가 거절한다.
+     */
+    public JsonNode approveAutomatically(String workspaceId, String userId, String runId,
+                                         int planVersion, String operationHash, String approvedBy) {
+        return postAutonomous(runId,
+                new ApproveRequest(workspaceId, userId, planVersion, operationHash, null, approvedBy), "/approve");
     }
 
     public JsonNode reject(String workspaceId, String userId, String runId) {
@@ -179,7 +189,11 @@ public class PipelineAgentRunStatusRequester {
             @JsonProperty("operation_hash") String operationHash,
             @JsonProperty("operation_ids")
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-            java.util.List<String> operationIds
+            java.util.List<String> operationIds,
+            // 사용자가 직접 승인하면 키를 싣지 않는다(ai-svc 기본값 user).
+            @JsonProperty("approved_by")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String approvedBy
     ) {}
 
     private record ReviseRequest(

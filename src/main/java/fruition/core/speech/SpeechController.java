@@ -93,13 +93,16 @@ public class SpeechController {
                     + "{\"type\":\"audio\",\"delta\":\"<base64 PCM16 LE mono 24kHz>\"} 이벤트가 이어지고, 정확히 하나의 "
                     + "{\"type\":\"done\"} 또는 {\"type\":\"error\",\"code\":\"...\"}로 끝납니다. "
                     + "끝까지 합성된 음성은 저장돼 같은 형식으로 다시 재생되며(과금 없음) 30일 뒤 삭제됩니다. "
-                    + "연결을 끊으면 합성을 멈춥니다. HTTP 상태 오류는 스트림이 시작되기 전에만 나옵니다.")
+                    + "연결을 끊으면 합성을 멈춥니다. HTTP 상태 오류는 스트림이 시작되기 전에만 나옵니다. "
+                    + "운영에서 기능을 끄면(app.speech.synthesis.enabled=false) 저장본 재생까지 모두 403 SPEECH_SYNTHESIS_DISABLED입니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "NDJSON 이벤트 스트림",
             content = @Content(mediaType = "application/x-ndjson", schema = @Schema(type = "string"))),
         @ApiResponse(responseCode = "400", description = "message_id 누락 또는 답변이 합성 입력 한도 초과",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "402", description = "크레딧 부족",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "답변 듣기가 꺼져 있음(SPEECH_SYNTHESIS_DISABLED). 조회·저장본 재생·크레딧 예약·AI 호출 전에 거절",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "워크스페이스·답변을 찾을 수 없음(멤버가 아니거나 내 세션의 assistant 답변이 아님)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

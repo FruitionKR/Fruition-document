@@ -124,6 +124,11 @@ public class Document {
     @Column(name = "ai_origin", length = 32)
     private String aiOrigin;
 
+    /** PDF 변환 문서의 복원 요약·그림 설명 집계. 변환 문서가 아니거나 AI가 요약을 주지 않았으면 null이다. */
+    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+    @Column(name = "conversion_report", columnDefinition = "jsonb")
+    private ConversionReport conversionReport;
+
     /** 이 문서를 만든 가져오기 세션(document_imports.id). 가져온 문서가 아니면 null. */
     @Column(name = "import_id")
     private UUID importId;
@@ -386,6 +391,13 @@ public class Document {
     }
 
     public void markAiOrigin(String aiOrigin) { this.aiOrigin = aiOrigin; }
+
+    public ConversionReport getConversionReport() { return conversionReport; }
+
+    /** 변환 batch 하나의 요약을 합친다. 요약이 없는 batch는 그대로 둔다. */
+    public void mergeConversionReport(ConversionReport batchReport) {
+        this.conversionReport = ConversionReport.merge(this.conversionReport, batchReport);
+    }
 
     public UUID getImportId() { return importId; }
 

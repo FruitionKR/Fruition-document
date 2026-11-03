@@ -323,10 +323,10 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 항목 | 내용 |
 |---|---|
 | 목적 | 대용량 PDF를 객체 저장소에 직접 올리기 위한 업로드 티켓과 조각 크기를 발급합니다. |
-| 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `StartRequest` |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `X-Fruition-Import-Id`(선택): `string` — 가져오기 세션([Imports](../imports.md)). ticket에 묶이고 확정에도 같은 값이 필요하다<br>**Body** — `StartRequest` |
 | 출력 | `200` 티켓 발급 — `StartResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` PDF 파일명이 올바르지 않음 — `ErrorResponse`<br>`400` 크기가 0 이하 — `ErrorResponse`<br>`413` 100MB 초과(`FILE_TOO_LARGE`) 또는 내 저장 공간 5GB 초과(`STORAGE_QUOTA_EXCEEDED`) — `ErrorResponse` |
+| 주요 오류 | `400` PDF 파일명이 올바르지 않음 — `ErrorResponse`<br>`400` 크기가 0 이하 — `ErrorResponse`<br>`400 IMPORT_INVALID` `X-Fruition-Import-Id`가 열린 내 가져오기 세션이 아님 — `ErrorResponse`<br>`413` 100MB 초과(`FILE_TOO_LARGE`) 또는 내 저장 공간 5GB 초과(`STORAGE_QUOTA_EXCEEDED`) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -567,10 +567,10 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 항목 | 내용 |
 |---|---|
 | 목적 | 조각 업로드를 조립해 PDF를 검증하고 문서로 확정합니다. |
-| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`(필수): `string`<br>**Body** — `CompleteRequest` |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`(필수): `string`, `X-Fruition-Import-Id`(선택): `string` — 시작 때 ticket에 묶은 세션과 같아야 한다. 그 세션 문서(`origin=notion_import`)로 확정하고 항목 1개를 센다(자동 편입 없음)<br>**Body** — `CompleteRequest` |
 | 출력 | `201` 확정 성공 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>티켓의 사용자·워크스페이스가 요청과 같아야 하고, 활성 멤버십을 다시 검증한다. |
-| 주요 오류 | `400` 티켓 오류, 조각 크기·순서 불일치, 파일 정보 불일치 — `ErrorResponse`<br>`403` 다른 사용자의 업로드 — `ErrorResponse`<br>`409` 전송되지 않은 조각이 있음 또는 Idempotency-Key 충돌 — `ErrorResponse`<br>`415` PDF 내용이 올바르지 않음 — `ErrorResponse` |
+| 주요 오류 | `400` 티켓 오류, 조각 크기·순서 불일치, 파일 정보 불일치 — `ErrorResponse`<br>`400 IMPORT_INVALID` 가져오기 헤더가 ticket의 세션과 다르거나 세션이 닫힘 — `ErrorResponse`<br>`403` 다른 사용자의 업로드 — `ErrorResponse`<br>`409` 전송되지 않은 조각이 있음 또는 Idempotency-Key 충돌 — `ErrorResponse`<br>`415` PDF 내용이 올바르지 않음 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1399,7 +1399,7 @@ Notion의 page title처럼 표시 이름만 변경하며 본문은 유지합니�
 | `400` | 유효하지 않은 파일명 | `ErrorResponse` |
 | `403` | 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `409` | 문서 version 충돌 | `ErrorResponse` |
+| `409` | 문서 version 충돌(`DOCUMENT_VERSION_CONFLICT`) 또는 채팅에서 만든 문서라 이름이 잠김(`DOCUMENT_TITLE_LOCKED`, "채팅에서 만든 문서는 이름을 바꿀 수 없습니다."). 이동·삭제는 그대로 허용한다. | `ErrorResponse` |
 
 ```json
 {

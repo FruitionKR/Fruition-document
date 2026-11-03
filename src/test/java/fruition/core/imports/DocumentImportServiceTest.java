@@ -4,7 +4,6 @@ import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.document.service.DocumentService;
 import fruition.core.imports.DocumentImportDtos.CreateRequest;
 import fruition.core.upload.UploadLimitService;
-import fruition.core.usage.limit.AiUsageLimiter;
 import fruition.core.usage.service.CreditService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -18,7 +17,7 @@ class DocumentImportServiceTest {
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
     private final UploadLimitService limits = mock(UploadLimitService.class);
     private final DocumentImportService service = new DocumentImportService(jdbc, mock(WorkspaceAccessGuard.class),
-            limits, mock(DocumentService.class), mock(CreditService.class), mock(AiUsageLimiter.class));
+            limits, mock(DocumentService.class), mock(CreditService.class));
 
     @Test
     void create_rejectsBeforeTouchingQuotaOrDatabase() {

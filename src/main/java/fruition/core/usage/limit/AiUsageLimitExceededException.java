@@ -7,9 +7,9 @@ public class AiUsageLimitExceededException extends RuntimeException {
     private final AiUsageLimitType type;
     private final Instant resetAt;
 
-    /** resetAt은 하루 한도가 풀리는 시각이며 동시 실행 한도는 null이다. */
-    public AiUsageLimitExceededException(AiUsageLimitType type, Instant resetAt, String message) {
-        super(message);
+    /** resetAt은 하루 한도가 풀리는 다음 0시(KST)다. */
+    public AiUsageLimitExceededException(AiUsageLimitType type, Instant resetAt) {
+        super(type.message());
         this.type = type;
         this.resetAt = resetAt;
     }
