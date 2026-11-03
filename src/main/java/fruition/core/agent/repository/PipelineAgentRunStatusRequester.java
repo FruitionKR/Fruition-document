@@ -103,7 +103,7 @@ public class PipelineAgentRunStatusRequester {
         } catch (HttpClientErrorException.NotFound e) {
             throw new AgentRunNotFoundException(runId);
         } catch (ResourceAccessException e) {
-            throw new PipelineAgentException("AgentRun 요청 시간이 초과되었습니다.", 503, null);
+            throw new fruition.core.agent.exception.PipelineAgentNoResponseException("AgentRun 요청 시간이 초과되었습니다.");
         } catch (RestClientResponseException e) {
             int status = e.getStatusCode().is4xxClientError() ? e.getStatusCode().value() : 503;
             throw new PipelineAgentException("AgentRun 요청이 거부되었습니다.", status, null);

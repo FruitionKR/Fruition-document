@@ -35,6 +35,8 @@ import java.util.regex.Pattern;
 
 @Service
 public class AgentTurnService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgentTurnService.class);
+
 
     @org.springframework.beans.factory.annotation.Autowired
     private fruition.core.analytics.DocumentAnalytics analytics;
@@ -281,7 +283,7 @@ public class AgentTurnService {
                             AgentRunApproveRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         // 고른 작업은 예약하기 전에 검사한다. 잘못된 선택이면 크레딧을 건드리지 않고 400으로 끝난다.
-        return rerun(workspaceId, userId, runId, current -> {
+        return rerun(workspaceId, userId, runId, APPROVABLE, current -> {
             List<String> operationIds = selectedOperationIds(current, request.operationIds());
             return () -> operationIds == null
                     ? statusRequester.approve(workspaceId, userId, runId, request.planVersion(), request.operationHash())
@@ -341,23 +343,27 @@ public class AgentTurnService {
     public JsonNode revise(String workspaceId, String userId, String runId,
                            AgentRunReviseRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return rerun(workspaceId, userId, runId,
+        return rerun(workspaceId, userId, runId, REVISABLE,
                 current -> () -> statusRequester.revise(workspaceId, userId, runId, request.instruction()));
     }
 
+    /** ai-svc가 승인을 받는 run 상태({@code approve_and_enqueue}). */
+    private static final Set<String> APPROVABLE = Set.of("awaiting_approval");
+    /** ai-svc가 계획 수정을 받는 run 상태({@code revise}). */
+    private static final Set<String> REVISABLE = Set.of("awaiting_approval", "clarification_required");
+
     /**
-     * 계획 수정·승인은 ai-svc가 AgentRun(처음 요청의 turn과 다른 id)으로 모델을 다시 부른다. 먼저 AgentRun을 조회해 호출자의
-     * 것임을 확인하고(남의 id를 크레딧 실행으로 선점하지 못하게), 전달하기 전에 크레딧 실행으로 등록·예약해 처음 요청과 같은
-     * 규칙으로 가용 잔액을 확인한다(부족하면 402, 전달하지 않음). ai-svc가 전달을 거절하면 이번 시도의 예약만 풀고 실행은
-     * 닫지 않아 다음 시도가 잔액을 다시 확인한다. 실행의 종료는 AgentRun 응답의 상태로 알아챈다({@link #closeIfTerminal}).
-     * enforce가 꺼져 있으면 아무것도 하지 않는다(#102).
+     * 소유 확인과 요청 검증 뒤 AgentRun 단위로 예약한다. 예약은 동시 요청·시간 초과된 이전 요청도 공유하므로,
+     * 개별 전달 실패로 풀지 않는다. 종료 정산 또는 CreditService.releaseStale이 해제한다.
      */
-    private JsonNode rerun(String workspaceId, String userId, String runId,
+    private JsonNode rerun(String workspaceId, String userId, String runId, Set<String> accepting,
                            java.util.function.Function<JsonNode, java.util.function.Supplier<JsonNode>> prepare) {
         JsonNode current = statusRequester.getAutonomousRun(workspaceId, userId, runId);
         // 현재 run으로 요청을 검사·준비한다(예약 전). 전달은 아래에서 한다.
         java.util.function.Supplier<JsonNode> forward = prepare.apply(current);
-        if (usageCharges.isAutonomousTerminal(current)) {  // 이미 끝난 실행은 ai-svc가 거절한다. 예약하지 않는다.
+        // 이미 끝났거나 이 요청을 받지 않는 상태(예: 이미 승인돼 실행 중)면 ai-svc가 거절한다. 예약을 건드리지 않는다.
+        // 여기서 예약하면 거절(409)을 받은 뒤 실행 중인 run의 예약을 풀게 된다(#167).
+        if (current == null || !accepting.contains(current.path("status").asText())) {
             closeIfTerminal(runId, current);
             return forward.get();
         }
@@ -365,8 +371,23 @@ public class AgentTurnService {
         try {
             return closeIfTerminal(runId, forward.get());
         } catch (RuntimeException e) {
-            usageCharges.abortAutonomousAttempt(runId, userId);
+            // 이번 요청이 거절됐어도 이전 요청이 아직 커밋 전일 수 있다. run 단위 예약은 유지한다.
+            reconcileFailedForward(workspaceId, userId, runId, e);
             throw e;
+        }
+    }
+
+    /** 재조회는 종료 정산을 시작하는 데만 사용한다. 상태가 그대로여도 미처리라는 증거는 아니다. */
+    private void reconcileFailedForward(String workspaceId, String userId, String runId, RuntimeException failure) {
+        if (failure instanceof fruition.core.agent.exception.PipelineAgentNoResponseException) {
+            log.warn("[Agent 전달 응답 없음] runId={} 예약 유지", runId);
+            return;
+        }
+        try {
+            closeIfTerminal(runId, statusRequester.getAutonomousRun(workspaceId, userId, runId));
+        } catch (RuntimeException unknown) {
+            // 정산 확인 실패가 원래 전달 오류를 덮어쓰지 않도록 한다.
+            log.warn("[Agent 전달 결과 확인 실패] runId={} 예약 유지 error={}", runId, unknown.toString());
         }
     }
 
