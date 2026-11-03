@@ -23,8 +23,9 @@ import java.util.stream.Collectors;
  *
  * <p>{@code app.restore.preview-token-secret}이 설정되면 그 값을 서명 키로 쓴다. 인스턴스마다
  * 같은 키를 쓰게 되어 다중 인스턴스에서도 미리보기와 실행이 서로 다른 인스턴스로 가도 토큰이
- * 유효하다. 설정하지 않으면 기동 시 무작위 키를 만든다. 이 경우 미리보기 토큰은 그 인스턴스에서만
- * 유효하고 재시작하면 무효가 된다 — 사용자는 미리보기를 다시 열면 된다.
+ * 유효하다. 설정하지 않으면 모든 인스턴스가 함께 받는 내부 토큰({@code app.internal.callback-token})에서 용도별 키를 파생한다.
+ * 그것마저 없을 때(로컬)만 기동 시 무작위 키를 만든다. 무작위 키면 미리보기 토큰이 그 인스턴스에서만
+ * 유효해, 여러 replica 뒤에서는 미리보기와 실행이 다른 Pod로 가면 409 RESTORE_PREVIEW_STALE이 난다.
  */
 @Component
 public class PreviewTokenSigner {
@@ -34,15 +35,28 @@ public class PreviewTokenSigner {
     private final SecretKeySpec key;
 
     public PreviewTokenSigner(
-            @Value("${app.restore.preview-token-secret:}") String configuredSecret) {
+            @Value("${app.restore.preview-token-secret:}") String configuredSecret,
+            @Value("${app.internal.callback-token:}") String sharedSecret) {
         byte[] secret;
-        if (configuredSecret == null || configuredSecret.isBlank()) {
+        if (configuredSecret != null && !configuredSecret.isBlank()) {
+            secret = configuredSecret.getBytes(StandardCharsets.UTF_8);
+        } else if (sharedSecret != null && !sharedSecret.isBlank()) {
+            // 용도를 섞어 해시로 파생한다(DirectMultipartUpload와 같은 방식). 원래 토큰은 드러나지 않는다.
+            // JWT_SECRET은 RS256 전환 뒤 제거될 값이라 기준으로 쓰지 않는다.
+            secret = sha256(sharedSecret + ":restore-preview-token:v1");
+        } else {
             secret = new byte[32];
             new SecureRandom().nextBytes(secret);
-        } else {
-            secret = configuredSecret.getBytes(StandardCharsets.UTF_8);
         }
         this.key = new SecretKeySpec(secret, ALGORITHM);
+    }
+
+    private static byte[] sha256(String value) {
+        try {
+            return java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("미리보기 토큰 키를 만들지 못했습니다.", e);
+        }
     }
 
     /**
