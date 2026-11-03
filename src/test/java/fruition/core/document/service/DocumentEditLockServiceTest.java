@@ -14,11 +14,17 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -52,7 +58,16 @@ class DocumentEditLockServiceTest {
         org.mockito.Mockito.lenient().when(workspaceAccessGuard.access(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(new fruition.core.authz.WorkspaceAccessGuard.Access("MEMBER", java.util.List.of()));
         return new DocumentEditLockService(lockRepository, documentRepository,
-                workspaceAccessGuard, accessUserClient, new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate), 45, Clock.fixed(NOW, ZoneOffset.UTC));
+                workspaceAccessGuard, accessUserClient, new DocumentAccessPolicy(workspaceAccessGuard, jdbcTemplate), 45, Clock.fixed(NOW, ZoneOffset.UTC),
+                new TransactionTemplate(new NoopTransactionManager()));
+    }
+
+    /** 실제 DB 없이 트랜잭션 경계(isActualTransactionActive)만 만들어 주는 관리자. */
+    private static class NoopTransactionManager extends AbstractPlatformTransactionManager {
+        @Override protected Object doGetTransaction() { return new Object(); }
+        @Override protected void doBegin(Object transaction, TransactionDefinition definition) { }
+        @Override protected void doCommit(DefaultTransactionStatus status) { }
+        @Override protected void doRollback(DefaultTransactionStatus status) { }
     }
 
     private void stubOwnedEditable() {
@@ -97,6 +112,27 @@ class DocumentEditLockServiceTest {
         EditLockResponse res = service().acquire(WS, USER, DOC);
 
         assertThat(res.holderUserId()).isEqualTo("other");
+    }
+
+    @Test
+    void acquire_looksUpHolderNameOutsideTransaction() {
+        stubOwnedEditable();
+        DocumentEditLock l = lock("other", false);
+        when(lockRepository.acquire(eq(DOC), eq(USER), any(), any())).thenReturn(0);
+        when(lockRepository.findById(DOC)).thenAnswer(inv -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
+            return Optional.of(l);
+        });
+        AtomicBoolean txActiveDuringLookup = new AtomicBoolean(true);
+        when(accessUserClient.getDisplayName("other")).thenAnswer(inv -> {
+            txActiveDuringLookup.set(TransactionSynchronizationManager.isActualTransactionActive());
+            return "다른 편집자";
+        });
+
+        EditLockResponse res = service().acquire(WS, USER, DOC);
+
+        assertThat(res.holderDisplayName()).isEqualTo("다른 편집자");
+        assertThat(txActiveDuringLookup).isFalse();
     }
 
     @Test
