@@ -109,6 +109,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 @Service
@@ -324,11 +325,13 @@ public class DocumentService {
                     : requestHash(filename.trim(), mimeType, contentHash, String.valueOf(folderId));
             String uploadFilename = filename;
 
-            // 멱등 재요청은 execute가 저장된 응답을 돌려준다.
-            return idempotencyService.execute(userId, endpointScope, idempotencyKey, requestHash,
-                    DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
-                    () -> storeUpload(workspaceId, userId, folderId, file, skillReference, uploadFilename,
-                            mimeType, markdownContent, contentHash));
+            // 멱등 재요청은 execute가 저장된 응답을 돌려준다. 원본 저장은 실행 트랜잭션을 열기 전에 한다.
+            AtomicReference<String> storedKey = new AtomicReference<>();
+            return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope,
+                    idempotencyKey, requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
+                    () -> storeUploadOriginal(workspaceId, userId, file, mimeType, storedKey),
+                    documentId -> storeUpload(workspaceId, userId, folderId, file, skillReference, uploadFilename,
+                            mimeType, markdownContent, contentHash, documentId, storedKey.get())));
         } catch (Exception e) {
             // storeUpload가 이미 감싼 실패는 그대로 올린다.
             if (e instanceof DocumentUploadException || isUploadRejection(e)) {
@@ -338,39 +341,22 @@ public class DocumentService {
         }
     }
 
-    private DocumentUploadResponse storeUpload(
-            String workspaceId,
-            String userId,
-            UUID folderId,
-            MultipartFile file,
-            boolean skillReference,
-            String filename,
-            String mimeType,
-            DocumentEditingRules.MarkdownContent markdownContent,
-            String contentHash
-    ) {
-        boolean markdownUpload = markdownContent != null;
-        String objectPath = null;
-        boolean objectStored = false;
+    /**
+     * 실행 트랜잭션을 열기 전(선점 뒤)에 한도를 미리 보고 원본을 저장한다. 큰 원본을 쓰는 동안 DB 연결을 쥐지 않는다.
+     * 저장한 키는 {@code storedKey}에 남겨 실패 정리에 쓴다. 문서 ID를 돌려준다.
+     */
+    private String storeUploadOriginal(String workspaceId, String userId, MultipartFile file, String mimeType,
+                                       AtomicReference<String> storedKey) {
         try {
             // 새 업로드는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
             if (uploadLimits != null) {
                 uploadLimits.precheck(userId, file.getSize());
             }
-
-            // 같은 폴더에 같은 이름이 있으면 거절하지 않고 "이름 (2).pdf"처럼 번호를 붙인다.
-            // 스킬 참고 문서는 참고 문서끼리만 비교한다. 동시에 같은 이름을 고르는 경합은 DB 고유 제약이 막는다.
-            List<String> existingNames = skillReference
-                    ? documentRepository.findActiveSkillReferenceNames(workspaceId)
-                    : documentRepository.findActiveSiblingNames(workspaceId, folderId);
-            String storedFilename = DocumentEditingRules.uniqueUploadFilename(filename,
-                    new java.util.HashSet<>(existingNames)).filename();
-
             log.info("[문서 업로드 요청] workspaceId={} userId={} filename={} contentType={} size={}",
                     workspaceId, userId, file.getOriginalFilename(), file.getContentType(), file.getSize());
 
             String documentId = newDocumentId();
-            objectPath = "sources/documents/" + documentId + "/original";
+            String objectPath = "sources/documents/" + documentId + "/original";
             log.info("[문서 원본 저장 시작] documentId={} bucket={} objectPath={} mimeType={} byteSize={}",
                     documentId, storageProps.getBucket(), objectPath, mimeType, file.getSize());
 
@@ -386,9 +372,41 @@ public class DocumentService {
                                 .build()
                 );
             }
-            objectStored = true;
-            registerMinioRollbackCleanup(objectPath);
+            storedKey.set(objectPath);
             log.info("[문서 원본 저장 완료] documentId={} objectPath={}", documentId, objectPath);
+            return documentId;
+        } catch (Exception e) {
+            if (isUploadRejection(e)) {
+                throw (RuntimeException) e;
+            }
+            throw new DocumentUploadException("파일 저장 중 오류가 발생했습니다.", e);
+        }
+    }
+
+    private DocumentUploadResponse storeUpload(
+            String workspaceId,
+            String userId,
+            UUID folderId,
+            MultipartFile file,
+            boolean skillReference,
+            String filename,
+            String mimeType,
+            DocumentEditingRules.MarkdownContent markdownContent,
+            String contentHash,
+            String documentId,
+            String objectPath
+    ) {
+        boolean markdownUpload = markdownContent != null;
+        try {
+            registerMinioRollbackCleanup(objectPath);
+
+            // 같은 폴더에 같은 이름이 있으면 거절하지 않고 "이름 (2).pdf"처럼 번호를 붙인다.
+            // 스킬 참고 문서는 참고 문서끼리만 비교한다. 동시에 같은 이름을 고르는 경합은 DB 고유 제약이 막는다.
+            List<String> existingNames = skillReference
+                    ? documentRepository.findActiveSkillReferenceNames(workspaceId)
+                    : documentRepository.findActiveSiblingNames(workspaceId, folderId);
+            String storedFilename = DocumentEditingRules.uniqueUploadFilename(filename,
+                    new java.util.HashSet<>(existingNames)).filename();
 
             // 사용자 잠금은 저장이 끝난 뒤 문서 행을 쓰기 직전에 잡아 커밋까지 짧게 쥔다. 큰 원본을 쓰는 동안 잡으면
             // 같은 사용자의 다른 업로드가 그 시간 내내 줄을 선다. 잠금 아래에서 다시 확인해 병렬 업로드가 함께 한도를
@@ -435,9 +453,7 @@ public class DocumentService {
             if (isUploadRejection(e)) {
                 throw (RuntimeException) e;
             }
-            if (objectStored) {
-                deleteMinioObject(objectPath);
-            }
+            // 미리 저장한 원본은 호출자(deleteStoredOnFailure)와 롤백 정리가 지운다.
             throw new DocumentUploadException("파일 저장 중 오류가 발생했습니다.", e);
         }
     }
@@ -598,15 +614,21 @@ public class DocumentService {
 
         String origin = skillReference ? Document.SKILL_REFERENCE_ORIGIN
                 : accounting.importSession() != null ? Document.NOTION_IMPORT_ORIGIN : "direct";
-        // 멱등 재요청은 execute가 저장된 응답을 돌려준다.
-        return idempotencyService.execute(userId, endpointScope, idempotencyKey, requestHash,
-                DocumentUploadResponse.class, 201, DocumentUploadResponse::id, () -> {
+        // 멱등 재요청은 execute가 저장된 응답을 돌려준다. 한도 사전 확인과 원본 저장은 실행 트랜잭션을 열기 전에 한다.
+        AtomicReference<String> storedKey = new AtomicReference<>();
+        return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope, idempotencyKey,
+                requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id, () -> {
                     // 새 문서는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
                     if (accounting.limited() && uploadLimits != null) {
                         uploadLimits.precheck(userId, content.bytes().length);
                     }
-                    DocumentUploadResponse created = createMarkdownDocument(workspaceId, userId, filename.filename(),
-                            content, origin, request.folderId(), aiOrigin, true, accounting);
+                    String documentId = newDocumentId();
+                    storedKey.set(putMarkdownSource(documentId, content.bytes()));
+                    return documentId;
+                }, documentId -> {
+                    DocumentUploadResponse created = createMarkdownDocument(workspaceId, userId, documentId,
+                            storedKey.get(), filename.filename(), content, origin, request.folderId(), aiOrigin, true,
+                            accounting);
                     // 같은 키의 재요청은 저장된 응답만 돌려주므로 처음 만들 때 한 번만 기록한다.
                     if (agentRun != null && analytics != null) {
                         documentRepository.findById(created.id())
@@ -614,7 +636,7 @@ public class DocumentService {
                                 .ifPresent(document -> analytics.aiDocumentCreated(agentRun, document));
                     }
                     return created;
-                });
+                }));
     }
 
     @Transactional
@@ -698,6 +720,8 @@ public class DocumentService {
             createMarkdownDocument(
                     workspaceId,
                     userId,
+                    null,
+                    null,
                     INITIAL_NOTE_FILENAME,
                     DocumentEditingRules.markdown("# 새 노트\n"),
                     "direct",
@@ -772,9 +796,15 @@ public class DocumentService {
         }
     }
 
+    /**
+     * @param documentId 원본을 트랜잭션 밖에서 미리 저장했으면 그 문서 ID와 {@code storedSourceKey}. 둘 다 null이면
+     *                   여기서 ID를 정하고 원본을 저장한다.
+     */
     private DocumentUploadResponse createMarkdownDocument(
             String workspaceId,
             String userId,
+            String documentId,
+            String storedSourceKey,
             String filename,
             DocumentEditingRules.MarkdownContent content,
             String origin,
@@ -783,7 +813,14 @@ public class DocumentService {
             boolean recordUpload,
             UploadAccounting accounting
     ) {
-        String documentId = newDocumentId();
+        if (documentId == null) documentId = newDocumentId();
+        String sourceKey;
+        if (storedSourceKey == null) {
+            sourceKey = storeMarkdownSource(documentId, content.bytes());
+        } else {
+            registerMinioRollbackCleanup(storedSourceKey);
+            sourceKey = storedSourceKey;
+        }
         Document document = new Document(
                 documentId,
                 workspaceId,
@@ -791,7 +828,7 @@ public class DocumentService {
                 filename,
                 "text/markdown",
                 content.bytes().length,
-                storeMarkdownSource(documentId, content.bytes()),
+                sourceKey,
                 null,
                 origin
         );
@@ -957,14 +994,53 @@ public class DocumentService {
      * 문서 행을 만들 때 원본도 같이 만들어야 이후 ingest가 성립한다.
      */
     private String storeMarkdownSource(String documentId, byte[] bytes) {
+        String objectPath = putMarkdownSource(documentId, bytes);
+        registerMinioRollbackCleanup(objectPath);
+        return objectPath;
+    }
+
+    /** 원본만 저장한다. 트랜잭션 밖에서 부르면 실패 정리는 호출자가 {@link #deleteStoredOnFailure}로 맡는다. */
+    private String putMarkdownSource(String documentId, byte[] bytes) {
         String objectPath = "sources/documents/" + documentId + "/original";
         try {
             RetryingObjectPut.put(minioClient, storageProps.getBucket(), objectPath, bytes, "text/markdown");
         } catch (Exception e) {
             throw new DocumentUploadException("문서 원본 저장 중 오류가 발생했습니다.", e);
         }
-        registerMinioRollbackCleanup(objectPath);
         return objectPath;
+    }
+
+    /**
+     * 실행 트랜잭션 전에 저장한 원본({@code storedKey})을 실패하면 지운다. 실행 안의 롤백 정리
+     * (registerMinioRollbackCleanup)는 트랜잭션을 열지 못한 실패(연결 대기 시간 초과 등)를 보지 못한다.
+     * 두 정리가 겹쳐도 없는 객체 삭제라 무해하다.
+     */
+    private <T> T deleteStoredOnFailure(AtomicReference<String> storedKey, java.util.function.Supplier<T> work) {
+        try {
+            return work.get();
+        } catch (RuntimeException e) {
+            if (storedKey.get() != null) deleteMinioObject(storedKey.get());
+            throw e;
+        }
+    }
+
+    /**
+     * 트랜잭션 밖에서 미리 부른 외부 호출의 결과. 실패는 원래 그 호출을 하던 자리에서 {@link #get()}이 같은 예외로 던져,
+     * 앞선 검증 오류가 먼저 나가는 순서를 지킨다.
+     */
+    private record Prefetched<T>(T value, RuntimeException failure) {
+        static <T> Prefetched<T> of(java.util.function.Supplier<T> call) {
+            try {
+                return new Prefetched<>(call.get(), null);
+            } catch (RuntimeException e) {
+                return new Prefetched<>(null, e);
+            }
+        }
+
+        T get() {
+            if (failure != null) throw failure;
+            return value;
+        }
     }
 
     private void registerMinioRollbackCleanup(String objectPath) {
@@ -1196,19 +1272,35 @@ public class DocumentService {
 
         String endpointScope = convertEndpointScope(workspaceId);
         String requestHash = requestHash(documentId, "convert-markdown", "");
-        return idempotencyService.execute(userId, endpointScope, idempotencyKey, requestHash,
-                DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
-                () -> startConvertPlaceholder(workspaceId, userId, documentId, source));
+        // placeholder 원본 저장과 모델 설정(access) 조회는 실행 트랜잭션을 열기 전에 한다. 실패는 원래 호출하던 자리에서
+        // 던져(Prefetched) 크레딧 예약 거절 같은 앞선 오류가 먼저 나가는 순서를 지킨다.
+        DocumentEditingRules.MarkdownContent content =
+                DocumentEditingRules.markdown(CONVERT_PLACEHOLDER_MARKDOWN);
+        AtomicReference<String> storedKey = new AtomicReference<>();
+        return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope,
+                idempotencyKey, requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
+                () -> {
+                    String placeholderId = newDocumentId();
+                    Prefetched<String> stored = Prefetched.of(() -> putMarkdownSource(placeholderId, content.bytes()));
+                    storedKey.set(stored.value());
+                    return new ConvertPrepared(placeholderId, stored,
+                            Prefetched.of(() -> workspaceAiModelClient.get(workspaceId)));
+                },
+                prepared -> startConvertPlaceholder(workspaceId, userId, documentId, source, content, prepared)));
     }
 
+    private record ConvertPrepared(String placeholderId, Prefetched<String> sourceKey,
+                                   Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel) {}
+
     private DocumentUploadResponse startConvertPlaceholder(String workspaceId, String userId, String documentId,
-                                                           Document source) {
+                                                           Document source,
+                                                           DocumentEditingRules.MarkdownContent content,
+                                                           ConvertPrepared prepared) {
+        if (prepared.sourceKey().value() != null) registerMinioRollbackCleanup(prepared.sourceKey().value());
         // placeholder: display_name은 원본에서 확장자를 뗀 이름, filename은 <이름>.md
         DocumentEditingRules.Filename filename =
                 DocumentEditingRules.rename(source.getDisplayName(), "document.md");
-        DocumentEditingRules.MarkdownContent content =
-                DocumentEditingRules.markdown(CONVERT_PLACEHOLDER_MARKDOWN);
-        String placeholderId = newDocumentId();
+        String placeholderId = prepared.placeholderId();
         String convertRunId = "convert:" + placeholderId;
         taskWriter.begin(convertRunId, workspaceId, userId, "convert");
         Document placeholder = new Document(
@@ -1218,7 +1310,7 @@ public class DocumentService {
                 filename.filename(),
                 "text/markdown",
                 content.bytes().length,
-                storeMarkdownSource(placeholderId, content.bytes()),
+                prepared.sourceKey().get(),
                 null,
                 "convert"
         );
@@ -1234,7 +1326,7 @@ public class DocumentService {
         documentRepository.save(placeholder);
         editStateRepository.save(new DocumentEditState(
                 placeholderId, content.markdown(), content.contentHash(), 1));
-        startConvert(placeholder, source);
+        startConvert(placeholder, source, prepared.aiModel());
 
         DocumentUploadResponse response = toUploadResponse(placeholder, true);
         log.info("[문서 변환 요청 등록] workspaceId={} sourceDocumentId={} placeholderDocumentId={}",
@@ -1266,11 +1358,12 @@ public class DocumentService {
      * placeholder 생성이 같은 커밋이라 command만 사라지거나 run 없이 command가 나가지 않는다.
      * 이후 batch는 결과 이벤트({@link #applyConvertBatch})가 진행한다.
      */
-    private void startConvert(Document placeholder, Document source) {
+    private void startConvert(Document placeholder, Document source,
+                              Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel) {
         // queue 행이 placeholder를 FK로 참조한다. IDENTITY라 저장 즉시 INSERT되므로 placeholder를 먼저 내보낸다.
         documentRepository.flush();
         var queue = convertQueueRepository.save(new DocumentConvertQueue(placeholder.getId(), source.getId()));
-        var model = workspaceAiModelClient.get(placeholder.getWorkspaceId());
+        var model = aiModel.get();
         dispatchConvertBatch(queue, placeholder, normalizeObjectKey(source.getSourceUri()),
                 model.provider(), model.model(), 0, convertPagesPerBatch);
         queue.dispatchedUpTo(convertPagesPerBatch);
@@ -1427,6 +1520,9 @@ public class DocumentService {
     private void ingestConvertedParts(Document placeholder) {
         // 설정·권한은 변환을 요청한 사용자 기준이며, 변환이 끝나는 시점에 판정한다(트랜잭션 밖).
         boolean autoIngest = autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId());
+        // 모델 설정(access) 조회도 문서 행 잠금·트랜잭션 밖에서 한 번 한다. 실패는 편입 등록 자리에서 던진다.
+        Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel = autoIngest
+                ? Prefetched.of(() -> workspaceAiModelClient.get(placeholder.getWorkspaceId())) : null;
         java.util.List<Document> parts = new java.util.ArrayList<>();
         parts.add(documentRepository.findById(placeholder.getId()).orElseThrow());
         parts.addAll(documentRepository.findConvertedParts(placeholder.getWorkspaceId(), placeholder.getId()));
@@ -1442,7 +1538,7 @@ public class DocumentService {
                             content.getContentHash(), doc.getUserId(), Instant.now());
                     if (autoIngest && (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:"))) {
                         doc.reopenForReingest(content.getContentHash(), content.getMarkdown().getBytes(StandardCharsets.UTF_8).length);
-                        enqueueIngest(doc);
+                        enqueueIngest(doc, doc.getUserId(), "auto", aiModel);
                     }
                     return null;
                 });
@@ -1603,12 +1699,15 @@ public class DocumentService {
         Runnable autoIngest = () -> {
             try {
                 if (!autoIngestAllowed(workspaceId, userId)) return;
+                // 모델 설정(access) 조회도 트랜잭션 밖에서 한다. 실패는 편입 등록 자리에서 던진다.
+                Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel =
+                        Prefetched.of(() -> workspaceAiModelClient.get(workspaceId));
                 requiresNewSaveTransactionTemplate().execute(status -> {
                     documentRepository.findByIdInActiveWorkspace(documentId)
                             .filter(doc -> doc.getStatus() == DocumentStatus.uploaded)
                             .ifPresent(doc -> {
                                 doc.reopenForReingest(contentHash, byteSize);
-                                enqueueIngest(doc, userId, "auto");
+                                enqueueIngest(doc, userId, "auto", aiModel);
                             });
                     return null;
                 });
@@ -1633,15 +1732,20 @@ public class DocumentService {
         return enqueueIngest(document, document.getUserId(), "auto");
     }
 
-    /** requesterId는 ingest를 요청한 사용자다. 공동 편집에서는 소유자와 다를 수 있다. */
-    private String enqueueIngest(Document document, String requesterId) {
-        return enqueueIngest(document, requesterId, "manual");
+    private String enqueueIngest(Document document, String requesterId, String trigger) {
+        return enqueueIngest(document, requesterId, trigger,
+                Prefetched.of(() -> workspaceAiModelClient.get(document.getWorkspaceId())));
     }
 
-    private String enqueueIngest(Document document, String requesterId, String trigger) {
+    /**
+     * requesterId는 ingest를 요청한 사용자다. 공동 편집에서는 소유자와 다를 수 있다.
+     * aiModel은 트랜잭션 밖에서 미리 조회한 모델 설정이다(수동 편입). 자동 편입은 여기서 바로 조회한다.
+     */
+    private String enqueueIngest(Document document, String requesterId, String trigger,
+                                 Prefetched<WorkspaceAiModelClient.AiModelSelection> prefetchedModel) {
         String runId = UUID.randomUUID().toString();
         // access HTTP 조회는 크레딧 예약(계정 행 잠금) 전에 한다. 잠금을 쥔 채 기다리면 같은 사용자의 AI 요청이 줄을 선다.
-        var aiModel = workspaceAiModelClient.get(document.getWorkspaceId());
+        var aiModel = prefetchedModel.get();
         ingestCommandOutbox.begin(runId, document.getWorkspaceId(), requesterId);
         String documentId = document.getId();
         Instant startedAt = Instant.now();
@@ -2347,10 +2451,18 @@ public class DocumentService {
      * 편집 가능 Markdown 문서를 최신 편집본으로 재ingest한다. DB 편집본을 MinIO 원본으로 승격(덮어쓰기)한 뒤
      * 파이프라인 처리 큐에 재등록해, 업로드 당시가 아닌 편집한 내용으로 Wiki가 만들어지게 한다.
      */
-    @Transactional
     public DocumentIngestResponse ingest(String workspaceId, String userId, String documentId) {
+        // 권한 확인과 모델 설정 조회(access)는 트랜잭션·문서 행 잠금 전에 한다. 권한 확인은 원래도 가장 먼저였고,
+        // 모델 설정 조회의 실패는 원래 호출하던 자리(검증 뒤)에서 던진다(Prefetched).
         verifyWorkspaceOwnership(workspaceId, userId);
         workspaceAccessGuard.requirePermission(workspaceId, userId, WorkspacePermissions.WIKI_INGEST);
+        Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel =
+                Prefetched.of(() -> workspaceAiModelClient.get(workspaceId));
+        return transactionTemplate.execute(status -> ingestInTransaction(workspaceId, userId, documentId, aiModel));
+    }
+
+    private DocumentIngestResponse ingestInTransaction(String workspaceId, String userId, String documentId,
+                                                       Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel) {
         Document document = documentRepository.findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .filter(value -> value.getDeletedAt() == null)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
@@ -2365,7 +2477,7 @@ public class DocumentService {
             // 저장한 문답과 provenance를 그대로 사용한다. 편집본 승격은 필요하지 않다.
             document.updateStatus(DocumentStatus.processing, document.getExtractedTextUri(), null, null);
             document.markReconciled(null);
-            String runId = enqueueIngest(document, userId);
+            String runId = enqueueIngest(document, userId, "manual", aiModel);
             return new DocumentIngestResponse(documentId, runId, document.getStatus());
         }
         if (document.getDocumentRole() != DocumentRole.EDITABLE) {
@@ -2376,11 +2488,13 @@ public class DocumentService {
             throw new DocumentAlreadyProcessingException("이미 처리 중인 문서입니다.");
         }
 
-        return new DocumentIngestResponse(documentId, promoteAndEnqueueIngest(document, userId), document.getStatus());
+        return new DocumentIngestResponse(documentId, promoteAndEnqueueIngest(document, userId, aiModel),
+                document.getStatus());
     }
 
     /** 최신 편집본을 원본으로 승격하고 ingest outbox에 등록한다(수동 편입). 자동 편입은 업로드 본문이 곧 원본이라 승격 없이 등록한다. */
-    private String promoteAndEnqueueIngest(Document document, String userId) {
+    private String promoteAndEnqueueIngest(Document document, String userId,
+                                           Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel) {
         String documentId = document.getId();
         editStateInitializer.initializeIfNeeded(document);
         DocumentEditState editState = editStateRepository.findById(documentId)
@@ -2408,7 +2522,7 @@ public class DocumentService {
         document.reopenForReingest(currentContentHash, bytes.length);
         log.info("[문서 재ingest DB 갱신 완료] documentId={} contentHashPrefix={} byteSize={}",
                 documentId, contentHashPrefix(currentContentHash), bytes.length);
-        return enqueueIngest(document, userId);
+        return enqueueIngest(document, userId, "manual", aiModel);
     }
 
     @Transactional
