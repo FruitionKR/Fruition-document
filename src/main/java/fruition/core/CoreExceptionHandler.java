@@ -21,6 +21,7 @@ import fruition.core.document.exception.ConflictAlreadyResolvedException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentContentVersionNotFoundException;
 import fruition.core.document.exception.DocumentLockedException;
+import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.exception.EditLockLostException;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.DocumentOriginalNotFoundException;
@@ -45,6 +46,7 @@ import fruition.core.document.exception.HierarchyWriteForbiddenException;
 import fruition.core.chat.exception.ChatSessionLimitExceededException;
 import fruition.core.chat.exception.ChatSessionNotFoundException;
 import fruition.core.meeting.MeetingException;
+import fruition.core.speech.SpeechSynthesisDisabledException;
 import fruition.core.chat.exception.EmptyChatWikiExportException;
 import fruition.core.chat.exception.InvalidChatWikiExportRequestException;
 import fruition.core.query.exception.PipelineQueryException;
@@ -231,6 +233,13 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
                 .body(ErrorResponse.of(e.getCode(), e.getMessage()));
     }
 
+    @ExceptionHandler(SpeechSynthesisDisabledException.class)
+    public ResponseEntity<ErrorResponse> handleSpeechSynthesisDisabled(SpeechSynthesisDisabledException e) {
+        logHandled(e, HttpStatus.FORBIDDEN, "SPEECH_SYNTHESIS_DISABLED");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of("SPEECH_SYNTHESIS_DISABLED", e.getMessage()));
+    }
+
     @ExceptionHandler(MeetingException.class)
     public ResponseEntity<ErrorResponse> handleMeeting(MeetingException e) {
         logHandled(e, e.getStatus(), e.getCode());
@@ -312,6 +321,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("DOCUMENT_CONTENT_VERSION_NOT_FOUND", "문서 콘텐츠 버전을 찾을 수 없습니다."));
+    }
+
+    @ExceptionHandler(DocumentTitleLockedException.class)
+    public ResponseEntity<ErrorResponse> handleDocumentTitleLocked(DocumentTitleLockedException e) {
+        logHandled(e, HttpStatus.CONFLICT, "DOCUMENT_TITLE_LOCKED");
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("DOCUMENT_TITLE_LOCKED", e.getMessage()));
     }
 
     @ExceptionHandler(DocumentLockedException.class)

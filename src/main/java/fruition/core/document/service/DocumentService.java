@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.shared.util.StorageProperties;
 import fruition.shared.util.RetryingObjectPut;
+import fruition.core.document.domain.ConversionReport;
 import fruition.core.document.domain.Document;
 import fruition.core.document.domain.DocumentAsset;
 import fruition.core.document.repository.DocumentAssetRepository;
@@ -15,6 +16,7 @@ import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.domain.DocumentStatus;
 import fruition.shared.idempotency.IdempotencyService;
 import fruition.core.document.exception.DocumentNotFoundException;
+import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.exception.DocumentOriginalNotFoundException;
 import fruition.core.document.exception.DocumentUploadException;
 import fruition.core.document.exception.InvalidDocumentOriginException;
@@ -1338,7 +1340,9 @@ public class DocumentService {
                     Prefetched<String> stored = Prefetched.of(() -> putMarkdownSource(placeholderId, content.bytes()));
                     storedKey.set(stored.value());
                     return new ConvertPrepared(placeholderId, stored,
-                            Prefetched.of(() -> workspaceAiModelClient.get(workspaceId)));
+                            Prefetched.of(() -> workspaceAiModelClient.get(workspaceId)),
+                            // 조회 실패는 꺼진 것으로 돌려받는다. 외부 AI 전송은 명시적으로 켠 워크스페이스만 한다.
+                            workspaceSettingsClient.describePdfFigures(workspaceId));
                 },
                 prepared -> {
                     registerStoredSourceCleanup(storedKey);
@@ -1347,7 +1351,8 @@ public class DocumentService {
     }
 
     private record ConvertPrepared(String placeholderId, Prefetched<String> sourceKey,
-                                   Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel) {}
+                                   Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel,
+                                   boolean describeFigures) {}
 
     private DocumentUploadResponse startConvertPlaceholder(String workspaceId, String userId, String documentId,
                                                            Document source,
@@ -1386,7 +1391,7 @@ public class DocumentService {
         documentRepository.save(placeholder);
         editStateRepository.save(new DocumentEditState(
                 placeholderId, content.markdown(), content.contentHash(), 1));
-        startConvert(placeholder, source, prepared.aiModel());
+        startConvert(placeholder, source, prepared.aiModel(), prepared.describeFigures());
 
         DocumentUploadResponse response = toUploadResponse(placeholder, true);
         log.info("[문서 변환 요청 등록] workspaceId={} sourceDocumentId={} placeholderDocumentId={}",
@@ -1419,23 +1424,27 @@ public class DocumentService {
      * 이후 batch는 결과 이벤트({@link #applyConvertBatch})가 진행한다.
      */
     private void startConvert(Document placeholder, Document source,
-                              Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel) {
+                              Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel, boolean describeFigures) {
         // queue 행이 placeholder를 FK로 참조한다. IDENTITY라 저장 즉시 INSERT되므로 placeholder를 먼저 내보낸다.
         documentRepository.flush();
         var queue = convertQueueRepository.save(new DocumentConvertQueue(placeholder.getId(), source.getId()));
         var model = aiModel.get();
         dispatchConvertBatch(queue, placeholder, normalizeObjectKey(source.getSourceUri()),
-                model.provider(), model.model(), 0, convertPagesPerBatch);
+                model.provider(), model.model(), describeFigures, 0, convertPagesPerBatch);
         queue.dispatchedUpTo(convertPagesPerBatch);
     }
 
     private void dispatchConvertBatch(DocumentConvertQueue queue, Document placeholder, String sourceKey,
-                                      String provider, String model, int startPage, int pageCount) {
+                                      String provider, String model, boolean describeFigures,
+                                      int startPage, int pageCount) {
         String command = convertCommandOutbox.enqueue(placeholder.getId(), placeholder.getWorkspaceId(),
-                placeholder.getUserId(), sourceKey, startPage, pageCount, provider, model);
+                placeholder.getUserId(), sourceKey, startPage, pageCount, provider, model, describeFigures);
         convertBatchStore.insertDispatched(queue.getId(), startPage, pageCount, command);
         log.info("[문서 변환 batch 발행] documentId={} startPage={} pageCount={}", placeholder.getId(), startPage, pageCount);
     }
+
+    /** 변환 결과 이벤트가 같은 문서의 대기열 행 잠금을 기다리는 최대 시간. */
+    private static final String CONVERT_QUEUE_LOCK_TIMEOUT = "5s";
 
     private static final java.util.regex.Pattern CONVERT_BATCH_RUN_ID =
             java.util.regex.Pattern.compile("^convert:([^:]+):(\\d+)$");
@@ -1473,13 +1482,19 @@ public class DocumentService {
     }
 
     private ConvertOutcome mergeConvertBatch(JsonNode event, String documentId, int startPage) {
+        // 같은 문서의 이벤트가 동시에 와도 결과 기록·병합·발행을 한 번에 하나씩 처리한다.
+        // 잠금을 쥔 쪽은 MinIO·이미지 작업을 하므로 기다리는 쪽이 DB 연결을 오래 잡지 않게 대기를 제한한다.
+        // 시간이 지나면 예외로 트랜잭션을 되돌리고, ai.task.event error handler가 같은 레코드를 다시 소비한다.
+        String lockTimeout = convertQueueRepository.currentLockTimeout();
+        convertQueueRepository.setLocalLockTimeout(CONVERT_QUEUE_LOCK_TIMEOUT);
+        var queue = convertQueueRepository.findByDocumentIdForUpdate(documentId).orElse(null);
+        convertQueueRepository.setLocalLockTimeout(lockTimeout);
+        // placeholder는 잠금을 잡은 뒤에 읽는다. 먼저 읽으면 앞 batch가 커밋한 변환 요약을 덮어써 잃는다.
         Document placeholder = documentRepository.findByIdInActiveWorkspace(documentId).orElse(null);
         if (placeholder == null) {
             log.info("[문서 변환 이벤트 무시] documentId={} startPage={} reason=document_not_found", documentId, startPage);
             return null;
         }
-        // 같은 문서의 이벤트가 동시에 와도 결과 기록·병합·발행을 한 번에 하나씩 처리한다.
-        var queue = convertQueueRepository.findByDocumentIdForUpdate(documentId).orElse(null);
         String convertRunId = "convert:" + documentId;
         if (queue == null || !taskWriter.join(convertRunId)) {
             log.info("[문서 변환 이벤트 무시] documentId={} startPage={} reason=run_not_active", documentId, startPage);
@@ -1507,6 +1522,8 @@ public class DocumentService {
         }
         convertBatchStore.markReady(queue.getId(), startPage, pageEnd, resultKey);
         queue.recordTotalPages(total);
+        // 복원 요약·그림 설명 집계는 선택 필드다. 중복 이벤트는 위에서 걸러 두 번 더하지 않는다.
+        placeholder.mergeConversionReport(ConversionReport.fromBatchPayload(payload));
         try {
             while (queue.getCompletedPages() < total) {
                 var next = convertBatchStore.find(queue.getId(), queue.getCompletedPages()).orElse(null);
@@ -1532,6 +1549,7 @@ public class DocumentService {
             if (analytics != null) analytics.converted(placeholder, queue.getSourceDocumentId(), total, null);
             convertQueueRepository.delete(queue);
             log.info("[문서 변환 완료] documentId={} totalPages={}", documentId, total);
+            logConversionReport(placeholder, total);
             return new ConvertOutcome(placeholder, true, List.of());
         }
         // 결과를 기다리는 batch와 순서를 기다리는 결과를 합쳐 최대 maxInFlight개만 문서에 열어 둔다.
@@ -1540,12 +1558,28 @@ public class DocumentService {
         int nextStart = queue.getNextStartPage();
         while (inFlight < convertMaxInFlight && nextStart < total) {
             dispatchConvertBatch(queue, placeholder, template.path("source_key").asText(),
-                    template.path("provider").asText(), template.path("model").asText(), nextStart, batch.pageCount());
+                    template.path("provider").asText(), template.path("model").asText(),
+                    // 변환 요청 때 정한 그림 설명 여부를 모든 batch가 따른다. 도중에 설정이 바뀌어도 한 문서 안에서는 같다.
+                    template.path("describe_figures").asBoolean(false), nextStart, batch.pageCount());
             nextStart += batch.pageCount();
             inFlight++;
         }
         queue.dispatchedUpTo(nextStart);
         return new ConvertOutcome(placeholder, false, List.of());
+    }
+
+    /** 원문으로 대신한 쪽이 있으면 운영 확인용으로 쪽 수·사유 코드만 남긴다. 본문은 남기지 않는다. */
+    private static void logConversionReport(Document placeholder, int totalPages) {
+        ConversionReport report = placeholder.getConversionReport();
+        if (report == null || report.fallbackPageCount() == 0) return;
+        var restoration = report.restorationSummary();
+        var figures = report.figureDescriptions();
+        log.warn("[문서 변환 원문 대체] documentId={} workspaceId={} totalPages={} brokenPages={} repairedPages={} "
+                        + "fallbackPages={} reasons={} figuresRequested={} figuresDescribed={} figuresFailed={}",
+                placeholder.getId(), placeholder.getWorkspaceId(), totalPages, restoration.brokenPages(),
+                restoration.repairedPages(), report.fallbackPageCount(), report.fallbackReasonCounts(),
+                figures != null && figures.requested(), figures == null ? 0 : figures.described(),
+                figures == null ? 0 : figures.failed());
     }
 
     private JsonNode readCommand(String command) {
@@ -1951,7 +1985,9 @@ public class DocumentService {
                 viewer.override(doc),
                 doc.getUpdatedBy(),
                 doc.getAiOrigin(),
-                documentItemAssembler.lastAiChanges(List.of(documentId)).get(documentId)
+                documentItemAssembler.lastAiChanges(List.of(documentId)).get(documentId),
+                DocumentItemAssembler.restorationSummaryOf(doc),
+                DocumentItemAssembler.figureDescriptionsOf(doc)
         );
     }
 
@@ -2602,6 +2638,10 @@ public class DocumentService {
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
         documentAccessPolicy.requireEdit(document, userId);
+        // 채팅에서 만든 문서는 이름도 문답 출처의 일부라 본문과 함께 잠근다. 이동·삭제는 그대로 허용한다.
+        if ("chat_export".equals(document.getOrigin())) {
+            throw new DocumentTitleLockedException("채팅에서 만든 문서는 이름을 바꿀 수 없습니다.");
+        }
         if (document.getCurrentVersion() != request.baseVersion()) {
             throw versionConflict();
         }
@@ -2673,6 +2713,9 @@ public class DocumentService {
         verifyWorkspaceOwnership(workspaceId, userId);
         validateIdempotencyKey(idempotencyKey);
         validateLifecycleRequest(request);
+        // 변환 결과 반영(mergeConvertBatch)과 같은 순서로 변환 대기열 행을 문서 행보다 먼저 잠근다.
+        // 반대 순서면 삭제와 반영이 서로를 기다려 교착한다. 변환 문서가 아니면 행이 없어 아무것도 잠그지 않는다.
+        convertQueueRepository.findByDocumentIdForUpdate(documentId);
         Document document = documentRepository
                 .findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));

@@ -258,6 +258,16 @@ class SpeechSynthesisIntegrationTest {
     }
 
     @Test
+    void catalogReportsSpeechSynthesisEnabledByDefault() throws Exception {
+        var response = http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/ai-models"))
+                .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(userId, userId + "@example.com"))
+                .GET().build(), HttpResponse.BodyHandlers.ofString());
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(JSON.readTree(response.body()).path("speech_synthesis_enabled").asBoolean(false)).isTrue();
+    }
+
+    @Test
     void relaysEventsInOrder_andStoresCompletedSynthesis() throws Exception {
         var response = post(userId, messageId);
 

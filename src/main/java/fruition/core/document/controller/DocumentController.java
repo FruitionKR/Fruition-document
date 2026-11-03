@@ -352,7 +352,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "문서 version 충돌",
+        @ApiResponse(responseCode = "409", description = "문서 version 충돌 또는 채팅에서 만든 문서라 이름이 잠김(DOCUMENT_TITLE_LOCKED)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PatchMapping("/{document_id}/rename")

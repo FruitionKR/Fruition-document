@@ -14,4 +14,11 @@ public interface DocumentConvertQueueRepository extends JpaRepository<DocumentCo
     Optional<DocumentConvertQueue> findByDocumentIdForUpdate(@Param("documentId") String documentId);
 
     Optional<DocumentConvertQueue> findByDocumentId(String documentId);
+
+    @Query(value = "SELECT current_setting('lock_timeout')", nativeQuery = true)
+    String currentLockTimeout();
+
+    /** 이 트랜잭션 안에서만 잠금 대기 한도를 바꾼다(SET LOCAL과 같다). */
+    @Query(value = "SELECT set_config('lock_timeout', :value, true)", nativeQuery = true)
+    String setLocalLockTimeout(@Param("value") String value);
 }

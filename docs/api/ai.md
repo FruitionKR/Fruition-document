@@ -82,9 +82,12 @@
       "model": "claude-haiku-4-5-20251001",
       "provider": "claude"
     }
-  ]
+  ],
+  "speech_synthesis_enabled": true
 }
 ```
+
+- `speech_synthesis_enabled`: 채팅 답변 듣기(`POST /api/workspaces/{workspace_id}/speech/synthesis`)를 쓸 수 있는지. 운영 스위치 `app.speech.synthesis.enabled`(`SPEECH_SYNTHESIS_ENABLED`, 기본 `true`) 값이다. `false`면 프론트가 듣기 버튼을 숨긴다. 음성 입력·회의 받아쓰기와는 관계없다. 프론트를 다시 빌드하지 않고 configmap만 바꿔 켜고 끈다.
 
 - 저가 모델 정책(2026-10-18)에 따라 provider마다 가장 싼 모델 하나씩, 위 예시의 3개만 반환한다. 첫 항목은 기본 모델 `gpt-6-luna`다. 프론트는 저장된 선택이 없으면 첫 항목을 고른다.
 - `claude-haiku-4-5-20251001`은 사용자가 요청마다 직접 고르는 채팅 질의·Agent turn에서만 쓸 수 있다. 워크스페이스 공용 설정(`PUT /api/workspaces/{workspace_id}/ai-model-settings`)에는 openai·gemini만 저장할 수 있다.

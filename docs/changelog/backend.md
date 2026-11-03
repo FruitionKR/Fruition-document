@@ -2,6 +2,7 @@
 
 ## 2026-11-03
 
+- 채팅에서 만든 문서(`origin=chat_export`)는 본문뿐 아니라 이름도 잠근다. `PATCH .../documents/{id}/rename`과 이를 그대로 쓰는 Agent `rename_document` 도구가 409 `DOCUMENT_TITLE_LOCKED`("채팅에서 만든 문서는 이름을 바꿀 수 없습니다.")로 거절한다. 내보내기 직후 서버가 위키 제목으로 이름을 확정하는 경로와 이동·삭제는 그대로 허용한다.
 - 복구 미리보기 토큰 서명 키를 `RESTORE_PREVIEW_TOKEN_SECRET`이 없을 때 Pod마다 무작위로 만들던 것을, 모든 Pod가 함께 받는 `INTERNAL_CALLBACK_TOKEN`에서 용도별로 파생하게 했다. 여러 replica 뒤에서 미리보기와 실행이 다른 Pod로 가거나 그사이 재시작·배포가 있으면 409 `RESTORE_PREVIEW_STALE`로 롤백이 가끔 거절되던 문제다. 전용 키를 설정하면 그 값을 그대로 쓰고, 둘 다 없을 때(로컬)만 무작위 키를 쓴다. API·토큰 형식은 바뀌지 않는다.
 
 ## 2026-10-23
