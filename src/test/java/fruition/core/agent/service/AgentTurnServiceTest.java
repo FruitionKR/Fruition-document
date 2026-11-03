@@ -71,7 +71,9 @@ class AgentTurnServiceTest {
         service = new AgentTurnService(documentService, editLockService, workspaceAccessGuard, runRepository,
                 statusRequester, outboxWriter, applyOperationStore, aiModelCatalog,
                 chatSessionService, chatConversationReader, chatTurnRecorder, "ai.agent.command", cancellation, new ObjectMapper(),
-                usageCharges, folderRepository);
+                usageCharges, folderRepository,
+                new org.springframework.transaction.support.TransactionTemplate(
+                        org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class)));
     }
 
     @Test

@@ -59,7 +59,9 @@ class WikiMaintenanceServiceTest {
                 org.mockito.Mockito.mock(fruition.core.usage.limit.AiUsageLimiter.class)));
         service = new WikiMaintenanceService(workspaceAccessGuard, operationStarter, outboxWriter,
                 runStatusRequester, lintStateRepository, wikiStateRequester, objectMapper,
-                "ai.maintenance.command", workspaceAiModelClient);
+                "ai.maintenance.command", workspaceAiModelClient,
+                new org.springframework.transaction.support.TransactionTemplate(
+                        org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class)));
         org.mockito.Mockito.lenient().when(workspaceAiModelClient.get("ws_1"))
                 .thenReturn(new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"));
     }
