@@ -51,7 +51,7 @@ class ChatWikiExportReconcilerTest {
                 };
         reconciler = new ChatWikiExportReconciler(
                 documentRepository, wikiStateRequester, chatPartialWikiRepository, documentService,
-                transactionTemplate, new ObjectMapper(), taskWriter);
+                transactionTemplate, new ObjectMapper(), taskWriter, null);
     }
 
     /** export 시점에 documents.pipeline_input_blocks에 저장되는 형식 그대로. */
