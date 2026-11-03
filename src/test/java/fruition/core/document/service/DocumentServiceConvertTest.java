@@ -536,7 +536,8 @@ class DocumentServiceConvertTest {
                 java.util.Map.entry("start_page", 0),
                 java.util.Map.entry("page_count", 10),
                 java.util.Map.entry("provider", "gemini"),
-                java.util.Map.entry("model", "gemini-3.5-flash-lite")));
+                java.util.Map.entry("model", "gemini-3.5-flash-lite"),
+                java.util.Map.entry("describe_figures", false)));
         assertThat(batchStore.rows.get(0).command()).isEqualTo(payload.getValue());
         // 예약은 변환 run 하나만 한다. batch는 run 등록·예약을 만드는 enqueue/begin/reserve를 거치지 않는다.
         verify(taskWriter, times(1)).begin(eq("convert:" + placeholderId), eq(WORKSPACE_ID), eq(USER_ID), eq("convert"));
@@ -549,6 +550,83 @@ class DocumentServiceConvertTest {
         ArgumentCaptor<DocumentConvertQueue> saved = ArgumentCaptor.forClass(DocumentConvertQueue.class);
         verify(convertQueueRepository).save(saved.capture());
         return saved.getValue();
+    }
+
+    @Test
+    @DisplayName("워크스페이스가 PDF 그림 설명을 켰으면 첫 command에 describe_figures=true를 싣는다")
+    void requestCarriesDescribeFiguresSetting() throws Exception {
+        stubOwnedWorkspace();
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(sourcePdf()));
+        when(workspaceSettingsClient.describePdfFigures(WORKSPACE_ID)).thenReturn(true);
+
+        documentService.convertToMarkdown(WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key");
+
+        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
+        verify(taskWriter).enqueueJoined(anyString(), eq("ai.convert.command"), anyString(), payload.capture());
+        assertThat(mapper.readTree(payload.getValue()).path("describe_figures").asBoolean()).isTrue();
+    }
+
+    @Test
+    @DisplayName("이어 발행하는 batch는 첫 command의 describe_figures를 그대로 따른다")
+    void laterBatchesInheritDescribeFigures() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        batchStore.insertDispatched(7, 0, 10, "{\"run_id\":\"convert:doc_placeholder:0\",\"source_key\":"
+                + "\"sources/documents/doc_source_pdf/original\",\"provider\":\"gemini\",\"model\":\"m\","
+                + "\"describe_figures\":true}");
+        queue.dispatchedUpTo(10);
+        stubResult(0, "<!-- page 1 -->\n\n# p1\n");
+
+        documentService.applyConvertBatch(succeeded(0, 10, 20));
+
+        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
+        verify(taskWriter).enqueueJoined(anyString(), anyString(), anyString(), payload.capture());
+        assertThat(mapper.readTree(payload.getValue()).path("describe_figures").asBoolean()).isTrue();
+    }
+
+    @Test
+    @DisplayName("batch 결과의 복원 요약·그림 설명 집계를 변환 문서에 합치고, 요약이 없는 batch는 그대로 둔다")
+    void batchReportsAreMergedIntoConvertedDocument() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0, 10);
+        stubResult(0, "<!-- page 1 -->\n\n# p1\n");
+        stubResult(10, "<!-- page 1 -->\n\n# p11\n");
+
+        documentService.applyConvertBatch(withReport(succeeded(10, 15, 15),
+                "{\"broken_pages\":2,\"repaired_pages\":1,\"fallback_pages\":[{\"page\":12,\"reason\":\"font_mapping\"}]}",
+                "{\"requested\":3,\"described\":2,\"failed\":1,\"skipped\":0}"));
+        documentService.applyConvertBatch(withReport(succeeded(0, 10, 15),
+                "{\"broken_pages\":1,\"repaired_pages\":0,\"fallback_pages\":[{\"page\":4,\"reason\":\"provider_error\"}]}",
+                null));
+
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
+        var report = parent.getConversionReport();
+        assertThat(report.restorationSummary().brokenPages()).isEqualTo(3);
+        assertThat(report.restorationSummary().repairedPages()).isEqualTo(1);
+        assertThat(report.restorationSummary().fallbackPages()).extracting(
+                fruition.core.document.domain.ConversionReport.FallbackPage::page).containsExactly(4, 12);
+        assertThat(report.figureDescriptions()).isEqualTo(
+                new fruition.core.document.domain.ConversionReport.FigureDescriptions(3, 2, 1, 0));
+    }
+
+    @Test
+    @DisplayName("요약 필드가 없는 이전 AI 결과는 변환 문서에 요약을 남기지 않는다")
+    void batchWithoutReportLeavesNull() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# p1\n");
+
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
+
+        assertThat(parent.getConversionReport()).isNull();
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode withReport(com.fasterxml.jackson.databind.JsonNode event,
+                                                               String restoration, String figures) throws Exception {
+        var payload = (com.fasterxml.jackson.databind.node.ObjectNode) event.path("payload");
+        if (restoration != null) payload.set("restoration_summary", mapper.readTree(restoration));
+        if (figures != null) payload.set("figure_descriptions", mapper.readTree(figures));
+        return event;
     }
 
     @Test
