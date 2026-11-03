@@ -69,7 +69,7 @@ class ChatWikiExportReconcilerIntegrationTest {
         List<Future<?>> pods = new ArrayList<>();
         for (int i = 0; i < 2; i++) {
             var reconciler = new ChatWikiExportReconciler(onlyDocument(doc), wiki, partials, documentService,
-                    transactionTemplate, mapper, taskWriter);
+                    transactionTemplate, mapper, taskWriter, null);
             pods.add(pool.submit(() -> {
                 barrier.await();
                 reconciler.reconcile();

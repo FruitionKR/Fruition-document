@@ -39,6 +39,7 @@ class FxRateServiceIntegrationTest {
     @Autowired PlatformTransactionManager manager;
     @Autowired ObjectMapper mapper;
     @Autowired PipelineClientFactory factory;
+    @Autowired fruition.shared.scheduling.SchedulerLease lease;
 
     private HttpServer server;
     private FxRateService fx;
@@ -62,7 +63,7 @@ class FxRateServiceIntegrationTest {
         server.start();
         // 다른 테스트가 넣은 미래 행이 '최신 행'을 가리지 않게 치운다(각 테스트가 자기 행을 넣는다).
         jdbc.update("DELETE FROM fx_rates WHERE effective_from > now()");
-        fx = new FxRateService(jdbc, manager, mapper, factory, "http://127.0.0.1:" + server.getAddress().getPort() + "/fx", "test-key");
+        fx = new FxRateService(jdbc, manager, mapper, factory, lease, "http://127.0.0.1:" + server.getAddress().getPort() + "/fx", "test-key");
     }
 
     @AfterEach
@@ -134,7 +135,7 @@ class FxRateServiceIntegrationTest {
 
     @Test
     void blankAuthKeyDoesNothing() {
-        var blank = new FxRateService(jdbc, manager, mapper, factory, "http://127.0.0.1:" + server.getAddress().getPort() + "/fx", "");
+        var blank = new FxRateService(jdbc, manager, mapper, factory, lease, "http://127.0.0.1:" + server.getAddress().getPort() + "/fx", "");
         blank.refresh();
         assertThat(queries).isEmpty();
     }

@@ -3,6 +3,7 @@ package fruition.core.usage.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.shared.http.PipelineClientFactory;
+import fruition.shared.scheduling.SchedulerLease;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,6 +17,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -30,6 +32,8 @@ import java.time.format.DateTimeFormatter;
  * <p>{@code effective_from}은 게시일이 아니라 가져온 시각(초 단위)이다. 게시일 00:00으로 두면 이미 청구된 호출에
  * 소급되어, 같은 시각 호출도 수집 시점에 따라 환율이 달라진다. 직전 환율과 같으면 넣지 않는다.
  * 여러 Pod가 동시에 돌아도 안전하도록 마지막 행 조회와 삽입을 advisory lock 트랜잭션으로 묶는다.
+ * 외부 API 호출 한도 때문에 {@link SchedulerLease}로 {@value #HOLD_MINUTES}분 안에는 한 Pod만 부른다
+ * (11:30에 모든 Pod가 함께 돌 때와 롤링 배포로 Pod가 차례로 뜰 때).
  * 실패하면 이전 환율을 그대로 쓰고 {@code [환율 갱신 실패]} 경고만 남긴다(알람 기준 문구).
  */
 @Service
@@ -40,6 +44,7 @@ public class FxRateService {
     private static final DateTimeFormatter YYYYMMDD = DateTimeFormatter.BASIC_ISO_DATE;
     // 추석·설 연휴(주말 포함)가 길어도 직전 영업일에 닿는 범위.
     static final int LOOKBACK_DAYS = 10;
+    static final int HOLD_MINUTES = 10;
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -47,11 +52,14 @@ public class FxRateService {
     private final String endpoint;
     private final String authKey;
     private final TransactionTemplate transaction;
+    private final SchedulerLease lease;
 
     public FxRateService(JdbcTemplate jdbc, PlatformTransactionManager manager, ObjectMapper mapper, PipelineClientFactory factory,
+                         SchedulerLease lease,
                          @Value("${app.fx.koreaexim.endpoint}") String endpoint,
                          @Value("${app.fx.koreaexim.auth-key:}") String authKey) {
         this.jdbc = jdbc;
+        this.lease = lease;
         this.transaction = new TransactionTemplate(manager);
         this.mapper = mapper;
         // 내부 인증 헤더가 붙는 restClient()는 쓰지 않는다(외부 호출). timeout 설정만 가져온다.
@@ -70,6 +78,9 @@ public class FxRateService {
         if (authKey.isBlank()) {
             log.warn("[환율 갱신 실패] KOREAEXIM_AUTH_KEY가 없어 환율을 갱신하지 않는다.");
             return;
+        }
+        if (!lease.tryAcquire("fx_rate_refresh", Duration.ofMinutes(HOLD_MINUTES))) {
+            return; // 다른 Pod가 방금 갱신했다. fx_rates는 공유 테이블이라 결과가 같다.
         }
         try {
             update(LocalDate.now(KST));
