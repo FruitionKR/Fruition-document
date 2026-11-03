@@ -2,6 +2,7 @@ package fruition.core.document.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import fruition.core.document.domain.ConversionReport;
 import fruition.core.document.domain.DocumentProcessingState;
 import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.domain.DocumentStatus;
@@ -150,5 +151,15 @@ public record DocumentDetailResponse(
         @JsonProperty("last_ai_change")
         @JsonInclude(JsonInclude.Include.ALWAYS)
         @Schema(description = "현재 본문 이력 중 가장 최근 AI 적용(Agent 편집·회의록 덧붙이기). 없으면 null이다.", nullable = true)
-        DocumentAiChange lastAiChange
+        DocumentAiChange lastAiChange,
+
+        @JsonProperty("restoration_summary")
+        @Schema(description = "PDF 변환 문서의 복원 요약. 깨진 쪽 수(broken_pages), AI로 복원한 쪽 수(repaired_pages), "
+                + "원문 텍스트로 대신한 쪽과 사유(fallback_pages[].page(원본 1부터)·reason(대표 사유)·causes(모든 사유, 없으면 키 생략): font_mapping | replacement_character | "
+                + "token_mismatch | extract_failed | repair_rejected | provider_error | unknown). 변환 문서가 아니거나 요약이 없으면 키가 빠진다.")
+        ConversionReport.RestorationSummary restorationSummary,
+
+        @JsonProperty("figure_descriptions")
+        @Schema(description = "PDF 변환의 그림 설명 집계. requested(bool)는 그림 설명 요청 여부, described·failed·skipped는 batch별 합이다(AI가 batch당 50장까지). AI가 집계를 주지 않았으면 키가 빠진다.")
+        ConversionReport.FigureDescriptions figureDescriptions
 ) {}
