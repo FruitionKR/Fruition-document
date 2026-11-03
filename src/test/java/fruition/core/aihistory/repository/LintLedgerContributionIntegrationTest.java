@@ -267,4 +267,19 @@ class LintLedgerContributionIntegrationTest {
             restoreApplier.apply(restore, plan, Set.of(lintId), Map.of(child, signature), now);
         });
     }
+
+    @Test
+    void maxRevisionCountsContributionRowWithoutVersion() {
+        // 재편입·lint가 지운 페이지는 기여 행만 순서를 차지한다. 뒤 기여가 같은 순서를 받으면 재생 순서가 뒤집힌다.
+        String pageId = "page_" + UUID.randomUUID();
+        String operationId = "op_" + UUID.randomUUID();
+        transactionTemplate.executeWithoutResult(status -> {
+            operationLogRepository.save(OperationLog.processing(
+                    operationId, "ws_1", "user_1", OperationType.lint, null, Instant.now()));
+            contributionRepository.save(new WikiPageContribution(
+                    pageId, operationId, null, 5L, "wiki/ws_1/pages/" + pageId + "/ops/" + operationId + ".json",
+                    Instant.now()));
+        });
+        assertThat(versionRepository.findMaxRevision(pageId)).isEqualTo(5L);
+    }
 }

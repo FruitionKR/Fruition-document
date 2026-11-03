@@ -1,17 +1,20 @@
 package fruition.core.document.service;
 
+import fruition.shared.scheduling.SchedulerLease;
 import fruition.shared.util.StorageProperties;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.errors.ErrorResponseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
@@ -21,6 +24,7 @@ import java.util.Set;
  * 이 컬럼 이전에 올린 문서는 여기서 저장소 객체를 읽어 계산한다. 직접 업로드는 크기가 커서 업로드 응답을 붙잡지 않는다.
  *
  * <p>행을 잠그지 않는다. 여러 replica가 같은 문서를 동시에 계산해도 값은 같고, 비어 있을 때만 쓴다.
+ * 스케줄 실행은 대상이 있을 때 {@link SchedulerLease}로 한 회차에 한 Pod만 객체를 내려받게 한다.
  */
 @Service
 public class DocumentOriginalHashWorker {
@@ -32,26 +36,41 @@ public class DocumentOriginalHashWorker {
     private final JdbcTemplate jdbc;
     private final MinioClient minio;
     private final StorageProperties storage;
+    private final SchedulerLease lease;
+    private final Duration hold;
 
-    public DocumentOriginalHashWorker(JdbcTemplate jdbc, MinioClient minio, StorageProperties storage) {
+    public DocumentOriginalHashWorker(JdbcTemplate jdbc, MinioClient minio, StorageProperties storage, SchedulerLease lease,
+                                      @Value("${app.document-original-hash.delay-ms:30000}") long intervalMs) {
         this.jdbc = jdbc;
         this.minio = minio;
         this.storage = storage;
+        this.lease = lease;
+        this.hold = SchedulerLease.forInterval(intervalMs);
     }
 
     @Scheduled(fixedDelayString = "${app.document-original-hash.delay-ms:30000}")
     public void runScheduled() {
-        fillPending();
+        List<Pending> pending = pending();
+        if (!pending.isEmpty() && lease.tryAcquire("document_original_hash", hold)) {
+            fill(pending);
+        }
     }
 
     /** 계산한 문서 수를 돌려준다. */
     public int fillPending() {
-        List<Pending> pending = jdbc.query("""
+        return fill(pending());
+    }
+
+    private List<Pending> pending() {
+        return jdbc.query("""
                 SELECT id, source_uri FROM documents
                 WHERE original_sha256 IS NULL AND document_role = 'ORIGINAL'
                   AND source_uri IS NOT NULL AND deleted_at IS NULL
                 ORDER BY uploaded_at LIMIT ?
                 """, (rs, n) -> new Pending(rs.getString("id"), rs.getString("source_uri")), BATCH_SIZE);
+    }
+
+    private int fill(List<Pending> pending) {
         // ponytail: 계속 실패하는 문서가 BATCH_SIZE개 쌓이면 뒤 문서가 밀린다. 그런 일이 보이면 실패 횟수 컬럼을 둔다.
         int filled = 0;
         for (Pending document : pending) {

@@ -9,13 +9,16 @@ import fruition.core.document.domain.DocumentStatus;
 import fruition.core.document.service.DocumentService;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
+import fruition.shared.scheduling.SchedulerLease;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -39,6 +42,9 @@ public class ChatWikiExportReconciler {
     private static final Logger log = LoggerFactory.getLogger(ChatWikiExportReconciler.class);
 
     /** export 블록 id의 {@code session_id:pair_id} provenance. group(1)=session_id, group(2)=pair_id. */
+    private static final long INTERVAL_MS = 3000;
+    private static final Duration HOLD = SchedulerLease.forInterval(INTERVAL_MS);
+
     private static final Pattern PAIR_REF = Pattern.compile("(?U)^([^:\\s]+):([^:\\s]+)$");
 
     private final DocumentRepository documentRepository;
@@ -48,13 +54,15 @@ public class ChatWikiExportReconciler {
     private final TransactionTemplate transactionTemplate;
     private final ObjectMapper objectMapper;
     private final fruition.core.document.repository.AiCommandOutboxWriter taskWriter;
+    private final SchedulerLease lease;
 
     public ChatWikiExportReconciler(DocumentRepository documentRepository,
                                     PipelineWikiStateRequester pipelineWikiStateRequester,
                                     ChatPartialWikiRepository chatPartialWikiRepository,
                                     DocumentService documentService,
                                     TransactionTemplate transactionTemplate,
-                                    ObjectMapper objectMapper, fruition.core.document.repository.AiCommandOutboxWriter taskWriter) {
+                                    ObjectMapper objectMapper, fruition.core.document.repository.AiCommandOutboxWriter taskWriter,
+                                    SchedulerLease lease) {
         this.documentRepository = documentRepository;
         this.pipelineWikiStateRequester = pipelineWikiStateRequester;
         this.chatPartialWikiRepository = chatPartialWikiRepository;
@@ -62,16 +70,35 @@ public class ChatWikiExportReconciler {
         this.transactionTemplate = transactionTemplate;
         this.objectMapper = objectMapper;
         this.taskWriter = taskWriter;
+        this.lease = lease;
+    }
+
+    /**
+     * 후처리할 문서가 있을 때만 점유를 시도하고, 점유한 Pod만 AI에 Wiki 상태를 묻는다. 겹쳐 돌아도 결과는 같지만
+     * (아래 reconcileOne의 재확인) 외부 조회가 Pod 수만큼 반복됐다. 일이 없을 때는 점유 쿼리도 보내지 않는다.
+     */
+    @Scheduled(fixedDelay = INTERVAL_MS)
+    public void runScheduled() {
+        List<Document> documents = pending();
+        if (!documents.isEmpty() && lease.tryAcquire("chat_wiki_export_reconcile", HOLD)) {
+            reconcile(documents);
+        }
+    }
+
+    private List<Document> pending() {
+        return documentRepository.findAllByOriginAndStatusAndReconciledAtIsNull("chat_export", DocumentStatus.completed);
     }
 
     /**
      * 문서 하나가 실패해도 나머지는 확정되도록 문서 단위로 처리한다. 한 트랜잭션으로 묶으면
      * 뒤쪽 문서의 실패가 앞서 끝낸 문서까지 되돌려, 문서 하나가 전체 후처리를 막는다.
      */
-    @Scheduled(fixedDelay = 3000)
     public void reconcile() {
-        for (Document document : documentRepository.findAllByOriginAndStatusAndReconciledAtIsNull(
-                "chat_export", DocumentStatus.completed)) {
+        reconcile(pending());
+    }
+
+    private void reconcile(List<Document> documents) {
+        for (Document document : documents) {
             try {
                 reconcileOne(document);
             } catch (RuntimeException e) {

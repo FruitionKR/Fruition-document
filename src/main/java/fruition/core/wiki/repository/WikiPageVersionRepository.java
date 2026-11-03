@@ -14,10 +14,15 @@ public interface WikiPageVersionRepository extends JpaRepository<WikiPageVersion
     void lockPage(@Param("pageId") String pageId);
 
     /**
-     * 다음 revision 채번 기준. {@code wiki_pages}에 현재 버전 컬럼을 두지 않고 여기서 얻는다.
-     * {@code (page_id, revision DESC)} 인덱스의 첫 항목 한 행만 읽는다.
+     * 다음 revision·기여 순서 채번 기준. {@code wiki_pages}에 현재 버전 컬럼을 두지 않고 여기서 얻는다.
+     * 버전 없이 순서만 차지한 기여 행(lint·재편입이 지운 페이지)도 세야 뒤 기여가 같은 순서를 받지 않는다.
+     * 같은 순서면 재생 순서가 정해지지 않아, 앞선 삭제 기록이 뒤 기여의 근거까지 지울 수 있다.
      */
-    @Query("SELECT COALESCE(MAX(v.id.revision), 0) FROM WikiPageVersion v WHERE v.id.pageId = :pageId")
+    @Query(value = """
+            SELECT GREATEST(
+                COALESCE((SELECT MAX(revision) FROM wiki_page_versions WHERE page_id = :pageId), 0),
+                COALESCE((SELECT MAX(sequence_revision) FROM wiki_page_contributions WHERE page_id = :pageId), 0))
+            """, nativeQuery = true)
     long findMaxRevision(@Param("pageId") String pageId);
 
     Optional<WikiPageVersion> findTopByIdPageIdOrderByIdRevisionDesc(String pageId);
