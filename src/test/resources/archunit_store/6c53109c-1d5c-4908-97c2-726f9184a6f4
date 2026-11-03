@@ -1,0 +1,4 @@
+Constructor <fruition.core.query.domain.QueryRun.<init>(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, boolean, fruition.core.query.domain.QueryRunStatus, java.lang.String, fruition.core.query.dto.QueryResponse, java.lang.String, java.lang.String, java.time.Instant, java.time.Instant)> has parameter of type <fruition.core.query.dto.QueryResponse> in (QueryRun.java:0)
+Field <fruition.core.query.domain.QueryRun.result> has type <fruition.core.query.dto.QueryResponse> in (QueryRun.java:0)
+Method <fruition.core.query.domain.QueryRun.completed(fruition.core.query.dto.QueryResponse, java.time.Instant)> has parameter of type <fruition.core.query.dto.QueryResponse> in (QueryRun.java:0)
+Method <fruition.core.query.domain.QueryRun.result()> has return type <fruition.core.query.dto.QueryResponse> in (QueryRun.java:0)
