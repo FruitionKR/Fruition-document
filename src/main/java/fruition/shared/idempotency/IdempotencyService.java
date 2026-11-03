@@ -86,6 +86,24 @@ public class IdempotencyService {
                          int responseStatus,
                          Function<T, String> resourceId,
                          Supplier<T> action) {
+        return execute(userId, endpointScope, idempotencyKey, requestHash, responseType, responseStatus, resourceId,
+                () -> null, ignored -> action.get());
+    }
+
+    /**
+     * {@code prepare}는 선점에 성공한 뒤 실행 트랜잭션을 열기 전에 돈다. 원본 저장·외부 조회처럼 느릴 수 있는 호출을
+     * 여기서 하면 그동안 DB 연결을 쥐지 않는다. 재생이면 부르지 않고, 실패하면 실행 실패와 같이 선점을 푼다.
+     * {@link #currentExecutionId()}는 prepare에서도 실행과 같은 값이다.
+     */
+    public <P, T> T execute(String userId,
+                            String endpointScope,
+                            String idempotencyKey,
+                            String requestHash,
+                            Class<T> responseType,
+                            int responseStatus,
+                            Function<T, String> resourceId,
+                            Supplier<P> prepare,
+                            Function<P, T> action) {
         validateKey(idempotencyKey);
         Claim claim = transaction.execute(status -> claim(
                 userId, endpointScope, idempotencyKey, requestHash));
@@ -99,9 +117,10 @@ public class IdempotencyService {
         ActiveClaim previousClaim = currentClaim.get();
         currentClaim.set(new ActiveClaim(claim, previousClaim));
         try {
+            P prepared = prepare.get();
             T response = actionTransaction.execute(status -> {
                 registerReleaseOnRollback(claim);
-                T executed = action.get();
+                T executed = action.apply(prepared);
                 String responseBody = serialize(executed);
                 if (repository.complete(
                         claim.id(), claim.token(), responseStatus, resourceId.apply(executed), responseBody,

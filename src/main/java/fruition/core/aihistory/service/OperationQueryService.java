@@ -101,7 +101,7 @@ public class OperationQueryService {
                 page.stream().map(OperationLogListResponse.Item::from).toList(), nextCursor);
     }
 
-    @Transactional(readOnly = true)
+    // 트랜잭션을 두지 않는다. ingest·lint 상세는 ai 페이지 조회를 하므로 그동안 DB 연결을 쥐지 않게 한다(지연 로딩 연관 없음).
     public OperationLogDetailResponse detail(String workspaceId, String userId, String operationId) {
         verifyMember(workspaceId, userId);
         OperationLog log = operationLogRepository

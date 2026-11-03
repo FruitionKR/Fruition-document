@@ -24,7 +24,7 @@ import fruition.shared.ai.AiModelCatalog;
 import fruition.core.document.service.DocumentService;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -62,6 +62,7 @@ public class AgentTurnService {
     private final com.fasterxml.jackson.databind.ObjectMapper mapper;
     private final fruition.core.usage.service.UsageChargeService usageCharges;
     private final FolderRepository folderRepository;
+    private final TransactionTemplate transaction;
 
     public AgentTurnService(DocumentService documentService,
                             DocumentEditLockService editLockService,
@@ -78,7 +79,8 @@ public class AgentTurnService {
                             fruition.core.aitask.service.AiTaskCancellationService cancellation,
                             com.fasterxml.jackson.databind.ObjectMapper mapper,
                             fruition.core.usage.service.UsageChargeService usageCharges,
-                            FolderRepository folderRepository) {
+                            FolderRepository folderRepository,
+                            TransactionTemplate transaction) {
         this.documentService = documentService;
         this.editLockService = editLockService;
         this.workspaceAccessGuard = workspaceAccessGuard;
@@ -95,9 +97,13 @@ public class AgentTurnService {
         this.mapper = mapper;
         this.usageCharges = usageCharges;
         this.folderRepository = folderRepository;
+        this.transaction = transaction;
     }
 
-    @Transactional
+    /**
+     * 검증(문서 상세의 AI 위키 맥락 조회, skill draft run 조회, 권한 확인 포함)은 트랜잭션 밖에서 하고,
+     * 말풍선·실행 등록·command 적재만 한 트랜잭션에 둔다. 검증은 잠금 없는 읽기라 순서와 오류는 그대로다.
+     */
     public AgentTurnResponse turn(String workspaceId, String userId, AgentTurnRequest request) {
         chatSessionService.verifyOwnedSession(workspaceId, userId, request.sessionId());
         // 문서를 열지 않은 턴은 적용할 대상이 없어 편집 전제 검사를 하지 않는다.
@@ -120,7 +126,13 @@ public class AgentTurnService {
         AiModelCatalog.AiModel selectedModel = aiModelCatalog.resolve(request.provider(), request.model());
         List<CanonicalSkillDraftSource> skillDraftSources = canonicalSkillDraftSources(
                 workspaceId, userId, request.skillDraftSources());
+        return transaction.execute(status ->
+                queueTurn(workspaceId, userId, request, folderId, selectedModel, skillDraftSources));
+    }
 
+    private AgentTurnResponse queueTurn(String workspaceId, String userId, AgentTurnRequest request, UUID folderId,
+                                        AiModelCatalog.AiModel selectedModel,
+                                        List<CanonicalSkillDraftSource> skillDraftSources) {
         String runId = "agent_" + UUID.randomUUID().toString().replace("-", "");
         // 질의와 같은 방식으로 말풍선을 먼저 만들고 결과가 오면 채운다. command와 같은 트랜잭션이라
         // 발행에 실패하면 메시지도 남지 않는다.

@@ -150,7 +150,8 @@ class DocumentServiceConvertTest {
                 .thenReturn(Optional.empty());
         // 변환 요청은 execute로 선점한 뒤 실행한다. 선점 성공을 흉내 내 action을 그대로 돌린다.
         lenient().when(idempotencyService.execute(anyString(), anyString(), anyString(), anyString(), any(),
-                anyInt(), any(), any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(7)).get());
+                anyInt(), any(), any(), any())).thenAnswer(inv -> inv.<java.util.function.Function<Object, ?>>getArgument(8)
+                        .apply(inv.<java.util.function.Supplier<?>>getArgument(7).get()));
         lenient().doCallRealMethod().when(idempotencyService).validateKey(any());
         lenient().doCallRealMethod().when(idempotencyService).requestHash(any(String[].class));
         lenient().when(idempotencyService.currentExecutionId()).thenReturn(Optional.empty());
@@ -327,7 +328,7 @@ class DocumentServiceConvertTest {
 
         verify(idempotencyService).execute(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
-                eq(DocumentUploadResponse.class), eq(201), any(), any());
+                eq(DocumentUploadResponse.class), eq(201), any(), any(), any());
         assertThat(response.id()).isEqualTo(placeholder.getId());
         assertThat(response.status()).isEqualTo(DocumentStatus.processing);
         assertThat(response.editable()).isTrue();
@@ -373,7 +374,7 @@ class DocumentServiceConvertTest {
                 DocumentStatus.processing, null, now, true, 1, DocumentRole.EDITABLE, null);
         when(idempotencyService.execute(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
-                eq(DocumentUploadResponse.class), anyInt(), any(), any())).thenReturn(stored);
+                eq(DocumentUploadResponse.class), anyInt(), any(), any(), any())).thenReturn(stored);
 
         DocumentUploadResponse response = documentService.convertToMarkdown(
                 WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key");
@@ -391,7 +392,7 @@ class DocumentServiceConvertTest {
                 .thenReturn(Optional.of(sourcePdf()));
         when(idempotencyService.execute(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
-                eq(DocumentUploadResponse.class), anyInt(), any(), any()))
+                eq(DocumentUploadResponse.class), anyInt(), any(), any(), any()))
                 .thenThrow(new IdempotencyConflictException("충돌"));
 
         assertThatThrownBy(() -> documentService.convertToMarkdown(
