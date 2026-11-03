@@ -32,11 +32,11 @@ public record ErrorResponse(
 
             @JsonProperty("limit_type")
             @Schema(description = "AI 사용 한도 초과(429 AI_USAGE_LIMIT_EXCEEDED)일 때만 존재한다. 넘은 한도 종류.",
-                    allowableValues = {"CONCURRENT", "DAILY_COST", "DAILY_TOKENS"}, example = "DAILY_COST")
+                    allowableValues = {"DAILY_TOKENS"}, example = "DAILY_TOKENS")
             String limitType,
 
             @JsonProperty("reset_at")
-            @Schema(description = "AI 하루 한도 초과(limit_type이 DAILY_COST·DAILY_TOKENS)일 때만 존재한다. 한도가 풀리는 다음 0시(Asia/Seoul), ISO-8601 offset 시각.",
+            @Schema(description = "AI 사용 한도 초과(429 AI_USAGE_LIMIT_EXCEEDED)일 때만 존재한다. 한도가 풀리는 다음 0시(Asia/Seoul), ISO-8601 offset 시각.",
                     example = "2026-11-03T00:00:00+09:00")
             String resetAt) {
 

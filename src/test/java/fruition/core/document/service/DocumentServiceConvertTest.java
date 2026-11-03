@@ -834,7 +834,7 @@ class DocumentServiceConvertTest {
         seedDispatched(10);
         stubResult(10, "<!-- page 1 -->\n\n# next pages\n");
         org.mockito.Mockito.doThrow(new fruition.core.usage.limit.AiUsageLimitExceededException(
-                        fruition.core.usage.limit.AiUsageLimitType.DAILY_COST, null, "한도"))
+                        fruition.core.usage.limit.AiUsageLimitType.DAILY_TOKENS, java.time.Instant.now()))
                 .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
 
         documentService.applyConvertBatch(succeeded(10, 20, 20));

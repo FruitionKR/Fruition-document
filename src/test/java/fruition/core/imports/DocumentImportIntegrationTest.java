@@ -7,7 +7,6 @@ import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.authz.WorkspaceSettingsClient;
 import fruition.core.document.service.DocumentAssetContentService;
 import fruition.core.upload.UploadLimitService;
-import fruition.core.usage.limit.AiUsageLimiter;
 import fruition.core.usage.service.CreditService;
 import fruition.shared.security.JwtTokenProvider;
 import org.junit.jupiter.api.BeforeEach;
@@ -68,7 +67,6 @@ class DocumentImportIntegrationTest {
     @Autowired UploadLimitService limits;
     @Autowired DocumentAssetContentService assetContent;
     @Autowired CreditService credits;
-    @Autowired AiUsageLimiter aiUsageLimiter;
     @Autowired fruition.core.document.service.DocumentService documentService;
     @Autowired io.minio.MinioClient minio;
     @Autowired fruition.shared.util.StorageProperties storage;
@@ -312,7 +310,7 @@ class DocumentImportIntegrationTest {
         assertThat(body.path("document_count").asInt()).isEqualTo(2);
         assertThat(body.path("estimated_credits").asLong()).isEqualTo(2 * credits.estimate("document"));
         assertThat(body.path("estimated_cost_usd").decimalValue()).isEqualByComparingTo(
-                BigDecimal.valueOf(aiUsageLimiter.estimateUsdMicro("document") * 2).movePointLeft(6));
+                BigDecimal.valueOf(credits.estimateUsdMicro("document") * 2).movePointLeft(6));
     }
 
     @Test
@@ -460,7 +458,7 @@ class DocumentImportIntegrationTest {
         assertThat(before.path("pdf_unconverted_count").asInt()).isEqualTo(2);
         assertThat(before.path("convert_estimated_credits").asLong()).isEqualTo(2 * credits.estimate("convert"));
         assertThat(before.path("convert_estimated_cost_usd").decimalValue()).isEqualByComparingTo(
-                BigDecimal.valueOf(aiUsageLimiter.estimateUsdMicro("convert") * 2).movePointLeft(6));
+                BigDecimal.valueOf(credits.estimateUsdMicro("convert") * 2).movePointLeft(6));
         assertThat(before.path("document_count").asInt()).isEqualTo(1);
 
         mockMvc.perform(post(imports() + "/" + importId + "/convert").header("Authorization", bearer(userId)))
