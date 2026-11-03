@@ -2758,7 +2758,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 문서 version 충돌
+          description: 문서 version 충돌 또는 채팅에서 만든 문서라 이름이 잠김(DOCUMENT_TITLE_LOCKED)
       summary: 문서 이름 변경
       tags:
       - Documents

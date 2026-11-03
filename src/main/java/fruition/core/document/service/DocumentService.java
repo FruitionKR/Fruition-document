@@ -15,6 +15,7 @@ import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.domain.DocumentStatus;
 import fruition.shared.idempotency.IdempotencyService;
 import fruition.core.document.exception.DocumentNotFoundException;
+import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.exception.DocumentOriginalNotFoundException;
 import fruition.core.document.exception.DocumentUploadException;
 import fruition.core.document.exception.InvalidDocumentOriginException;
@@ -2602,6 +2603,10 @@ public class DocumentService {
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
         documentAccessPolicy.requireEdit(document, userId);
+        // 채팅에서 만든 문서는 이름도 문답 출처의 일부라 본문과 함께 잠근다. 이동·삭제는 그대로 허용한다.
+        if ("chat_export".equals(document.getOrigin())) {
+            throw new DocumentTitleLockedException("채팅에서 만든 문서는 이름을 바꿀 수 없습니다.");
+        }
         if (document.getCurrentVersion() != request.baseVersion()) {
             throw versionConflict();
         }
