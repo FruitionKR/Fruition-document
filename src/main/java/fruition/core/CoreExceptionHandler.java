@@ -45,6 +45,7 @@ import fruition.core.document.exception.HierarchyWriteForbiddenException;
 import fruition.core.chat.exception.ChatSessionLimitExceededException;
 import fruition.core.chat.exception.ChatSessionNotFoundException;
 import fruition.core.meeting.MeetingException;
+import fruition.core.speech.SpeechSynthesisDisabledException;
 import fruition.core.chat.exception.EmptyChatWikiExportException;
 import fruition.core.chat.exception.InvalidChatWikiExportRequestException;
 import fruition.core.query.exception.PipelineQueryException;
@@ -229,6 +230,13 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(e.getStatus())
                 .body(ErrorResponse.of(e.getCode(), e.getMessage()));
+    }
+
+    @ExceptionHandler(SpeechSynthesisDisabledException.class)
+    public ResponseEntity<ErrorResponse> handleSpeechSynthesisDisabled(SpeechSynthesisDisabledException e) {
+        logHandled(e, HttpStatus.FORBIDDEN, "SPEECH_SYNTHESIS_DISABLED");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of("SPEECH_SYNTHESIS_DISABLED", e.getMessage()));
     }
 
     @ExceptionHandler(MeetingException.class)
