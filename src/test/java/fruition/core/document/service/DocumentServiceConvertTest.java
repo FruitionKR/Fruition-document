@@ -55,6 +55,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -147,6 +148,10 @@ class DocumentServiceConvertTest {
         lenient().when(idempotencyService.replay(
                 anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(Optional.empty());
+        // 변환 요청은 execute로 선점한 뒤 실행한다. 선점 성공을 흉내 내 action을 그대로 돌린다.
+        lenient().when(idempotencyService.execute(anyString(), anyString(), anyString(), anyString(), any(),
+                anyInt(), any(), any(), any())).thenAnswer(inv -> inv.<java.util.function.Function<Object, ?>>getArgument(8)
+                        .apply(inv.<java.util.function.Supplier<?>>getArgument(7).get()));
         lenient().doCallRealMethod().when(idempotencyService).validateKey(any());
         lenient().doCallRealMethod().when(idempotencyService).requestHash(any(String[].class));
         lenient().when(idempotencyService.currentExecutionId()).thenReturn(Optional.empty());
@@ -321,9 +326,9 @@ class DocumentServiceConvertTest {
         assertThat(savedQueue.getValue().getSourceDocumentId()).isEqualTo(SOURCE_DOCUMENT_ID);
         assertThat(savedQueue.getValue().getStatus()).isEqualTo("processing");
 
-        verify(idempotencyService).save(
+        verify(idempotencyService).execute(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
-                eq(201), anyString(), any());
+                eq(DocumentUploadResponse.class), eq(201), any(), any(), any());
         assertThat(response.id()).isEqualTo(placeholder.getId());
         assertThat(response.status()).isEqualTo(DocumentStatus.processing);
         assertThat(response.editable()).isTrue();
@@ -367,9 +372,9 @@ class DocumentServiceConvertTest {
         DocumentUploadResponse stored = new DocumentUploadResponse(
                 "doc_replay", "보고서.md", "text/markdown", 10,
                 DocumentStatus.processing, null, now, true, 1, DocumentRole.EDITABLE, null);
-        when(idempotencyService.replay(
+        when(idempotencyService.execute(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
-                eq(DocumentUploadResponse.class))).thenReturn(Optional.of(stored));
+                eq(DocumentUploadResponse.class), anyInt(), any(), any(), any())).thenReturn(stored);
 
         DocumentUploadResponse response = documentService.convertToMarkdown(
                 WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key");
@@ -385,9 +390,9 @@ class DocumentServiceConvertTest {
         stubOwnedWorkspace();
         when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
                 .thenReturn(Optional.of(sourcePdf()));
-        when(idempotencyService.replay(
+        when(idempotencyService.execute(
                 eq(USER_ID), anyString(), eq("convert-key"), anyString(),
-                eq(DocumentUploadResponse.class)))
+                eq(DocumentUploadResponse.class), anyInt(), any(), any(), any()))
                 .thenThrow(new IdempotencyConflictException("충돌"));
 
         assertThatThrownBy(() -> documentService.convertToMarkdown(
@@ -762,6 +767,42 @@ class DocumentServiceConvertTest {
     }
 
     @Test
+    @DisplayName("가져온 PDF의 변환본은 자동 편입 설정·권한이 있어도 변환 완료 뒤 편입하지 않고 completed로 남는다")
+    void importedConversion_completesWithoutAutoIngest() throws Exception {
+        lenient().when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        lenient().when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
+        startScenario(PLACEHOLDER_MARKDOWN);
+        parent.markImported(java.util.UUID.randomUUID());
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
+
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
+
+        assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 1 -->\n\n# 본문\n");
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
+        verify(taskWriter).completeAndSettle("convert:doc_placeholder");
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("가져온 PDF를 변환하면 placeholder도 같은 가져오기 세션 문서로 표시한다")
+    void convertToMarkdown_importedSource_tagsPlaceholderWithImport() {
+        stubOwnedWorkspace();
+        Document source = sourcePdf();
+        java.util.UUID importId = java.util.UUID.randomUUID();
+        source.markImported(importId);
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(source));
+
+        documentService.convertToMarkdown(WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key");
+
+        ArgumentCaptor<Document> saved = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(saved.capture());
+        assertThat(saved.getValue().getImportId()).isEqualTo(importId);
+        assertThat(saved.getValue().getOrigin()).isEqualTo("convert");
+    }
+
+    @Test
     @DisplayName("변환 뒤 자동 ingest가 크레딧 부족으로 거절돼도 변환은 성공이고 문서에 INSUFFICIENT_CREDIT을 남긴다")
     void autoIngestRejectedForCreditKeepsConversionAndRecordsInsufficientCredit() throws Exception {
         enableAutoIngest(true);
@@ -793,7 +834,7 @@ class DocumentServiceConvertTest {
         seedDispatched(10);
         stubResult(10, "<!-- page 1 -->\n\n# next pages\n");
         org.mockito.Mockito.doThrow(new fruition.core.usage.limit.AiUsageLimitExceededException(
-                        fruition.core.usage.limit.AiUsageLimitType.DAILY_COST, null, "한도"))
+                        fruition.core.usage.limit.AiUsageLimitType.DAILY_TOKENS, java.time.Instant.now()))
                 .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
 
         documentService.applyConvertBatch(succeeded(10, 20, 20));

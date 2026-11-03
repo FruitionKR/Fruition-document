@@ -99,6 +99,9 @@ public class ChatWikiExportReconciler {
 
         transactionTemplate.execute(status -> {
             if (!taskWriter.join(document.getPipelineRunId())) return null;
+            // 다른 Pod가 같은 문서를 먼저 확정했으면 건너뛴다. join의 실행 행 잠금 뒤에 읽어 그 커밋이 보인다.
+            // 낡은 엔티티로 이름을 다시 확정하면 방금 정한 자기 이름과 겹쳐 "(2)"가 붙는다.
+            if (documentRepository.existsByIdAndReconciledAtIsNotNull(document.getId())) return null;
             // export 시점 이름은 첫 질문을 줄인 임시값이다. 내용을 요약한 페이지 제목이 나왔으면 그걸로 확정한다.
             documentService.confirmChatExportName(document, sourcePage.title());
 

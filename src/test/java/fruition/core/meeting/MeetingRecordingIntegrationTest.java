@@ -69,6 +69,7 @@ class MeetingRecordingIntegrationTest {
     private final HttpClient http = HttpClient.newHttpClient();
     private String userId;
     private String workspaceId;
+    @org.springframework.beans.factory.annotation.Value("${app.jwt.secret}") String jwtSecret;
 
     @BeforeEach
     void setUp() {
@@ -163,6 +164,47 @@ class MeetingRecordingIntegrationTest {
         uploadPost(meetingId, "complete", "{\"ticket\":\"tampered\"}").andExpect(status().isBadRequest());
 
         uploadPost(meetingId, "abort", "{\"ticket\":\"" + ticket + "\"}").andExpect(status().isNoContent());
+    }
+
+    @Test
+    void validlySignedTicketPointingAtAnotherMeetingsRecording_isRejected() throws Exception {
+        String meetingId = createMeeting("upload");
+        String other = createMeeting("upload");
+        var signing = io.jsonwebtoken.security.Keys.hmacShaKeyFor(java.security.MessageDigest.getInstance("SHA-256")
+                .digest((jwtSecret + ":meeting-recording-ticket:v1").getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        String forged = io.jsonwebtoken.Jwts.builder().subject(userId).audience().add("meeting-recording-ticket").and()
+                .claim("meeting", meetingId).claim("contentType", "audio/wav").claim("workspace", workspaceId)
+                .claim("key", "meetings/" + other + "/recording-" + UUID.randomUUID() + ".wav")
+                .claim("size", 3).claim("upload", "u").claim("partSize", 64L * 1024 * 1024)
+                .expiration(new java.util.Date(System.currentTimeMillis() + 60_000)).signWith(signing).compact();
+
+        uploadPost(meetingId, "complete", "{\"ticket\":\"" + forged + "\"}").andExpect(status().isForbidden());
+        uploadPost(meetingId, "parts", "{\"ticket\":\"" + forged + "\",\"first_part\":1,\"count\":1}")
+                .andExpect(status().isForbidden());
+        assertThat(meetingStatus(meetingId)).isEqualTo("awaiting_upload");
+    }
+
+    @Test
+    void validlySignedTicketWithNonAudioContentType_isRejectedAndNotRecorded() throws Exception {
+        // 서명 키가 새도 원본 형식을 text/html 등으로 바꿔 재생 주소가 HTML을 내주게 할 수 없다.
+        String meetingId = createMeeting("upload");
+        byte[] bytes = "<html></html>".getBytes();
+        String ticket = json(start(meetingId, "audio/wav", bytes.length), 200).path("ticket").asText();
+        put(partUrl(meetingId, ticket, 1), bytes);
+        Map<?, ?> issued = objectMapper.readValue(java.util.Base64.getUrlDecoder().decode(ticket.split("\\.")[1]), Map.class);
+        var signing = io.jsonwebtoken.security.Keys.hmacShaKeyFor(java.security.MessageDigest.getInstance("SHA-256")
+                .digest((jwtSecret + ":meeting-recording-ticket:v1").getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        for (String contentType : List.of("text/html", "audio/mpeg")) {  // 녹음 형식이어도 키 확장자(wav)와 달라야 거절
+            String forged = io.jsonwebtoken.Jwts.builder().subject(userId).audience().add("meeting-recording-ticket").and()
+                    .claims(Map.of("meeting", meetingId, "workspace", workspaceId, "key", issued.get("key"),
+                            "size", bytes.length, "upload", issued.get("upload"), "partSize", issued.get("partSize")))
+                    .claim("contentType", contentType)
+                    .expiration(new java.util.Date(System.currentTimeMillis() + 60_000)).signWith(signing).compact();
+            complete(meetingId, forged).andExpect(status().isBadRequest());
+        }
+        assertThat(meetingStatus(meetingId)).isEqualTo("awaiting_upload");
+        assertThat(recordingKey(meetingId)).isNull();
+        complete(meetingId, ticket).andExpect(status().isAccepted());
     }
 
     @Test

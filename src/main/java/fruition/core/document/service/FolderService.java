@@ -74,7 +74,7 @@ public class FolderService {
         this.trashRetention = trashRetention;
     }
 
-    @Transactional
+    // 바깥 트랜잭션을 두지 않는다. 선점(REQUIRES_NEW)이 바깥 연결을 쥔 채 연결을 하나 더 잡으면 풀이 교착한다.
     public FolderResponse create(String workspaceId, String userId, String idempotencyKey,
                                  FolderCreateRequest request) {
         String name = normalizeName(request.name());
@@ -94,7 +94,6 @@ public class FolderService {
                 });
     }
 
-    @Transactional
     public FolderResponse rename(String workspaceId, String userId, UUID folderId, String idempotencyKey,
                                  FolderRenameRequest request) {
         String name = normalizeName(request.name());
@@ -115,7 +114,6 @@ public class FolderService {
                 });
     }
 
-    @Transactional
     public FolderResponse move(String workspaceId, String userId, UUID folderId, String idempotencyKey,
                                FolderPositionRequest request) {
         UUID targetParentId = request.parentFolderId();
@@ -146,13 +144,11 @@ public class FolderService {
                 });
     }
 
-    @Transactional
     public FolderLifecycleResponse delete(String workspaceId, String userId, UUID folderId,
                                           String idempotencyKey, long baseVersion) {
         return deleteFolder(workspaceId, userId, folderId, idempotencyKey, baseVersion, false);
     }
 
-    @Transactional
     public FolderLifecycleResponse deleteEmpty(String workspaceId, String userId, UUID folderId,
                                                String idempotencyKey, long baseVersion) {
         return deleteFolder(workspaceId, userId, folderId, idempotencyKey, baseVersion, true);
@@ -192,7 +188,6 @@ public class FolderService {
                 });
     }
 
-    @Transactional
     public FolderLifecycleResponse restore(String workspaceId, String userId, UUID folderId,
                                            String idempotencyKey, long baseVersion) {
         String scope = "POST:/api/workspaces/" + workspaceId + "/folders/" + folderId + "/restore";

@@ -134,6 +134,6 @@ class SkillTestRunServiceTest {
 
     private SkillTestRunRequest request(String markdown, SkillTestRunRequest.Target target) {
         return new SkillTestRunRequest("research-summary", "연구 요약", "'연구 개요' 섹션만 고친다.",
-                List.of("document-edit"), "doc_1", markdown, target);
+                List.of("document-edit"), "doc_1", markdown, target, null);
     }
 }

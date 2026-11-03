@@ -82,7 +82,7 @@ public class AiTaskCancellationService {
                     String.class, id, command.toString());
             if (matching.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "작업 ID의 요청 내용이 다릅니다.");
             // 새로 등록한 실행만 사용자별 사용 한도를 본다. 넘으면 등록과 함께 롤백된다.
-            if (inserted == 1) limits.check(id, command.path("user_id").asText(), command.path("kind").asText());
+            if (inserted == 1) limits.check(command.path("user_id").asText(), command.path("kind").asText());
             // AI 호출 전에 크레딧을 예약한다. 잔액이 모자라면 실행 등록과 함께 롤백된다(#79).
             credits.reserve(id, command.path("user_id").asText(), command.path("kind").asText());
         });

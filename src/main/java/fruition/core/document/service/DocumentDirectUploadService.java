@@ -2,6 +2,8 @@ package fruition.core.document.service;
 
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.document.dto.DocumentUploadResponse;
+import fruition.core.imports.DocumentImportException;
+import fruition.core.imports.ImportSessionStore;
 import fruition.core.upload.UploadLimitService;
 import fruition.shared.util.StorageProperties;
 import fruition.shared.util.DirectMultipartUpload;
@@ -28,16 +30,19 @@ public class DocumentDirectUploadService {
     private final WorkspaceAccessGuard access;
     private final DocumentService documents;
     private final UploadLimitService limits;
+    private final ImportSessionStore importSessions;
 
     public DocumentDirectUploadService(MinioClient storage, MultipartStorage multipart, StorageProperties properties,
             WorkspaceAccessGuard access, DocumentService documents, UploadLimitService limits,
-            @Value("${app.jwt.secret}") String secret) throws Exception {
+            ImportSessionStore importSessions, @Value("${app.jwt.secret}") String secret) throws Exception {
         this.storage = storage;
         this.limits = limits;
+        this.importSessions = importSessions;
         this.properties = properties;
         this.access = access;
         this.documents = documents;
-        this.upload = new DirectMultipartUpload(storage, multipart, properties, secret, "document-upload-ticket");
+        this.upload = new DirectMultipartUpload(storage, multipart, properties, secret, "document-upload-ticket",
+                java.util.regex.Pattern.compile("tmp/document-uploads/[^/]+/[^/]+/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"));
     }
 
     public record StartRequest(String filename, long size, UUID folder_id) {}
@@ -48,7 +53,17 @@ public class DocumentDirectUploadService {
     public record CompleteRequest(String ticket) {}
 
     public StartResponse start(String workspaceId, String userId, StartRequest request) throws Exception {
+        return start(workspaceId, userId, request, null);
+    }
+
+    /**
+     * @param importId {@code X-Fruition-Import-Id}. 있으면 열린 가져오기 세션(본인·같은 워크스페이스)이어야 하고 ticket에
+     *                 세션을 묶는다. 확정 때 같은 헤더가 다시 와야 한다. 아니면 400 IMPORT_INVALID다.
+     */
+    public StartResponse start(String workspaceId, String userId, StartRequest request, String importId)
+            throws Exception {
         access.requireMember(workspaceId, userId);
+        var session = importSessions.resolve(workspaceId, userId, importId);
         String filename = request.filename();
         if (filename == null || filename.length() > 255 || !filename.toLowerCase(Locale.ROOT).endsWith(".pdf")
                 || filename.contains("/") || filename.contains("\\")
@@ -61,14 +76,23 @@ public class DocumentDirectUploadService {
         // 알린 크기로 먼저 거절한다. 실제 크기는 확정 때 조립한 객체로 다시 확인한다.
         limits.requirePdfSize(request.size());
         limits.precheck(userId, request.size());
-        var started = upload.start(userId, workspaceId, "tmp/document-uploads/" + UUID.randomUUID(),
+        var started = upload.start(userId, workspaceId, keyPrefix(workspaceId, userId) + UUID.randomUUID(),
                 "application/pdf", request.size(), Map.of("filename", filename,
-                        "folder", request.folder_id() == null ? "" : request.folder_id().toString()));
+                        "folder", request.folder_id() == null ? "" : request.folder_id().toString(),
+                        "import", session == null ? "" : session.id().toString()));
         return new StartResponse(started.ticket(), started.partSize(), started.partCount());
+    }
+
+    /** 임시 원본은 발급 대상 경로에 둔다. ticket이 같은 형식의 남의 임시 객체를 가리키지 못하게 확정 때 대조한다. */
+    private static String keyPrefix(String workspaceId, String userId) {
+        return "tmp/document-uploads/" + workspaceId + "/" + userId + "/";
     }
 
     private Claims verify(String workspaceId, String userId, String ticket) {
         Claims claims = upload.verify(workspaceId, userId, ticket);
+        if (!claims.get("key", String.class).startsWith(keyPrefix(workspaceId, userId))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "다른 사용자의 업로드를 사용할 수 없습니다.");
+        }
         access.requireMember(workspaceId, userId);
         return claims;
     }
@@ -89,7 +113,21 @@ public class DocumentDirectUploadService {
 
     public DocumentUploadResponse complete(String workspaceId, String userId, String idempotencyKey,
             CompleteRequest request) throws Exception {
+        return complete(workspaceId, userId, idempotencyKey, request, null);
+    }
+
+    /**
+     * @param importId 시작 때 ticket에 묶은 가져오기 세션과 같아야 한다(둘 다 없거나 둘 다 같은 세션). 가져오기 PDF는
+     *                 그 세션 문서로 표시되고 항목 수를 세며 자동 편입하지 않는다. 용량·크기 한도·멱등성은 일반 업로드와 같다.
+     */
+    public DocumentUploadResponse complete(String workspaceId, String userId, String idempotencyKey,
+            CompleteRequest request, String importId) throws Exception {
         Claims claims = verify(workspaceId, userId, request.ticket());
+        String ticketImport = Objects.requireNonNullElse(claims.get("import", String.class), "");
+        var session = importSessions.resolve(workspaceId, userId, importId);
+        if (!ticketImport.equals(session == null ? "" : session.id().toString())) {
+            throw DocumentImportException.invalid();
+        }
         String key = claims.get("key", String.class);
         StatObjectResponse stat = upload.assemble(claims);
         if (stat.size() != ((Number) claims.get("size")).longValue()
@@ -108,8 +146,11 @@ public class DocumentDirectUploadService {
             }
         }
         // 기존 멱등성·폴더 권한·롤백 처리를 그대로 사용한다. 임시 객체는 재시도를 위해 lifecycle로 삭제한다.
-        return documents.upload(workspaceId, userId, idempotencyKey,
-                folder.isEmpty() ? null : UUID.fromString(folder), file);
+        UUID folderId = folder.isEmpty() ? null : UUID.fromString(folder);
+        if (session != null) {
+            return documents.uploadImported(workspaceId, userId, idempotencyKey, folderId, file, importId);
+        }
+        return documents.upload(workspaceId, userId, idempotencyKey, folderId, file);
     }
 
     private record StoredPdf(MinioClient storage, String bucket, String key, String filename,

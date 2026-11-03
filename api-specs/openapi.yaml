@@ -278,6 +278,73 @@ paths:
           description: OK
       tags:
       - ai-task-cancellation-controller
+  /api/workspaces/{workspace_id}/agent/auto-approval-settings:
+    get:
+      description: 요청한 사용자의 AI 에이전트 계획 자동 승인 설정을 조회합니다. 사용자 단위 설정이며 모든 워크스페이스에 적용됩니다(경로의 워크스페이스는 멤버 확인용). 저장한 적 없으면 모두 false입니다.
+      operationId: getAutoApprovalSettings
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/AgentAutoApprovalSettings"
+          description: 조회 성공
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+      summary: Agent 자동 승인 설정 조회
+      tags:
+      - Agent
+    put:
+      description: "분류별로 계획 자동 승인을 켜고 끕니다. 켜진 분류의 작업만으로 이뤄지고 AI 검토 경고가 없으며 요청자가 모든 대상을 편집할 수 있는 계획은 승인 확인 없이 실행되고, 승인 기록에 approved_by=auto:user-setting이 남습니다. 대상 권한 검사는 건너뛰지 않습니다. 분류에 없는 작업(삭제 등)은 항상 직접 승인해야 합니다. 바뀐 설정은 다음 승인 판단부터 적용됩니다."
+      operationId: updateAutoApprovalSettings
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentAutoApprovalSettings"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/AgentAutoApprovalSettings"
+          description: 변경 후 설정
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 필드 누락 또는 정의되지 않은 필드
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+      summary: Agent 자동 승인 설정 변경
+      tags:
+      - Agent
   /api/workspaces/{workspace_id}/agent/runs/{run_id}:
     get:
       description: 자율 AgentRun 계획과 실행 상태를 조회합니다.
@@ -1684,6 +1751,12 @@ paths:
         schema:
           type: string
           default: ws_9d47a0e9a6324341b47562553b75f92a
+      - description: 가져오기 세션 ID(POST /imports 응답의 import_id). 시작과 확정에 같은 값을 보낸다
+        in: header
+        name: X-Fruition-Import-Id
+        required: false
+        schema:
+          type: string
       requestBody:
         content:
           application/json:
@@ -1735,6 +1808,12 @@ paths:
       - in: header
         name: Idempotency-Key
         required: true
+        schema:
+          type: string
+      - description: 가져오기 세션 ID(POST /imports 응답의 import_id). 시작과 확정에 같은 값을 보낸다
+        in: header
+        name: X-Fruition-Import-Id
+        required: false
         schema:
           type: string
       requestBody:
@@ -3392,6 +3471,51 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 내 세션이 아님(IMPORT_NOT_FOUND) 또는 워크스페이스 멤버가 아님
       summary: 가져오기 세션 완료
+      tags:
+      - Imports
+  /api/workspaces/{workspace_id}/imports/{import_id}/convert:
+    post:
+      description: "아직 변환하지 않은 가져온 PDF를 문서마다 수동 변환(POST /documents/{id}/convert-markdown)과 같은 경로로 변환 큐에 넣습니다(권한·크레딧 동일). 한 번에 20개까지 넣으며 remaining이 0이 될 때까지 다시 부르면 됩니다. 변환본은 이 가져오기 문서로 표시되고 자동 편입하지 않습니다. 첫 PDF부터 거절되면 그 오류를 그대로 돌려줍니다."
+      operationId: convertDocumentImportPdfs
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: import_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "202":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentImportIngestResponse"
+          description: 큐 등록
+        "402":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 크레딧 부족(INSUFFICIENT_CREDIT)
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 변환 권한 없음(WORKSPACE_PERMISSION_REQUIRED)
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 내 세션이 아님(IMPORT_NOT_FOUND) 또는 워크스페이스 멤버가 아님
+      summary: 가져온 PDF Markdown 변환
       tags:
       - Imports
   /api/workspaces/{workspace_id}/imports/{import_id}/ingest:
@@ -5646,6 +5770,30 @@ paths:
       summary: Agent 폴더 트리 읽기
       tags:
       - agent-folder-lookup-controller
+  /internal/agent/runs/{run_id}/plan-ready:
+    post:
+      operationId: planReady
+      parameters:
+      - in: path
+        name: run_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentPlanReadyRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/JsonNode"
+          description: OK
+      tags:
+      - agent-plan-ready-controller
   /internal/agent/skill-authoring/references/read:
     post:
       operationId: read_1
@@ -5970,7 +6118,34 @@ components:
       required:
       - user_id
       - workspace_id
+    AgentAutoApprovalSettings:
+      type: object
+      description: "AI 에이전트 계획 자동 승인 설정(사용자 단위, 모든 워크스페이스에 적용). 정의되지 않은 필드가 있으면 거절된다."
+      properties:
+        content_edit:
+          type: boolean
+          description: "문서 편집·생성(apply_document_edit, create_document) 계획을 자동 승인한다. 편집은 버전 기록에서 되돌릴 수 있다."
+          example: false
+        organize:
+          type: boolean
+          description: "폴더 생성·문서/폴더 이동·이름 변경(create_folder, move_document, move_folder, rename_document, rename_folder) 계획을 자동 승인한다."
+          example: false
+      required:
+      - content_edit
+      - organize
     AgentFolderTreeRequest:
+      type: object
+      properties:
+        user_id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+      required:
+      - user_id
+      - workspace_id
+    AgentPlanReadyRequest:
       type: object
       properties:
         user_id:
@@ -7365,10 +7540,21 @@ components:
     DocumentImportIngestEstimateResponse:
       type: object
       properties:
+        convert_estimated_cost_usd:
+          type: number
+          description: PDF 변환 예상 비용(USD) = 변환 1건 예상 비용 × pdf_unconverted_count. 환율을 못 읽으면 null
+        convert_estimated_credits:
+          type: integer
+          format: int64
+          description: PDF 변환 예상 크레딧(milli-KRW) = app.billing.estimate.convert(없으면 기본값) × pdf_unconverted_count
+        converting_count:
+          type: integer
+          format: int32
+          description: 아직 Markdown 변환 중이라 document_count에서 빠진 가져온 PDF 변환본 수. 변환이 끝나면 편입 대상에 들어간다
         document_count:
           type: integer
           format: int32
-          description: 아직 편입하지 않은(편입 요청한 적 없는) 휴지통 밖 가져온 문서 수
+          description: "아직 편입하지 않은(편입 요청한 적 없는) 휴지통 밖 가져온 Markdown 문서 수. PDF 원본은 빼고, PDF 변환본은 변환이 끝난 것만 센다"
         estimated_cost_usd:
           type: number
           description: 예상 비용(USD) = 문서 편입 1건 예상 비용 × document_count. 환율을 못 읽으면 null
@@ -7376,6 +7562,10 @@ components:
           type: integer
           format: int64
           description: "예상 크레딧(milli-KRW, /users/me/credits의 *_krw_milli와 같은 단위) = app.billing.estimate.document × document_count"
+        pdf_unconverted_count:
+          type: integer
+          format: int32
+          description: 아직 변환하지 않은(변환본이 없거나 변환에 실패한) 가져온 PDF 수. POST .../convert로 변환한다
     DocumentImportIngestRequest:
       type: object
       properties:
@@ -8059,17 +8249,15 @@ components:
           type: string
           description: AI 사용 한도 초과(429 AI_USAGE_LIMIT_EXCEEDED)일 때만 존재한다. 넘은 한도 종류.
           enum:
-          - CONCURRENT
-          - DAILY_COST
           - DAILY_TOKENS
-          example: DAILY_COST
+          example: DAILY_TOKENS
         message:
           type: string
           description: 사용자에게 그대로 보여도 되는 한국어 문구
           example: 요청 형식이 올바르지 않습니다.
         reset_at:
           type: string
-          description: "AI 하루 한도 초과(limit_type이 DAILY_COST·DAILY_TOKENS)일 때만 존재한다. 한도가 풀리는 다음 0시(Asia/Seoul), ISO-8601 offset 시각."
+          description: "AI 사용 한도 초과(429 AI_USAGE_LIMIT_EXCEEDED)일 때만 존재한다. 한도가 풀리는 다음 0시(Asia/Seoul), ISO-8601 offset 시각."
           example: 2026-11-03T00:00:00+09:00
     ErrorResponse:
       type: object
@@ -9958,6 +10146,10 @@ components:
           example: research-summary
           minLength: 1
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        requires_source:
+          type: boolean
+          description: 원문 문서가 필요한 Skill인지 여부. 작성 초안의 값(게시 때 보낼 값과 같다). 생략(null)하면 키를 보내지 않고 AI가 판단한다.
+          example: true
         target:
           $ref: "#/components/schemas/Target"
           description: 적용 범위. 생략하면 문서 전체다.

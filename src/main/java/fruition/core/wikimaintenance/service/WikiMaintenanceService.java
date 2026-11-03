@@ -19,7 +19,7 @@ import fruition.core.authz.WorkspacePermissions;
 import fruition.core.authz.WorkspaceAiModelClient;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -36,6 +36,7 @@ public class WikiMaintenanceService {
     private final ObjectMapper objectMapper;
     private final String commandTopic;
     private final WorkspaceAiModelClient workspaceAiModelClient;
+    private final TransactionTemplate transaction;
 
     public WikiMaintenanceService(WorkspaceAccessGuard workspaceAccessGuard,
                                   LintOperationStarter operationStarter,
@@ -45,7 +46,8 @@ public class WikiMaintenanceService {
                                   PipelineWikiStateRequester wikiStateRequester,
                                   ObjectMapper objectMapper,
                                   @Value("${app.maintenance.command-topic}") String commandTopic,
-                                  WorkspaceAiModelClient workspaceAiModelClient) {
+                                  WorkspaceAiModelClient workspaceAiModelClient,
+                                  TransactionTemplate transaction) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.operationStarter = operationStarter;
         this.outboxWriter = outboxWriter;
@@ -55,9 +57,10 @@ public class WikiMaintenanceService {
         this.objectMapper = objectMapper;
         this.commandTopic = commandTopic;
         this.workspaceAiModelClient = workspaceAiModelClient;
+        this.transaction = transaction;
     }
 
-    @Transactional
+    /** 권한 확인과 모델 설정 조회(access HTTP)는 트랜잭션 전에 하고, 실행 등록·작업 기록·command 적재만 한 트랜잭션에 둔다. */
     public JsonNode lint(String workspaceId, String userId, WikiLintRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         // dry_run도 LLM 비용을 쓰므로 모든 lint 요청에 권한을 요구한다.
@@ -69,13 +72,15 @@ public class WikiMaintenanceService {
         String runId = UUID.randomUUID().toString();
         // access HTTP 조회는 크레딧 예약(계정 행 잠금) 전에 한다. 잠금을 쥔 채 기다리면 같은 사용자의 AI 요청이 줄을 선다.
         WorkspaceAiModelClient.AiModelSelection aiModel = workspaceAiModelClient.get(workspaceId);
-        outboxWriter.begin(runId, workspaceId, userId, "lint");
-        String operationId = dryRun ? null : operationStarter.start(workspaceId, userId);
-        outboxWriter.enqueue(runId, commandTopic, workspaceId,
-                new LintCommand(runId, "lint", workspaceId, userId, operationId,
-                        materializePromotions, dryRun,
-                        aiModel.provider(), aiModel.model()));
-        return objectMapper.valueToTree(new LintRunResponse(runId, operationId, "queued"));
+        return transaction.execute(status -> {
+            outboxWriter.begin(runId, workspaceId, userId, "lint");
+            String operationId = dryRun ? null : operationStarter.start(workspaceId, userId);
+            outboxWriter.enqueue(runId, commandTopic, workspaceId,
+                    new LintCommand(runId, "lint", workspaceId, userId, operationId,
+                            materializePromotions, dryRun,
+                            aiModel.provider(), aiModel.model()));
+            return objectMapper.valueToTree(new LintRunResponse(runId, operationId, "queued"));
+        });
     }
 
     public JsonNode run(String workspaceId, String userId, String runId) {

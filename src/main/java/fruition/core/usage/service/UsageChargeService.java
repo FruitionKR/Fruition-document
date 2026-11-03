@@ -147,7 +147,7 @@ public class UsageChargeService {
     }
 
     /** AgentRun 응답의 상태가 AI가 더 일하지 않는 끝난 상태인지. */
-    public boolean isAutonomousTerminal(JsonNode run) {
+    private boolean isAutonomousTerminal(JsonNode run) {
         return run != null && AUTONOMOUS_TERMINAL.contains(run.path("status").asText());
     }
 
