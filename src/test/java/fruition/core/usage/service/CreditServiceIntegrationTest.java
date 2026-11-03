@@ -92,6 +92,36 @@ class CreditServiceIntegrationTest {
         assertLedgerMatchesAccount();
     }
 
+    /** 여러 Pod의 정리 작업이 겹쳐도 계정 행 잠금 뒤에 남은 예약을 다시 읽어 한 번만 푼다. 그래서 작업 단위 잠금을 두지 않는다. */
+    @Test
+    void overlappingStaleReleasesReleaseEachRunOnce() throws Exception {
+        CreditService credits = credits(true);
+        for (int i = 0; i < 20; i++) {
+            String runId = "run-" + UUID.randomUUID();
+            jdbc.update("INSERT INTO credit_accounts (user_id) VALUES (?) ON CONFLICT DO NOTHING", user);
+            jdbc.update("INSERT INTO credit_entries (user_id, type, amount, run_id, idempotency_key, reason, created_at) "
+                    + "VALUES (?, 'reserve', 1000, ?, ?, 'test_kind', now() - interval '49 hours')", user, runId, "reserve:" + runId);
+            jdbc.update("UPDATE credit_accounts SET reserved = reserved + 1000 WHERE user_id = ?", user);
+        }
+        var barrier = new java.util.concurrent.CyclicBarrier(2);
+        var pool = Executors.newFixedThreadPool(2);
+        List<Future<?>> runs = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            runs.add(pool.submit(() -> {
+                barrier.await();
+                credits.releaseStale();
+                return null;
+            }));
+        }
+        for (Future<?> run : runs) run.get();
+        pool.shutdown();
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE user_id = ? AND type = 'release'",
+                Integer.class, user)).isEqualTo(20);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertLedgerMatchesAccount();
+    }
+
     @Test
     void settlingSameRunTwiceChargesOnceAndLateCallsAddOnlyTheDifference() {
         CreditService credits = credits(true);
