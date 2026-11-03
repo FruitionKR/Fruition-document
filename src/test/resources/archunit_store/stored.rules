@@ -1,0 +1,6 @@
+#
+#Tue Nov 03 11:10:39 KST 2026
+classes\ should\ not\ have\ fields\ annotated\ with\ @Autowired=f0a196c8-10c2-437b-9c29-1452542b24d8
+classes\ that\ controllers\ should\ not\ depend\ on\ repositories=cd3eef40-d450-4911-b5c8-6270b20faaa9
+classes\ that\ reside\ in\ a\ package\ '..domain..'\ should\ not\ depend\ on\ dto=a3ae88d8-403f-4da7-ad2a-f54533121822
+classes\ that\ reside\ in\ a\ package\ 'fruition.core..'\ should\ not\ depend\ on\ repositories\ of\ other\ fruition.core\ modules=31bea70e-ee2d-4172-be60-3ac0a9044492
