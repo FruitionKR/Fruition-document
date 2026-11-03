@@ -86,10 +86,12 @@ class DocumentConvertFailureIntegrationTest {
         // 다른 pod가 같은 문서의 batch를 처리하는 중인 것처럼 queue 행 잠금을 먼저 잡아 두 이벤트를 잠금 앞에 세운다.
         var locked = new java.util.concurrent.CountDownLatch(1);
         var release = new java.util.concurrent.CountDownLatch(1);
+        var holderPid = new java.util.concurrent.atomic.AtomicInteger();
         var pool = java.util.concurrent.Executors.newFixedThreadPool(3);
         try {
             var holder = pool.submit(() -> tx.executeWithoutResult(status -> {
                 jdbc.queryForList("SELECT id FROM document_convert_queue WHERE id=? FOR UPDATE", conversion.queue());
+                holderPid.set(jdbc.queryForObject("SELECT pg_backend_pid()", Integer.class));
                 locked.countDown();
                 try {
                     release.await();
@@ -101,10 +103,16 @@ class DocumentConvertFailureIntegrationTest {
             var second = pool.submit(() -> service.applyConvertBatch(reportedSuccess(conversion, 10)));
             var third = pool.submit(() -> service.applyConvertBatch(reportedSuccess(conversion, 20)));
             long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
-            while (jdbc.queryForObject("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock'"
-                    + " AND query LIKE '%document_convert_queue%FOR UPDATE%'", Long.class) < 2) {
+            // 이 테스트가 잡은 잠금을 기다리는 세션만 센다. 두 번째 대기자는 첫 대기자의 행 잠금을 기다리므로 사슬을 따라간다.
+            while (jdbc.queryForObject("""
+                    WITH RECURSIVE blocked(pid) AS (
+                        SELECT pid FROM pg_stat_activity WHERE ? = ANY(pg_blocking_pids(pid))
+                        UNION
+                        SELECT a.pid FROM pg_stat_activity a JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))
+                    ) SELECT count(*) FROM blocked
+                    """, Long.class, holderPid.get()) < 2) {
                 assertThat(System.nanoTime()).as("두 이벤트가 queue 잠금을 기다려야 한다").isLessThan(deadline);
-                Thread.onSpinWait();
+                Thread.sleep(20);
             }
             release.countDown();
             holder.get(10, java.util.concurrent.TimeUnit.SECONDS);
