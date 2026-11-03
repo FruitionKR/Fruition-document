@@ -19,14 +19,16 @@ import fruition.core.authz.WorkspaceAccessGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+/**
+ * 위키 조회. 클래스 트랜잭션을 두지 않는다. 메서드마다 ai 호출(그래프·페이지)과 객체 저장소 읽기가 끼어 있어, 트랜잭션이
+ * 있으면 그동안 DB 연결을 쥔다. DB 읽기는 저장소 호출마다 짧게 끝나며 지연 로딩 연관도 없다.
+ */
 @Service
-@Transactional(readOnly = true)
 public class WikiService {
 
     private static final Logger log = LoggerFactory.getLogger(WikiService.class);
@@ -160,7 +162,6 @@ public class WikiService {
      * <p>diff 본문을 저장하지 않는 이유는 전체 본문이 바로 옆에 있어 언제든 다시 만들 수 있고,
      * 중복 저장하면 두 값이 어긋날 여지가 생기기 때문이다. 사용자가 펼칠 때만 호출된다.
      */
-    @Transactional(readOnly = true)
     public WikiPageDiffResponse diff(String workspaceId, String userId, String pageId,
                                      long fromRevision, long toRevision) {
         verifyWorkspaceOwnership(workspaceId, userId);

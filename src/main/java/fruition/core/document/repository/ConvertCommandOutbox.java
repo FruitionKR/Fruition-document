@@ -30,12 +30,12 @@ public class ConvertCommandOutbox {
 
     /** @return 발행한 command JSON. 취소 요청에 같은 내용을 실어야 해서 호출자가 저장한다. */
     public String enqueue(String placeholderId, String workspaceId, String userId, String sourceKey,
-                          int startPage, int pageCount, String provider, String model) {
+                          int startPage, int pageCount, String provider, String model, boolean describeFigures) {
         String runId = batchRunId(placeholderId, startPage);
         try {
             String payload = objectMapper.writeValueAsString(new ConvertCommand(
                     runId, "convert:" + placeholderId, "convert_batch", workspaceId, userId, placeholderId,
-                    sourceKey, startPage, pageCount, provider, model));
+                    sourceKey, startPage, pageCount, provider, model, describeFigures));
             // Kafka key는 batch run_id다. document_id를 쓰면 한 문서의 batch가 한 파티션에 몰려 병렬 처리가 막힌다.
             writer.enqueueJoined(runId, commandTopic, runId, payload);
             return payload;
@@ -55,6 +55,9 @@ public class ConvertCommandOutbox {
             @JsonProperty("start_page") int startPage,
             @JsonProperty("page_count") int pageCount,
             String provider,
-            String model
+            String model,
+            // 그림을 외부 AI로 보내 설명을 붙일지. 워크스페이스 설정(access describe_pdf_figures)이고 기본은 꺼짐이다.
+            // AI가 batch(시도)당 50장까지만 보내므로 문서 전체 비용은 쪽 수(batch 수)에 비례해 묶인다. 문서 단위 상한은 두지 않는다.
+            @JsonProperty("describe_figures") boolean describeFigures
     ) {}
 }

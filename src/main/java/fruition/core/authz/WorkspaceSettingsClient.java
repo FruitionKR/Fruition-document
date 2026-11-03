@@ -19,6 +19,7 @@ public class WorkspaceSettingsClient {
 
     private static final Logger log = LoggerFactory.getLogger(WorkspaceSettingsClient.class);
     private static final Duration CACHE_TTL = Duration.ofSeconds(60);
+    private static final WorkspaceSettingsResponse OFF = new WorkspaceSettingsResponse(false, false);
 
     private final RestClient restClient;
     // 업로드마다 access를 부르지 않도록 프로세스 안에서 60초 캐시한다. 실패는 캐시하지 않는다.
@@ -37,6 +38,15 @@ public class WorkspaceSettingsClient {
 
     /** 업로드 뒤 자동 편입 설정. 조회에 실패하면 업로드·변환을 막지 않고 꺼진 것으로 본다. */
     public boolean autoIngestOnUpload(String workspaceId) {
+        return settings(workspaceId).autoIngestOnUpload();
+    }
+
+    /** PDF 변환 때 그림을 외부 AI로 보내 설명을 붙일지. 외부 전송이라 조회 실패·필드 없음은 꺼진 것으로 본다. */
+    public boolean describePdfFigures(String workspaceId) {
+        return settings(workspaceId).describePdfFigures();
+    }
+
+    private WorkspaceSettingsResponse settings(String workspaceId) {
         CachedSetting hit = cache.get(workspaceId);
         if (hit != null && hit.expiresAt().isAfter(Instant.now())) {
             return hit.value();
@@ -46,17 +56,18 @@ public class WorkspaceSettingsClient {
                     .uri("/internal/workspaces/{workspaceId}/settings", workspaceId)
                     .retrieve()
                     .body(WorkspaceSettingsResponse.class);
-            boolean value = response != null && response.autoIngestOnUpload();
+            WorkspaceSettingsResponse value = response == null ? OFF : response;
             cache.put(workspaceId, new CachedSetting(value, Instant.now().plus(CACHE_TTL)));
             return value;
         } catch (Exception e) {
-            log.warn("[워크스페이스 설정] 자동 편입 설정 조회 실패 — 꺼진 것으로 처리 workspace={} cause={}",
+            log.warn("[워크스페이스 설정] 설정 조회 실패 — 꺼진 것으로 처리 workspace={} cause={}",
                     workspaceId, e.toString());
-            return false;
+            return OFF;
         }
     }
 
-    private record CachedSetting(boolean value, Instant expiresAt) {}
+    private record CachedSetting(WorkspaceSettingsResponse value, Instant expiresAt) {}
 
-    record WorkspaceSettingsResponse(@JsonProperty("auto_ingest_on_upload") boolean autoIngestOnUpload) {}
+    record WorkspaceSettingsResponse(@JsonProperty("auto_ingest_on_upload") boolean autoIngestOnUpload,
+                                     @JsonProperty("describe_pdf_figures") boolean describePdfFigures) {}
 }

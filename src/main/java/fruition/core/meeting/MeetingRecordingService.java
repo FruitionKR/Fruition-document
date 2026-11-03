@@ -1,5 +1,7 @@
 package fruition.core.meeting;
 
+import fruition.core.upload.UploadLimitException;
+import fruition.core.upload.UploadLimitService;
 import fruition.core.usage.service.CreditService;
 import fruition.shared.util.DirectMultipartUpload;
 import fruition.shared.util.MultipartStorage;
@@ -65,17 +67,21 @@ public class MeetingRecordingService {
     private final MeetingTranscriptionService transcription;
     private final TransactionTemplate transaction;
     private final CreditService credits;
+    private final UploadLimitService limits;
 
     public MeetingRecordingService(MeetingService meetingService, MeetingRepository repository,
                                    MeetingLiveLock liveLock, MinioClient minio, StorageProperties storage,
                                    MultipartStorage multipart, MeetingTranscriptionService transcription,
-                                   TransactionTemplate transaction, CreditService credits, @Value("${app.jwt.secret}") String secret) throws Exception {
+                                   TransactionTemplate transaction, CreditService credits, UploadLimitService limits,
+                                   @Value("${app.jwt.secret}") String secret) throws Exception {
+        this.limits = limits;
         this.meetingService = meetingService;
         this.repository = repository;
         this.liveLock = liveLock;
         this.minio = minio;
         this.storage = storage;
-        this.upload = new DirectMultipartUpload(minio, multipart, storage, secret, "meeting-recording-ticket");
+        this.upload = new DirectMultipartUpload(minio, multipart, storage, secret, "meeting-recording-ticket",
+                java.util.regex.Pattern.compile("meetings/[^/]+/recording-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(?:wav|mp3|m4a|webm)"));
         this.transcription = transcription;
         this.transaction = transaction;
         this.credits = credits;
@@ -86,6 +92,8 @@ public class MeetingRecordingService {
         String contentType = audioType(request.content_type());
         requireSize(request.size(), request.size());
         requireUploadable(meeting);
+        // 재업로드는 기존 원본을 교체하므로 늘어나는 만큼만 본다. 최종 판단은 확정 때 잠금 아래에서 한다.
+        limits.precheck(userId, request.size() - recordingBytes(meeting));
         // 500 MiB를 올린 뒤에야 거절되지 않도록 전사를 시작할 수 있는 잔액인지 먼저 본다(예약은 확정 때).
         if ("upload".equals(meeting.source())) {
             credits.checkAdmission(userId, "meeting_transcription");
@@ -146,13 +154,18 @@ public class MeetingRecordingService {
             swap = transaction.execute(status -> {
                 var saved = repository.saveRecording(meetingId, key, contentType, size, allowedStatuses(meeting),
                         transcribe ? "transcribing" : "open", !transcribe, runId);
+                if (saved.isPresent()) {
+                    // 같은 트랜잭션에서 원본 크기를 이미 바꿨으므로(이전 원본 제외) 추가분 0으로 합계를 확인한다.
+                    limits.enforce(userId, 0);
+                }
                 if (saved.isPresent() && transcribe) {
                     transcription.begin(runId, meeting, key, contentType);
                 }
                 return saved;
             });
-        } catch (CreditService.InsufficientCreditException e) {
-            removeQuietly(key);  // 크레딧을 채운 뒤 다시 올리게 한다. 기록되지 않은 원본(음성 개인정보)을 남기지 않는다.
+        } catch (CreditService.InsufficientCreditException | fruition.core.usage.limit.AiUsageLimitExceededException
+                | UploadLimitException e) {
+            removeQuietly(key);  // 크레딧·한도·저장 공간을 확보한 뒤 다시 올리게 한다. 기록되지 않은 원본(음성 개인정보)을 남기지 않는다.
             throw e;
         }
         if (swap.isEmpty()) {
@@ -178,10 +191,22 @@ public class MeetingRecordingService {
         }
     }
 
+    private static long recordingBytes(MeetingRepository.Meeting meeting) {
+        return meeting.recordingKey() == null || meeting.recordingBytes() == null ? 0 : meeting.recordingBytes();
+    }
+
     private Claims verify(String workspaceId, String userId, String meetingId, String ticket) {
         Claims claims = upload.verify(workspaceId, userId, ticket);
-        if (!meetingId.equals(claims.get("meeting", String.class))) {
+        // 키도 이 회의의 경로여야 한다. ticket의 meeting만 맞추고 키는 다른 회의 녹음을 가리키는 위조를 막는다.
+        if (!meetingId.equals(claims.get("meeting", String.class))
+                || !claims.get("key", String.class).startsWith("meetings/" + meetingId + "/")) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "다른 회의의 업로드를 사용할 수 없습니다.");
+        }
+        // 형식도 start가 정한 녹음 형식이어야 한다. 원본 형식으로 기록돼 재생 주소의 응답 형식이 되므로(text/html 등) 위조를 막는다.
+        String contentType = claims.get("contentType", String.class);
+        String extension = contentType == null ? null : EXTENSIONS.get(contentType);
+        if (extension == null || !claims.get("key", String.class).endsWith("." + extension)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "업로드 확인 정보가 만료되었거나 올바르지 않습니다.");
         }
         return claims;
     }

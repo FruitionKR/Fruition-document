@@ -1,0 +1,5 @@
+fruition.core.chat.controller.ChatSessionController -> fruition.core.chat.repository.ChatMessageReferenceRepository
+fruition.core.chat.controller.ChatSessionController -> fruition.core.chat.repository.ChatMessageRelatedPageRepository
+fruition.core.chat.controller.ChatSessionController -> fruition.core.chat.repository.ChatMessageRepository
+fruition.core.chat.controller.ChatSessionController -> fruition.core.chat.repository.ChatPartialWikiRepository
+fruition.core.wiki.controller.InternalWikiContributionController -> fruition.core.wiki.repository.WikiPageContributionRepository

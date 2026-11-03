@@ -10,6 +10,7 @@ import fruition.core.usage.service.UsageChargeService;
 import io.minio.GetObjectResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -50,19 +51,24 @@ public class SpeechSynthesisService {
     private final SpeechSynthesisClient client;
     private final SpeechAudioStore store;
     private final ObjectMapper mapper;
+    private final boolean enabled;
 
     public SpeechSynthesisService(ChatMessageRepository messages, ChatSessionService sessions,
                                   UsageChargeService usageCharges, SpeechSynthesisClient client,
-                                  SpeechAudioStore store, ObjectMapper mapper) {
+                                  SpeechAudioStore store, ObjectMapper mapper,
+                                  @Value("${app.speech.synthesis.enabled:true}") boolean enabled) {
         this.messages = messages;
         this.sessions = sessions;
         this.usageCharges = usageCharges;
         this.client = client;
         this.store = store;
         this.mapper = mapper;
+        this.enabled = enabled;
     }
 
     public StreamingResponseBody prepare(String workspaceId, String userId, String messageId) {
+        // 비용 스위치가 꺼져 있으면 조회·저장본 재생·크레딧 예약·ai 호출 전에 거절한다.
+        if (!enabled) throw new SpeechSynthesisDisabledException();
         // 멤버·세션 소유 검증. 남의 메시지와 없는 메시지는 같은 404다.
         String sessionId = messages.findSessionIdById(messageId).orElseThrow(() -> new ChatSessionNotFoundException(messageId));
         sessions.verifyOwnedSession(workspaceId, userId, sessionId);

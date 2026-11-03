@@ -23,7 +23,8 @@ public class AgentServiceTokenFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = InternalRequestPaths.canonicalPath(request);
-        return java.util.stream.Stream.of(PROTECTED_PREFIX, "/internal/agent/skill-execution", "/internal/agent/folder-lookup")
+        return java.util.stream.Stream.of(PROTECTED_PREFIX, "/internal/agent/skill-execution", "/internal/agent/folder-lookup",
+                        "/internal/agent/runs")
                 .noneMatch(prefix -> path.equals(prefix) || path.startsWith(prefix + "/"));
     }
 

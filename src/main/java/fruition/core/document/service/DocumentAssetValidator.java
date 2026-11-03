@@ -30,7 +30,7 @@ public class DocumentAssetValidator {
     /** placeholder와 검증 결과를 같은 key로 묶어 돌려준다. 호출부가 순서로 다시 짝지을 필요가 없다. */
     public Map<UUID, ValidatedAsset> validateAll(Map<UUID, MultipartFile> attachments) {
         if (attachments.size() > MAX_FILES) {
-            throw tooLarge("한 번에 새 이미지가 20개를 초과할 수 없습니다.");
+            throw fruition.core.upload.UploadLimitException.tooManyFiles("한 번에 새 이미지는 20개까지 올릴 수 있습니다.");
         }
         long total = 0;
         for (MultipartFile file : attachments.values()) {

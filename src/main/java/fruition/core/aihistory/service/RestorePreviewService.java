@@ -19,7 +19,6 @@ import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.authz.WorkspacePermissionRequiredException;
 import fruition.core.authz.WorkspacePermissions;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashMap;
 import java.util.ArrayList;
@@ -72,8 +71,9 @@ public class RestorePreviewService {
      *
      * <p>실행과 <b>같은 검증</b>을 거친다. 여기서 통과한 것이 실행에서 거절되면 사용자가 확인
      * 화면을 다 보고 나서 실패한다.
+     *
+     * <p>쓰기·잠금이 없는 읽기라 트랜잭션을 두지 않는다. 위키 판정이 ai 페이지 조회를 하므로 그동안 DB 연결을 쥐지 않게 한다.
      */
-    @Transactional
     public RestorePreviewResponse preview(String workspaceId, String userId, String operationId) {
         OperationLog target = loadOperation(workspaceId, userId, operationId);
 

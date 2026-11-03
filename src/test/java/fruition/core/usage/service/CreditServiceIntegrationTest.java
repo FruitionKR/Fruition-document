@@ -55,6 +55,7 @@ class CreditServiceIntegrationTest {
     @Autowired StorageProperties storageProperties;
     @Autowired fruition.core.document.repository.AiCommandOutboxRepository outboxRepository;
     @Autowired jakarta.persistence.EntityManager entityManager;
+    @Autowired fruition.core.usage.limit.AiUsageLimiter limits;
 
     private final String user = "user-" + UUID.randomUUID();
 
@@ -88,6 +89,36 @@ class CreditServiceIntegrationTest {
         assertThat(reserved).isEqualTo(4);
         assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(1_000_000);
         assertThat(credits.credits(user).availableKrwMilli()).isZero();
+        assertLedgerMatchesAccount();
+    }
+
+    /** 여러 Pod의 정리 작업이 겹쳐도 계정 행 잠금 뒤에 남은 예약을 다시 읽어 한 번만 푼다. 그래서 작업 단위 잠금을 두지 않는다. */
+    @Test
+    void overlappingStaleReleasesReleaseEachRunOnce() throws Exception {
+        CreditService credits = credits(true);
+        for (int i = 0; i < 20; i++) {
+            String runId = "run-" + UUID.randomUUID();
+            jdbc.update("INSERT INTO credit_accounts (user_id) VALUES (?) ON CONFLICT DO NOTHING", user);
+            jdbc.update("INSERT INTO credit_entries (user_id, type, amount, run_id, idempotency_key, reason, created_at) "
+                    + "VALUES (?, 'reserve', 1000, ?, ?, 'test_kind', now() - interval '49 hours')", user, runId, "reserve:" + runId);
+            jdbc.update("UPDATE credit_accounts SET reserved = reserved + 1000 WHERE user_id = ?", user);
+        }
+        var barrier = new java.util.concurrent.CyclicBarrier(2);
+        var pool = Executors.newFixedThreadPool(2);
+        List<Future<?>> runs = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            runs.add(pool.submit(() -> {
+                barrier.await();
+                credits.releaseStale();
+                return null;
+            }));
+        }
+        for (Future<?> run : runs) run.get();
+        pool.shutdown();
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE user_id = ? AND type = 'release'",
+                Integer.class, user)).isEqualTo(20);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
         assertLedgerMatchesAccount();
     }
 
@@ -309,7 +340,7 @@ class CreditServiceIntegrationTest {
     void restoreStartsWithoutReservationEvenWhenEnforcedWithZeroBalance() {
         CreditService credits = credits(true);
         var writer = new fruition.core.document.repository.AiCommandOutboxWriter(outboxRepository, mapper, jdbc,
-                entityManager, credits);
+                entityManager, credits, limits);
         var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
         for (String kind : List.of("restore_ingest", "restore_lint")) {
             String runId = "run-" + UUID.randomUUID();
@@ -325,7 +356,7 @@ class CreditServiceIntegrationTest {
         CreditService credits = credits(true);
         // 모든 outbox 작업(query·agent·ingest·convert·lint)은 begin·reserve를, skill 작업은 register를 거친다.
         var writer = new fruition.core.document.repository.AiCommandOutboxWriter(outboxRepository, mapper, jdbc,
-                entityManager, credits);
+                entityManager, credits, limits);
         var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
         for (String kind : List.of("query", "agent", "document", "convert", "lint")) {
             assertThatThrownBy(() -> transaction.executeWithoutResult(tx ->
@@ -337,7 +368,8 @@ class CreditServiceIntegrationTest {
                 .isInstanceOf(CreditService.InsufficientCreditException.class);
 
         var runs = new AiTaskCancellationService(jdbc, manager, pipeline, access, mapper, queryRuns, events, storage,
-                storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc));
+                storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc),
+                limits);
         for (String kind : List.of("skill_author", "skill_publish", "skill_update")) {
             assertThatThrownBy(() -> runs.register(mapper.createObjectNode().put("run_id", "run-" + UUID.randomUUID())
                     .put("kind", kind).put("workspace_id", "ws-1").put("user_id", user)))
@@ -358,7 +390,8 @@ class CreditServiceIntegrationTest {
         CreditService credits = credits(true);
         grant(300_000);
         var runs = new AiTaskCancellationService(jdbc, manager, pipeline, access, mapper, queryRuns, events, storage,
-                storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc));
+                storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc),
+                limits);
         var command = mapper.createObjectNode().put("run_id", "skill_test_" + UUID.randomUUID())
                 .put("kind", "skill_test_run").put("workspace_id", "ws-1").put("user_id", user);
 
@@ -556,7 +589,7 @@ class CreditServiceIntegrationTest {
         // 운영 기본값과 같게 convert 상한 500,000(default-estimate)으로 맞춘다.
         CreditService credits = new CreditService(jdbc, manager, environment, true, 500_000, 48);
         var writer = new fruition.core.document.repository.AiCommandOutboxWriter(outboxRepository, mapper, jdbc,
-                entityManager, credits);
+                entityManager, credits, limits);
         var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
         grant(550_000);
         String convert = "convert:" + UUID.randomUUID();
@@ -589,7 +622,8 @@ class CreditServiceIntegrationTest {
         try {
             CreditService credits = credits(true);
             var runs = new AiTaskCancellationService(jdbc, manager, pipeline, access, mapper, queryRuns, events, storage,
-                    storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc));
+                    storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc),
+                limits);
             var charges = new UsageChargeService(jdbc, manager, runs, credits, mapper,
                     new PipelineClientFactory("internal-test"),
                     "http://127.0.0.1:" + server.getAddress().getPort() + "/calls", 900);
@@ -640,7 +674,8 @@ class CreditServiceIntegrationTest {
 
     private UsageChargeService charges(CreditService credits, String callsEndpoint) {
         var runs = new AiTaskCancellationService(jdbc, manager, pipeline, access, mapper, queryRuns, events, storage,
-                storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc));
+                storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc),
+                limits);
         return new UsageChargeService(jdbc, manager, runs, credits, mapper, new PipelineClientFactory("internal-test"),
                 callsEndpoint, 900);
     }
@@ -651,7 +686,8 @@ class CreditServiceIntegrationTest {
 
     private SpeechTranscriptionClient speech(CreditService credits, String endpoint) {
         var runs = new AiTaskCancellationService(jdbc, manager, pipeline, access, mapper, queryRuns, events, storage,
-                storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc));
+                storageProperties, credits, new fruition.core.wiki.repository.WikiWorkspaceVersionRepository(jdbc),
+                limits);
         var charges = new UsageChargeService(jdbc, manager, runs, credits, mapper, new PipelineClientFactory("internal-test"),
                 "http://127.0.0.1:1/unused", 900);
         return new SpeechTranscriptionClient(new PipelineClientFactory("internal-test"), endpoint, 5, charges);

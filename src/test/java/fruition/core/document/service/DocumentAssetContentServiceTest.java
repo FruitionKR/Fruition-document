@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
@@ -54,7 +55,7 @@ class DocumentAssetContentServiceTest {
         when(storageCoordinator.storeAll("ws_1", "doc_1", 3L, Map.of(attachmentId, validated)))
                 .thenReturn(Map.of(attachmentId, stored));
         when(documentService.saveContentWithAssets(
-                eq("ws_1"), eq("user_1"), eq("doc_1"), any(), eq(3L), any(), any(), eq("operation_1")))
+                eq("ws_1"), eq("user_1"), eq("doc_1"), any(), eq(3L), any(), any(), eq("operation_1"), isNull()))
                 .thenAnswer(invocation -> new DocumentContentSaveResponse(
                         "doc_1", 4, "a".repeat(64), Instant.now(), true,
                         invocation.getArgument(3), List.of()));
@@ -87,7 +88,7 @@ class DocumentAssetContentServiceTest {
                 .thenReturn(Map.of(attachmentId, validated));
         doThrow(new InvalidAgentTurnRequestException("유효하지 않은 적용 표입니다."))
                 .when(documentService).saveContentWithAssets(
-                        any(), any(), any(), any(), anyLong(), any(), any(), eq("operation_1"));
+                        any(), any(), any(), any(), anyLong(), any(), any(), eq("operation_1"), isNull());
 
         assertThatThrownBy(() -> service().save(
                 "ws_1", "user_1", "doc_1", "metadata", new LinkedMultiValueMap<>(),
@@ -96,7 +97,7 @@ class DocumentAssetContentServiceTest {
 
         verify(storageCoordinator).storeAll(any(), any(), anyLong(), any());
         verify(documentService).saveContentWithAssets(
-                any(), any(), any(), any(), anyLong(), any(), any(), eq("operation_1"));
+                any(), any(), any(), any(), anyLong(), any(), any(), eq("operation_1"), isNull());
         verify(storageCoordinator).compensate(any());
     }
 
@@ -117,7 +118,7 @@ class DocumentAssetContentServiceTest {
         when(storageCoordinator.storeAll(any(), any(), anyLong(), any()))
                 .thenReturn(Map.of(attachmentId, stored));
         when(documentService.saveContentWithAssets(
-                any(), any(), any(), any(), anyLong(), any(), any(), any()))
+                any(), any(), any(), any(), anyLong(), any(), any(), any(), isNull()))
                 .thenReturn(new DocumentContentSaveResponse(
                         "doc_1", 4, "a".repeat(64), Instant.now(), true, "markdown", List.of()));
 
@@ -127,7 +128,7 @@ class DocumentAssetContentServiceTest {
 
         ArgumentCaptor<String> revisionIds = ArgumentCaptor.forClass(String.class);
         verify(documentService, times(2)).saveContentWithAssets(
-                eq("ws_1"), eq("user_1"), eq("doc_1"), anyString(), eq(3L), revisionIds.capture(), any(), any());
+                eq("ws_1"), eq("user_1"), eq("doc_1"), anyString(), eq(3L), revisionIds.capture(), any(), any(), isNull());
         assertThat(revisionIds.getAllValues().get(0))
                 .isNotEqualTo(revisionIds.getAllValues().get(1))
                 .hasSizeLessThanOrEqualTo(255);
@@ -149,7 +150,7 @@ class DocumentAssetContentServiceTest {
                 .thenReturn(Map.of(attachmentId, new DocumentAssetStorageCoordinator.StoredAsset(
                         UUID.randomUUID(), "object-key", first)));
         when(documentService.saveContentWithAssets(
-                any(), any(), any(), any(), anyLong(), any(), any(), any()))
+                any(), any(), any(), any(), anyLong(), any(), any(), any(), isNull()))
                 .thenReturn(new DocumentContentSaveResponse(
                         "doc_1", 4, "a".repeat(64), Instant.now(), true, "markdown", List.of()));
 
@@ -159,7 +160,7 @@ class DocumentAssetContentServiceTest {
 
         ArgumentCaptor<String> revisionIds = ArgumentCaptor.forClass(String.class);
         verify(documentService, times(2)).saveContentWithAssets(
-                eq("ws_1"), eq("user_1"), eq("doc_1"), anyString(), eq(3L), revisionIds.capture(), any(), any());
+                eq("ws_1"), eq("user_1"), eq("doc_1"), anyString(), eq(3L), revisionIds.capture(), any(), any(), isNull());
         assertThat(revisionIds.getAllValues().get(0))
                 .isNotEqualTo(revisionIds.getAllValues().get(1))
                 .hasSizeLessThanOrEqualTo(255);
@@ -181,7 +182,7 @@ class DocumentAssetContentServiceTest {
         when(storageCoordinator.storeAll("ws_1", "doc_1", 3L, Map.of(attachmentId, validated)))
                 .thenReturn(Map.of(attachmentId, stored));
         when(documentService.saveContentWithAssets(
-                any(), any(), any(), any(), any(Long.class), any(), any(), any()))
+                any(), any(), any(), any(), any(Long.class), any(), any(), any(), isNull()))
                 .thenThrow(new DocumentVersionConflictException("충돌"));
 
         assertThatThrownBy(() -> service().save(

@@ -1,0 +1,17 @@
+fruition.core.agent.service.AgentTurnService.analytics
+fruition.core.aihistory.service.OperationRecorder.analytics
+fruition.core.aihistory.service.RestoreOperationLifecycle.analytics
+fruition.core.aihistory.service.RestoreRebuildApplier.analytics
+fruition.core.aitask.service.AiTaskResultApplier.analytics
+fruition.core.analytics.DocumentAnalytics.skillMetadata
+fruition.core.chat.service.ChatWikiExportService.analytics
+fruition.core.chat.service.ChatWikiExportService.exportLinks
+fruition.core.document.service.DocumentAssetContentService.importSessions
+fruition.core.document.service.DocumentService.agentRuns
+fruition.core.document.service.DocumentService.analytics
+fruition.core.document.service.DocumentService.importSessions
+fruition.core.document.service.DocumentService.uploadLimits
+fruition.core.meeting.MeetingNotesService.analytics
+fruition.core.meeting.MeetingTranscriptionService.analytics
+fruition.core.query.service.QueryRunService.analytics
+fruition.core.usage.service.UsageChargeService.analytics

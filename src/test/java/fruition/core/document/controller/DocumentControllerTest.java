@@ -14,6 +14,7 @@ import fruition.core.document.dto.DocumentRenameResponse;
 import fruition.core.document.dto.MarkdownDocumentCreateRequest;
 import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.domain.DocumentStatus;
+import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.InvalidDocumentConvertRequestException;
 import fruition.core.document.exception.MarkdownDiffTooLargeException;
@@ -211,8 +212,8 @@ class DocumentControllerTest {
                 true,
                 1,
                 DocumentRole.EDITABLE, null);
-        when(documentService.createMarkdown(
-                eq(WORKSPACE_ID), eq(USER_ID), eq("create-key"), any(MarkdownDocumentCreateRequest.class)))
+        when(documentService.createMarkdownAsUpload(
+                eq(WORKSPACE_ID), eq(USER_ID), eq("create-key"), any(MarkdownDocumentCreateRequest.class), eq(null)))
                 .thenReturn(response);
 
         mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/documents/markdown")
@@ -228,8 +229,8 @@ class DocumentControllerTest {
                 .andExpect(jsonPath("$.current_version").value(1))
                 .andExpect(jsonPath("$.source_uri").doesNotExist());
 
-        verify(documentService).createMarkdown(
-                eq(WORKSPACE_ID), eq(USER_ID), eq("create-key"), any(MarkdownDocumentCreateRequest.class));
+        verify(documentService).createMarkdownAsUpload(
+                eq(WORKSPACE_ID), eq(USER_ID), eq("create-key"), any(MarkdownDocumentCreateRequest.class), eq(null));
     }
 
     @Test
@@ -242,8 +243,8 @@ class DocumentControllerTest {
                                 {"display_name":"양식","markdown":"# 양식","origin":"skill_reference"}
                                 """))
                 .andExpect(status().isCreated());
-        verify(documentService).createMarkdown(eq(WORKSPACE_ID), eq(USER_ID), eq("ref-key"),
-                eq(new MarkdownDocumentCreateRequest("양식", "# 양식", null, "skill_reference")));
+        verify(documentService).createMarkdownAsUpload(eq(WORKSPACE_ID), eq(USER_ID), eq("ref-key"),
+                eq(new MarkdownDocumentCreateRequest("양식", "# 양식", null, "skill_reference")), eq(null));
 
         when(documentService.findAll(WORKSPACE_ID, USER_ID, null, "skill_reference"))
                 .thenReturn(new fruition.core.document.dto.DocumentListResponse(List.of()));
@@ -497,7 +498,7 @@ class DocumentControllerTest {
                 """.formatted(attachmentId);
         when(documentAssetContentService.save(
                 eq(WORKSPACE_ID), eq(USER_ID), eq("doc_edit"), eq(metadataJson), any(),
-                eq("operation_1")))
+                eq("operation_1"), eq(null)))
                 .thenReturn(new DocumentContentSaveResponse(
                         "doc_edit", 4, "a".repeat(64), Instant.now(), true,
                         "![](/api/workspaces/" + WORKSPACE_ID + "/assets/" + UUID.randomUUID() + "/content)",
@@ -522,7 +523,7 @@ class DocumentControllerTest {
 
         verify(documentAssetContentService).save(
                 eq(WORKSPACE_ID), eq(USER_ID), eq("doc_edit"), eq(metadataJson), any(),
-                eq("operation_1"));
+                eq("operation_1"), eq(null));
     }
 
     @Test
@@ -531,7 +532,7 @@ class DocumentControllerTest {
                 {"markdown":"# 본문","base_version":3}
                 """;
         when(documentAssetContentService.save(
-                eq(WORKSPACE_ID), eq(USER_ID), eq("doc_edit"), eq(metadataJson), any(), eq(null)))
+                eq(WORKSPACE_ID), eq(USER_ID), eq("doc_edit"), eq(metadataJson), any(), eq(null), eq(null)))
                 .thenReturn(new DocumentContentSaveResponse(
                         "doc_edit", 3, "a".repeat(64), Instant.now(), false, "# 본문", List.of()));
 
@@ -550,7 +551,7 @@ class DocumentControllerTest {
 
         var files = org.mockito.ArgumentCaptor.forClass(org.springframework.util.MultiValueMap.class);
         verify(documentAssetContentService).save(
-                eq(WORKSPACE_ID), eq(USER_ID), eq("doc_edit"), eq(metadataJson), files.capture(), eq(null));
+                eq(WORKSPACE_ID), eq(USER_ID), eq("doc_edit"), eq(metadataJson), files.capture(), eq(null), eq(null));
         assertThat(files.getValue()).containsKey("unexpected_file");
         assertThat(files.getValue()).doesNotContainKey("metadata");
     }
@@ -676,5 +677,23 @@ class DocumentControllerTest {
                 .andExpect(jsonPath("$.display_name").value("새 제목"))
                 .andExpect(jsonPath("$.current_version").value(2))
                 .andExpect(jsonPath("$.changed").value(true));
+    }
+
+    @Test
+    void rename_chatExportDocument_returnsTitleLockedConflict() throws Exception {
+        when(documentService.rename(
+                eq(WORKSPACE_ID), eq(USER_ID), eq("doc_chat"), any(DocumentRenameRequest.class)))
+                .thenThrow(new DocumentTitleLockedException("채팅에서 만든 문서는 이름을 바꿀 수 없습니다."));
+
+        mockMvc.perform(patch(
+                        "/api/workspaces/" + WORKSPACE_ID + "/documents/doc_chat/rename")
+                        .header("Authorization", bearerToken())
+                        .contentType("application/json")
+                        .content("""
+                                {"display_name":"새 제목","base_version":1}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("DOCUMENT_TITLE_LOCKED"))
+                .andExpect(jsonPath("$.error.message").value("채팅에서 만든 문서는 이름을 바꿀 수 없습니다."));
     }
 }

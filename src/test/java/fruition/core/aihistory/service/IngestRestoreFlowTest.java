@@ -59,7 +59,7 @@ class IngestRestoreFlowTest {
                 "doc_monday", "월요일 ingest", 2, MONDAY);
         var scope = new RestoreScopeResolver(logs);
         var planner = new RestorePlanner(wiki);
-        var signer = new PreviewTokenSigner("");
+        var signer = new PreviewTokenSigner("", "");
         var validator = new RestoreTargetValidator(wiki);
         var documentPlanner = mock(DocumentRestorePlanner.class);
         var lintPlanner = mock(LintRestorePlanner.class);

@@ -29,6 +29,7 @@ public class AiTaskCancellationService {
     private final fruition.shared.util.StorageProperties storageProperties;
     private final fruition.core.usage.service.CreditService credits;
     private final fruition.core.wiki.repository.WikiWorkspaceVersionRepository wikiVersions;
+    private final fruition.core.usage.limit.AiUsageLimiter limits;
 
     /** 취소 복구가 ai 위키를 되돌릴 수 있는 실행 종류. 복구가 끝나면 위키 버전을 올린다(#68). */
     private static final java.util.Set<String> WIKI_KINDS =
@@ -38,8 +39,10 @@ public class AiTaskCancellationService {
             PipelineTaskCancellationClient pipeline, WorkspaceAccessGuard access, ObjectMapper mapper,
             QueryRunStore queryRuns, fruition.core.query.service.QueryEventBroker events, io.minio.MinioClient storage, fruition.shared.util.StorageProperties storageProperties,
             fruition.core.usage.service.CreditService credits,
-            fruition.core.wiki.repository.WikiWorkspaceVersionRepository wikiVersions) {
+            fruition.core.wiki.repository.WikiWorkspaceVersionRepository wikiVersions,
+            fruition.core.usage.limit.AiUsageLimiter limits) {
         this.credits = credits;
+        this.limits = limits;
         this.wikiVersions = wikiVersions;
         this.jdbc = jdbc;
         this.transaction = new TransactionTemplate(manager);
@@ -78,6 +81,8 @@ public class AiTaskCancellationService {
             var matching = jdbc.queryForList("SELECT id FROM ai_task_runs WHERE id = ? AND command = CAST(? AS jsonb)",
                     String.class, id, command.toString());
             if (matching.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "작업 ID의 요청 내용이 다릅니다.");
+            // 새로 등록한 실행만 사용자별 사용 한도를 본다. 넘으면 등록과 함께 롤백된다.
+            if (inserted == 1) limits.check(command.path("user_id").asText(), command.path("kind").asText());
             // AI 호출 전에 크레딧을 예약한다. 잔액이 모자라면 실행 등록과 함께 롤백된다(#79).
             credits.reserve(id, command.path("user_id").asText(), command.path("kind").asText());
         });
@@ -222,6 +227,9 @@ public class AiTaskCancellationService {
             if (!result.status().equals("cancelled")) return;
             pipeline.rollbackBackend(id, workspaceId, userId, command);
             transaction.executeWithoutResult(tx -> {
+                // 변환 결과 반영과 같은 순서(대기열 행 → 실행 행)로 잠근다. 반대 순서면 둘이 교착한다.
+                if (converting) jdbc.queryForList("SELECT id FROM document_convert_queue WHERE document_id = ? FOR UPDATE",
+                        Long.class, id.substring("convert:".length()));
                 var current = owned(id, workspaceId, userId, true);
                 if (current.get("status").equals("cancelled")) return;
                 if (!jdbc.queryForList("SELECT id FROM ai_task_changes WHERE run_id = ? AND NOT undone", Long.class, id).isEmpty())

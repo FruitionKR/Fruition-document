@@ -16,6 +16,7 @@ import fruition.core.authz.WorkspaceAccessGuard;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -35,6 +36,7 @@ public class DocumentEditLockService {
     private final DocumentAccessPolicy documentAccessPolicy;
     private final long ttlSeconds;
     private final Clock clock;
+    private final TransactionTemplate transactionTemplate;
 
     public DocumentEditLockService(DocumentEditLockRepository lockRepository,
                                    DocumentRepository documentRepository,
@@ -42,7 +44,8 @@ public class DocumentEditLockService {
                                    AccessUserClient accessUserClient,
                                    DocumentAccessPolicy documentAccessPolicy,
                                    @Value("${app.document.edit-lock.ttl-seconds:45}") long ttlSeconds,
-                                   Clock clock) {
+                                   Clock clock,
+                                   TransactionTemplate transactionTemplate) {
         this.lockRepository = lockRepository;
         this.documentRepository = documentRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
@@ -50,18 +53,29 @@ public class DocumentEditLockService {
         this.documentAccessPolicy = documentAccessPolicy;
         this.ttlSeconds = ttlSeconds;
         this.clock = clock;
+        this.transactionTemplate = transactionTemplate;
     }
 
-    /** 잠금 획득/갱신. 성립하면 본인 보유 잠금을, 다른 사용자가 보유 중이면 그 사용자 잠금을 그대로 반환한다. */
-    @Transactional
+    /**
+     * 잠금 획득/갱신. 성립하면 본인 보유 잠금을, 다른 사용자가 보유 중이면 그 사용자 잠금을 그대로 반환한다.
+     * 잠금 처리는 짧은 트랜잭션으로 끝내고 보유자 표시 이름은 트랜잭션 밖에서 조회한다.
+     * DB 연결을 쥔 채 Access를 기다리면 Access 지연이 곧 연결 풀 고갈이 된다.
+     */
     public EditLockResponse acquire(String workspaceId, String userId, String documentId) {
-        requireEditable(workspaceId, userId, documentId);
-        Instant now = Instant.now(clock);
-        lockRepository.acquire(documentId, userId, now, now.plus(Duration.ofSeconds(ttlSeconds)));
-        return toResponse(currentLock(documentId));
+        DocumentEditLock lock = transactionTemplate.execute(status -> {
+            requireEditable(workspaceId, userId, documentId);
+            Instant now = Instant.now(clock);
+            lockRepository.acquire(documentId, userId, now, now.plus(Duration.ofSeconds(ttlSeconds)));
+            return currentLock(documentId);
+        });
+        return toResponse(lock);
     }
 
-    /** heartbeat 갱신. 보유자 본인의 유효한 잠금만 연장하며, 상실 시 409. */
+    /**
+     * heartbeat 갱신. 보유자 본인의 유효한 잠금만 연장하며, 상실 시 409.
+     * 보유자는 항상 요청자 본인이라 표시 이름은 조회하지 않는다({@code holder_display_name}=null).
+     * 수 초마다 오는 요청이 DB 연결을 쥔 채 Access를 부르면 Access 지연이 곧 연결 풀 고갈이 된다.
+     */
     @Transactional
     public EditLockResponse heartbeat(String workspaceId, String userId, String documentId) {
         requireEditable(workspaceId, userId, documentId);
@@ -70,7 +84,7 @@ public class DocumentEditLockService {
         if (renewed == 0) {
             throw new EditLockLostException("편집 잠금이 만료되었거나 다른 사용자에게 넘어갔습니다. 다시 획득해 주세요.");
         }
-        return toResponse(currentLock(documentId));
+        return toResponse(currentLock(documentId), null);
     }
 
     /** 보유자 본인의 잠금 해제(멱등). */
@@ -80,8 +94,10 @@ public class DocumentEditLockService {
         lockRepository.release(documentId, userId);
     }
 
-    /** 현재 잠금 상태. 비어 있거나 만료됐으면 null. GET /documents/{id}의 edit_lock 노출용. */
-    @Transactional(readOnly = true)
+    /**
+     * 현재 잠금 상태. 비어 있거나 만료됐으면 null. GET /documents/{id}의 edit_lock 노출용.
+     * 트랜잭션을 걸지 않아 조회 연결은 findById 직후 반납되고, 표시 이름 조회는 연결 없이 한다.
+     */
     public EditLockResponse getStatus(String documentId) {
         DocumentEditLock lock = lockRepository.findById(documentId).orElse(null);
         if (lock == null || lock.isExpiredAt(Instant.now(clock))) {
@@ -111,10 +127,13 @@ public class DocumentEditLockService {
     }
 
     private EditLockResponse toResponse(DocumentEditLock lock) {
+        return toResponse(lock, holderDisplayName(lock.getHolderUserId()));
+    }
+
+    private EditLockResponse toResponse(DocumentEditLock lock, String holderDisplayName) {
         // 클라이언트 시계와 무관하게 쓸 수 있도록 서버 시계 기준 남은 시간을 함께 내려준다.
         long ttlMs = Math.max(0L, Duration.between(Instant.now(clock), lock.getExpiresAt()).toMillis());
-        return new EditLockResponse(lock.getHolderUserId(), holderDisplayName(lock.getHolderUserId()),
-                lock.getExpiresAt(), ttlMs);
+        return new EditLockResponse(lock.getHolderUserId(), holderDisplayName, lock.getExpiresAt(), ttlMs);
     }
 
     private String holderDisplayName(String userId) {

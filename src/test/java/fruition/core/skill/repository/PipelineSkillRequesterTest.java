@@ -169,6 +169,7 @@ class PipelineSkillRequesterTest {
         assertThat(sent.path("definition").path("instructions_markdown").asText()).isEqualTo("'연구 개요' 섹션만 고친다.");
         assertThat(sent.path("definition").path("capabilities").get(0).asText()).isEqualTo("document-edit");
         assertThat(sent.path("definition").has("allowed_tools")).isFalse();
+        assertThat(sent.path("definition").path("requires_source").asBoolean()).isTrue();
         assertThat(sent.path("document").path("document_id").asText()).isEqualTo("doc_1");
         assertThat(sent.path("document").path("base_version").asLong()).isEqualTo(7);
         assertThat(sent.path("document").path("markdown").asText()).isEqualTo("# 연구 개요\n본문");
@@ -220,10 +221,11 @@ class PipelineSkillRequesterTest {
     @Test
     void testRun_omitsTargetWhenWholeDocument() {
         requester().testRun("ws_1", "user_1", new fruition.core.skill.dto.SkillTestRunRequest("research-summary",
-                        "연구 요약", "지침", List.of("document-edit"), "doc_1", null, null), 1, "본문",
+                        "연구 요약", "지침", List.of("document-edit"), "doc_1", null, null, null), 1, "본문",
                 new WorkspaceAiModelClient.AiModelSelection("openai", "gpt-6-luna"), "skill_test_1");
 
         assertThat(body.get()).doesNotContain("target");
+        assertThat(body.get()).doesNotContain("requires_source");
     }
 
     @Test
@@ -268,7 +270,7 @@ class PipelineSkillRequesterTest {
     private fruition.core.skill.dto.SkillTestRunRequest testRunRequest() {
         return new fruition.core.skill.dto.SkillTestRunRequest("research-summary", "연구 요약",
                 "'연구 개요' 섹션만 고친다.", List.of("document-edit"), "doc_1", null,
-                new fruition.core.skill.dto.SkillTestRunRequest.Target("selection", 1, 2));
+                new fruition.core.skill.dto.SkillTestRunRequest.Target("selection", 1, 2), true);
     }
 
     @Test

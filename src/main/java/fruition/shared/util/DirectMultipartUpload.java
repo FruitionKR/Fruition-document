@@ -21,6 +21,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * 브라우저가 S3에 직접 올리는 multipart 업로드의 공통 절차. 서명된 ticket에 키·크기·uploadId를 담아 두고,
@@ -35,10 +36,16 @@ public class DirectMultipartUpload {
     private final StorageProperties properties;
     private final String audience;
     private final SecretKey ticketKey;
+    private final Pattern keyFormat;
 
+    /**
+     * @param keyFormat 이 업로드가 발급하는 객체 키의 형식. ticket의 키가 이 형식이 아니면 서명이 맞아도 거절한다.
+     *                  서명 키가 새더라도 ticket으로 다른 사용자의 원본 경로를 가리킬 수 없게 하는 2차 방어다.
+     */
     public DirectMultipartUpload(MinioClient storage, MultipartStorage multipart, StorageProperties properties,
-                                 String secret, String audience) throws Exception {
+                                 String secret, String audience, Pattern keyFormat) throws Exception {
         this.storage = storage;
+        this.keyFormat = keyFormat;
         this.multipart = multipart;
         this.properties = properties;
         this.audience = audience;
@@ -70,6 +77,10 @@ public class DirectMultipartUpload {
         }
         if (!userId.equals(claims.getSubject()) || !workspaceId.equals(claims.get("workspace", String.class))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "다른 사용자의 업로드를 사용할 수 없습니다.");
+        }
+        String key = claims.get("key", String.class);
+        if (key == null || !keyFormat.matcher(key).matches()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "업로드 확인 정보가 만료되었거나 올바르지 않습니다.");
         }
         return claims;
     }

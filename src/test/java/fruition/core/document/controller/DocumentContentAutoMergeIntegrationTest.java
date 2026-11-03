@@ -6,7 +6,7 @@ import fruition.core.document.dto.DocumentContentSaveResponse;
 import fruition.core.document.dto.MarkdownDocumentCreateRequest;
 import fruition.core.document.service.DocumentService;
 import fruition.shared.security.JwtTokenProvider;
-import org.flywaydb.core.Flyway;
+import fruition.core.config.FlywayDefaults;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,7 +52,7 @@ class DocumentContentAutoMergeIntegrationTest {
     @Autowired AgentRunCommandRepository agentRunCommandRepository;
     @Autowired StringRedisTemplate redis;
     @Autowired JdbcTemplate jdbc;
-    @Autowired PostgreSQLContainer<?> postgresContainer;
+    PostgreSQLContainer<?> postgresContainer = TestcontainersConfiguration.POSTGRES;
 
     final String workspace = "ws_" + UUID.randomUUID();
     final String author = "user_author_" + UUID.randomUUID();
@@ -194,7 +194,7 @@ class DocumentContentAutoMergeIntegrationTest {
         }
         String url = "jdbc:postgresql://" + postgresContainer.getHost() + ":"
                 + postgresContainer.getMappedPort(PostgreSQLContainer.POSTGRESQL_PORT) + "/" + databaseName;
-        Flyway.configure().dataSource(url, postgresContainer.getUsername(), postgresContainer.getPassword())
+        FlywayDefaults.configure().dataSource(url, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .target(MigrationVersion.fromVersion("79")).load().migrate();
         try (Connection connection = DriverManager.getConnection(
                 url, postgresContainer.getUsername(), postgresContainer.getPassword());
@@ -233,7 +233,7 @@ class DocumentContentAutoMergeIntegrationTest {
                     """);
         }
 
-        Flyway.configure().dataSource(url, postgresContainer.getUsername(), postgresContainer.getPassword())
+        FlywayDefaults.configure().dataSource(url, postgresContainer.getUsername(), postgresContainer.getPassword())
                 .load().migrate();
 
         try (Connection connection = DriverManager.getConnection(

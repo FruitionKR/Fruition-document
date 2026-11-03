@@ -53,4 +53,31 @@ class WorkspaceSettingsClientTest {
         assertThat(client.autoIngestOnUpload("ws_1")).isTrue();
         server.verify();
     }
+
+    @Test
+    void describePdfFiguresReadsSettingAndSharesCache() {
+        server.expect(requestTo(URL)).andRespond(withSuccess(
+                "{\"auto_ingest_on_upload\":false,\"describe_pdf_figures\":true}", MediaType.APPLICATION_JSON));
+
+        assertThat(client.describePdfFigures("ws_1")).isTrue();
+        // 같은 응답을 캐시해 두 설정을 한 번만 조회한다.
+        assertThat(client.autoIngestOnUpload("ws_1")).isFalse();
+        server.verify();
+    }
+
+    @Test
+    void describePdfFiguresMissingFieldIsOff() {
+        // 설정을 아직 모르는 access(배포 순서 차이)는 필드를 주지 않는다. 외부 전송은 기본 꺼짐이다.
+        server.expect(requestTo(URL)).andRespond(
+                withSuccess("{\"auto_ingest_on_upload\":true}", MediaType.APPLICATION_JSON));
+
+        assertThat(client.describePdfFigures("ws_1")).isFalse();
+    }
+
+    @Test
+    void describePdfFiguresFailureIsOff() {
+        server.expect(requestTo(URL)).andRespond(withServerError());
+
+        assertThat(client.describePdfFigures("ws_1")).isFalse();
+    }
 }

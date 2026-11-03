@@ -45,7 +45,12 @@ public record SkillTestRunRequest(
 
         @Valid
         @Schema(description = "적용 범위. 생략하면 문서 전체다.")
-        Target target
+        Target target,
+
+        @JsonProperty("requires_source")
+        @Schema(description = "원문 문서가 필요한 Skill인지 여부. 작성 초안의 값(게시 때 보낼 값과 같다). 생략(null)하면 키를 보내지 않고 AI가 판단한다.",
+                nullable = true, example = "true")
+        Boolean requiresSource
 ) {
 
     @Schema(description = "적용 범위(1-based 줄 번호). Agent 턴 editor_snapshot.target과 같은 형식이다.")

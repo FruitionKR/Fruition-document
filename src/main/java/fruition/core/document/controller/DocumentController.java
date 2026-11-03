@@ -116,7 +116,12 @@ public class DocumentController {
             @RequestParam(value = "folder_id", required = false) java.util.UUID folderId,
             @RequestParam(value = "file", required = false) MultipartFile file,
             @Parameter(description = "skill_reference면 스킬 참고 문서로 올린다. Markdown·txt만 받으며 folder_id와 함께 쓸 수 없다. 그 밖의 값은 400이다.")
-            @RequestParam(value = "origin", required = false) String origin) {
+            @RequestParam(value = "origin", required = false) String origin,
+            MultipartHttpServletRequest multipartRequest) {
+        // 파일은 요청마다 하나다. 같은 이름의 part를 여러 개 보내면 첫 번째만 저장되므로 명시적으로 거절한다.
+        if (multipartRequest.getMultiFileMap().values().stream().mapToInt(java.util.List::size).sum() > 1) {
+            throw fruition.core.upload.UploadLimitException.tooManyFiles("파일은 한 번에 1개만 올릴 수 있습니다.");
+        }
         if (file == null || file.isEmpty()) {
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)
@@ -130,19 +135,20 @@ public class DocumentController {
 
     @Operation(
         summary = "Markdown 문서 생성",
-        description = "표시 이름과 전체 Markdown 본문으로 즉시 편집 가능한 문서를 생성합니다."
+        description = "표시 이름과 전체 Markdown 본문으로 즉시 편집 가능한 문서를 생성합니다. 다른 업로드처럼 저장 용량(5GB) 한도를 "
+            + "적용합니다. X-Fruition-Import-Id가 있으면 그 가져오기 세션의 문서로 만들고 자동 편입하지 않습니다."
     )
     @ApiResponses({
         @ApiResponse(responseCode = "201", description = "생성 성공 또는 멱등 재요청",
             content = @Content(schema = @Schema(implementation = DocumentUploadResponse.class))),
-        @ApiResponse(responseCode = "400", description = "잘못된 본문 또는 Idempotency-Key",
+        @ApiResponse(responseCode = "400", description = "잘못된 본문 또는 Idempotency-Key, 열린 가져오기 세션이 아님(IMPORT_INVALID)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Idempotency-Key 충돌",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "413", description = "Markdown 5MB 초과",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+        @ApiResponse(responseCode = "413", description = "Markdown 5MB 초과 또는 저장 용량 초과(STORAGE_QUOTA_EXCEEDED)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
     })
     @PostMapping(path = "/markdown", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<DocumentUploadResponse> createMarkdown(
@@ -150,9 +156,11 @@ public class DocumentController {
             @AuthenticationPrincipal String userId,
             @Parameter(description = "요청 멱등 키", required = true)
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Parameter(description = "가져오기 세션 ID(POST /imports 응답의 import_id)")
+            @RequestHeader(value = fruition.core.imports.ImportSessionStore.HEADER, required = false) String importId,
             @RequestBody MarkdownDocumentCreateRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(documentService.createMarkdown(workspaceId, userId, idempotencyKey, request));
+                .body(documentService.createMarkdownAsUpload(workspaceId, userId, idempotencyKey, request, importId));
     }
 
     @Operation(summary = "문서 목록 조회", description = "활성 문서의 호환용 평면 목록을 반환하며 파일명 검색을 지원합니다. 스킬 참고 문서는 빠지고, origin=skill_reference로 따로 조회합니다.")
@@ -344,7 +352,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "문서 version 충돌",
+        @ApiResponse(responseCode = "409", description = "문서 version 충돌 또는 채팅에서 만든 문서라 이름이 잠김(DOCUMENT_TITLE_LOCKED)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PatchMapping("/{document_id}/rename")
@@ -422,6 +430,8 @@ public class DocumentController {
             @RequestPart(value = "source", required = false) String source,
             @Parameter(description = "AI 편집 적용 표. `POST /agent/turn` 응답의 apply_operation_id를 그대로 전달하면 AI 작업 로그가 남습니다.")
             @RequestPart(value = "apply_operation_id", required = false) String applyOperationId,
+            @Parameter(description = "가져오기 세션 ID. 그 세션이 만든 문서에만 쓸 수 있습니다(아니면 400 IMPORT_INVALID).")
+            @RequestHeader(value = fruition.core.imports.ImportSessionStore.HEADER, required = false) String importId,
             MultipartHttpServletRequest multipartRequest) {
         if (metadata != null) {
             // attachment 후보뿐 아니라 업로드된 file part를 모두 넘겨, 계약에 없는 part는 parser가 거절하게 한다.
@@ -434,7 +444,10 @@ public class DocumentController {
                 }
             });
             return ResponseEntity.ok(documentAssetContentService.save(
-                    workspaceId, userId, documentId, metadata, fileParts, applyOperationId));
+                    workspaceId, userId, documentId, metadata, fileParts, applyOperationId, importId));
+        }
+        if (importId != null) {
+            documentService.requireImportDocument(workspaceId, userId, documentId, importId);
         }
         if (markdown == null || baseRevision == null || revisionWriteId == null) {
             throw new InvalidMarkdownContentException(

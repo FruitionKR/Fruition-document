@@ -77,6 +77,8 @@ class DocumentTreeControllerTest {
                 // 폴더에는 키 자체가 없어야 한다. doesNotExist()는 "document": null도 통과시키므로
                 // 키의 부재를 직접 본다.
                 .andExpect(jsonPath("$.items[0]").value(not(hasKey("document"))))
+                // 코드 없는 문서는 error_code 키가 빠진다. 이전 클라이언트가 받는 모양은 그대로다.
+                .andExpect(jsonPath("$.items[0].children[0].document").value(not(hasKey("error_code"))))
                 // 문서에 직접 건 설정이 없으면 null이지만 키는 있다.
                 .andExpect(jsonPath("$.items[0].children[0]").value(hasKey("permission")))
                 .andExpect(jsonPath("$.items[0].children[0].permission").value(nullValue()));
@@ -103,9 +105,9 @@ class DocumentTreeControllerTest {
                 "sources/documents/doc_1/original", null,
                 Instant.parse("2026-08-17T00:00:00Z"), Instant.parse("2026-08-17T00:01:00Z"),
                 Instant.parse("2026-08-17T00:00:30Z"),
-                null, "run_1", DocumentProcessingState.completed, null,
+                null, null, "run_1", DocumentProcessingState.completed, null,
                 "pages", "page", "메모", "md", DocumentRole.EDITABLE, true, 3L, null,
-                Instant.parse("2026-08-17T00:02:00Z"), true, null, "a1b2c3", true, false, false, null, null, null, null);
+                Instant.parse("2026-08-17T00:02:00Z"), true, null, "a1b2c3", true, false, false, null, null, null, null, null, null);
     }
 
     @Test

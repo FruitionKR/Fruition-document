@@ -223,7 +223,7 @@ class DocumentRestoreTest {
         @Test
         @DisplayName("지금 버전이 달라지면 서명이 어긋난다")
         void signatureBreaksWhenDocumentChanged() {
-            PreviewTokenSigner signer = new PreviewTokenSigner("");
+            PreviewTokenSigner signer = new PreviewTokenSigner("", "");
             String issued = signer.sign(TARGET, new DocumentRestorePlan(DOCUMENT, 6, 5));
 
             assertThat(signer.matches(issued, TARGET, new DocumentRestorePlan(DOCUMENT, 6, 5))).isTrue();

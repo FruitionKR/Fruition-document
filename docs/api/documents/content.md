@@ -349,11 +349,11 @@ curl -X DELETE "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/doc
 
 - HTTP `200`: 잠금 연장
 - Content-Type: `*/*` (`EditLockResponse`)
+- 보유자는 항상 요청자 본인이라 `holder_display_name`은 조회하지 않고 내려주지 않는다(필드 생략, heartbeat마다 access-svc를 부르지 않는다).
 
 ```json
 {
   "expires_at": "2026-08-13T04:25:24.371948Z",
-  "holder_display_name": "표시 이름",
   "holder_user_id": "user_3f1c8a6b52d7411e9c04ab5d2e7f6081",
   "ttl_ms": 45000
 }
@@ -594,6 +594,13 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 #### 2. 목적
 
 전체 Markdown과 신규 이미지를 저장합니다. base_revision이 현재 편집 revision과 일치할 때만 반영하며 revision_write_id 재시도는 기존 결과를 반환합니다. 이미지 포함 저장은 metadata part를 사용합니다.
+
+업로드 한도: 새로 들어간 이미지만 저장 공간(5GB)에 센다(하루 업로드 개수 한도는 없다). 본문 Markdown이 늘어나는 것은 저장 시점에 용량으로 세지 않는다(의도된 동작).
+편집본은 object storage가 아니라 PostgreSQL 편집 상태에 있고 문서마다 5MB로 묶여 있으며, 저장 공간 합계(`documents.byte_size`)는 원본 크기라
+위키 편입 때 편집본이 원본으로 승격되면서 그 크기로 갱신된다(편입 시점에도 한도로 거절하지는 않는다).
+
+`X-Fruition-Import-Id` 헤더(선택, [Imports](../imports.md))를 주면 그 가져오기 세션이 만든 문서에만 저장할 수 있다(아니면 `400 IMPORT_INVALID`).
+새 이미지는 세션 항목 수로 센다(상한 없음). 이미지 크기·개수·저장 공간 한도는 그대로다.
 
 #### 3. Auth 필요 여부
 

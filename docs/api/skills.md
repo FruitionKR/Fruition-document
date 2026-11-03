@@ -652,6 +652,9 @@ Figma "스킬 만들기" 시트의 "테스트 실행" 카드용. 게시 전 정�
 | body | `document_id` | `string` | 예 | 테스트할 문서 |
 | body | `markdown` | `string` | 아니요 | 에디터의 저장 안 된 본문(UTF-8 5MB 이하). 생략하면 저장된 최신 본문 |
 | body | `target` | `object` | 아니요 | `{type, start_line, end_line}`. `type`은 `selection` \| `current_section` \| `whole_document`, 1-based 줄(끝 포함). 생략하면 문서 전체. 줄 범위는 실제로 쓰는 본문 기준으로 검사한다 |
+| body | `requires_source` | `boolean` \| `null` | 아니요 | 작성 초안의 원문 필요 여부(게시 때 보낼 값과 같은 값). ai-svc `definition.requires_source`로 보낸다. 생략하거나 `null`이면 키를 보내지 않고 ai-svc가 판단한다 |
+
+> `requires_source`를 모르는 이전 ai-svc는 `422`로 거절할 수 있으므로 값은 ai-svc 배포 뒤에 보낸다. 생략한 요청은 지금과 같다.
 
 ```json
 {
@@ -672,7 +675,7 @@ ai-svc로는 다음을 보낸다(`X-Agent-Service-Token`, `X-Request-Id: <run_id
   "user_id": "user_123",
   "provider": "openai",
   "model": "gpt-6-luna",
-  "definition": { "name": "research-summary", "description": "...", "instructions_markdown": "...", "capabilities": ["document-edit"] },
+  "definition": { "name": "research-summary", "description": "...", "instructions_markdown": "...", "capabilities": ["document-edit"], "requires_source": true },
   "document": { "document_id": "doc_123", "base_version": 7, "markdown": "# 연구 개요\n..." },
   "target": { "type": "selection", "start_line": 10, "end_line": 24 }
 }

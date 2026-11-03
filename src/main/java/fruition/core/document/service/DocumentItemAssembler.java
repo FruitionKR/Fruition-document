@@ -1,5 +1,6 @@
 package fruition.core.document.service;
 
+import fruition.core.document.domain.ConversionReport;
 import fruition.core.document.domain.Document;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.domain.DocumentProcessingState;
@@ -88,6 +89,7 @@ public class DocumentItemAssembler {
                 doc.getProcessedAt(),
                 doc.getProcessingStartedAt(),
                 doc.getErrorMessage(),
+                doc.getErrorCode(),
                 doc.getPipelineRunId(),
                 resolveProcessingState(doc),
                 doc.getProcessingStage(),
@@ -109,7 +111,17 @@ public class DocumentItemAssembler {
                 viewer.override(doc),
                 doc.getUpdatedBy(),
                 doc.getAiOrigin(),
-                lastAiChange);
+                lastAiChange,
+                restorationSummaryOf(doc),
+                figureDescriptionsOf(doc));
+    }
+
+    static ConversionReport.RestorationSummary restorationSummaryOf(Document doc) {
+        return doc.getConversionReport() == null ? null : doc.getConversionReport().restorationSummary();
+    }
+
+    static ConversionReport.FigureDescriptions figureDescriptionsOf(Document doc) {
+        return doc.getConversionReport() == null ? null : doc.getConversionReport().figureDescriptions();
     }
 
     /** 편집 문서는 현재 본문 해시, 원본은 파일 전체 해시. 원본 해시가 계산 전이거나 계산할 수 없으면 null이다. */

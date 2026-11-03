@@ -143,7 +143,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/speec
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `{"message_id": "<assistant 메시지 ID>"}` |
 | 출력 | `200` `application/x-ndjson` 이벤트 스트림, `Cache-Control: no-store` |
 | 조건 | 인증 필요, 워크스페이스 활성 멤버, 메시지가 내 채팅 세션의 완료된 assistant 답변 |
-| 주요 오류 | `400` message_id 누락·답변이 합성 입력 한도 초과<br>`402` 크레딧 부족<br>`404` 멤버 아님·없는/남의/assistant가 아닌 메시지<br>`409` 완료되지 않았거나 실패한 답변<br>`422` 읽을 글이 없는 답변<br>`503` 합성 서비스 사용 불가 — 모두 `ErrorResponse`, 스트림 시작 전에만 |
+| 주요 오류 | `400` message_id 누락·답변이 합성 입력 한도 초과<br>`402` 크레딧 부족<br>`403` `SPEECH_SYNTHESIS_DISABLED` 운영에서 답변 듣기를 끔<br>`404` 멤버 아님·없는/남의/assistant가 아닌 메시지<br>`409` 완료되지 않았거나 실패한 답변<br>`422` 읽을 글이 없는 답변<br>`503` 합성 서비스 사용 불가 — 모두 `ErrorResponse`, 스트림 시작 전에만 |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -168,6 +168,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/speec
 
 #### 2. 동작
 
+0. 운영 스위치 `app.speech.synthesis.enabled`(`SPEECH_SYNTHESIS_ENABLED`, 기본 `true`)가 `false`면 메시지 조회·저장본 재생·크레딧 예약·AI 호출 전에 `403` `{"error":{"code":"SPEECH_SYNTHESIS_DISABLED","message":"지금은 답변 듣기를 쓸 수 없어요."}}`로 거절한다. 같은 값이 `GET /api/ai-models`의 `speech_synthesis_enabled`로 나가 프론트가 듣기 버튼을 숨긴다. 음성 입력(`/speech/transcriptions`)과 회의 받아쓰기는 이 스위치와 관계없다.
 1. 인증·멤버십을 확인하고, 메시지가 내 세션의 `assistant` 답변인지 본다. 남의 메시지·없는 메시지·assistant가 아닌 메시지는 모두 `404`, `completed`가 아니면 `409`다.
 2. 저장된 음성이 있으면 AI를 부르지 않고 저장된 WAV의 PCM을 같은 형식으로 보낸다. 과금하지 않는다.
 3. 없으면 답변 Markdown을 읽을 문장으로 정리한다(아래). 글이 남지 않으면 `422`다.

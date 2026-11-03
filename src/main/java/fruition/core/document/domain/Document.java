@@ -96,6 +96,10 @@ public class Document {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
+    /** 실패 사유의 기계 판독용 코드(예: AI_USAGE_LIMIT_EXCEEDED). 코드 없이 실패했거나 이전에 기록된 행은 null이다. */
+    @Column(name = "error_code", length = 64)
+    private String errorCode;
+
     @Column(name = "pipeline_run_id")
     private String pipelineRunId;
 
@@ -119,6 +123,15 @@ public class Document {
      */
     @Column(name = "ai_origin", length = 32)
     private String aiOrigin;
+
+    /** PDF 변환 문서의 복원 요약·그림 설명 집계. 변환 문서가 아니거나 AI가 요약을 주지 않았으면 null이다. */
+    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+    @Column(name = "conversion_report", columnDefinition = "jsonb")
+    private ConversionReport conversionReport;
+
+    /** 이 문서를 만든 가져오기 세션(document_imports.id). 가져온 문서가 아니면 null. */
+    @Column(name = "import_id")
+    private UUID importId;
 
     /** 채팅 export의 선택 모드("full"/"partial"). 파이프라인에 전달한다. 일반 업로드는 null. */
     @Column(name = "selection_mode")
@@ -157,6 +170,8 @@ public class Document {
     public static final String SKILL_REFERENCE_ORIGIN = "skill_reference";
     public static final String AGENT_ORIGIN = "agent";
     public static final String MEETING_NOTES_ORIGIN = "meeting_notes";
+    /** Notion 내보내기 가져오기로 만든 문서의 origin. */
+    public static final String NOTION_IMPORT_ORIGIN = "notion_import";
 
     protected Document() {}
 
@@ -199,6 +214,7 @@ public class Document {
         this.extractedTextUri = extractedTextUri;
         this.processedAt = processedAt;
         this.errorMessage = errorMessage;
+        this.errorCode = null;
     }
 
     public void markPipelineStarted(String pipelineRunId, Instant now) {
@@ -215,8 +231,14 @@ public class Document {
     }
 
     public void markProcessingFailed(String errorMessage, Instant now) {
+        markProcessingFailed(null, errorMessage, now);
+    }
+
+    /** 실패 코드를 함께 남긴다. 화면은 문구 대신 코드로 실패 종류를 판정한다. */
+    public void markProcessingFailed(String errorCode, String errorMessage, Instant now) {
         this.status = DocumentStatus.failed;
         this.errorMessage = errorMessage;
+        this.errorCode = errorCode;
         this.processedAt = now;
         this.processingUpdatedAt = now;
     }
@@ -289,6 +311,7 @@ public class Document {
         this.status = DocumentStatus.completed;
         this.processedAt = now;
         this.errorMessage = null;
+        this.errorCode = null;
         this.updatedAt = now;
     }
 
@@ -313,6 +336,7 @@ public class Document {
         this.status = DocumentStatus.processing;
         this.processedAt = null;
         this.errorMessage = null;
+        this.errorCode = null;
         this.pipelineInputMarkdown = null;
         this.pipelineInputBlocks = null;
         this.reconciledAt = null; // 재처리하므로 완료 후 다시 reconcile 대상이 되게 리셋
@@ -350,6 +374,7 @@ public class Document {
     public Instant getUploadedAt() { return uploadedAt; }
     public Instant getProcessedAt() { return processedAt; }
     public String getErrorMessage() { return errorMessage; }
+    public String getErrorCode() { return errorCode; }
     public String getPipelineRunId() { return pipelineRunId; }
     public Instant getProcessingStartedAt() { return processingStartedAt; }
     public Instant getProcessingUpdatedAt() { return processingUpdatedAt; }
@@ -366,6 +391,17 @@ public class Document {
     }
 
     public void markAiOrigin(String aiOrigin) { this.aiOrigin = aiOrigin; }
+
+    public ConversionReport getConversionReport() { return conversionReport; }
+
+    /** 변환 batch 하나의 요약을 합친다. 요약이 없는 batch는 그대로 둔다. */
+    public void mergeConversionReport(ConversionReport batchReport) {
+        this.conversionReport = ConversionReport.merge(this.conversionReport, batchReport);
+    }
+
+    public UUID getImportId() { return importId; }
+
+    public void markImported(UUID importId) { this.importId = importId; }
 
     public void assignSelectionMode(String selectionMode) { this.selectionMode = selectionMode; }
 

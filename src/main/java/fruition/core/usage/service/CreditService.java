@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -101,7 +103,7 @@ public class CreditService {
      * 모델을 부르지 않아 비용이 없는 작업(복원: 자체 호스팅 임베딩만 쓰고 원장에 호출이 남지 않는다)은 예약도 사전 승인도 하지 않는다.
      * 실행 추적({@code ai_task_runs})은 그대로 남는다.
      */
-    private static boolean isFree(String kind) {
+    public static boolean isFree(String kind) {
         return kind != null && kind.startsWith("restore_");
     }
 
@@ -110,9 +112,20 @@ public class CreditService {
         return enforce;
     }
 
-    /** kind별 예상 상한. */
-    private long estimate(String kind) {
+    /** kind별 예상 상한(milli-KRW). */
+    public long estimate(String kind) {
         return environment.getProperty("app.billing.estimate." + kind, Long.class, defaultEstimate);
+    }
+
+    /**
+     * kind 실행 한 건의 예상 비용(USD micro). 예상 상한(milli-KRW)을 최신 환율로 바꾼다: KRW = milli/1000, USD = KRW/환율,
+     * micro = USD×10^6. 마진·부가세가 포함된 값이라 실제 원가보다 크게 잡힌다. 환율 행은 V72가 기본값을 넣는다.
+     */
+    public long estimateUsdMicro(String kind) {
+        BigDecimal rate = jdbc.queryForObject("SELECT krw_per_usd FROM fx_rates WHERE effective_from <= now() "
+                + "ORDER BY effective_from DESC LIMIT 1", BigDecimal.class);
+        long krwPerUsdMilli = rate.movePointRight(3).setScale(0, RoundingMode.UP).longValueExact();
+        return Math.ceilDiv(estimate(kind) * 1_000_000L, krwPerUsdMilli);
     }
 
     /** kind별 최저 비용. 설정이 없으면 예상 상한의 10%이고 최소 1이다(0이면 가용 잔액 0도 통과해 버린다). */

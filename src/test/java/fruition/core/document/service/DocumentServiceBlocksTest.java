@@ -19,6 +19,7 @@ import fruition.core.document.dto.DocumentTrashResponse;
 import fruition.core.document.dto.DocumentUploadResponse;
 import fruition.core.document.dto.MarkdownDocumentCreateRequest;
 import fruition.core.document.dto.DocumentRenameRequest;
+import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.dto.DocumentRenameResponse;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.DocumentUploadException;
@@ -176,6 +177,27 @@ class DocumentServiceBlocksTest {
         lenient().doCallRealMethod().when(idempotencyService).validateKey(any());
         lenient().doCallRealMethod().when(idempotencyService).requestHash(any(String[].class));
         lenient().when(idempotencyService.currentExecutionId()).thenReturn(Optional.empty());
+        // execute는 선점(또는 저장된 응답 재생) → 실행 → 완료 기록 순서다. 같은 의미의 replay/save stub으로 흉내 내
+        // 재생·충돌·완료 기록 검증을 replay 경로와 같은 방식으로 쓴다.
+        // 문서 생성 계열은 prepare(트랜잭션 전 원본 저장)를 받는 overload를 쓴다.
+        lenient().when(idempotencyService.execute(anyString(), anyString(), anyString(), anyString(), any(),
+                anyInt(), any(), any(), any())).thenAnswer(invocation -> {
+                    Optional<?> replayed = idempotencyService.replay(invocation.getArgument(0),
+                            invocation.getArgument(1), invocation.getArgument(2), invocation.getArgument(3),
+                            invocation.getArgument(4));
+                    if (replayed.isPresent()) {
+                        return replayed.get();
+                    }
+                    Object prepared = invocation.<java.util.function.Supplier<?>>getArgument(7).get();
+                    Object response = invocation.<java.util.function.Function<Object, ?>>getArgument(8)
+                            .apply(prepared);
+                    String resourceId = invocation.<java.util.function.Function<Object, String>>getArgument(6)
+                            .apply(response);
+                    idempotencyService.save(invocation.getArgument(0), invocation.getArgument(1),
+                            invocation.getArgument(2), invocation.getArgument(3), invocation.<Integer>getArgument(5),
+                            resourceId, response);
+                    return response;
+                });
         // 기본 저장 결과: base revision + 1로 변경 성공. 필요한 테스트는 개별로 다시 stub한다.
         lenient().when(postgresDocumentEditStore.save(
                 anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(),
@@ -1725,6 +1747,26 @@ class DocumentServiceBlocksTest {
 
         documentService.rename(WORKSPACE_ID, USER_ID, "doc_ren3", new DocumentRenameRequest("논문", 1L));
 
+        verify(ingestCommandOutbox, never()).enqueueRename(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("채팅에서 만든 문서는 이름을 바꿀 수 없다")
+    void rename_chatExportDocument_rejectsWithTitleLocked() {
+        stubOwnedWorkspace();
+        Document chatDoc = new Document(
+                "chatdoc_lock", WORKSPACE_ID, USER_ID, "[채팅] 첫 질문.md", "text/markdown", 10L,
+                "sources/documents/chatdoc_lock/original", "h", "chat_export");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("chatdoc_lock", WORKSPACE_ID))
+                .thenReturn(Optional.of(chatDoc));
+
+        assertThatThrownBy(() -> documentService.rename(
+                WORKSPACE_ID, USER_ID, "chatdoc_lock", new DocumentRenameRequest("새 이름", 1L)))
+                .isInstanceOf(DocumentTitleLockedException.class)
+                .hasMessage("채팅에서 만든 문서는 이름을 바꿀 수 없습니다.");
+
+        verify(documentRepository, never()).renameIfVersionMatches(
+                anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any());
         verify(ingestCommandOutbox, never()).enqueueRename(anyString(), anyString(), anyString());
     }
 

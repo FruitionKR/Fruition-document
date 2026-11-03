@@ -5,7 +5,7 @@
 사용자용 Agent 실행·승인과 내부 Tool 실행 API다. Agent turn은 Kafka `ai.agent.command`,
 계획 조회·승인·거절·취소·수정은 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 13
+- API 수: 16
 
 ## API 목차
 
@@ -16,14 +16,57 @@
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/cancel`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-cancel) | 현재 AgentRun을 취소합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/reject`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-reject) | 현재 AgentRun 계획을 거절합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/revise`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-revise) | 현재 AgentRun에 새 계획을 요청합니다. |
+| `GET /api/workspaces/{workspace_id}/agent/auto-approval-settings` ([자동 승인](#agent-auto-approval)) | 요청한 사용자의 계획 자동 승인 설정을 조회합니다. |
+| `PUT /api/workspaces/{workspace_id}/agent/auto-approval-settings` ([자동 승인](#agent-auto-approval)) | 분류별 계획 자동 승인을 켜고 끕니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/turn`](#summary-post-api-workspaces-workspace-id-agent-turn) | 사용자 요청을 비동기 Agent 실행 대기열에 등록합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/turn/{run_id}`](#summary-get-api-workspaces-workspace-id-agent-turn-run-id) | 워크스페이스의 Agent 실행 결과를 조회합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/turn/{run_id}/cancel`](#summary-post-api-workspaces-workspace-id-agent-turn-run-id-cancel) | 끝나지 않은 Agent turn을 취소합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/turn/{run_id}/events`](#summary-get-api-workspaces-workspace-id-agent-turn-run-id-events) | Agent turn의 진행 상황과 최종 결과를 Server-Sent Events로 전달합니다. |
 | [`POST /internal/agent/folder-lookup/tree`](#summary-post-internal-agent-folder-lookup-tree) | 작업 탭 폴더 내용 조회용으로 사용자 기준 폴더·문서 트리를 반환합니다. |
+| `POST /internal/agent/runs/{run_id}/plan-ready` ([자동 승인](#agent-auto-approval)) | ai-svc가 계획을 승인 대기로 저장했음을 알립니다. 자동 승인 설정을 적용합니다. |
 | [`POST /internal/agent/skill-execution/folder-sources/read`](#summary-post-internal-agent-skill-execution-folder-sources-read) | Skill 실행 원문으로 쓸 폴더 바로 아래 문서의 최신 본문을 반환합니다. |
 | [`POST /internal/agent/tools/execute/{tool_name}`](#summary-post-internal-agent-tools-execute-tool-name) | 승인된 Agent Tool 변경 작업을 실행합니다. |
 | [`POST /internal/agent/tools/read/{tool_name}`](#summary-post-internal-agent-tools-read-tool-name) | 승인된 Agent Tool 읽기 작업을 실행합니다. |
+
+<a id="agent-auto-approval"></a>
+## 계획 자동 승인(사용자 설정)
+
+AgentRun 계획은 기본적으로 사용자가 승인 화면에서 승인해야 실행된다. 사용자는 분류별로 승인 확인을 건너뛰게 할 수 있다.
+설정은 **사용자 단위**(모든 워크스페이스 공통)이고 기본값은 모두 꺼짐이라, 켜지 않으면 기존 동작과 같다.
+
+| 분류(필드) | 대상 도구 | 되돌리기 |
+|---|---|---|
+| `content_edit` 문서 편집·생성 | `apply_document_edit`, `create_document` | 편집은 문서 버전 기록에서 복원, 만든 문서는 휴지통으로 이동 |
+| `organize` 폴더 생성·이동·이름 변경 | `create_folder`, `move_document`, `move_folder`, `rename_document`, `rename_folder` | 다시 옮기거나 이름을 바꿔 되돌림 |
+
+- **항상 수동**: 위 표에 없는 도구(`delete_document`·`delete_folder` 등 취소 보상용 삭제, 앞으로 추가될 도구)는 설정과 관계없이
+  자동 승인하지 않는다(fail-closed). 영구 삭제·외부 공유는 현재 Agent 도구에 없고, 추가되더라도 이 목록에 넣지 않는 한 수동이다.
+- **판단 시점·위치(서버)**: ai-svc worker가 계획을 승인 대기로 저장하면 `POST /internal/agent/runs/{run_id}/plan-ready`로 알리고,
+  document-svc가 그 시점의 설정을 읽어 판단한다. 알림이 실패해도 `GET .../agent/runs/{run_id}` 조회 때 같은 판단을 다시 한다.
+- **조건**: 계획의 모든 작업이 켜진 분류에 속하고, AI 검토 경고(`warning`)나 기본 선택 제외(`suggested_selected=false`)가 없으며,
+  요청자가 모든 대상 문서·폴더와 옮길 위치를 편집할 수 있어야 한다. 하나라도 어긋나면 승인 대기로 남는다.
+- **권한**: 자동 승인은 확인 단계만 건너뛴다. 실행 때 도구별 권한 검사(`/internal/agent/tools/execute/*`)는 그대로다.
+- **크레딧**: 사용자 승인과 같은 경로로 예약한다. 크레딧이 부족하거나 그 사이 계획이 바뀌었으면 자동 승인을 포기하고 승인 대기로 둔다.
+- **감사 기록**: ai-svc `agent_approvals.approved_by`에 `auto:user-setting`(사용자 직접 승인은 `user`)이 남고,
+  `GET .../agent/runs/{run_id}` 응답의 `plan.approved_by`로 보인다. `user_id`는 설정을 켠 요청자다.
+
+### `GET|PUT /api/workspaces/{workspace_id}/agent/auto-approval-settings`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 요청한 사용자의 자동 승인 설정 조회·변경. 경로의 워크스페이스는 멤버 확인용이다. |
+| 입력 | **Path** — `workspace_id`<br>**Body(PUT)** — `{"content_edit": boolean, "organize": boolean}` 두 필드 모두 필수, 정의되지 않은 필드는 `400` |
+| 출력 | `200` — `AgentAutoApprovalSettings` `{"content_edit": false, "organize": false}` |
+| 조건 | 인증 필요, path의 `workspace_id` 활성 멤버십 |
+
+### `POST /internal/agent/runs/{run_id}/plan-ready`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | ai-svc agent worker가 계획을 승인 대기로 저장한 뒤 호출. 자동 승인 조건을 만족하면 승인한다. |
+| 입력 | **Header** — `X-Agent-Service-Token`<br>**Body** — `{"workspace_id": string, "user_id": string}` (run 소유자) |
+| 출력 | `200` — 그 시점의 AgentRun(`JsonNode`). 자동 승인했으면 `status=executing`, `plan.approved_by=auto:user-setting` |
+| 조건 | 토큰이 없거나 틀리면 `401`. `user_id`의 워크스페이스 멤버십을 검증한다. |
 
 ## 한눈에 보기
 

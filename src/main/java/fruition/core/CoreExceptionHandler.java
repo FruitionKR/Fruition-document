@@ -21,6 +21,7 @@ import fruition.core.document.exception.ConflictAlreadyResolvedException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentContentVersionNotFoundException;
 import fruition.core.document.exception.DocumentLockedException;
+import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.exception.EditLockLostException;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.DocumentOriginalNotFoundException;
@@ -45,6 +46,7 @@ import fruition.core.document.exception.HierarchyWriteForbiddenException;
 import fruition.core.chat.exception.ChatSessionLimitExceededException;
 import fruition.core.chat.exception.ChatSessionNotFoundException;
 import fruition.core.meeting.MeetingException;
+import fruition.core.speech.SpeechSynthesisDisabledException;
 import fruition.core.chat.exception.EmptyChatWikiExportException;
 import fruition.core.chat.exception.InvalidChatWikiExportRequestException;
 import fruition.core.query.exception.PipelineQueryException;
@@ -203,6 +205,41 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
                 .body(ErrorResponse.of("INSUFFICIENT_CREDIT", e.getMessage()));
     }
 
+    /** 사용자별 AI 하루 사용 한도 초과. 한도가 풀리는 시각(KST)을 reset_at과 Retry-After(초)로 알린다. */
+    @ExceptionHandler(fruition.core.usage.limit.AiUsageLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleAiUsageLimit(fruition.core.usage.limit.AiUsageLimitExceededException e) {
+        logHandled(e, HttpStatus.TOO_MANY_REQUESTS, "AI_USAGE_LIMIT_EXCEEDED");
+        String resetAt = java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
+                .format(e.getResetAt().atZone(fruition.core.usage.limit.AiUsageLimitPolicy.ZONE));
+        long seconds = Math.max(1, java.time.Duration.between(java.time.Instant.now(), e.getResetAt()).toSeconds());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(org.springframework.http.HttpHeaders.RETRY_AFTER, Long.toString(seconds))
+                .body(ErrorResponse.ofUsageLimit("AI_USAGE_LIMIT_EXCEEDED", e.getMessage(), e.getType().name(), resetAt));
+    }
+
+    @ExceptionHandler(fruition.core.imports.DocumentImportException.class)
+    public ResponseEntity<ErrorResponse> handleDocumentImport(fruition.core.imports.DocumentImportException e) {
+        logHandled(e, e.getStatus(), e.getCode());
+        return ResponseEntity
+                .status(e.getStatus())
+                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
+    }
+
+    @ExceptionHandler(fruition.core.upload.UploadLimitException.class)
+    public ResponseEntity<ErrorResponse> handleUploadLimit(fruition.core.upload.UploadLimitException e) {
+        logHandled(e, e.getStatus(), e.getCode());
+        return ResponseEntity
+                .status(e.getStatus())
+                .body(ErrorResponse.of(e.getCode(), e.getMessage()));
+    }
+
+    @ExceptionHandler(SpeechSynthesisDisabledException.class)
+    public ResponseEntity<ErrorResponse> handleSpeechSynthesisDisabled(SpeechSynthesisDisabledException e) {
+        logHandled(e, HttpStatus.FORBIDDEN, "SPEECH_SYNTHESIS_DISABLED");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of("SPEECH_SYNTHESIS_DISABLED", e.getMessage()));
+    }
+
     @ExceptionHandler(MeetingException.class)
     public ResponseEntity<ErrorResponse> handleMeeting(MeetingException e) {
         logHandled(e, e.getStatus(), e.getCode());
@@ -284,6 +321,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("DOCUMENT_CONTENT_VERSION_NOT_FOUND", "문서 콘텐츠 버전을 찾을 수 없습니다."));
+    }
+
+    @ExceptionHandler(DocumentTitleLockedException.class)
+    public ResponseEntity<ErrorResponse> handleDocumentTitleLocked(DocumentTitleLockedException e) {
+        logHandled(e, HttpStatus.CONFLICT, "DOCUMENT_TITLE_LOCKED");
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("DOCUMENT_TITLE_LOCKED", e.getMessage()));
     }
 
     @ExceptionHandler(DocumentLockedException.class)
@@ -553,7 +598,7 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
     public ResponseEntity<ErrorResponse> handleWikiPageVersionConflict(WikiPageVersionConflictException e) {
         logHandled(e, HttpStatus.CONFLICT, "WIKI_PAGE_VERSION_CONFLICT");
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(new ErrorResponse.ErrorDetail(
-                "WIKI_PAGE_VERSION_CONFLICT", e.getMessage(), null, e.getCurrentRevision())));
+                "WIKI_PAGE_VERSION_CONFLICT", e.getMessage(), null, e.getCurrentRevision(), null, null)));
     }
 
     @ExceptionHandler(WikiPageVersionNotFoundException.class)

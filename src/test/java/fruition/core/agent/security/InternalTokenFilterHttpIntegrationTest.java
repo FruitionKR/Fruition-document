@@ -43,7 +43,9 @@ class InternalTokenFilterHttpIntegrationTest {
             "/internal/agent/tools/execute/move_document",
             "/internal/agent/%74ools/execute/move_document",
             "/internal/agent/tools/%65xecute/move_document",
-            "/%69nternal/agent/tools/execute/move_document"})
+            "/%69nternal/agent/tools/execute/move_document",
+            "/internal/agent/runs/run-1/plan-ready",
+            "/internal/agent/%72uns/run-1/plan-ready"})
     void protectedInternalPathRejectsMissingOrWrongToken(String path) throws Exception {
         assertThat(post(path, null).statusCode()).isEqualTo(401);
         assertThat(post(path, "wrong-token").statusCode()).isEqualTo(401);
@@ -58,7 +60,8 @@ class InternalTokenFilterHttpIntegrationTest {
             "/internal/agent/skill-authoring/references/read",
             "/internal/agent/skill-authoring/references/%72ead",
             "/internal/agent/tools/execute/move_document",
-            "/internal/agent/%74ools/execute/move_document"})
+            "/internal/agent/%74ools/execute/move_document",
+            "/internal/agent/runs/run-1/plan-ready"})
     void protectedInternalPathWithCorrectTokenPassesAuthentication(String path) throws Exception {
         assertThat(post(path, TOKEN).statusCode()).isEqualTo(400);
     }
