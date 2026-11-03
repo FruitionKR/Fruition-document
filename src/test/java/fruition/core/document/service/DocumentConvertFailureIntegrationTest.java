@@ -72,6 +72,67 @@ class DocumentConvertFailureIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM document_convert_queue WHERE id=?", Long.class, conversion.queue())).isZero();
     }
 
+    @Test
+    void concurrentBatchesOfOneDocumentKeepEveryConversionReport() throws Exception {
+        Conversion conversion = conversion();
+        // 0쪽 batch는 결과가 오지 않은 채로 두어 두 이벤트 모두 병합·완료 없이 요약만 쌓게 한다.
+        tx.executeWithoutResult(status -> {
+            tasks.join(conversion.run());
+            var queue = queues.findById(conversion.queue()).orElseThrow();
+            queue.dispatchedUpTo(30);
+            batches.insertDispatched(queue.getId(), 10, 10, "{}");
+            batches.insertDispatched(queue.getId(), 20, 10, "{}");
+        });
+        // 다른 pod가 같은 문서의 batch를 처리하는 중인 것처럼 queue 행 잠금을 먼저 잡아 두 이벤트를 잠금 앞에 세운다.
+        var locked = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(3);
+        try {
+            var holder = pool.submit(() -> tx.executeWithoutResult(status -> {
+                jdbc.queryForList("SELECT id FROM document_convert_queue WHERE id=? FOR UPDATE", conversion.queue());
+                locked.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            locked.await();
+            var second = pool.submit(() -> service.applyConvertBatch(reportedSuccess(conversion, 10)));
+            var third = pool.submit(() -> service.applyConvertBatch(reportedSuccess(conversion, 20)));
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+            while (jdbc.queryForObject("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock'"
+                    + " AND query LIKE '%document_convert_queue%FOR UPDATE%'", Long.class) < 2) {
+                assertThat(System.nanoTime()).as("두 이벤트가 queue 잠금을 기다려야 한다").isLessThan(deadline);
+                Thread.onSpinWait();
+            }
+            release.countDown();
+            holder.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            second.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            third.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+        var report = documents.findById(conversion.document()).orElseThrow().getConversionReport();
+        assertThat(report.restorationSummary().fallbackPages())
+                .extracting(fruition.core.document.domain.ConversionReport.FallbackPage::page)
+                .containsExactlyInAnyOrder(11, 21);
+        assertThat(report.figureDescriptions().described()).isEqualTo(2);
+    }
+
+    /** 30쪽 문서의 batch 성공 이벤트. 시작 쪽마다 원문 대체 쪽 하나와 그림 설명 하나를 알린다. */
+    private ObjectNode reportedSuccess(Conversion conversion, int start) {
+        var event = success(conversion, start);
+        var payload = (ObjectNode) event.get("payload");
+        payload.put("total_pages", 30);
+        payload.putObject("restoration_summary").put("broken_pages", 1).put("repaired_pages", 0)
+                .putArray("fallback_pages").addObject().put("page", start + 1).put("reason", "provider_error");
+        payload.putObject("figure_descriptions").put("requested", true).put("described", 1)
+                .put("failed", 0).put("skipped", 0);
+        return event;
+    }
+
     private void putResult(Conversion conversion, int start, String markdown) throws Exception {
         byte[] bytes = markdown.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         minio.putObject(io.minio.PutObjectArgs.builder().bucket(storage.getBucket())

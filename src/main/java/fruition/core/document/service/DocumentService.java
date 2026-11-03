@@ -1478,13 +1478,14 @@ public class DocumentService {
     }
 
     private ConvertOutcome mergeConvertBatch(JsonNode event, String documentId, int startPage) {
+        // 같은 문서의 이벤트가 동시에 와도 결과 기록·병합·발행을 한 번에 하나씩 처리한다.
+        var queue = convertQueueRepository.findByDocumentIdForUpdate(documentId).orElse(null);
+        // placeholder는 잠금을 잡은 뒤에 읽는다. 먼저 읽으면 앞 batch가 커밋한 변환 요약을 덮어써 잃는다.
         Document placeholder = documentRepository.findByIdInActiveWorkspace(documentId).orElse(null);
         if (placeholder == null) {
             log.info("[문서 변환 이벤트 무시] documentId={} startPage={} reason=document_not_found", documentId, startPage);
             return null;
         }
-        // 같은 문서의 이벤트가 동시에 와도 결과 기록·병합·발행을 한 번에 하나씩 처리한다.
-        var queue = convertQueueRepository.findByDocumentIdForUpdate(documentId).orElse(null);
         String convertRunId = "convert:" + documentId;
         if (queue == null || !taskWriter.join(convertRunId)) {
             log.info("[문서 변환 이벤트 무시] documentId={} startPage={} reason=run_not_active", documentId, startPage);
