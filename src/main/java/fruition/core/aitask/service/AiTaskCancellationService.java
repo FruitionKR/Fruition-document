@@ -227,6 +227,9 @@ public class AiTaskCancellationService {
             if (!result.status().equals("cancelled")) return;
             pipeline.rollbackBackend(id, workspaceId, userId, command);
             transaction.executeWithoutResult(tx -> {
+                // 변환 결과 반영과 같은 순서(대기열 행 → 실행 행)로 잠근다. 반대 순서면 둘이 교착한다.
+                if (converting) jdbc.queryForList("SELECT id FROM document_convert_queue WHERE document_id = ? FOR UPDATE",
+                        Long.class, id.substring("convert:".length()));
                 var current = owned(id, workspaceId, userId, true);
                 if (current.get("status").equals("cancelled")) return;
                 if (!jdbc.queryForList("SELECT id FROM ai_task_changes WHERE run_id = ? AND NOT undone", Long.class, id).isEmpty())
