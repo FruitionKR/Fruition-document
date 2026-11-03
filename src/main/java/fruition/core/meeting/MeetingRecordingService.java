@@ -202,6 +202,12 @@ public class MeetingRecordingService {
                 || !claims.get("key", String.class).startsWith("meetings/" + meetingId + "/")) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "다른 회의의 업로드를 사용할 수 없습니다.");
         }
+        // 형식도 start가 정한 녹음 형식이어야 한다. 원본 형식으로 기록돼 재생 주소의 응답 형식이 되므로(text/html 등) 위조를 막는다.
+        String contentType = claims.get("contentType", String.class);
+        String extension = contentType == null ? null : EXTENSIONS.get(contentType);
+        if (extension == null || !claims.get("key", String.class).endsWith("." + extension)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "업로드 확인 정보가 만료되었거나 올바르지 않습니다.");
+        }
         return claims;
     }
 
