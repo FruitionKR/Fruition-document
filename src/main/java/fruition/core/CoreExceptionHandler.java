@@ -21,6 +21,7 @@ import fruition.core.document.exception.ConflictAlreadyResolvedException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentContentVersionNotFoundException;
 import fruition.core.document.exception.DocumentLockedException;
+import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.exception.EditLockLostException;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.DocumentOriginalNotFoundException;
@@ -320,6 +321,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("DOCUMENT_CONTENT_VERSION_NOT_FOUND", "문서 콘텐츠 버전을 찾을 수 없습니다."));
+    }
+
+    @ExceptionHandler(DocumentTitleLockedException.class)
+    public ResponseEntity<ErrorResponse> handleDocumentTitleLocked(DocumentTitleLockedException e) {
+        logHandled(e, HttpStatus.CONFLICT, "DOCUMENT_TITLE_LOCKED");
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("DOCUMENT_TITLE_LOCKED", e.getMessage()));
     }
 
     @ExceptionHandler(DocumentLockedException.class)

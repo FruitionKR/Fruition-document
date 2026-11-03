@@ -19,6 +19,7 @@ import fruition.core.document.dto.DocumentTrashResponse;
 import fruition.core.document.dto.DocumentUploadResponse;
 import fruition.core.document.dto.MarkdownDocumentCreateRequest;
 import fruition.core.document.dto.DocumentRenameRequest;
+import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.dto.DocumentRenameResponse;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.exception.DocumentUploadException;
@@ -1746,6 +1747,26 @@ class DocumentServiceBlocksTest {
 
         documentService.rename(WORKSPACE_ID, USER_ID, "doc_ren3", new DocumentRenameRequest("논문", 1L));
 
+        verify(ingestCommandOutbox, never()).enqueueRename(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("채팅에서 만든 문서는 이름을 바꿀 수 없다")
+    void rename_chatExportDocument_rejectsWithTitleLocked() {
+        stubOwnedWorkspace();
+        Document chatDoc = new Document(
+                "chatdoc_lock", WORKSPACE_ID, USER_ID, "[채팅] 첫 질문.md", "text/markdown", 10L,
+                "sources/documents/chatdoc_lock/original", "h", "chat_export");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("chatdoc_lock", WORKSPACE_ID))
+                .thenReturn(Optional.of(chatDoc));
+
+        assertThatThrownBy(() -> documentService.rename(
+                WORKSPACE_ID, USER_ID, "chatdoc_lock", new DocumentRenameRequest("새 이름", 1L)))
+                .isInstanceOf(DocumentTitleLockedException.class)
+                .hasMessage("채팅에서 만든 문서는 이름을 바꿀 수 없습니다.");
+
+        verify(documentRepository, never()).renameIfVersionMatches(
+                anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any());
         verify(ingestCommandOutbox, never()).enqueueRename(anyString(), anyString(), anyString());
     }
 

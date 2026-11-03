@@ -1399,7 +1399,7 @@ Notion의 page title처럼 표시 이름만 변경하며 본문은 유지합니�
 | `400` | 유효하지 않은 파일명 | `ErrorResponse` |
 | `403` | 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `409` | 문서 version 충돌 | `ErrorResponse` |
+| `409` | 문서 version 충돌(`DOCUMENT_VERSION_CONFLICT`) 또는 채팅에서 만든 문서라 이름이 잠김(`DOCUMENT_TITLE_LOCKED`, "채팅에서 만든 문서는 이름을 바꿀 수 없습니다."). 이동·삭제는 그대로 허용한다. | `ErrorResponse` |
 
 ```json
 {
