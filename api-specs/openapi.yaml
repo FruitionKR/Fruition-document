@@ -7214,7 +7214,7 @@ components:
           description: 추출된 본문 텍스트가 저장된 경로. 처리 전이면 없다.
         figure_descriptions:
           $ref: "#/components/schemas/FigureDescriptions"
-          description: "PDF 변환 때 그림 설명을 요청했으면 그 집계(requested, described, failed, skipped). 요청하지 않았으면 키가 빠진다."
+          description: "PDF 변환의 그림 설명 집계. requested(bool)는 그림 설명 요청 여부, described·failed·skipped는 batch별 합이다(AI가 batch당 50장까지). AI가 집계를 주지 않았으면 키가 빠진다."
         file_type:
           type: string
           description: 확장자 기준 파일 종류
@@ -7269,7 +7269,7 @@ components:
           - failed
         restoration_summary:
           $ref: "#/components/schemas/RestorationSummary"
-          description: "PDF 변환 문서의 복원 요약. 깨진 쪽 수(broken_pages), AI로 복원한 쪽 수(repaired_pages), 원문 텍스트로 대신한 쪽과 사유(fallback_pages[].page·reason: font_mapping | replacement_character | token_mismatch | extract_failed | repair_rejected | provider_error | unknown). 변환 문서가 아니거나 요약이 없으면 키가 빠진다."
+          description: "PDF 변환 문서의 복원 요약. 깨진 쪽 수(broken_pages), AI로 복원한 쪽 수(repaired_pages), 원문 텍스트로 대신한 쪽과 사유(fallback_pages[].page(원본 1부터)·reason(대표 사유)·causes(모든 사유, 없으면 키 생략): font_mapping | replacement_character | token_mismatch | extract_failed | repair_rejected | provider_error | unknown). 변환 문서가 아니거나 요약이 없으면 키가 빠진다."
         source_document_id:
           type: string
           description: 변환으로 만들어진 문서라면 원본 문서 ID
@@ -7738,7 +7738,7 @@ components:
           description: 추출된 본문 텍스트가 저장된 경로. 처리 전이면 없다.
         figure_descriptions:
           $ref: "#/components/schemas/FigureDescriptions"
-          description: "PDF 변환 때 그림 설명을 요청했으면 그 집계(requested, described, failed, skipped). 요청하지 않았으면 키가 빠진다."
+          description: "PDF 변환의 그림 설명 집계. requested(bool)는 그림 설명 요청 여부, described·failed·skipped는 batch별 합이다(AI가 batch당 50장까지). AI가 집계를 주지 않았으면 키가 빠진다."
         file_sha256:
           type: string
           description: "같은 파일이 이미 있는지 업로드 전에 판별하는 SHA-256(hex). 원본(PDF)은 올린 파일 전체의 해시, 편집 문서는 현재 본문(UTF-8)의 해시다. 대용량 직접 업로드 직후처럼 아직 계산 전이면 null이다."
@@ -7805,7 +7805,7 @@ components:
           - failed
         restoration_summary:
           $ref: "#/components/schemas/RestorationSummary"
-          description: "PDF 변환 문서의 복원 요약. 깨진 쪽 수(broken_pages), AI로 복원한 쪽 수(repaired_pages), 원문 텍스트로 대신한 쪽과 사유(fallback_pages[].page·reason: font_mapping | replacement_character | token_mismatch | extract_failed | repair_rejected | provider_error | unknown). 변환 문서가 아니거나 요약이 없으면 키가 빠진다."
+          description: "PDF 변환 문서의 복원 요약. 깨진 쪽 수(broken_pages), AI로 복원한 쪽 수(repaired_pages), 원문 텍스트로 대신한 쪽과 사유(fallback_pages[].page(원본 1부터)·reason(대표 사유)·causes(모든 사유, 없으면 키 생략): font_mapping | replacement_character | token_mismatch | extract_failed | repair_rejected | provider_error | unknown). 변환 문서가 아니거나 요약이 없으면 키가 빠진다."
         source_document_id:
           type: string
           description: 변환으로 만들어진 문서라면 원본 문서 ID
@@ -8307,6 +8307,10 @@ components:
     FallbackPage:
       type: object
       properties:
+        causes:
+          type: array
+          items:
+            type: string
         page:
           type: integer
           format: int32
@@ -8333,8 +8337,7 @@ components:
           type: integer
           format: int32
         requested:
-          type: integer
-          format: int32
+          type: boolean
         skipped:
           type: integer
           format: int32

@@ -593,8 +593,8 @@ class DocumentServiceConvertTest {
         stubResult(10, "<!-- page 1 -->\n\n# p11\n");
 
         documentService.applyConvertBatch(withReport(succeeded(10, 15, 15),
-                "{\"broken_pages\":2,\"repaired_pages\":1,\"fallback_pages\":[{\"page\":12,\"reason\":\"font_mapping\"}]}",
-                "{\"requested\":3,\"described\":2,\"failed\":1,\"skipped\":0}"));
+                "{\"broken_pages\":2,\"repaired_pages\":1,\"fallback_pages\":[{\"page\":12,\"reason\":\"repair_rejected\",\"causes\":[\"font_mapping\",\"repair_rejected\"]}]}",
+                "{\"requested\":true,\"described\":2,\"failed\":1,\"skipped\":0}"));
         documentService.applyConvertBatch(withReport(succeeded(0, 10, 15),
                 "{\"broken_pages\":1,\"repaired_pages\":0,\"fallback_pages\":[{\"page\":4,\"reason\":\"provider_error\"}]}",
                 null));
@@ -606,7 +606,7 @@ class DocumentServiceConvertTest {
         assertThat(report.restorationSummary().fallbackPages()).extracting(
                 fruition.core.document.domain.ConversionReport.FallbackPage::page).containsExactly(4, 12);
         assertThat(report.figureDescriptions()).isEqualTo(
-                new fruition.core.document.domain.ConversionReport.FigureDescriptions(3, 2, 1, 0));
+                new fruition.core.document.domain.ConversionReport.FigureDescriptions(true, 2, 1, 0));
     }
 
     @Test

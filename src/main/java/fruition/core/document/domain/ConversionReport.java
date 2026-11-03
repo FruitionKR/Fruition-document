@@ -35,9 +35,23 @@ public record ConversionReport(
             @JsonProperty("fallback_pages") List<FallbackPage> fallbackPages
     ) {}
 
-    public record FallbackPage(int page, String reason) {}
+    /** reason은 대표 사유(복원이 거부·실패했으면 그 코드, 아니면 첫 깨짐 원인), causes는 그 쪽의 모든 사유 코드다. */
+    public record FallbackPage(
+            int page,
+            String reason,
+            @JsonInclude(JsonInclude.Include.NON_EMPTY) List<String> causes
+    ) {
+        public FallbackPage {
+            causes = causes == null ? List.of() : List.copyOf(causes);
+        }
 
-    public record FigureDescriptions(int requested, int described, int failed, int skipped) {}
+        public FallbackPage(int page, String reason) {
+            this(page, reason, List.of());
+        }
+    }
+
+    /** requested는 변환 command의 describe_figures다. 개수는 AI가 batch(시도)마다 50장까지 보낸 결과의 합이다. */
+    public record FigureDescriptions(boolean requested, int described, int failed, int skipped) {}
 
     /** batch 결과 payload에서 두 객체를 읽는다. 없거나 모양이 틀린 객체는 없는 것으로 본다(선택 필드). */
     public static ConversionReport fromBatchPayload(JsonNode payload) {
@@ -74,15 +88,23 @@ public record ConversionReport(
         for (JsonNode item : node.path("fallback_pages")) {
             int page = item.path("page").asInt(0);
             if (page < 1 || pages.size() >= MAX_FALLBACK_PAGES) continue;
-            String reason = item.path("reason").asText("");
-            pages.add(new FallbackPage(page, FALLBACK_REASONS.contains(reason) ? reason : UNKNOWN_REASON));
+            List<String> causes = new ArrayList<>();
+            for (JsonNode cause : item.path("causes")) {
+                String code = normalizeReason(cause.asText(""));
+                if (!causes.contains(code) && causes.size() < FALLBACK_REASONS.size() + 1) causes.add(code);
+            }
+            pages.add(new FallbackPage(page, normalizeReason(item.path("reason").asText("")), causes));
         }
         return new RestorationSummary(count(node, "broken_pages"), count(node, "repaired_pages"), dedupe(pages));
     }
 
+    private static String normalizeReason(String code) {
+        return FALLBACK_REASONS.contains(code) ? code : UNKNOWN_REASON;
+    }
+
     private static FigureDescriptions parseFigures(JsonNode node) {
         if (!node.isObject()) return null;
-        return new FigureDescriptions(count(node, "requested"), count(node, "described"),
+        return new FigureDescriptions(node.path("requested").asBoolean(false), count(node, "described"),
                 count(node, "failed"), count(node, "skipped"));
     }
 
@@ -102,7 +124,7 @@ public record ConversionReport(
     private static FigureDescriptions mergeFigures(FigureDescriptions a, FigureDescriptions b) {
         if (a == null) return b;
         if (b == null) return a;
-        return new FigureDescriptions(a.requested() + b.requested(), a.described() + b.described(),
+        return new FigureDescriptions(a.requested() || b.requested(), a.described() + b.described(),
                 a.failed() + b.failed(), a.skipped() + b.skipped());
     }
 

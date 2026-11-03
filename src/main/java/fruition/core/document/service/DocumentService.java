@@ -1565,10 +1565,11 @@ public class DocumentService {
         var restoration = report.restorationSummary();
         var figures = report.figureDescriptions();
         log.warn("[문서 변환 원문 대체] documentId={} workspaceId={} totalPages={} brokenPages={} repairedPages={} "
-                        + "fallbackPages={} reasons={} figuresRequested={} figuresFailed={}",
+                        + "fallbackPages={} reasons={} figuresRequested={} figuresDescribed={} figuresFailed={}",
                 placeholder.getId(), placeholder.getWorkspaceId(), totalPages, restoration.brokenPages(),
                 restoration.repairedPages(), report.fallbackPageCount(), report.fallbackReasonCounts(),
-                figures == null ? 0 : figures.requested(), figures == null ? 0 : figures.failed());
+                figures != null && figures.requested(), figures == null ? 0 : figures.described(),
+                figures == null ? 0 : figures.failed());
     }
 
     private JsonNode readCommand(String command) {

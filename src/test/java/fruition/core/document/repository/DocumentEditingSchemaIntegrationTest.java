@@ -159,8 +159,8 @@ class DocumentEditingSchemaIntegrationTest {
         insertDocument(documentId, workspaceId, userId, "변환.md", "hash", "EDITABLE");
         var report = new fruition.core.document.domain.ConversionReport(
                 new fruition.core.document.domain.ConversionReport.RestorationSummary(3, 1, List.of(
-                        new fruition.core.document.domain.ConversionReport.FallbackPage(4, "font_mapping"))),
-                new fruition.core.document.domain.ConversionReport.FigureDescriptions(2, 1, 1, 0));
+                        new fruition.core.document.domain.ConversionReport.FallbackPage(4, "font_mapping", List.of("font_mapping")))),
+                new fruition.core.document.domain.ConversionReport.FigureDescriptions(true, 1, 1, 0));
 
         new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(status ->
                 documentRepository.findById(documentId).orElseThrow().mergeConversionReport(report));
@@ -169,8 +169,8 @@ class DocumentEditingSchemaIntegrationTest {
                 "SELECT conversion_report->'restoration_summary'->'fallback_pages'->0->>'reason' FROM documents WHERE id = ?",
                 String.class, documentId)).isEqualTo("font_mapping");
         assertThat(jdbcTemplate.queryForObject(
-                "SELECT (conversion_report->'figure_descriptions'->>'requested')::int FROM documents WHERE id = ?",
-                Integer.class, documentId)).isEqualTo(2);
+                "SELECT (conversion_report->'figure_descriptions'->>'described')::int FROM documents WHERE id = ?",
+                Integer.class, documentId)).isEqualTo(1);
         assertThat(documentRepository.findById(documentId).orElseThrow().getConversionReport()).isEqualTo(report);
     }
 

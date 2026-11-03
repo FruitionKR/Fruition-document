@@ -57,6 +57,7 @@ public class ConvertCommandOutbox {
             String provider,
             String model,
             // 그림을 외부 AI로 보내 설명을 붙일지. 워크스페이스 설정(access describe_pdf_figures)이고 기본은 꺼짐이다.
+            // AI가 batch(시도)당 50장까지만 보내므로 문서 전체 비용은 쪽 수(batch 수)에 비례해 묶인다. 문서 단위 상한은 두지 않는다.
             @JsonProperty("describe_figures") boolean describeFigures
     ) {}
 }
