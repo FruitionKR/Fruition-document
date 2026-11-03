@@ -330,8 +330,11 @@ public class DocumentService {
             return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope,
                     idempotencyKey, requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
                     () -> storeUploadOriginal(workspaceId, userId, file, mimeType, storedKey),
-                    documentId -> storeUpload(workspaceId, userId, folderId, file, skillReference, uploadFilename,
-                            mimeType, markdownContent, contentHash, documentId, storedKey.get())));
+                    documentId -> {
+                        registerStoredSourceCleanup(storedKey);
+                        return storeUpload(workspaceId, userId, folderId, file, skillReference, uploadFilename,
+                                mimeType, markdownContent, contentHash, documentId, storedKey.get());
+                    }));
         } catch (Exception e) {
             // storeUpload가 이미 감싼 실패는 그대로 올린다.
             if (e instanceof DocumentUploadException || isUploadRejection(e)) {
@@ -398,8 +401,6 @@ public class DocumentService {
     ) {
         boolean markdownUpload = markdownContent != null;
         try {
-            registerMinioRollbackCleanup(objectPath);
-
             // 같은 폴더에 같은 이름이 있으면 거절하지 않고 "이름 (2).pdf"처럼 번호를 붙인다.
             // 스킬 참고 문서는 참고 문서끼리만 비교한다. 동시에 같은 이름을 고르는 경합은 DB 고유 제약이 막는다.
             List<String> existingNames = skillReference
@@ -410,7 +411,7 @@ public class DocumentService {
 
             // 사용자 잠금은 저장이 끝난 뒤 문서 행을 쓰기 직전에 잡아 커밋까지 짧게 쥔다. 큰 원본을 쓰는 동안 잡으면
             // 같은 사용자의 다른 업로드가 그 시간 내내 줄을 선다. 잠금 아래에서 다시 확인해 병렬 업로드가 함께 한도를
-            // 넘지 못하게 하고, 거절되면 롤백 정리(registerMinioRollbackCleanup)가 방금 저장한 원본을 지운다.
+            // 넘지 못하게 하고, 거절되면 롤백 정리(registerStoredSourceCleanup)가 방금 저장한 원본을 지운다.
             if (uploadLimits != null) {
                 uploadLimits.enforce(userId, file.getSize());
             }
@@ -626,6 +627,7 @@ public class DocumentService {
                     storedKey.set(putMarkdownSource(documentId, content.bytes()));
                     return documentId;
                 }, documentId -> {
+                    registerStoredSourceCleanup(storedKey);
                     DocumentUploadResponse created = createMarkdownDocument(workspaceId, userId, documentId,
                             storedKey.get(), filename.filename(), content, origin, request.folderId(), aiOrigin, true,
                             accounting);
@@ -818,7 +820,7 @@ public class DocumentService {
         if (storedSourceKey == null) {
             sourceKey = storeMarkdownSource(documentId, content.bytes());
         } else {
-            registerMinioRollbackCleanup(storedSourceKey);
+            // 미리 저장한 원본의 정리는 호출자가 registerStoredSourceCleanup으로 등록했다.
             sourceKey = storedSourceKey;
         }
         Document document = new Document(
@@ -1012,7 +1014,8 @@ public class DocumentService {
 
     /**
      * 실행 트랜잭션 전에 저장한 원본({@code storedKey})을 실패하면 지운다. 실행 안의 롤백 정리
-     * (registerMinioRollbackCleanup)는 트랜잭션을 열지 못한 실패(연결 대기 시간 초과 등)를 보지 못한다.
+     * (registerStoredSourceCleanup)는 트랜잭션을 열지 못한 실패(연결 대기 시간 초과 등)를 보지 못한다.
+     * 실행이 최종 커밋됐으면 그 정리가 키를 비우므로, 커밋 뒤에 난 예외로는 원본을 지우지 않는다.
      * 두 정리가 겹쳐도 없는 객체 삭제라 무해하다.
      */
     private <T> T deleteStoredOnFailure(AtomicReference<String> storedKey, java.util.function.Supplier<T> work) {
@@ -1041,6 +1044,27 @@ public class DocumentService {
             if (failure != null) throw failure;
             return value;
         }
+    }
+
+    /**
+     * 실행 트랜잭션(폴더를 지정해 바깥 트랜잭션에 합류했으면 그 트랜잭션)이 끝날 때, 커밋됐으면 {@code storedKey}를
+     * 비워 {@link #deleteStoredOnFailure}가 지우지 않게 하고, 아니면 원본을 지운다. 실행 블록 첫머리에서 부른다.
+     */
+    private void registerStoredSourceCleanup(AtomicReference<String> storedKey) {
+        String objectPath = storedKey.get();
+        if (objectPath == null || !TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status == TransactionSynchronization.STATUS_COMMITTED) {
+                    storedKey.compareAndSet(objectPath, null);
+                } else {
+                    deleteMinioObject(objectPath);
+                }
+            }
+        });
     }
 
     private void registerMinioRollbackCleanup(String objectPath) {
@@ -1286,7 +1310,10 @@ public class DocumentService {
                     return new ConvertPrepared(placeholderId, stored,
                             Prefetched.of(() -> workspaceAiModelClient.get(workspaceId)));
                 },
-                prepared -> startConvertPlaceholder(workspaceId, userId, documentId, source, content, prepared)));
+                prepared -> {
+                    registerStoredSourceCleanup(storedKey);
+                    return startConvertPlaceholder(workspaceId, userId, documentId, source, content, prepared);
+                }));
     }
 
     private record ConvertPrepared(String placeholderId, Prefetched<String> sourceKey,
@@ -1296,7 +1323,6 @@ public class DocumentService {
                                                            Document source,
                                                            DocumentEditingRules.MarkdownContent content,
                                                            ConvertPrepared prepared) {
-        if (prepared.sourceKey().value() != null) registerMinioRollbackCleanup(prepared.sourceKey().value());
         // placeholder: display_name은 원본에서 확장자를 뗀 이름, filename은 <이름>.md
         DocumentEditingRules.Filename filename =
                 DocumentEditingRules.rename(source.getDisplayName(), "document.md");

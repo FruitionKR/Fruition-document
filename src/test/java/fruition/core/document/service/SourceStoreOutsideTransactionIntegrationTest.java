@@ -42,6 +42,7 @@ class SourceStoreOutsideTransactionIntegrationTest {
     @Autowired StorageProperties storage;
     @MockitoSpyBean MinioClient minioClient;
     @MockitoSpyBean DocumentRepository documentRepository;
+    @MockitoSpyBean fruition.core.analytics.DocumentAnalytics analytics;
 
     @Test
     void markdownCreateAndUploadStoreSourceOutsideTransaction() throws Exception {
@@ -74,6 +75,33 @@ class SourceStoreOutsideTransactionIntegrationTest {
         assertThatThrownBy(() -> minioClient.statObject(StatObjectArgs.builder()
                 .bucket(storage.getBucket()).object(keys.getFirst()).build()))
                 .isInstanceOf(io.minio.errors.ErrorResponseException.class);
+    }
+
+    @Test
+    void storedSourceSurvivesExceptionAfterCommit() throws Exception {
+        List<String> keys = new ArrayList<>();
+        recordPuts(new ArrayList<>(), keys);
+        String workspaceId = "ws_src_tx_" + UUID.randomUUID();
+        String userId = owner(workspaceId);
+        // 문서 행이 커밋된 뒤 afterCommit 콜백이 예외를 던지는 상황. 커밋된 문서의 원본은 남아야 한다.
+        doAnswer(invocation -> {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            throw new IllegalStateException("after commit");
+                        }
+                    });
+            return invocation.callRealMethod();
+        }).when(analytics).uploaded(any(fruition.core.document.domain.Document.class));
+
+        assertThatThrownBy(() -> documentService.createMarkdown(workspaceId, userId, "md-" + UUID.randomUUID(),
+                new MarkdownDocumentCreateRequest("노트", "# 노트", null)))
+                .hasMessageContaining("after commit");
+
+        assertThat(keys).hasSize(1);
+        assertThat(minioClient.statObject(StatObjectArgs.builder()
+                .bucket(storage.getBucket()).object(keys.getFirst()).build()).object()).isEqualTo(keys.getFirst());
     }
 
     private void recordPuts(List<Boolean> inTransaction, List<String> keys) throws Exception {
