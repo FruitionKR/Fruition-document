@@ -65,13 +65,13 @@ class OperationIngestServiceTest {
     void acceptsValidCallback() {
         givenProcessingOperation();
         givenObject("# 개념 C1", "sha256:aaa");
-        when(applier.apply(anyString(), any(), anyList(), anyString(), any()))
+        when(applier.apply(anyString(), any(), anyList(), anyList(), anyString(), any()))
                 .thenReturn(new OperationResultResponse(OPERATION_ID, "succeeded", 1));
 
         OperationResultResponse response = service.accept(OPERATION_ID, request("sha256:aaa"));
 
         assertThat(response.recordedChanges()).isEqualTo(1);
-        verify(applier).apply(anyString(), any(), anyList(), anyString(), any());
+        verify(applier).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
     }
 
     @Test
@@ -83,7 +83,7 @@ class OperationIngestServiceTest {
         assertThatThrownBy(() -> service.accept(OPERATION_ID, request("sha256:reported")))
                 .isInstanceOf(InvalidCallbackPayloadException.class);
 
-        verify(applier, never()).apply(anyString(), any(), anyList(), anyString(), any());
+        verify(applier, never()).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
     }
 
     @Test
@@ -106,7 +106,7 @@ class OperationIngestServiceTest {
         assertThatThrownBy(() -> service.accept(OPERATION_ID, forged))
                 .isInstanceOf(InvalidCallbackPayloadException.class);
 
-        verify(applier, never()).apply(anyString(), any(), anyList(), anyString(), any());
+        verify(applier, never()).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
     }
 
     @Test
@@ -129,7 +129,7 @@ class OperationIngestServiceTest {
         service.accept("op_lint_1", request);
 
         verify(lintApplier).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
-        verify(applier, never()).apply(anyString(), any(), anyList(), anyString(), any());
+        verify(applier, never()).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
     }
 
     @Test
@@ -185,7 +185,7 @@ class OperationIngestServiceTest {
         assertThatThrownBy(() -> service.accept(OPERATION_ID, forged))
                 .isInstanceOf(InvalidCallbackPayloadException.class);
 
-        verify(applier, never()).apply(anyString(), any(), anyList(), anyString(), any());
+        verify(applier, never()).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
     }
 
     @Test
@@ -197,7 +197,7 @@ class OperationIngestServiceTest {
         when(operationLogRepository.findById(OPERATION_ID)).thenReturn(Optional.of(done));
 
         assertThat(service.accept(OPERATION_ID, request).recordedChanges()).isEqualTo(3);
-        verify(applier, never()).apply(anyString(), any(), anyList(), anyString(), any());
+        verify(applier, never()).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
     }
 
     @Test
@@ -223,7 +223,7 @@ class OperationIngestServiceTest {
 
         assertThat(response.status()).isEqualTo("succeeded");
         verify(rebuildApplier).apply(anyString(), any(), anyList(), anyString(), any());
-        verify(applier, never()).apply(anyString(), any(), anyList(), anyString(), any());
+        verify(applier, never()).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
     }
 
     @Test

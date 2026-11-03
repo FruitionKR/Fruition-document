@@ -63,9 +63,15 @@ public class OperationApplier {
         this.documentRepository = documentRepository;
     }
 
+    /**
+     * @param deleted 재편입이 수정·삭제한 블록의 근거만 남아 재생 결과가 비어 지운 페이지(ai ADR 0042).
+     *                본문 버전은 없고, 무효화 기여 행과 삭제 변경만 남긴다. 그 행이 있어야 이 편입을 되돌릴 때
+     *                복구 계획이 페이지를 다시 재생해 되살린다.
+     */
     @Transactional
     public OperationResultResponse apply(String operationId, OperationResultRequest request,
-                                         List<LoadedPage> loaded, String payloadHash, Instant now) {
+                                         List<LoadedPage> loaded, List<DeletedPage> deleted,
+                                         String payloadHash, Instant now) {
         OperationLog operation = operationLogRepository.findById(operationId)
                 .orElseThrow(() -> new OperationNotFoundException(operationId));
 
@@ -80,9 +86,21 @@ public class OperationApplier {
         boolean documentDeleted = operation.getTargetDocumentId() != null
                 && documentRepository.findDeletedForShare(operation.getTargetDocumentId()).orElse(false);
 
+        // 바뀐 페이지와 지운 페이지를 함께 page_id 순서로 잠근다. 따로 돌면 동시 콜백끼리 잠금 순서가 엇갈린다.
+        java.util.TreeMap<String, Object> pages = new java.util.TreeMap<>();
+        ordered.forEach(page -> pages.put(page.pageId(), page));
+        for (DeletedPage page : deleted) {
+            if (pages.putIfAbsent(page.pageId(), page) != null) {
+                throw new InvalidCallbackPayloadException(
+                        "바뀐 페이지와 지운 페이지가 겹칩니다: pageId=" + page.pageId());
+            }
+        }
         int recorded = 0;
-        for (LoadedPage page : ordered) {
-            if (applyPage(operation, page, now, documentDeleted)) {
+        for (Object page : pages.values()) {
+            boolean applied = page instanceof LoadedPage loadedPage
+                    ? applyPage(operation, loadedPage, now, documentDeleted)
+                    : deletePage(operation, (DeletedPage) page, now, documentDeleted);
+            if (applied) {
                 recorded++;
             }
         }
@@ -159,6 +177,42 @@ public class OperationApplier {
                 null, lines.additions(), lines.deletions()));
         return true;
     }
+
+    /** @return 적재했으면 true. 같은 작업의 재전송이면 건너뛴다 */
+    private boolean deletePage(OperationLog operation, DeletedPage page, Instant now, boolean documentDeleted) {
+        String pageId = page.pageId();
+        versionRepository.lockPage(pageId);
+        var wikiPage = wikiStateRequester.lookup(List.of(pageId), operation.getWorkspaceId()).stream()
+                .findFirst()
+                .orElseThrow(() -> new InvalidCallbackPayloadException(
+                        "Wiki 페이지를 찾을 수 없습니다: pageId=" + pageId));
+        if (!wikiPage.workspaceId().equals(operation.getWorkspaceId())) {
+            throw new InvalidCallbackPayloadException(
+                    "다른 워크스페이스의 페이지입니다: pageId=" + pageId);
+        }
+        if (contributionRepository.existsById(
+                new WikiPageContributionId(pageId, operation.getOperationId()))) {
+            return false;
+        }
+        Optional<WikiPageVersion> previous =
+                versionRepository.findTopByIdPageIdOrderByIdRevisionDesc(pageId);
+        // 순서 값만 차지하고 그 번호에는 버전이 없다(lint 삭제와 같다).
+        WikiPageContribution contribution = new WikiPageContribution(
+                pageId, operation.getOperationId(), operation.getTargetDocumentId(),
+                versionRepository.findMaxRevision(pageId) + 1, page.contributionKey(), now);
+        if (documentDeleted) {
+            contribution.deactivate(null);
+        }
+        contributionRepository.save(contribution);
+        operationChangeRepository.save(new OperationChange(
+                operation.getOperationId(), ResourceType.wiki_page, pageId,
+                wikiPage.title(), previous.map(WikiPageVersion::getRevision).orElse(null), null,
+                ChangeType.deleted, "재편입으로 남은 근거가 없어 삭제했습니다.", null, null));
+        return true;
+    }
+
+    /** 재편입이 지운 페이지. 기여 key는 등록된 작업 경로로 정한다. */
+    public record DeletedPage(String pageId, String contributionKey) {}
 
     /** 저장소에서 읽어 검증까지 마친 페이지 하나. */
     public record LoadedPage(String pageId, String markdownKey, String contributionKey,
