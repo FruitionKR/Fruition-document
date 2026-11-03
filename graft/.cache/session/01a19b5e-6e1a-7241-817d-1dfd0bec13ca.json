@@ -1,9 +1,0 @@
-{
-  "lastQuery": "두 변경을 함께 리뷰해줘. (1) 이 저장소 커밋 16190b9: 편입 결과 deleted_pages를 무효화 기여 행 + deleted 변경으로 기록(버전 없음). (2) /Users/jaehyeong/orca/workspaces/Fruition-ai/ingest-perf-claude-handoff 저장소 커밋 1cd2eea: 재편입 재생 결과가 빈 개념 페이지를 내리고 기여 JSON을 쓰고 deleted_pages로 보고. 정합성(복구 계획에서 되살아나는지, 재전송 멱등, 잠금 순서, 같은 페이지 changed/deleted 중복, AI DB와 document-svc 상태 불일치, JSON 미작성 시 재생 실패), 보안만 고신뢰로 구체 사례와 함께. 없으면 '지적 없음'. 한국어로 간결하게.",
-  "perAgentQuery": {},
-  "graftReads": 0,
-  "sourceReads": 0,
-  "savedTokens": 0,
-  "injectedPointers": [],
-  "nudges": 0
-}
