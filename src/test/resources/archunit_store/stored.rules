@@ -1,6 +1,6 @@
 #
-#Tue Nov 03 11:01:03 KST 2026
-classes\ that\ reside\ in\ a\ package\ 'fruition.core..'\ should\ only\ have\ dependencies\ where\ \uB300\uC0C1\uC774\ \uB2E4\uB978\ fruition.core\ \uBAA8\uB4C8\uC758\ repository\uAC00\ \uC544\uB2C8\uB2E4=fbfc80f3-af45-41be-9dea-c830fb1f307c
-no\ classes\ that\ controllers\ should\ depend\ on\ classes\ that\ reside\ in\ a\ package\ '..repository..'=7aea5ff9-edfb-4bc8-b3c2-d72ed9a72abf
-no\ classes\ that\ reside\ in\ a\ package\ '..domain..'\ should\ depend\ on\ classes\ that\ reside\ in\ a\ package\ '..dto..'=6c53109c-1d5c-4908-97c2-726f9184a6f4
-no\ fields\ should\ be\ annotated\ with\ @Autowired=b63e279e-bb46-4d97-98f1-64f6f4938300
+#Tue Nov 03 11:10:39 KST 2026
+classes\ should\ not\ have\ fields\ annotated\ with\ @Autowired=f0a196c8-10c2-437b-9c29-1452542b24d8
+classes\ that\ controllers\ should\ not\ depend\ on\ repositories=cd3eef40-d450-4911-b5c8-6270b20faaa9
+classes\ that\ reside\ in\ a\ package\ '..domain..'\ should\ not\ depend\ on\ dto=a3ae88d8-403f-4da7-ad2a-f54533121822
+classes\ that\ reside\ in\ a\ package\ 'fruition.core..'\ should\ not\ depend\ on\ repositories\ of\ other\ fruition.core\ modules=31bea70e-ee2d-4172-be60-3ac0a9044492
