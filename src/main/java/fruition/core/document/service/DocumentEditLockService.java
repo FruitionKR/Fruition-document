@@ -16,6 +16,7 @@ import fruition.core.authz.WorkspaceAccessGuard;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -35,6 +36,7 @@ public class DocumentEditLockService {
     private final DocumentAccessPolicy documentAccessPolicy;
     private final long ttlSeconds;
     private final Clock clock;
+    private final TransactionTemplate transactionTemplate;
 
     public DocumentEditLockService(DocumentEditLockRepository lockRepository,
                                    DocumentRepository documentRepository,
@@ -42,7 +44,8 @@ public class DocumentEditLockService {
                                    AccessUserClient accessUserClient,
                                    DocumentAccessPolicy documentAccessPolicy,
                                    @Value("${app.document.edit-lock.ttl-seconds:45}") long ttlSeconds,
-                                   Clock clock) {
+                                   Clock clock,
+                                   TransactionTemplate transactionTemplate) {
         this.lockRepository = lockRepository;
         this.documentRepository = documentRepository;
         this.workspaceAccessGuard = workspaceAccessGuard;
@@ -50,15 +53,22 @@ public class DocumentEditLockService {
         this.documentAccessPolicy = documentAccessPolicy;
         this.ttlSeconds = ttlSeconds;
         this.clock = clock;
+        this.transactionTemplate = transactionTemplate;
     }
 
-    /** 잠금 획득/갱신. 성립하면 본인 보유 잠금을, 다른 사용자가 보유 중이면 그 사용자 잠금을 그대로 반환한다. */
-    @Transactional
+    /**
+     * 잠금 획득/갱신. 성립하면 본인 보유 잠금을, 다른 사용자가 보유 중이면 그 사용자 잠금을 그대로 반환한다.
+     * 잠금 처리는 짧은 트랜잭션으로 끝내고 보유자 표시 이름은 트랜잭션 밖에서 조회한다.
+     * DB 연결을 쥔 채 Access를 기다리면 Access 지연이 곧 연결 풀 고갈이 된다.
+     */
     public EditLockResponse acquire(String workspaceId, String userId, String documentId) {
-        requireEditable(workspaceId, userId, documentId);
-        Instant now = Instant.now(clock);
-        lockRepository.acquire(documentId, userId, now, now.plus(Duration.ofSeconds(ttlSeconds)));
-        return toResponse(currentLock(documentId));
+        DocumentEditLock lock = transactionTemplate.execute(status -> {
+            requireEditable(workspaceId, userId, documentId);
+            Instant now = Instant.now(clock);
+            lockRepository.acquire(documentId, userId, now, now.plus(Duration.ofSeconds(ttlSeconds)));
+            return currentLock(documentId);
+        });
+        return toResponse(lock);
     }
 
     /**
@@ -84,8 +94,10 @@ public class DocumentEditLockService {
         lockRepository.release(documentId, userId);
     }
 
-    /** 현재 잠금 상태. 비어 있거나 만료됐으면 null. GET /documents/{id}의 edit_lock 노출용. */
-    @Transactional(readOnly = true)
+    /**
+     * 현재 잠금 상태. 비어 있거나 만료됐으면 null. GET /documents/{id}의 edit_lock 노출용.
+     * 트랜잭션을 걸지 않아 조회 연결은 findById 직후 반납되고, 표시 이름 조회는 연결 없이 한다.
+     */
     public EditLockResponse getStatus(String documentId) {
         DocumentEditLock lock = lockRepository.findById(documentId).orElse(null);
         if (lock == null || lock.isExpiredAt(Instant.now(clock))) {
