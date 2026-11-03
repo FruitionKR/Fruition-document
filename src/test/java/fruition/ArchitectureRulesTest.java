@@ -16,8 +16,9 @@ import org.springframework.stereotype.Controller;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.function.BiPredicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -35,14 +36,17 @@ import static com.tngtech.archunit.library.freeze.FreezingArchRule.freeze;
  * 지금 코드가 지키는 패키지 의존 규칙을 고정한다. 규칙을 깨야 한다면 이 테스트를 먼저 고친다.
  * freeze(...) 규칙은 현재 위반을 src/test/resources/archunit_store에 기록해 두고 새 위반만 실패시킨다.
  * store 생성·갱신(freeze 규칙 추가·변경, 위반 수정 시): archunit.properties의 allowStoreUpdate와 freeze.refreeze를 잠시 true로 두고 이 테스트만 실행한 뒤 되돌려 store diff를 커밋한다.
+ * store를 처음부터 다시 만들 때는 allowStoreCreation=false라 빈 stored.rules 파일을 먼저 둔다.
  */
 @AnalyzeClasses(packages = "fruition", importOptions = ImportOption.DoNotIncludeTests.class)
 class ArchitectureRulesTest {
 
-	/** controller 패키지에 있거나 @Controller/@RestController가 붙은 클래스(평평한 패키지의 컨트롤러 포함). */
-	private static final DescribedPredicate<JavaClass> CONTROLLER = resideInAPackage("..controller..")
-			.or(metaAnnotatedWith(Controller.class))
-			.as("controllers");
+	private static final DescribedPredicate<JavaClass> CONTROLLER_TYPE = resideInAPackage("..controller..")
+			.or(metaAnnotatedWith(Controller.class));
+
+	/** 바깥 클래스가 controller 패키지에 있거나 @Controller/@RestController인 클래스(평평한 패키지 컨트롤러와 그 중첩·익명 클래스 포함). */
+	private static final DescribedPredicate<JavaClass> CONTROLLER = DescribedPredicate.describe(
+			"controllers", (JavaClass c) -> CONTROLLER_TYPE.test(outermost(c)));
 
 	/** ..repository.. 패키지, @Repository, Spring Data Repository 하위 타입(평평한 패키지의 MeetingRepository 등 포함). */
 	private static final DescribedPredicate<JavaClass> REPOSITORY = resideInAPackage("..repository..")
@@ -139,10 +143,17 @@ class ArchitectureRulesTest {
 	/** origin(바깥 클래스 기준)이 forbidden인 대상에 의존하면 "origin -> target"을 쌍마다 한 번 위반으로 낸다. */
 	private static ArchCondition<JavaClass> notDependOn(String description, BiPredicate<JavaClass, JavaClass> forbidden) {
 		return new ArchCondition<>(description) {
+			// 규칙 단위로 쌍을 모아 바깥 클래스와 중첩 클래스가 같은 대상에 의존해도 한 번만 낸다.
+			private final Set<String> reported = new HashSet<>();
+
+			@Override
+			public void init(Collection<JavaClass> allObjectsToTest) {
+				reported.clear();
+			}
+
 			@Override
 			public void check(JavaClass javaClass, ConditionEvents events) {
 				JavaClass origin = outermost(javaClass);
-				Set<String> reported = new TreeSet<>();
 				for (Dependency d : javaClass.getDirectDependenciesFromSelf()) {
 					JavaClass target = outermost(d.getTargetClass());
 					if (!target.equals(origin) && forbidden.test(origin, target)
