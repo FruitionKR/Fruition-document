@@ -133,13 +133,27 @@ public class AgentTurnService {
         AiModelCatalog.AiModel selectedModel = aiModelCatalog.resolve(request.provider(), request.model());
         List<CanonicalSkillDraftSource> skillDraftSources = canonicalSkillDraftSources(
                 workspaceId, userId, request.skillDraftSources());
+        String readOnlyDocumentId = confirmedReadOnlyDocumentId(workspaceId, userId, request);
         return transaction.execute(status ->
-                queueTurn(workspaceId, userId, request, folderId, selectedModel, skillDraftSources));
+                queueTurn(workspaceId, userId, request, folderId, selectedModel, skillDraftSources, readOnlyDocumentId));
+    }
+
+    /**
+     * 메시지에 남길 보기 전용 문서. 클라이언트 값을 믿지 않고 서버가 확인한 것만 남기며, 맞지 않으면 오류 없이 버려 존재 여부가 응답으로 새지 않는다.
+     * 편집 문맥이 있는 요청은 보기 전용 문서를 연 요청이 아니다. 안내 표시에만 쓰고 AI로 보내지 않는다.
+     */
+    private String confirmedReadOnlyDocumentId(String workspaceId, String userId, AgentTurnRequest request) {
+        String documentId = request.readOnlyDocumentId();
+        if (documentId == null || request.hasDocumentContext()) {
+            return null;
+        }
+        return documentService.isReadOnlyFor(workspaceId, userId, documentId) ? documentId : null;
     }
 
     private AgentTurnResponse queueTurn(String workspaceId, String userId, AgentTurnRequest request, UUID folderId,
                                         AiModelCatalog.AiModel selectedModel,
-                                        List<CanonicalSkillDraftSource> skillDraftSources) {
+                                        List<CanonicalSkillDraftSource> skillDraftSources,
+                                        String readOnlyDocumentId) {
         String runId = "agent_" + UUID.randomUUID().toString().replace("-", "");
         // 질의와 같은 방식으로 말풍선을 먼저 만들고 결과가 오면 채운다. command와 같은 트랜잭션이라
         // 발행에 실패하면 메시지도 남지 않는다.
@@ -152,7 +166,7 @@ public class AgentTurnService {
         java.time.Instant requestedAt = java.time.Instant.now();
         chatTurnRecorder.createPendingAgentPair(request.sessionId(), messageContext.pairId(),
                 messageContext.userMessageId(), messageContext.assistantMessageId(), request.message(),
-                requestedAt, selectedModel.provider(), selectedModel.model(), runId);
+                requestedAt, selectedModel.provider(), selectedModel.model(), runId, readOnlyDocumentId);
         outboxWriter.begin(runId, workspaceId, userId, "agent");
         // 편집안을 적용할 때 되돌려받을 표. source=agent 문자열 대신 이 값으로 AI 작업 여부를 가린다.
         // 적용할 문서가 없으면 표도 만들지 않는다.

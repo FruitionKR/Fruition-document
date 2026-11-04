@@ -79,7 +79,7 @@ public class ChatTurnRecorder {
 
     /**
      * Agent turn용 쌍. 질의와 달리 assistant 메시지에 run ID를 새겨, 결과가 왔을 때
-     * 어느 말풍선을 채울지와 승인 상태를 어디서 읽을지 정한다.
+     * 어느 말풍선을 채울지와 승인 상태를 어디서 읽을지 정한다. {@code readOnlyDocumentId}는 호출자가 권한을 확인한 값이다.
      */
     @Transactional
     public void createPendingAgentPair(String sessionId,
@@ -90,12 +90,14 @@ public class ChatTurnRecorder {
                                        Instant createdAt,
                                        String provider,
                                        String model,
-                                       String runId) {
+                                       String runId,
+                                       String readOnlyDocumentId) {
         ChatSession session = chatSessionRepository.findById(sessionId)
                 .orElseThrow(() -> new ChatSessionNotFoundException(sessionId));
         ChatMessage assistant = new ChatMessage(assistantMessageId, session, pairId, "assistant", "", "pending",
                 createdAt, null, provider, model, false);
         assistant.assignRun(runId);
+        assistant.markReadOnlyDocument(readOnlyDocumentId);
         chatMessageRepository.saveAll(List.of(
                 new ChatMessage(userMessageId, session, pairId, "user", message, "completed", createdAt,
                         null, provider, model, false),

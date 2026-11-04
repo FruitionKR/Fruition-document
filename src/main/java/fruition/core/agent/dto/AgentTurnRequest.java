@@ -2,6 +2,11 @@ package fruition.core.agent.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -10,6 +15,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -98,7 +104,16 @@ public record AgentTurnRequest(
                 + "폴더 정리는 워크스페이스 전체를 범위로 본다(기존 동작). "
                 + "이 워크스페이스의 삭제되지 않은 폴더여야 한다(없으면 404). 문서 없이도 보낼 수 있다.",
                 format = "uuid", nullable = true, example = "44444444-4444-4444-4444-444444444444")
-        String folderId
+        String folderId,
+
+        @JsonProperty("read_only_document_id")
+        @JsonDeserialize(using = StringOrNullDeserializer.class)
+        @Schema(description = "보기 권한 문서를 연 채 보낸 요청이면 그 문서 ID. 편집 대상(documentId)과 다르며 AI로 보내지 않는다. "
+                + "서버가 이 사용자가 읽을 수 있고 편집은 못 하는 문서인지 확인해 맞을 때만 메시지에 남기고, "
+                + "그 밖의 값(없는 문서, 다른 워크스페이스 문서, 삭제된 문서, 편집 가능한 문서, 형식 오류)은 오류 없이 무시한다. "
+                + "안내 표시에만 쓰고 권한 판단에 쓰지 않는다.",
+                nullable = true, example = "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83")
+        String readOnlyDocumentId
 ) {
     private static final int MAX_SKILL_ID_LENGTH = 128;
     /**
@@ -109,6 +124,18 @@ public record AgentTurnRequest(
     private static final Set<String> SKILL_MODES = Set.of("auto", "explicit", "off");
     /** 작업 탭에서 보낸 턴. 생략(null)이면 기존 동작이다. */
     public static final String TASK_MODE = "task";
+
+    /** 표시용 힌트라 형식이 틀려도 요청을 거절하지 않는다. 문자열이 아니면(숫자·배열·객체) 값이 없는 것으로 본다. */
+    static final class StringOrNullDeserializer extends JsonDeserializer<String> {
+        @Override
+        public String deserialize(JsonParser parser, DeserializationContext context) throws IOException {
+            if (parser.currentToken() == JsonToken.VALUE_STRING) {
+                return parser.getText();
+            }
+            parser.skipChildren();
+            return null;
+        }
+    }
 
     /** 편집 대상이 정해진 요청인지. 셋은 함께 있거나 함께 없다. */
     public boolean hasDocumentContext() {
@@ -133,6 +160,23 @@ public record AgentTurnRequest(
         this(sessionId, documentId, baseVersion, message, provider, model, null, "auto", null, conversationContext,
                 skillDraftSources, skillDraftUserDirectives, skillDraftExcludedLiterals, skillScopeType,
                 editorSnapshot);
+    }
+
+    /** read_only_document_id 이전의 전체 필드 생성자. 보기 전용 문서는 생략(기존 동작)이다. */
+    public AgentTurnRequest(String sessionId, String documentId, Long baseVersion, String message,
+                            String provider, String model, Boolean allowWebSearch,
+                            String skillMode, String skillId,
+                            ConversationContext conversationContext,
+                            List<SkillDraftSourceSelector> skillDraftSources,
+                            List<String> skillDraftUserDirectives,
+                            List<String> skillDraftExcludedLiterals,
+                            String skillScopeType,
+                            EditorSnapshot editorSnapshot,
+                            String mode,
+                            String folderId) {
+        this(sessionId, documentId, baseVersion, message, provider, model, allowWebSearch, skillMode, skillId,
+                conversationContext, skillDraftSources, skillDraftUserDirectives, skillDraftExcludedLiterals,
+                skillScopeType, editorSnapshot, mode, folderId, null);
     }
 
     /** folder_id 이전의 전체 필드 생성자. 대상 폴더는 생략(기존 동작)이다. */

@@ -593,6 +593,12 @@ document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 
 (`agent_apply_projections.folder_id`)에 남겨 턴 생성·조회 응답의 `folder_id`로 돌려준다.
 새 문서 초안(`markdown_create`)은 클라이언트가 이 `folder_id`로 문서를 만든다.
 
+보기 권한 문서를 연 채 보낸 요청은 편집 문맥(`documentId`) 없이 나가므로 그 문서를 `read_only_document_id`로 함께 보낸다.
+document-svc는 클라이언트 값을 믿지 않고, 이 워크스페이스의 삭제되지 않은 문서이고 요청 사용자가 읽을 수 있으면서 편집은 못 할 때만
+assistant 메시지(`chat_messages.read_only_document_id`)에 남겨 [메시지 조회](chat.md) 응답으로 돌려준다. 없는 문서, 다른 워크스페이스 문서, 삭제된 문서,
+편집 가능한 문서, 형식 오류(문자열이 아닌 값 포함), `documentId`와 함께 온 값은 오류 없이 무시하고 턴 응답도 같아 존재 여부가 드러나지 않는다.
+안내 표시에만 쓰고 권한 판단에 쓰지 않으며, ai command에 싣지 않는다.
+
 열린 문서에서 저장·반영을 명시한 편집 요청은 `workspace_workflow` AgentRun으로 전환한다.
 이때 편집 대상 문서와 기준 버전을 계획에 고정하고,
 사용자가 그 계획을 승인해야 실제 문서에 반영한다. 저장을 명시하지 않은 편집 요청은 기존처럼
@@ -622,6 +628,7 @@ document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 
 | body | `editorSnapshot` | `object` | 아니오 | 편집 시작 시점의 에디터 상태 |
 | body | `mode` | `string` | 아니오 | `task`(작업 탭 턴)만 허용. 생략하면 기존 동작 |
 | body | `folder_id` | `string(uuid)` | 아니오 | 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 생략하면 루트·워크스페이스 전체 |
+| body | `read_only_document_id` | `string` | 아니오 | 보기 권한 문서를 연 채 보낸 요청의 그 문서. 서버가 확인해 맞을 때만 메시지에 남기고 틀린 값은 무시한다(`400` 없음). AI로 보내지 않는다 |
 | body | `allow_web_search` | `boolean` | 아니오 | Query와 웹 근거 기반 새 문서 생성에서 웹 검색을 허용할지. 편집·Skill 갈래에는 영향이 없다 |
 | body | `conversationContext.selected_pair_ids` | `string[]` | 아니오 | 맥락으로 쓸 문답 ID(최대 20개). 비우면 세션의 최근 완결 문답을 쓴다 |
 | body | `conversationContext.pendingSkillProposal` | `object` | 아니오 | 채팅에서 "게시"를 기다리는 Skill 제안. 필드는 snake_case(`scope_type`, `name`, `description`, `instructions_markdown`, `capabilities`, `allowed_tools`, `requires_source`)이고 ai command의 `conversation_context.pending_skill_proposal`로 그대로 옮긴다 |

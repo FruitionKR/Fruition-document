@@ -121,7 +121,7 @@ class ChatClarifyReasonIntegrationTest {
         jdbc.update("INSERT INTO chat_sessions(id, workspace_id, user_id, created_at) VALUES (?, ?, ?, now())",
                 turn.sessionId(), WORKSPACE, USER);
         recorder.createPendingAgentPair(turn.sessionId(), "pair_" + id, "user_" + id, turn.assistantId(), "고쳐 줘",
-                Instant.now(), "openai", "gpt-6-luna", turn.runId());
+                Instant.now(), "openai", "gpt-6-luna", turn.runId(), null);
         jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind) VALUES (?, ?, ?, 'agent')",
                 turn.runId(), WORKSPACE, USER);
         jdbc.update("INSERT INTO agent_apply_projections(run_id, workspace_id, user_id) VALUES (?, ?, ?)",

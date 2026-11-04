@@ -213,7 +213,8 @@ class ChatSessionControllerTest {
                         .header("Authorization", bearerToken()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.messages[0].clarify_reason").value("markdown_document_required"))
-                .andExpect(jsonPath("$.messages[1].clarify_reason").value(org.hamcrest.Matchers.nullValue()));
+                .andExpect(jsonPath("$.messages[1].clarify_reason").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.messages[1].read_only_document_id").value(org.hamcrest.Matchers.nullValue()));
     }
 
     @Test
