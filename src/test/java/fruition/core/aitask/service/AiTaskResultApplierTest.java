@@ -411,6 +411,17 @@ class AiTaskResultApplierTest {
                 "수정할 Markdown 문서를 연 뒤 다시 요청해 주세요.", "markdown_document_required");
     }
 
+    /** 첨부 문서 수정에서 대상을 못 고른 되묻기. 화면이 이 코드로 첨부 칩을 유지한다. */
+    @Test
+    void attachmentTargetRequiredReasonReachesChatMessage() throws Exception {
+        applyClarify("""
+                {"action":"clarify","message":"어느 문서를 고칠까요?","clarify_reason":"attachment_target_required"}
+                """);
+
+        verify(chatTurnRecorder).completeAgentTurn("chat_assistant_1", "clarify",
+                "어느 문서를 고칠까요?", "attachment_target_required");
+    }
+
     /** AI가 먼저 새 코드를 내보내도 document 배포 없이 전달돼야 한다. 뜻은 화면이 판단한다. */
     @Test
     void unknownClarifyReasonCodeIsKept() throws Exception {

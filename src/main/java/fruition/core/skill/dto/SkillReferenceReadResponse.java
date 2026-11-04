@@ -9,5 +9,12 @@ public record SkillReferenceReadResponse(
         String markdown,
         Boolean truncated,
         @JsonProperty("total_chars") Integer totalChars,
-        @JsonProperty("display_name") String displayName
-) {}
+        @JsonProperty("display_name") String displayName,
+        @JsonProperty("edit_revision") Long editRevision,
+        @JsonProperty("can_edit") Boolean canEdit
+) {
+    public SkillReferenceReadResponse(
+            String documentRole, String markdown, Boolean truncated, Integer totalChars, String displayName) {
+        this(documentRole, markdown, truncated, totalChars, displayName, null, null);
+    }
+}

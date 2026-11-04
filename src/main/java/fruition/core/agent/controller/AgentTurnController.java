@@ -2,6 +2,7 @@ package fruition.core.agent.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.agent.dto.AgentRunApproveRequest;
+import fruition.core.agent.dto.AgentRunEditPreviewsResponse;
 import fruition.core.agent.dto.AgentRunReviseRequest;
 import fruition.core.agent.dto.AgentTurnRequest;
 import fruition.core.agent.dto.AgentTurnResponse;
@@ -114,6 +115,24 @@ public class AgentTurnController {
             @AuthenticationPrincipal String userId,
             @PathVariable("run_id") String runId) {
         return ResponseEntity.ok(agentTurnService.getRun(workspaceId, userId, runId));
+    }
+
+    @Operation(summary = "AgentRun 변경 미리 보기",
+            description = "첨부 문서 수정 계획의 문서별 변경을 조회합니다. 지금 읽을 수 있는 문서만 돌려주고 제목은 현재 값입니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK",
+            content = @Content(schema = @Schema(implementation = AgentRunEditPreviewsResponse.class))),
+        @ApiResponse(responseCode = "404", description = "실행 또는 워크스페이스를 찾을 수 없음(다른 사용자의 실행 포함)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "503", description = "AI 서비스에서 미리 보기를 읽지 못함",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @GetMapping("/runs/{run_id}/edit-previews")
+    public ResponseEntity<AgentRunEditPreviewsResponse> getEditPreviews(
+            @PathVariable("workspace_id") String workspaceId,
+            @AuthenticationPrincipal String userId,
+            @PathVariable("run_id") String runId) {
+        return ResponseEntity.ok(agentTurnService.getEditPreviews(workspaceId, userId, runId));
     }
 
     @Operation(summary = "AgentRun 승인", description = "현재 AgentRun 계획을 승인합니다.")

@@ -52,6 +52,34 @@ class SkillReferenceControllerTest {
     }
 
     @Test
+    void read_returnsEditRevisionAndCanEditForEditableDocument() throws Exception {
+        when(referenceService.read("ws_1", "user_1", "doc_1", null))
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문", null, null, "주간 회의록", 7L, false));
+
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.edit_revision").value(7))
+                .andExpect(jsonPath("$.can_edit").value(false));
+    }
+
+    @Test
+    void read_omitsEditFieldsForOriginalDocument() throws Exception {
+        when(referenceService.read("ws_1", "user_1", "doc_1", null))
+                .thenReturn(new SkillReferenceReadResponse("ORIGINAL", null, null, null, "원본.pdf"));
+
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.edit_revision").doesNotExist())
+                .andExpect(jsonPath("$.can_edit").doesNotExist());
+    }
+
+    @Test
     void read_withoutMaxCharsOmitsTruncationFields() throws Exception {
         when(referenceService.read("ws_1", "user_1", "doc_1", null))
                 .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문", null, null, "주간 회의록"));

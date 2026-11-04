@@ -1,6 +1,7 @@
 package fruition.core.agent.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.agent.dto.AgentRunEditPreviewsResponse;
 import fruition.core.agent.dto.AgentTurnRequest;
 import fruition.core.agent.dto.AgentTurnResponse;
 import fruition.core.agent.dto.AgentRunApproveRequest;
@@ -29,6 +30,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -322,6 +325,24 @@ public class AgentTurnService {
         // 승인 대기 계획은 사용자의 자동 승인 설정을 지금 다시 적용해 본다. ai-svc의 계획 알림이 실패했거나
         // 알림 뒤에 설정을 켠 경우에도 화면이 계획을 열 때 판단한다.
         return closeIfTerminal(runId, autoApproveIfAllowed(workspaceId, userId, runId, run));
+    }
+
+    /**
+     * 첨부 문서 수정 계획의 변경 미리 보기. run 소유는 AI가 user_id로 가른다(남의 run은 404).
+     * 계획을 세운 뒤 권한이 바뀌었을 수 있으므로 문서마다 지금 읽을 수 있는지 다시 보고, 제목은 현재 값으로 덮는다.
+     */
+    public AgentRunEditPreviewsResponse getEditPreviews(String workspaceId, String userId, String runId) {
+        workspaceAccessGuard.requireMember(workspaceId, userId);
+        AgentRunEditPreviewsResponse previews = statusRequester.getEditPreviews(workspaceId, userId, runId);
+        List<AgentRunEditPreviewsResponse.Item> items = previews.items().stream().filter(Objects::nonNull).toList();
+        Map<String, String> titles = documentService.readableDocumentTitles(workspaceId, userId,
+                items.stream().map(AgentRunEditPreviewsResponse.Item::documentId).toList());
+        return new AgentRunEditPreviewsResponse(
+                items.stream()
+                        .filter(item -> titles.containsKey(item.documentId()))
+                        .map(item -> item.withDisplayName(titles.get(item.documentId())))
+                        .toList(),
+                previews.expiresAt());
     }
 
     /**

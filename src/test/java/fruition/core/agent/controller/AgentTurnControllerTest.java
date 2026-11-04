@@ -377,6 +377,52 @@ class AgentTurnControllerTest {
     }
 
     @Test
+    void getEditPreviews_returnsContractShape() throws Exception {
+        String runId = "run-autonomous";
+        when(agentTurnService.getEditPreviews(WORKSPACE_ID, USER_ID, runId)).thenReturn(
+                new fruition.core.agent.dto.AgentRunEditPreviewsResponse(java.util.List.of(
+                        new fruition.core.agent.dto.AgentRunEditPreviewsResponse.Item(
+                                "op-1", "doc-1", "회의록", 3, "요약", 1, 2, java.util.List.of(
+                                new fruition.core.agent.dto.AgentRunEditPreviewsResponse.Hunk(4, 5, java.util.List.of(
+                                        new fruition.core.agent.dto.AgentRunEditPreviewsResponse.Line("insert", "새 줄")))))),
+                        null));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/agent/runs/" + runId + "/edit-previews")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.expires_at").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.items[0].operation_id").value("op-1"))
+                .andExpect(jsonPath("$.items[0].document_id").value("doc-1"))
+                .andExpect(jsonPath("$.items[0].display_name").value("회의록"))
+                .andExpect(jsonPath("$.items[0].base_version").value(3))
+                .andExpect(jsonPath("$.items[0].summary").value("요약"))
+                .andExpect(jsonPath("$.items[0].added_lines").value(1))
+                .andExpect(jsonPath("$.items[0].removed_lines").value(2))
+                .andExpect(jsonPath("$.items[0].hunks[0].before_start").value(4))
+                .andExpect(jsonPath("$.items[0].hunks[0].after_start").value(5))
+                .andExpect(jsonPath("$.items[0].hunks[0].lines[0].type").value("insert"))
+                .andExpect(jsonPath("$.items[0].hunks[0].lines[0].text").value("새 줄"));
+    }
+
+    @Test
+    void getEditPreviews_notFoundKeepsFourOhFour() throws Exception {
+        String runId = "run-of-someone-else";
+        when(agentTurnService.getEditPreviews(WORKSPACE_ID, USER_ID, runId))
+                .thenThrow(new fruition.core.agent.exception.AgentRunNotFoundException(runId));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/agent/runs/" + runId + "/edit-previews")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void getEditPreviews_requiresLogin() throws Exception {
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/agent/runs/run-1/edit-previews"))
+                .andExpect(status().isUnauthorized());
+        org.mockito.Mockito.verifyNoInteractions(agentTurnService);
+    }
+
+    @Test
     void getRun_providerFailureReturnsUnavailableErrorEnvelope() throws Exception {
         String runId = "run-autonomous";
         when(agentTurnService.getRun(WORKSPACE_ID, USER_ID, runId))

@@ -2,6 +2,8 @@
 
 ## 2026-11-04
 
+- 첨부 문서를 열지 않고 수정하는 흐름의 document 쪽을 추가했다. 내부 API `/internal/agent/skill-authoring/references/read` 응답에 `edit_revision`(본문과 같은 행의 revision)과 `can_edit`(편집 권한이 있고 `chat_export`가 아니며 변환 중이 아님, 파트 문서는 부모 기준)를 `EDITABLE` 문서에 한해 더했다. `GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`를 추가해 ai-svc 응답에서 지금 읽을 수 있는 문서만 남기고 제목을 현재 값으로 덮어 돌려준다(ai-svc 배포 전에는 404).
+- Agent `apply_document_edit` 저장을 병합 전용으로 바꿨다. 안 겹치는 변경은 지금처럼 병합하고, 겹치거나 기준 버전 스냅샷이 없으면 덮어쓰지 않고 409 `DOCUMENT_VERSION_CONFLICT`로 거절한다(ADR 0032의 예외). 일반 저장, Agent 수동 수락, 회의록 저장은 그대로 last-writer-wins다.
 - 내부 API `/internal/agent/skill-authoring/references/read` 응답에 문서 제목 `display_name`을 추가했다. AI가 첨부 문서를 제목으로 구분하기 위한 것이다. 필드 추가만 있고 기존 필드와 동작은 그대로다.
 - 내부 API `/internal/agent/skill-authoring/references/read`에 선택 필드 `max_chars`를 추가했다. 보내면 3만 자 초과 문서도 `413` 없이 앞부분을 돌려주고 응답에 `truncated`·`total_chars`를 넣는다. 글자 수는 코드 포인트로 세고 한 글자 중간에서 자르지 않는다. 생략하면 기존 동작(`413`, 응답 모양 동일)이고 권한 확인은 어느 쪽이든 같다.
 - `POST .../agent/turn`에 참고 문서 `reference_document_ids`(최대 3개)를 추가하고 검증한 ID를 ai command에 같은 키로 전달한다(없으면 빈 배열, 본문은 싣지 않음). 문서 없이도, `documentId`와 함께여도 보낼 수 있고 읽기 권한만 요구한다. 중복과 `documentId`와 같은 ID는 서버가 뺀다. 없는 문서, 다른 워크스페이스 문서, 삭제된 문서, 비 Markdown, 읽을 수 없는 문서, 변환 중이거나 본문 없이 실패한 PDF 변환본이 하나라도 있으면 같은 메시지의 400으로 요청 전체를 거절한다. AI가 본문을 읽는 내부 API(`/internal/agent/skill-authoring/references/read`)는 멤버 확인만 하던 것에 문서 읽기 권한 판정을 더했다. 채팅 메시지에는 저장하지 않는다.

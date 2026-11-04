@@ -5,13 +5,14 @@
 사용자용 Agent 실행·승인과 내부 Tool 실행 API다. Agent turn은 Kafka `ai.agent.command`,
 계획 조회·승인·거절·취소·수정은 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 16
+- API 수: 17
 
 ## API 목차
 
 | API | 목적 |
 |---|---|
 | [`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}`](#summary-get-api-workspaces-workspace-id-agent-runs-run-id) | 자율 AgentRun 계획과 실행 상태를 조회합니다. |
+| [`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`](#summary-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews) | 첨부 문서 수정 계획의 문서별 변경을 조회합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/approve`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-approve) | 현재 AgentRun 계획을 승인합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/cancel`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-cancel) | 현재 AgentRun을 취소합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/reject`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-reject) | 현재 AgentRun 계획을 거절합니다. |
@@ -159,6 +160,123 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-runs-run-id)
+
+</details>
+
+<a id="summary-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews"></a>
+### `GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 첨부 문서 수정 계획의 문서별 변경을 조회합니다. |
+| 입력 | **Path** — `workspace_id`: `string`, `run_id`: `string` |
+| 출력 | `200` 성공 — `AgentRunEditPreviewsResponse` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다.<br>요청자의 run만 볼 수 있다(ai-svc가 `user_id`로 가른다). |
+| 주요 오류 | `401` 인증 실패<br>`404` 워크스페이스 멤버가 아니거나, run이 없거나 다른 사용자의 run, ai-svc가 이 API를 아직 제공하지 않음<br>`503` ai-svc 오류·깨진 응답 |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews"></a>
+### `GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews` 상세
+
+#### 1. Method + Path
+
+`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`
+
+#### 2. 목적
+
+첨부 문서 수정 계획의 문서별 변경을 조회합니다. ai-svc `GET /agent/runs/{run_id}/edit-previews`를 호출하고, 문서마다 지금 읽을 수 있는지 다시 확인해 읽을 수 없거나 삭제된 문서를 뺀 뒤, `display_name`을 현재 제목으로 덮어 돌려준다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| path | `run_id` | `string` | 예 | - |
+
+- Body: 없음
+
+#### 5. Response body
+
+- HTTP `200`: OK
+- Content-Type: `*/*` (`AgentRunEditPreviewsResponse`)
+
+```json
+{
+  "items": [
+    {
+      "operation_id": "op_1",
+      "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+      "display_name": "주간 회의록",
+      "base_version": 3,
+      "summary": "결론 문단을 고칩니다.",
+      "added_lines": 1,
+      "removed_lines": 1,
+      "hunks": [
+        {
+          "before_start": 10,
+          "after_start": 10,
+          "lines": [
+            { "type": "context", "text": "## 결론" },
+            { "type": "delete", "text": "다음 주에 정한다." },
+            { "type": "insert", "text": "이번 주에 정한다." }
+          ]
+        }
+      ]
+    }
+  ],
+  "expires_at": "2026-11-05T09:00:00Z"
+}
+```
+
+| 이름 | 타입 | 설명 |
+|---|---|---|
+| `items[].operation_id` | `string` | 계획의 작업 ID. 부분 승인의 `operation_ids`에 쓴다 |
+| `items[].display_name` | `string` | 문서의 현재 제목 |
+| `items[].base_version` | `integer` | 편집안의 기준 편집 revision |
+| `items[].hunks[].lines[].type` | `string` | `context`·`delete`·`insert` |
+| `expires_at` | `string` \| `null` | 편집안 만료 시각. 지나면 수락할 수 없다 |
+
+- 일부 문서가 빠져도 오류가 아니다. 왜 빠졌는지는 알려 주지 않는다. 보기 권한 문서는 빠지지 않는다(저장 때 편집 권한으로 막힌다).
+- 문서 내용이 담긴 응답이라 document-svc는 본문과 ai-svc의 오류 본문을 로그·오류 응답에 남기지 않는다.
+
+#### 6. Error response
+
+- HTTP `401`: 인증 실패
+- HTTP `404`: 워크스페이스 멤버가 아니거나, run이 없거나 다른 사용자의 run이다. ai-svc의 404를 그대로 돌려주므로 ai-svc 배포 전에도 404다
+- HTTP `503`: ai-svc 오류·깨진 응답
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 인증된 사용자만 호출할 수 있다.
+- path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 문서마다 현재 읽기 권한을 확인한다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/runs/<value>/edit-previews" \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getEditPreviews`)
+- 하위 호출: ai-svc `GET ${AGENT_RUN_ENDPOINT}/{runId}/edit-previews` (`PipelineAgentRunStatusRequester`, `X-Agent-Service-Token`)
+
+[↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews)
 
 </details>
 
@@ -1428,7 +1546,17 @@ curl -X POST "$DOCUMENT/internal/agent/skill-execution/folder-sources/read" \
 
 - HTTP `401`: Agent 서비스 인증 토큰 누락 또는 불일치
 
-- 명세에 별도 오류 응답이 정의되어 있지 않다.
+`apply_document_edit`:
+
+| 상황 | 결과 |
+|---|---|
+| 기준 revision이 지났고 안 겹침 | `200`, 자동 병합(`merge.status=merged`) |
+| 겹치거나 기준 버전 스냅샷이 없음 | `409` `DOCUMENT_VERSION_CONFLICT`. 덮어쓰지 않는다(ADR 0032의 예외). 적용 표는 `consumed`, 감사 로그는 `conflict`로 남는다 |
+| 다른 사람이 편집 중 | `423` `DOCUMENT_EDIT_LOCKED`. 적용 표는 `ready`, 감사 로그는 만들지 않는다 |
+| 편집 권한 없음 | `403` |
+| 문서 없음·삭제됨 | `404` |
+| 변환 중 | `409` `DOCUMENT_ALREADY_PROCESSING` |
+| `chat_export` 문서 | `400` |
 
 #### 7. Pagination / filtering
 

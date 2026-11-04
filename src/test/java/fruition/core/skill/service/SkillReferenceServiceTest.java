@@ -57,6 +57,25 @@ class SkillReferenceServiceTest {
         verifyNoInteractions(editStateInitializer, editStateRepository);
     }
 
+    /** 수정 계획의 기준 버전이므로 본문과 다른 시점의 값이면 안 된다. 상태 행은 한 번만 읽는다. */
+    @Test
+    void read_takesEditRevisionFromTheSameRowAsMarkdown() {
+        when(document.getId()).thenReturn("doc_1");
+        when(document.getDocumentRole()).thenReturn(DocumentRole.EDITABLE);
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_1", "ws_1"))
+                .thenReturn(Optional.of(document));
+        when(editStateRepository.findById("doc_1"))
+                .thenReturn(Optional.of(new DocumentEditState("doc_1", "# 일곱 번째 본문", "hash", 7)));
+
+        var full = service.read("ws_1", "user_1", "doc_1", null);
+        var truncated = service.read("ws_1", "user_1", "doc_1", 3);
+
+        assertThat(full.markdown()).isEqualTo("# 일곱 번째 본문");
+        assertThat(full.editRevision()).isEqualTo(7L);
+        assertThat(truncated.editRevision()).isEqualTo(7L);
+        org.mockito.Mockito.verify(editStateRepository, org.mockito.Mockito.times(2)).findById("doc_1");
+    }
+
     @Test
     void read_returnsLatestPostgresMarkdown() {
         when(document.getId()).thenReturn("doc_1");

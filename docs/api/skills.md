@@ -1583,8 +1583,10 @@ Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검�
 
 ```json
 {
+  "can_edit": true,
   "display_name": "string",
   "document_role": "string",
+  "edit_revision": 1,
   "markdown": "string",
   "total_chars": 1,
   "truncated": true
@@ -1596,10 +1598,12 @@ Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검�
 | `display_name` | `string` | 문서 제목. `document_role`과 `max_chars`에 관계없이 온다. 호출자는 무시해도 된다 |
 | `truncated` | `boolean` | 본문을 잘랐는지. `max_chars`를 보낸 `EDITABLE` 문서에만 온다 |
 | `total_chars` | `integer` | 자르기 전 전체 글자 수. `truncated`와 같은 경우에만 온다 |
+| `edit_revision` | `integer` | 현재 편집 revision. `markdown`과 같은 `document_edit_states` 행에서 읽는다. `EDITABLE` 문서에만 온다 |
+| `can_edit` | `boolean` | 이 사용자가 지금 본문을 저장할 수 있는지. 편집 권한이 있고 `chat_export`가 아니며 변환 중이 아닐 때(파트 문서는 부모 기준) `true`다. 편집 잠금은 보지 않는다. `EDITABLE` 문서에만 온다 |
 
 - 글자 수(`max_chars`·`total_chars`)는 Unicode 코드 포인트다. UTF-16 단위가 아니므로 이모지도 1자이고 Python `len`과 같다.
 - 경계가 한 글자(서로게이트 쌍, 결합 문자, NFD 한글, 국기, ZWJ 이모지, CRLF)의 중간이면 그 글자를 통째로 뺀다. 그래서 돌려준 본문이 `max_chars`보다 짧을 수 있고, 첫 글자가 `max_chars`보다 길면 빈 문자열일 수 있다.
-- `ORIGINAL` 문서는 `max_chars`와 관계없이 `markdown`·`truncated`·`total_chars`가 없다.
+- `ORIGINAL` 문서는 `max_chars`와 관계없이 `markdown`·`truncated`·`total_chars`·`edit_revision`·`can_edit`가 없다.
 - `max_chars`를 생략한 응답 모양은 이전과 같다(`truncated`·`total_chars` 없음).
 
 #### 6. Error response

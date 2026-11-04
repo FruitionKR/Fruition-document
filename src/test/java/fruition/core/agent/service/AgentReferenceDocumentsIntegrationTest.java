@@ -9,6 +9,7 @@ import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.core.document.domain.Document;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.dto.MarkdownDocumentCreateRequest;
+import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.repository.DocumentEditStateRepository;
 import fruition.core.document.service.DocumentAccessPolicy;
@@ -199,6 +200,80 @@ class AgentReferenceDocumentsIntegrationTest {
         jdbc.update("UPDATE documents SET deleted_at = now() WHERE id = ?", document);
 
         assertRejected(List.of(document));
+    }
+
+    /** AI가 수정 계획의 기준 버전으로 쓴다. 저장으로 오른 revision과 그 본문이 함께 와야 한다. */
+    @Test
+    void editRevisionComesWithTheMarkdownItDescribes() {
+        String document = documents.createMarkdown(workspace, user, UUID.randomUUID().toString(),
+                new MarkdownDocumentCreateRequest("회의록", "# 처음", null)).id();
+        documents.saveContent(workspace, user, document, "# 두 번째", 1L, "write_" + UUID.randomUUID(), null);
+
+        var full = references.read(workspace, user, document, null);
+        var truncated = references.read(workspace, user, document, 1);
+
+        assertThat(full.markdown()).isEqualTo("# 두 번째");
+        assertThat(full.editRevision()).isEqualTo(2L);
+        assertThat(full.canEdit()).isTrue();
+        assertThat(truncated.editRevision()).isEqualTo(2L);
+        assertThat(truncated.canEdit()).isTrue();
+    }
+
+    @Test
+    void canEditIsFalseForViewOnlyDocument() {
+        String document = markdown().insert();
+        jdbc.update("INSERT INTO document_permissions(workspace_id, document_id, access, updated_by) VALUES (?, ?, 'view', ?)",
+                workspace, document, AUTHOR);
+        saveBody(document, "# 보기 전용");
+
+        assertThat(references.read(workspace, user, document, null).canEdit()).isFalse();
+    }
+
+    @Test
+    void canEditIsFalseForChatExportEvenWithEditAccess() {
+        String document = markdown().origin("chat_export").insert();
+        saveBody(document, "# 내보낸 대화");
+
+        assertThat(references.read(workspace, user, document, null).canEdit()).isFalse();
+    }
+
+    @Test
+    void canEditIsFalseWhileConverting() {
+        String document = markdown().origin("convert").status("processing").runId("convert:run").insert();
+        saveBody(document, Document.CONVERT_PLACEHOLDER_MARKDOWN);
+
+        assertThat(references.read(workspace, user, document, null).canEdit()).isFalse();
+    }
+
+    @Test
+    void canEditIsTrueAfterConversionFinished() {
+        String document = markdown().origin("convert").insert();
+        saveBody(document, "# 변환된 본문");
+
+        assertThat(references.read(workspace, user, document, null).canEdit()).isTrue();
+    }
+
+    /** 파트 문서는 부모의 변환 상태를 따른다. 저장이 거절되는 문서를 수정 대상으로 내면 안 된다. */
+    @Test
+    void canEditFollowsConvertingParentLikeTheSavePathDoes() {
+        String parent = markdown().origin("convert").status("processing").runId("convert:run").insert();
+        String part = markdown().origin("convert_part").insert();
+        jdbc.update("UPDATE documents SET source_document_id = ? WHERE id = ?", parent, part);
+        saveBody(part, "# 파트 본문");
+
+        assertThat(references.read(workspace, user, part, null).canEdit()).isFalse();
+        assertThatThrownBy(() -> documents.saveContent(workspace, user, part, "# 바꿈", 1L, "write_" + UUID.randomUUID(), null))
+                .isInstanceOf(DocumentAlreadyProcessingException.class);
+    }
+
+    @Test
+    void originalDocumentHasNoEditFields() {
+        String document = new Row().filename("a.pdf").mimeType("application/pdf").role("ORIGINAL").insert();
+
+        var read = references.read(workspace, user, document, null);
+
+        assertThat(read.editRevision()).isNull();
+        assertThat(read.canEdit()).isNull();
     }
 
     /** 지금 저장되는 값은 edit·view뿐이라 멤버는 다 읽는다. 읽기 판정이 닫히는 값이 생겨도 turn과 본문 읽기가 함께 막혀야 한다. */
