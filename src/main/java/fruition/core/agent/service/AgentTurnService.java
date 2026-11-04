@@ -126,7 +126,8 @@ public class AgentTurnService {
                 throw new InvalidAgentTurnRequestException("Markdown 문서만 Agent 편집을 요청할 수 있습니다.");
             }
             // 다른 사용자가 편집 중이면 pipeline 호출 전에 423으로 거절한다.
-            editLockService.requireWritable(request.documentId(), userId);
+            // 첨부 수정도 열린 문서 잠금으로 막히므로 어느 문서 때문인지 응답에 담는다.
+            editLockService.requireWritableNamingDocument(workspaceId, userId, request.documentId());
             // 오래된 snapshot(baseVersion)이어도 거절하지 않는다. 적용 저장이 baseVersion 스냅샷 기준으로
             // 그 사이 변경과 자동 병합한다(ADR 0032).
             validateTarget(request.editorSnapshot());

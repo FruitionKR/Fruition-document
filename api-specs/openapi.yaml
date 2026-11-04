@@ -591,7 +591,7 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-          description: 다른 사용자가 문서를 편집 중
+          description: 다른 사용자가 열린 문서를 편집 중(DOCUMENT_EDIT_LOCKED). 읽을 수 있는 문서면 error.locked_document_name에 제목이 온다
       summary: Agent turn 실행
       tags:
       - Agent
@@ -8410,6 +8410,10 @@ components:
           enum:
           - DAILY_TOKENS
           example: DAILY_TOKENS
+        locked_document_name:
+          type: string
+          description: "Agent turn이 열린 문서의 편집 잠금으로 거절됐을 때(423 DOCUMENT_EDIT_LOCKED)만 존재한다. 잠긴 문서의 제목이며, 요청자가 읽을 수 있을 때만 담는다."
+          example: 회의록
         message:
           type: string
           description: 사용자에게 그대로 보여도 되는 한국어 문구

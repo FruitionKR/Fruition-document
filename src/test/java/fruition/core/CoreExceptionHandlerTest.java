@@ -56,6 +56,23 @@ class CoreExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("잠금 거절은 문서 제목이 있을 때만 locked_document_name을 싣고, 제목을 로그에 남기지 않는다")
+    void documentLockedCarriesNameOnlyWhenGiven() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var named = handler.handleDocumentLocked(
+                new fruition.core.document.exception.DocumentLockedException("편집 중입니다.", "회의록.md"));
+        var plain = handler.handleDocumentLocked(
+                new fruition.core.document.exception.DocumentLockedException("편집 중입니다."));
+
+        assertThat(named.getStatusCode().value()).isEqualTo(423);
+        var namedError = mapper.valueToTree(named.getBody()).path("error");
+        assertThat(namedError.path("code").asText()).isEqualTo("DOCUMENT_EDIT_LOCKED");
+        assertThat(namedError.path("locked_document_name").asText()).isEqualTo("회의록.md");
+        assertThat(mapper.valueToTree(plain.getBody()).path("error").has("locked_document_name")).isFalse();
+        assertThat(appender.list).noneMatch(event -> event.getFormattedMessage().contains("회의록"));
+    }
+
+    @Test
     @DisplayName("pipeline 응답을 중계하면 우리 code를 로그에 적지 않는다")
     void relayedPipelineResponseIsNotLoggedWithOurCode() {
         var response = handler.handlePipelineWikiPage(

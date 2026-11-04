@@ -672,7 +672,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `AgentTurnRequest` |
 | 출력 | `202` Agent 실행이 대기열에 등록됨 — `AgentTurnResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`423` 다른 사용자가 열린 문서를 편집 중(`DOCUMENT_EDIT_LOCKED`, `error.locked_document_name`에 제목) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -843,7 +843,7 @@ document-svc는 검증한 ID를 ai command의 `reference_document_ids`로 전달
 | `400` | 잘못된 요청 | `ErrorResponse` |
 | `402` | 크레딧 부족(`app.billing.enforce`, `INSUFFICIENT_CREDIT`) | `ErrorResponse` |
 | `404` | 문서·대상 폴더(`folder_id`) 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `423` | 다른 사용자가 문서를 편집 중 | `ErrorResponse` |
+| `423` | 다른 사용자가 열린 문서(`documentId`)를 편집 중(`DOCUMENT_EDIT_LOCKED`). 첨부 문서를 고치는 요청도 열린 문서가 잠기면 거절된다. `error.locked_document_name`에 잠긴 문서의 제목이 오며, 요청자가 읽을 수 없으면 키가 빠진다. 다른 API의 423에는 이 키가 없다 | `ErrorResponse` |
 
 ```json
 {

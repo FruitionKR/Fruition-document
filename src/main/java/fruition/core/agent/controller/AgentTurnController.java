@@ -51,7 +51,7 @@ public class AgentTurnController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "423", description = "다른 사용자가 문서를 편집 중",
+        @ApiResponse(responseCode = "423", description = "다른 사용자가 열린 문서를 편집 중(DOCUMENT_EDIT_LOCKED). 읽을 수 있는 문서면 error.locked_document_name에 제목이 온다",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping("/turn")
