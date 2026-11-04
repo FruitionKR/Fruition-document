@@ -5,6 +5,7 @@ import fruition.core.purge.DataPurgeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -26,7 +27,8 @@ import java.util.Map;
  * 문서에 딸린 본문·버전·잠금·asset 참조는 CASCADE로 함께 지워진다. 이미지 asset은 다른 문서가 참조하지 않으면
  * 미참조로 표시해 {@link DocumentAssetCleanupWorker}가 보존 기간 뒤 객체와 함께 지우게 한다.
  *
- * <p>AI 쪽에 남은 본문 복사본은 같은 트랜잭션의 outbox로 {@code document_purged}를 보내 지우게 한다. 트랜잭션이 되돌려지면
+ * <p>core_db의 실행 command·적용 projection·변경 기록에 남은 본문은 같은 트랜잭션에서 지운다({@link DocumentCopyScrubber}).
+ * AI 쪽에 남은 본문 복사본은 같은 트랜잭션의 outbox로 {@code document_purged}를 보내 지우게 한다. 트랜잭션이 되돌려지면
  * command도 남지 않는다. 휴지통에 있는 동안은 복구할 수 있어 보내지 않는다.
  *
  * <p>대상 행을 {@code FOR UPDATE SKIP LOCKED}로 잡은 채 원본 객체를 먼저 지우고 행을 지운다. 여러 replica가 동시에 돌아도
@@ -43,17 +45,20 @@ public class DocumentTrashPurgeWorker {
     private final TransactionTemplate transactionTemplate;
     private final DataPurgeService purgeService;
     private final IngestCommandOutbox ingestCommandOutbox;
+    private final DocumentCopyScrubber copyScrubber;
     private final Duration retention;
 
     public DocumentTrashPurgeWorker(NamedParameterJdbcTemplate jdbc,
                                     TransactionTemplate transactionTemplate,
                                     DataPurgeService purgeService,
                                     IngestCommandOutbox ingestCommandOutbox,
+                                    DocumentCopyScrubber copyScrubber,
                                     @Value("${app.document-trash.retention:30d}") Duration retention) {
         this.jdbc = jdbc;
         this.transactionTemplate = transactionTemplate;
         this.purgeService = purgeService;
         this.ingestCommandOutbox = ingestCommandOutbox;
+        this.copyScrubber = copyScrubber;
         this.retention = retention;
     }
 
@@ -85,10 +90,26 @@ public class DocumentTrashPurgeWorker {
             folders += batch;
         } while (batch == BATCH_SIZE);
 
-        if (documents + folders > 0) {
-            log.info("[휴지통 영구 삭제] documents={} folders={}", documents, folders);
+        int scrubbed = scrubFinishedOrphans();
+        if (documents + folders + scrubbed > 0) {
+            log.info("[휴지통 영구 삭제] documents={} folders={} scrubbed_orphans={}", documents, folders, scrubbed);
         }
         return documents;
+    }
+
+    /** 영구 삭제 때 진행 중이어서 남겨 둔 본문을 지운다. 실패해도 다음 실행에서 다시 찾으므로 영구 삭제 결과는 바꾸지 않는다. */
+    private int scrubFinishedOrphans() {
+        int scrubbed = 0;
+        try {
+            int batch;
+            do {
+                batch = transactionTemplate.execute(status -> copyScrubber.scrubOrphans(BATCH_SIZE));
+                scrubbed += batch;
+            } while (batch >= BATCH_SIZE);
+        } catch (DataAccessException e) {
+            log.warn("[영구 삭제 본문 정리 실패] 다음 실행에서 다시 시도합니다. type={}", e.getClass().getSimpleName());
+        }
+        return scrubbed;
     }
 
     private int purgeDocuments(Timestamp cutoff, Timestamp now) {
@@ -113,6 +134,7 @@ public class DocumentTrashPurgeWorker {
                 "SELECT DISTINCT asset_id FROM document_asset_references WHERE document_id IN (:ids)", params, Object.class);
         jdbc.update("DELETE FROM documents WHERE id IN (:ids)", params);
         workspaces.forEach((documentId, workspaceId) -> ingestCommandOutbox.enqueuePurge(documentId, workspaceId));
+        copyScrubber.scrub(ids);
         if (!assetIds.isEmpty()) {
             jdbc.update("""
                     UPDATE document_assets a SET unreferenced_since = :now
