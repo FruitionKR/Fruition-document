@@ -6,6 +6,7 @@ import fruition.shared.idempotency.IdempotencyInProgressException;
 import fruition.shared.idempotency.InvalidIdempotencyKeyException;
 import fruition.shared.logging.LoggableUri;
 import jakarta.servlet.http.HttpServletRequest;
+import org.apache.catalina.connector.ClientAbortException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.server.ResponseStatusException;
@@ -144,6 +146,17 @@ public abstract class BaseExceptionHandler {
         return ResponseEntity
                 .status(status)
                 .body(ErrorResponse.of("REQUEST_FAILED", message));
+    }
+
+    /**
+     * 클라이언트가 먼저 끊은 경우(탭 닫기·SSE 구독 해제·다운로드 취소). 서버 오류가 아니라 정상 운영에서 늘 생기므로
+     * 경보에 잡히지 않게 debug로만 남긴다. 응답은 쓸 수 없으니 본문을 만들지 않는다. "broken pipe" 같은 메시지로 고르면
+     * 서버가 다른 곳을 호출하다 난 진짜 500까지 숨기므로, 클라이언트 응답 쓰기에서만 나는 이 두 타입만 받는다.
+     */
+    @ExceptionHandler({AsyncRequestNotUsableException.class, ClientAbortException.class})
+    public void handleClientDisconnected(Exception e) {
+        log.debug("[클라이언트 연결 끊김] type={} {} message={}",
+                e.getClass().getSimpleName(), currentRequestLine(), e.getMessage());
     }
 
     /**
