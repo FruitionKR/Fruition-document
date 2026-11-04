@@ -14,8 +14,9 @@ import java.util.UUID;
  *   <li>모든 작업의 도구가 알려진 분류에 속하고, 그 분류를 사용자가 켰다. 분류에 없는 도구(문서·폴더 삭제 같은
  *       취소 보상용 도구, 앞으로 추가될 도구)는 항상 수동이다(fail-closed).</li>
  *   <li>AI 검토가 경고(이름·내용 중복 등)를 달거나 기본 선택에서 뺀 작업이 없다. 사람이 골라야 하는 계획이다.</li>
- *   <li>요청한 사용자가 모든 대상 문서·폴더와 옮길 위치를 편집할 수 있다. 자동 승인은 확인 단계만 건너뛸 뿐
- *       권한을 넓히지 않는다. 실행할 때도 도구마다 같은 권한 검사를 다시 한다.</li>
+ *   <li>요청한 사용자가 모든 대상 문서·폴더를 편집할 수 있고, 다른 폴더로 옮기면 출발 폴더와 옮길 위치도 편집할 수 있다.
+ *       같은 폴더 안 순서 변경은 대상의 권한만 본다. 자동 승인은 확인 단계만 건너뛸 뿐 권한을 넓히지 않는다.
+ *       실행할 때도 도구마다 같은 권한 검사를 다시 한다.</li>
  * </ul>
  */
 public final class AgentAutoApprovalPolicy {
@@ -39,6 +40,12 @@ public final class AgentAutoApprovalPolicy {
         boolean canEditDocument(String documentId);
 
         boolean canEditFolder(UUID folderId);
+
+        /** 문서가 지금 있는 폴더. 최상위면 null. {@link #canEditDocument}가 true인 문서만 묻는다. */
+        UUID folderOfDocument(String documentId);
+
+        /** 폴더의 지금 상위. 최상위면 null. {@link #canEditFolder}가 true인 폴더만 묻는다. */
+        UUID parentOfFolder(UUID folderId);
     }
 
     /**
@@ -92,13 +99,19 @@ public final class AgentAutoApprovalPolicy {
         return switch (operation.path("tool_name").asText()) {
             case "apply_document_edit", "rename_document" ->
                     permissions.canEditDocument(target(operation, "document_id"));
-            case "move_document" -> permissions.canEditDocument(target(operation, "document_id"))
-                    && destination(arguments.get("folder_id"), permissions);
+            case "move_document" -> {
+                String documentId = target(operation, "document_id");
+                yield permissions.canEditDocument(documentId)
+                        && movable(permissions.folderOfDocument(documentId), arguments.get("folder_id"), permissions);
+            }
             case "create_document" -> destination(arguments.get("folder_id"), permissions);
             case "create_folder" -> destination(arguments.get("parent_folder_id"), permissions);
             case "rename_folder" -> folder(target(operation, "folder_id"), permissions);
-            case "move_folder" -> folder(target(operation, "folder_id"), permissions)
-                    && destination(arguments.get("parent_folder_id"), permissions);
+            case "move_folder" -> {
+                String folderId = target(operation, "folder_id");
+                yield folder(folderId, permissions) && movable(
+                        permissions.parentOfFolder(UUID.fromString(folderId)), arguments.get("parent_folder_id"), permissions);
+            }
             default -> false;
         };
     }
@@ -108,6 +121,17 @@ public final class AgentAutoApprovalPolicy {
         if (target != null && target.isTextual()) return target.asText();
         JsonNode fromArguments = operation.path("arguments").get(argument);
         return fromArguments != null && fromArguments.isTextual() ? fromArguments.asText() : null;
+    }
+
+    /** 실행 규칙과 같다. 같은 폴더 안 순서 변경은 넣기·꺼내기가 아니고, 다른 폴더로 옮기면 출발과 목적지를 모두 본다. */
+    private static boolean movable(UUID source, JsonNode destination, TargetPermissions permissions) {
+        return sameFolder(source, destination)
+                || (permissions.canEditFolder(source) && destination(destination, permissions));
+    }
+
+    private static boolean sameFolder(UUID source, JsonNode destination) {
+        if (destination == null || destination.isNull()) return source == null;
+        return source != null && destination.isTextual() && source.toString().equalsIgnoreCase(destination.asText());
     }
 
     /** 옮기거나 만들 위치. 같은 계획이 만드는 폴더($operation_result)는 그 폴더의 상위를 이미 확인했다. */

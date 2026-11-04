@@ -62,6 +62,16 @@ public class AgentAutoApprovalService {
             public boolean canEditFolder(UUID folderId) {
                 return editTargets.canEditFolder(workspaceId, viewer, folderId);
             }
+
+            @Override
+            public UUID folderOfDocument(String documentId) {
+                return editTargets.folderOfDocument(workspaceId, documentId);
+            }
+
+            @Override
+            public UUID parentOfFolder(UUID folderId) {
+                return editTargets.parentOfFolder(workspaceId, folderId);
+            }
         };
     }
 }

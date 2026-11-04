@@ -970,7 +970,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string` |
 | 출력 | `202` 변환 요청 접수 및 placeholder 문서 생성 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` PDF 원본 문서가 아니거나 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 남이 올린 PDF인데 `document.convert` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`). 업로더 본인과 OWNER는 항상 가능 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
+| 주요 오류 | `400` PDF 원본 문서가 아니거나 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 변환본이 들어갈 원본 폴더를 편집할 수 없음(업로더 예외 없음, `DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") — `ErrorResponse`<br>`403` 남이 올린 PDF인데 `document.convert` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`). 업로더 본인과 OWNER는 항상 가능 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1028,6 +1028,7 @@ PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | PDF 원본 문서가 아니거나 잘못된 Idempotency-Key | `ErrorResponse` |
+| `403` | 변환본이 들어갈 원본 폴더를 편집할 수 없음(업로더 예외 없음, `DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") | `ErrorResponse` |
 | `403` | 남이 올린 PDF인데 `document.convert` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`). 업로더 본인과 OWNER는 항상 가능 | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 | `ErrorResponse` |

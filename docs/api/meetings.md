@@ -651,7 +651,7 @@ AI가 오디오를 S3에서 읽어 시간 단위로 나눠 전사하고 `ai.task
 | `mode` | 예 | `create`(새 문서) 또는 `append`(기존 문서 끝) |
 | `display_name` | 아니오 | `create`의 문서 이름. 생략 시 초안 이름 |
 | `markdown` | 아니오 | 사용자가 수정한 회의록 본문. 생략 시 초안 본문 |
-| `folder_id` | 아니오 | `create`의 위치. 생략 시 루트 |
+| `folder_id` | 아니오 | `create`의 위치. 생략 시 루트. 편집할 수 없는 폴더면 `403`([폴더에 넣기·꺼내기](documents/README.md#폴더에-넣기꺼내기)) |
 | `document_id` | 아니오 | `append` 대상. 생략 시 회의를 시작한 문서 |
 | `base_revision` | `append`에서 예 | `append-preview`에서 받은 값 |
 

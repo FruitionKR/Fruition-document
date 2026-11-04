@@ -86,6 +86,31 @@ class AgentAutoApprovalServiceTest {
         assertThat(decision.reason()).isEqualTo("forbidden");
     }
 
+    /** 자기 문서라 편집할 수 있어도 보기 폴더에서는 꺼낼 수 없다. 실행 때도 같은 이유로 403이다. */
+    @Test
+    void ownerMovingDocumentOutOfViewFolderIsNotAutoApproved() throws Exception {
+        java.util.UUID viewFolder = java.util.UUID.randomUUID();
+        when(settingsRepository.find("user_1")).thenReturn(new AgentAutoApprovalSettings(true, true));
+        when(documentAccessPolicy.viewer("ws_1", "user_1")).thenReturn(new DocumentAccessPolicy.Viewer(
+                "user_1", false, false, Map.of(), Map.of(viewFolder, DocumentAccessPolicy.VIEW), Map.of()));
+        Document document = mock(Document.class);
+        when(document.getUserId()).thenReturn("user_1");
+        when(document.getFolderId()).thenReturn(viewFolder);
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_1", "ws_1"))
+                .thenReturn(Optional.of(document));
+        when(folderRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(viewFolder, "ws_1"))
+                .thenReturn(Optional.of(mock(fruition.core.document.domain.Folder.class)));
+
+        var decision = service().decide("ws_1", "user_1", new ObjectMapper().readTree("""
+                {"id":"run-1","status":"awaiting_approval","plan":{"version":1,"operation_hash":"h",
+                 "status":"awaiting_approval","operations":[{"id":"op","tool_name":"move_document","target_id":"doc_1",
+                 "arguments":{"document_id":"doc_1","folder_id":null,"position":null,"base_version":2}}]}}
+                """));
+
+        assertThat(decision.autoApprove()).isFalse();
+        assertThat(decision.reason()).isEqualTo("forbidden");
+    }
+
     @Test
     void missingOrDeletedTargetIsNotAutoApproved() throws Exception {
         when(settingsRepository.find("user_1")).thenReturn(new AgentAutoApprovalSettings(true, true));

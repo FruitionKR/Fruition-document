@@ -55,11 +55,12 @@ public class DocumentPlacementService {
                     Document target = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                             .filter(document -> !document.isSkillReference())
                             .orElseThrow(() -> new HierarchyItemNotFoundException("문서를 찾을 수 없습니다."));
-                    documentAccessPolicy.requireEdit(target, userId);
                     if (targetFolderId != null && folderRepository
                             .findActiveForUpdate(targetFolderId, workspaceId).isEmpty()) {
                         throw new HierarchyItemNotFoundException("대상 폴더를 찾을 수 없습니다.");
                     }
+                    documentAccessPolicy.requireMove(workspaceId, target.getFolderId(), targetFolderId, userId);
+                    documentAccessPolicy.requireEdit(target, userId);
                     long sortOrder = siblingReorderer.placeDocument(
                             workspaceId, targetFolderId, documentId, request.position());
                     int updated = documentRepository.moveIfVersionMatches(

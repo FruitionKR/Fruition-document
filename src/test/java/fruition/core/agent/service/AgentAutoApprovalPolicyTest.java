@@ -17,6 +17,7 @@ class AgentAutoApprovalPolicyTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String FOLDER = "11111111-1111-1111-1111-111111111111";
     private static final String OTHER_FOLDER = "22222222-2222-2222-2222-222222222222";
+    private static final String MOVED_FOLDER = "33333333-3333-3333-3333-333333333333";
     private static final AgentAutoApprovalSettings ALL_ON = new AgentAutoApprovalSettings(true, true);
     private static final AgentAutoApprovalSettings ORGANIZE_ONLY = new AgentAutoApprovalSettings(false, true);
     private static final AgentAutoApprovalSettings CONTENT_ONLY = new AgentAutoApprovalSettings(true, false);
@@ -26,6 +27,13 @@ class AgentAutoApprovalPolicyTest {
 
     private static AgentAutoApprovalPolicy.TargetPermissions permissions(Set<String> forbiddenDocuments,
                                                                         Set<String> forbiddenFolders) {
+        return permissions(forbiddenDocuments, forbiddenFolders, null);
+    }
+
+    /** @param current 옮길 문서·폴더가 지금 있는 폴더. null이면 최상위. */
+    private static AgentAutoApprovalPolicy.TargetPermissions permissions(Set<String> forbiddenDocuments,
+                                                                        Set<String> forbiddenFolders,
+                                                                        String current) {
         return new AgentAutoApprovalPolicy.TargetPermissions() {
             @Override
             public boolean canEditDocument(String documentId) {
@@ -35,6 +43,16 @@ class AgentAutoApprovalPolicyTest {
             @Override
             public boolean canEditFolder(UUID folderId) {
                 return folderId == null || !forbiddenFolders.contains(folderId.toString());
+            }
+
+            @Override
+            public UUID folderOfDocument(String documentId) {
+                return current == null ? null : UUID.fromString(current);
+            }
+
+            @Override
+            public UUID parentOfFolder(UUID folderId) {
+                return current == null ? null : UUID.fromString(current);
             }
         };
     }
@@ -137,6 +155,77 @@ class AgentAutoApprovalPolicyTest {
                 permissions(Set.of(), Set.of(FOLDER))).autoApprove()).isFalse();
         assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(renameFolder),
                 permissions(Set.of(), Set.of(OTHER_FOLDER))).autoApprove()).isFalse();
+    }
+
+    private static String moveFolder(String parent) {
+        return """
+                {"id":"op_move","tool_name":"move_folder","target_id":"%s",
+                 "arguments":{"folder_id":"%s","parent_folder_id":%s,"position":null,"base_version":1}}
+                """.formatted(MOVED_FOLDER, MOVED_FOLDER, parent == null ? "null" : "\"" + parent + "\"");
+    }
+
+    private static String moveDocumentToRoot(String documentId) {
+        return """
+                {"id":"op_move","tool_name":"move_document","target_id":"%s",
+                 "arguments":{"document_id":"%s","folder_id":null,"position":null,"base_version":1}}
+                """.formatted(documentId, documentId);
+    }
+
+    /** 실행 규칙과 같다. 문서 소유자라 문서를 편집할 수 있어도 출발 폴더를 편집할 수 없으면 꺼낼 수 없다. */
+    @Test
+    void moveDocumentChecksSourceFolder() throws Exception {
+        var outOfView = permissions(Set.of(), Set.of(FOLDER), FOLDER);
+
+        var toRoot = AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveDocumentToRoot("doc_1")), outOfView);
+        var toOther = AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveDocument("doc_1", OTHER_FOLDER)), outOfView);
+
+        assertThat(toRoot.autoApprove()).isFalse();
+        assertThat(toRoot.reason()).isEqualTo("forbidden");
+        assertThat(toOther.reason()).isEqualTo("forbidden");
+        assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveDocumentToRoot("doc_1")),
+                permissions(Set.of(), Set.of(OTHER_FOLDER), FOLDER)).autoApprove()).isTrue();
+    }
+
+    @Test
+    void moveFolderChecksItselfSourceAndDestination() throws Exception {
+        var sourceForbidden = permissions(Set.of(), Set.of(FOLDER), FOLDER);
+        var destinationForbidden = permissions(Set.of(), Set.of(OTHER_FOLDER), FOLDER);
+        var selfForbidden = permissions(Set.of(), Set.of(MOVED_FOLDER), FOLDER);
+
+        assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveFolder(null)), sourceForbidden).reason())
+                .isEqualTo("forbidden");
+        assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveFolder(OTHER_FOLDER)), destinationForbidden).reason())
+                .isEqualTo("forbidden");
+        assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveFolder(OTHER_FOLDER)), selfForbidden).reason())
+                .isEqualTo("forbidden");
+        assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveFolder(OTHER_FOLDER)),
+                permissions(Set.of(), Set.of(), FOLDER)).autoApprove()).isTrue();
+    }
+
+    /** 같은 폴더 안 순서 변경은 넣기·꺼내기가 아니라 실행 때처럼 대상의 권한만 본다. */
+    @Test
+    void reorderWithinSameFolderChecksOnlyTheTarget() throws Exception {
+        var viewFolder = permissions(Set.of(), Set.of(FOLDER), FOLDER);
+
+        assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveDocument("doc_1", FOLDER)), viewFolder).autoApprove())
+                .isTrue();
+        assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveFolder(FOLDER)), viewFolder).autoApprove())
+                .isTrue();
+        assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveDocument("doc_1", FOLDER)),
+                permissions(Set.of("doc_1"), Set.of(FOLDER), FOLDER)).autoApprove()).isFalse();
+    }
+
+    /** 같은 계획이 만든 폴더로 옮겨도 출발 폴더는 본다. */
+    @Test
+    void movingIntoPlannedFolderStillChecksSource() throws Exception {
+        String moveIntoNew = """
+                {"id":"op_2","tool_name":"move_document","target_id":"doc_1",
+                 "arguments":{"document_id":"doc_1","folder_id":{"$operation_result":"op_1"},"base_version":1}}
+                """;
+
+        assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveIntoNew),
+                permissions(Set.of(), Set.of(FOLDER), FOLDER)).reason()).isEqualTo("forbidden");
+        assertThat(AgentAutoApprovalPolicy.decide(ORGANIZE_ONLY, run(moveIntoNew), EDITOR).autoApprove()).isTrue();
     }
 
     @Test
