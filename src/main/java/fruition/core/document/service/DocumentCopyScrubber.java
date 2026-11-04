@@ -12,13 +12,13 @@ import java.util.List;
 /**
  * 영구 삭제한 문서의 본문 복사본을 core_db에서 지운다. 행은 이력으로 남기고 본문 값만 지운다.
  *
- * <p>{@link #scrub}은 문서 행을 지우는 트랜잭션 안에서 돈다. 표현식 인덱스(V98~V100)로 그 문서의 행만 잠그므로 큰 표를 훑지 않는다.
+ * <p>{@link #scrub}은 문서 행을 지우는 트랜잭션 안에서 돈다. 표현식 인덱스(V98~V100, V102, V103)로 그 문서의 행만 잠그므로 큰 표를 훑지 않는다.
  *
  * <p>진행 중인 실행은 건드리지 않는다. 취소가 원본 command의 해시로 AI에 등록하고, 늦게 온 결과가 projection에 본문을 쓸 수 있어서다.
  * 끝난 뒤 {@link #scrubOrphans}가 "문서가 더 없는 행"을 찾아 지운다. 기억해 둘 대기열이 없어 이 기능 전에 지운 문서도 함께 정리된다.
  * 다시 취소를 요청할 수 있는 끝난 실행은 {@code document_purged} 표시를 남겨 AI가 해시 대조를 건너뛰게 한다.
  *
- * <p>사용자 메시지(conversation_context, message)와 채팅 기록은 범위 밖이라 지우지 않는다.
+ * <p>사용자 메시지(conversation_context, message)와 채팅 기록은 범위 밖이라 지우지 않는다. 채팅 메시지·참조의 변경 기록도 같은 값이라 남긴다.
  */
 @Component
 public class DocumentCopyScrubber {
@@ -51,6 +51,21 @@ public class DocumentCopyScrubber {
             "(CASE table_name WHEN 'documents' THEN row_key->>'id' ELSE row_key->>'document_id' END)";
     private static final String DOCUMENT_CHANGE_TABLES =
             "table_name IN ('documents', 'document_content_versions', 'document_edit_states', 'document_edit_writes')";
+    /** agent receipt는 재전달 판정(키)에만 쓰고 event_payload는 읽지 않는다. 질의 receipt는 재전달이 읽어 근거만 비운다. */
+    private static final String CLEAR_AGENT_RECEIPT =
+            "UPDATE ai_task_result_receipts SET event_payload = NULL WHERE task_kind = 'agent' AND event_payload IS NOT NULL ";
+    /** V102·V103 인덱스의 표현식과 같아야 인덱스를 탄다. 근거에는 문서 id가 있지만 행에는 없는 질의를 이것으로 찾는다. */
+    private static final String PROJECTION_EVIDENCE = "result #> '{chat,evidence_snippets}'";
+    private static final String RECEIPT_EVIDENCE =
+            "COALESCE(event_payload #> '{payload,chat,evidence_snippets}', event_payload #> '{payload,evidence_snippets}')";
+    private static final String CITES_DOCUMENT =
+            " @> jsonb_build_array(jsonb_build_object('source_document_id', CAST(:id AS text)))";
+    /** 이 문서의 근거 본문만 비운다. 순서와 다른 문서의 근거, 답변은 그대로다. */
+    private static final String BLANK_EVIDENCE = """
+            jsonb_set(%1$s, '%2$s', (
+                SELECT jsonb_agg(CASE WHEN snippet->>'source_document_id' = :id THEN snippet || '{"text": ""}' ELSE snippet END
+                                 ORDER BY position)
+                FROM jsonb_array_elements(%1$s #> '%2$s') WITH ORDINALITY AS item(snippet, position)))""";
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -73,6 +88,29 @@ public class DocumentCopyScrubber {
         jdbc.update(SCRUB_PROJECTION + " WHERE document_id IN (:ids) AND status <> 'queued' AND " + PROJECTION_HAS_BODY, params);
         jdbc.update(SCRUB_COMMAND + " WHERE command->>'document_id' IN (:ids) AND " + FINISHED_RUN
                 + " AND " + COMMAND_HAS_BODY, params);
+        jdbc.update(CLEAR_AGENT_RECEIPT + "AND run_id IN (SELECT id FROM ai_task_runs WHERE command->>'document_id' IN (:ids))", params);
+        documentIds.forEach(this::blankEvidence);
+    }
+
+    /**
+     * 문서를 열지 않은 질의는 행에 문서 id가 없고, 채팅 근거의 document_id는 문서를 지울 때 NULL이 되며, 질의 경로의 메시지는 run을 모른다.
+     * 그래서 근거 항목의 source_document_id로 찾는다. 답변은 채팅 표시·조회 API·재전달이 쓰는 범위 밖 값이라 남긴다.
+     *
+     * <p>projection의 updated_at을 바꾸지 않는다. 변경 기록의 값도 같게 고쳐 작업 취소의 "현재 값 = 변경 후 값" 대조가 맞게 한다.
+     */
+    private void blankEvidence(String documentId) {
+        MapSqlParameterSource params = new MapSqlParameterSource("id", documentId);
+        String citing = PROJECTION_EVIDENCE + CITES_DOCUMENT;
+        for (String column : List.of("before_value", "after_value")) {
+            jdbc.update("UPDATE ai_task_changes SET %1$s = %2$s WHERE table_name = 'agent_apply_projections' AND %1$s #> '{result,chat,evidence_snippets}'%3$s AND run_id IN (SELECT run_id FROM agent_apply_projections WHERE %4$s)"
+                    .formatted(column, BLANK_EVIDENCE.formatted(column, "{result,chat,evidence_snippets}"), CITES_DOCUMENT, citing), params);
+        }
+        jdbc.update("UPDATE agent_apply_projections SET result = %s WHERE %s"
+                .formatted(BLANK_EVIDENCE.formatted("result", "{chat,evidence_snippets}"), citing), params);
+        jdbc.update(CLEAR_AGENT_RECEIPT + "AND " + RECEIPT_EVIDENCE + CITES_DOCUMENT, params);
+        jdbc.update("UPDATE ai_task_result_receipts SET event_payload = %s WHERE task_kind = 'query' AND event_payload IS NOT NULL AND %s"
+                .formatted(BLANK_EVIDENCE.formatted("event_payload", "{payload,evidence_snippets}"),
+                        RECEIPT_EVIDENCE + CITES_DOCUMENT), params);
     }
 
     /**
@@ -127,6 +165,22 @@ public class DocumentCopyScrubber {
                       AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = document_id)
                     LIMIT :limit FOR UPDATE SKIP LOCKED)
                 """.formatted(PROJECTION_HAS_BODY), params);
-        return commands + projections;
+        // 취소·늦은 결과로 영구 삭제 뒤에 남은 receipt와 projection의 변경 기록. 진행 중 실행은 receipt가 아직 없다.
+        int receipts = jdbc.update(CLEAR_AGENT_RECEIPT + """
+                AND run_id IN (
+                    SELECT r.run_id FROM ai_task_result_receipts r JOIN ai_task_runs t ON t.id = r.run_id
+                    WHERE r.task_kind = 'agent' AND r.event_payload IS NOT NULL AND t.command->>'document_id' IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = t.command->>'document_id')
+                    LIMIT :limit FOR UPDATE OF r SKIP LOCKED)
+                """, params);
+        int changes = jdbc.update("""
+                DELETE FROM ai_task_changes WHERE id IN (
+                    SELECT c.id FROM ai_task_changes c JOIN agent_apply_projections p ON p.run_id = c.run_id
+                    WHERE c.table_name = 'agent_apply_projections' AND c.row_key->>'run_id' = c.run_id
+                      AND p.document_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = p.document_id)
+                    LIMIT :limit FOR UPDATE OF c SKIP LOCKED)
+                """, params);
+        return commands + projections + receipts + changes;
     }
 }
