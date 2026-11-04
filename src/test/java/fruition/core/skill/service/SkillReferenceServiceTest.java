@@ -251,6 +251,25 @@ class SkillReferenceServiceTest {
     }
 
     @Test
+    void read_returnsDisplayNameWithAndWithoutMaxChars() {
+        givenBody("# 본문");
+        when(document.getDisplayName()).thenReturn("주간 회의록");
+
+        assertThat(service.read("ws_1", "user_1", "doc_1", null).displayName()).isEqualTo("주간 회의록");
+        assertThat(service.read("ws_1", "user_1", "doc_1", 1).displayName()).isEqualTo("주간 회의록");
+    }
+
+    @Test
+    void read_returnsDisplayNameForOriginalRole() {
+        when(document.getDocumentRole()).thenReturn(DocumentRole.ORIGINAL);
+        when(document.getDisplayName()).thenReturn("계약서");
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_1", "ws_1"))
+                .thenReturn(Optional.of(document));
+
+        assertThat(service.read("ws_1", "user_1", "doc_1", null).displayName()).isEqualTo("계약서");
+    }
+
+    @Test
     void read_failsClosedBeforeDocumentAccess() {
         doThrow(new WorkspaceNotFoundException("ws_1"))
                 .when(workspaceAccessGuard).requireMember("ws_1", "user_2");

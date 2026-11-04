@@ -10116,6 +10116,8 @@ components:
     SkillReferenceReadResponse:
       type: object
       properties:
+        display_name:
+          type: string
         document_role:
           type: string
         markdown:

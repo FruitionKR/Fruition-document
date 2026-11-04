@@ -132,7 +132,9 @@ class AgentReferenceDocumentsIntegrationTest {
                 new MarkdownDocumentCreateRequest("회의록", "# 회의 내용", null), Document.MEETING_NOTES_ORIGIN).id();
 
         assertThat(turn(List.of(document)).status()).isEqualTo("queued");
-        assertThat(references.read(workspace, user, document, null).markdown()).contains("# 회의 내용");
+        var read = references.read(workspace, user, document, null);
+        assertThat(read.markdown()).contains("# 회의 내용");
+        assertThat(read.displayName()).isEqualTo("회의록");
     }
 
     /** 채팅 내보내기 문서는 본문 편집만 잠겨 있다. 읽을 수 있으므로 근거로 쓸 수 있다. */

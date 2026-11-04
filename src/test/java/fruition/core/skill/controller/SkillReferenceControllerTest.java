@@ -40,7 +40,7 @@ class SkillReferenceControllerTest {
     @Test
     void read_returnsCurrentMarkdownForServiceToken() throws Exception {
         when(referenceService.read("ws_1", "user_1", "doc_1", null))
-                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문"));
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문", null, null, "주간 회의록"));
 
         mockMvc.perform(post(URL)
                         .header("X-Agent-Service-Token", "test-agent-token")
@@ -54,7 +54,7 @@ class SkillReferenceControllerTest {
     @Test
     void read_withoutMaxCharsOmitsTruncationFields() throws Exception {
         when(referenceService.read("ws_1", "user_1", "doc_1", null))
-                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문"));
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문", null, null, "주간 회의록"));
 
         mockMvc.perform(post(URL)
                         .header("X-Agent-Service-Token", "test-agent-token")
@@ -68,7 +68,7 @@ class SkillReferenceControllerTest {
     @Test
     void read_passesMaxCharsAndReturnsTruncationFields() throws Exception {
         when(referenceService.read("ws_1", "user_1", "doc_1", 5))
-                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 ", true, 7));
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 ", true, 7, "주간 회의록"));
 
         mockMvc.perform(post(URL)
                         .header("X-Agent-Service-Token", "test-agent-token")
@@ -77,7 +77,8 @@ class SkillReferenceControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.markdown").value("# 현재 "))
                 .andExpect(jsonPath("$.truncated").value(true))
-                .andExpect(jsonPath("$.total_chars").value(7));
+                .andExpect(jsonPath("$.total_chars").value(7))
+                .andExpect(jsonPath("$.display_name").value("주간 회의록"));
     }
 
     @ParameterizedTest
@@ -140,7 +141,7 @@ class SkillReferenceControllerTest {
             "/internal/agent/skill%2Dauthoring/references/read"})
     void read_returnsMarkdownForPercentEncodedPathWithToken(String path) throws Exception {
         when(referenceService.read("ws_1", "user_1", "doc_1", null))
-                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문"));
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문", null, null, "주간 회의록"));
 
         mockMvc.perform(post(URI.create(path))
                         .header("X-Agent-Service-Token", "test-agent-token")

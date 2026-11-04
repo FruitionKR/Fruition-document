@@ -1583,6 +1583,7 @@ Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검�
 
 ```json
 {
+  "display_name": "string",
   "document_role": "string",
   "markdown": "string",
   "total_chars": 1,
@@ -1592,6 +1593,7 @@ Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검�
 
 | 이름 | 타입 | 설명 |
 |---|---|---|
+| `display_name` | `string` | 문서 제목. `document_role`과 `max_chars`에 관계없이 온다. 호출자는 무시해도 된다 |
 | `truncated` | `boolean` | 본문을 잘랐는지. `max_chars`를 보낸 `EDITABLE` 문서에만 온다 |
 | `total_chars` | `integer` | 자르기 전 전체 글자 수. `truncated`와 같은 경우에만 온다 |
 
@@ -1628,6 +1630,7 @@ curl -X POST "$DOCUMENT/internal/agent/skill-authoring/references/read" \
 
 ```json
 {
+  "display_name": "주간 회의록",
   "document_role": "EDITABLE",
   "markdown": "string",
   "total_chars": 45210,
