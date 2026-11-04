@@ -56,4 +56,37 @@ class ChatProgressIntegrationTest {
             sessions.deleteById(sessionId);
         }
     }
+
+    /** 판단이 어긋나면 저장되지 않을 제목에 LLM을 부르거나, 저장될 제목을 잃는다. 실제 UPDATE 조건과 맞춰 본다. */
+    @Test
+    void isTitleUnsetAgreesWithApplySessionTitleCondition() throws Exception {
+        java.util.List<String> titles = new java.util.ArrayList<>(java.util.Arrays.asList(
+                null, "", "   ", "새 채팅", " 새 채팅 ", "\t", "\t새 채팅", "새 채팅 2", "분기 회고"));
+        for (int i = 0; i < titles.size(); i++) {
+            String title = titles.get(i);
+            String sessionId = "session_title_parity_" + i;
+            String runId = "query_title_parity_" + i;
+            String assistantMessageId = "assistant_title_parity_" + i;
+            ChatSession session = new ChatSession(sessionId, "ws_progress", "user_progress", null);
+            session.rename(title);
+            sessions.save(session);
+            try {
+                recorder.createPendingPair(sessionId, "pair_title_parity_" + i, "user_title_parity_" + i,
+                        assistantMessageId, "질문", Instant.now());
+                recorder.assignRun(assistantMessageId, runId);
+                var message = messages.findById(assistantMessageId).orElseThrow();
+                message.complete("답변");
+                messages.save(message);
+
+                applier.applySessionTitle(mapper.createObjectNode()
+                        .put("run_id", runId).put("workspace_id", "ws_progress").put("user_id", "user_progress")
+                        .set("payload", mapper.createObjectNode().put("title", "AI 제목")));
+
+                boolean applied = "AI 제목".equals(sessions.findById(sessionId).orElseThrow().getTitle());
+                assertThat(applied).as("제목 [%s]", title).isEqualTo(ChatSession.isTitleUnset(title));
+            } finally {
+                sessions.deleteById(sessionId);
+            }
+        }
+    }
 }

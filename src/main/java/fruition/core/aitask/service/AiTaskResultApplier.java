@@ -2,6 +2,7 @@ package fruition.core.aitask.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.aitask.AiErrorMessages;
+import fruition.core.chat.domain.ChatSession;
 import fruition.core.chat.service.ChatEvidenceRecorder;
 import fruition.core.chat.service.ChatTurnRecorder;
 import org.slf4j.Logger;
@@ -104,16 +105,16 @@ public class AiTaskResultApplier {
         JsonNode value = event.path("payload").path("title");
         if (!value.isTextual()) return;
         String title = value.asText().strip();
-        if (title.isBlank() || title.codePointCount(0, title.length()) > 30 || "새 채팅".equals(title)) return;
+        if (title.isBlank() || title.codePointCount(0, title.length()) > 30 || ChatSession.DEFAULT_TITLE.equals(title)) return;
         // 이미 정한 제목은 덮어쓰지 않는다. 소유자와 완료 문답을 함께 확인한다.
         jdbcTemplate.update("""
                 UPDATE chat_sessions s SET title = ?
                 WHERE s.workspace_id = ? AND s.user_id = ?
-                  AND (s.title IS NULL OR btrim(s.title) IN ('', '새 채팅'))
+                  AND (s.title IS NULL OR btrim(s.title) IN ('', ?))
                   AND EXISTS (SELECT 1 FROM chat_messages m
                     WHERE m.session_id = s.id AND m.run_id = ?
                       AND m.role = 'assistant' AND m.status = 'completed')
-                """, title, text(event, "workspace_id"), text(event, "user_id"), text(event, "run_id"));
+                """, title, text(event, "workspace_id"), text(event, "user_id"), ChatSession.DEFAULT_TITLE, text(event, "run_id"));
     }
 
     @Transactional

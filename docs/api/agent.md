@@ -725,6 +725,8 @@ PDF 원본(`document_role=ORIGINAL`)과 변환 중이거나 첫 batch 전에 실
 하나라도 어긋나면 조용히 빼지 않고 요청 전체를 `400 INVALID_REQUEST`("고른 문서 중 사용할 수 없는 문서가 있습니다. 다시 골라 주세요.")로 거절한다. 사유를 나누지 않아 존재 여부가 드러나지 않는다.
 document-svc는 검증한 ID를 ai command의 `reference_document_ids`로 전달하고(없으면 빈 배열) 본문은 싣지 않는다. AI는 [`POST /internal/agent/skill-authoring/references/read`](skills.md#detail-post-internal-agent-skill-authoring-references-read)로 본문을 읽는다. 채팅 메시지에는 저장하지 않는다.
 
+document-svc는 소유권을 확인할 때 읽은 세션 제목으로 ai command의 `session_title_needed`를 정한다. 제목이 비었거나 `새 채팅`이면 `true`, 그 밖에는 `false`이고, `false`면 AI가 제목을 만들지 않는다. 판단 기준은 `session_title` 결과를 저장하는 조건과 같다.
+
 열린 문서에서 저장·반영을 명시한 편집 요청은 `workspace_workflow` AgentRun으로 전환한다.
 이때 편집 대상 문서와 기준 버전을 계획에 고정하고,
 사용자가 그 계획을 승인해야 실제 문서에 반영한다. 저장을 명시하지 않은 편집 요청은 기존처럼

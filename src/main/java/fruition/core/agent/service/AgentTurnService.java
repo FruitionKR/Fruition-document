@@ -14,6 +14,7 @@ import fruition.core.agent.repository.PipelineAgentRunStatusRequester;
 import fruition.core.aihistory.service.AgentApplyOperationStore;
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.chat.service.ChatConversationReader;
+import fruition.core.chat.domain.ChatSession;
 import fruition.core.chat.service.ChatSessionService;
 import fruition.core.chat.service.ChatTurnRecorder;
 import fruition.core.document.repository.AiCommandOutboxWriter;
@@ -115,7 +116,9 @@ public class AgentTurnService {
      * 말풍선·실행 등록·command 적재만 한 트랜잭션에 둔다. 검증은 잠금 없는 읽기라 순서와 오류는 그대로다.
      */
     public AgentTurnResponse turn(String workspaceId, String userId, AgentTurnRequest request) {
-        chatSessionService.verifyOwnedSession(workspaceId, userId, request.sessionId());
+        // 소유권 확인이 읽은 세션을 재사용해 제목을 판단한다. 세션 조회를 더하지 않는다.
+        boolean sessionTitleNeeded = ChatSession.isTitleUnset(
+                chatSessionService.verifyOwnedSession(workspaceId, userId, request.sessionId()).getTitle());
         // 문서를 열지 않은 턴은 적용할 대상이 없어 편집 전제 검사를 하지 않는다.
         // AI는 이 경우 chat_answer·conversation_reply·clarify·reject만 낼 수 있다.
         // 작업 탭 턴(mode=task)은 문서 없이 폴더 정리·워크플로를 낼 수 있고, 문서 편집이면 AI가 되묻는다.
@@ -141,7 +144,8 @@ public class AgentTurnService {
         requireUsableReferences(workspaceId, userId, request.referenceDocumentIds());
         String readOnlyDocumentId = confirmedReadOnlyDocumentId(workspaceId, userId, request);
         return transaction.execute(status ->
-                queueTurn(workspaceId, userId, request, folderId, selectedModel, skillDraftSources, readOnlyDocumentId));
+                queueTurn(workspaceId, userId, request, folderId, selectedModel, skillDraftSources, readOnlyDocumentId,
+                        sessionTitleNeeded));
     }
 
     /** 조용히 빼면 근거 없이 답하게 되므로 하나라도 어긋나면 거절한다. 사유를 나누지 않아 존재 여부가 응답으로 새지 않는다. */
@@ -166,7 +170,7 @@ public class AgentTurnService {
     private AgentTurnResponse queueTurn(String workspaceId, String userId, AgentTurnRequest request, UUID folderId,
                                         AiModelCatalog.AiModel selectedModel,
                                         List<CanonicalSkillDraftSource> skillDraftSources,
-                                        String readOnlyDocumentId) {
+                                        String readOnlyDocumentId, boolean sessionTitleNeeded) {
         String runId = "agent_" + UUID.randomUUID().toString().replace("-", "");
         // 질의와 같은 방식으로 말풍선을 먼저 만들고 결과가 오면 채운다. command와 같은 트랜잭션이라
         // 발행에 실패하면 메시지도 남지 않는다.
@@ -203,7 +207,7 @@ public class AgentTurnService {
                         CommandEditorSnapshot.from(request.editorSnapshot()),
                         request.mode(),
                         folderId == null ? null : folderId.toString(),
-                        request.referenceDocumentIds()));
+                        request.referenceDocumentIds(), sessionTitleNeeded));
         if (analytics != null) {
             analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt, "task");
             if ("explicit".equals(request.skillMode()))
@@ -605,7 +609,9 @@ public class AgentTurnService {
             @com.fasterxml.jackson.annotation.JsonProperty("folder_id")
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
             String folderId,
-            @com.fasterxml.jackson.annotation.JsonProperty("reference_document_ids") List<String> referenceDocumentIds
+            @com.fasterxml.jackson.annotation.JsonProperty("reference_document_ids") List<String> referenceDocumentIds,
+            // false면 사용자가 제목을 정한 세션이라 AI가 제목을 만들지 않는다.
+            @com.fasterxml.jackson.annotation.JsonProperty("session_title_needed") boolean sessionTitleNeeded
     ) {}
 
     record CanonicalSkillDraftSource(

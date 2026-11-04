@@ -74,11 +74,12 @@ public class QueryRunService {
         QueryService.QueryMessageContext messageContext = webSearchEnabled
                 ? queryService.prepareMessages(sessionId, question, run.requestId(), provider, model, true)
                 : queryService.prepareMessages(sessionId, question, run.requestId(), provider, model);
+        ChatSessionService.CommandSessionState sessionState = chatSessionService.commandState(sessionId);
         outboxWriter.enqueue(run.requestId(), commandTopic, sessionId,
                 new QueryCommand(run.requestId(), "query", workspaceId, userId, sessionId,
                         question, provider, model, webSearchEnabled,
-                        chatSessionService.contextSummary(sessionId),
-                        messageContext.recentMessages(), messageContext));
+                        sessionState.contextSummary(),
+                        messageContext.recentMessages(), messageContext, sessionState.titleNeeded()));
         if (analytics != null) analytics.queryStarted(run.requestId(), userId, workspaceId, sessionId, messageContext.createdAt(), "chat");
         log.info("[질의 command 등록 완료] requestId={}", run.requestId());
         return run;
@@ -119,6 +120,8 @@ public class QueryRunService {
             /** 세션에 쌓인 누적 대화 요약. recent_messages가 담지 못하는 앞쪽 맥락을 이어준다. */
             @JsonProperty("recent_conversation_summary") String recentConversationSummary,
             @JsonProperty("recent_messages") java.util.List<QueryService.RecentMessage> recentMessages,
-            @JsonProperty("message_context") QueryService.QueryMessageContext messageContext
+            @JsonProperty("message_context") QueryService.QueryMessageContext messageContext,
+            /** false면 사용자가 제목을 정한 세션이라 AI가 제목을 만들지 않는다. */
+            @JsonProperty("session_title_needed") boolean sessionTitleNeeded
     ) {}
 }
