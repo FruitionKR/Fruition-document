@@ -2802,6 +2802,11 @@ public class DocumentService {
         verifyWorkspaceOwnership(workspaceId, userId);
         validateIdempotencyKey(idempotencyKey);
         validateLifecycleRequest(request);
+        // 삭제해도 folder_id는 남으므로 원래 폴더로 돌아간다. 폴더 삭제·이동과 같은 순서로 폴더 행을 문서 행보다 먼저 잠근다.
+        // 반대 순서면 교착하고, 잠그지 않으면 빈 폴더 검사와 폴더 삭제 사이에 문서가 들어갈 수 있다.
+        UUID originalFolderId = documentRepository.findFolderIdById(documentId, workspaceId).orElse(null);
+        boolean originalFolderActive = originalFolderId != null
+                && folderRepository.findActiveForUpdate(originalFolderId, workspaceId).isPresent();
         Document document = documentRepository
                 .findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
@@ -2822,17 +2827,23 @@ public class DocumentService {
         if (isTrashExpired(document.getDeletedAt(), Instant.now())) {
             throw new TrashRetentionExpiredException("휴지통 보관 기간이 지나 복구할 수 없습니다.");
         }
-        List<Document> rootItems = documentRepository.findRootItemsForUpdate(
-                workspaceId, document.getDocumentRole());
-        long sortOrder = rootItems.stream()
-                .mapToLong(Document::getSortOrder)
-                .max()
-                .orElse(-1) + 1;
+        // 잠그기 전에 읽은 폴더와 다르면 그사이 복구·이동·재삭제가 있었던 것이라 잠근 폴더를 믿을 수 없다.
+        if (!Objects.equals(originalFolderId, document.getFolderId())) {
+            throw versionConflict();
+        }
+        UUID targetFolderId = originalFolderActive ? originalFolderId : null;
+        long sortOrder = targetFolderId != null
+                ? placementSortOrder(workspaceId, targetFolderId, document.getDocumentRole())
+                : documentRepository.findRootItemsForUpdate(workspaceId, document.getDocumentRole()).stream()
+                        .mapToLong(Document::getSortOrder)
+                        .max()
+                        .orElse(-1) + 1;
         Instant restoredAt = Instant.now();
         int updated = documentRepository.restoreIfVersionMatches(
                 documentId,
                 workspaceId,
                 request.baseVersion(),
+                targetFolderId,
                 sortOrder,
                 restoredAt
         );

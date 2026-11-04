@@ -321,7 +321,7 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.trash(workspaceId, userId));
     }
 
-    @Operation(summary = "문서 복구", description = "삭제 문서를 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다.")
+    @Operation(summary = "문서 복구", description = "삭제 문서를 원래 폴더의 마지막 위치에 복구합니다. 원래 폴더가 삭제됐거나 없으면 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "복구 성공",
             content = @Content(schema = @Schema(implementation = DocumentLifecycleResponse.class))),
@@ -331,7 +331,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "삭제 문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "문서 version 또는 멱등 키 충돌, TRASH_RETENTION_EXPIRED(휴지통 보관 기간 경과)",
+        @ApiResponse(responseCode = "409", description = "문서 version 또는 멱등 키 충돌, TRASH_RETENTION_EXPIRED(휴지통 보관 기간 경과), DUPLICATE_NAME(복구 위치에 같은 이름이 있음)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping("/{document_id}/restore")

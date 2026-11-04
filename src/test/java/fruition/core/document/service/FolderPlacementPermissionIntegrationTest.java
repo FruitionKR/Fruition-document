@@ -24,6 +24,7 @@ import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.imports.DocumentImportDtos;
 import fruition.core.imports.DocumentImportService;
+import fruition.shared.util.DuplicateResourceName;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -455,17 +456,219 @@ class FolderPlacementPermissionIntegrationTest {
         assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isEqualTo(reset);
     }
 
-    // ---------- 휴지통: 삭제 권한 규칙을 그대로 두었다. 현재 동작을 고정한다.
+    // ---------- 휴지통: 문서는 원래 폴더로 복구한다. 원래 폴더가 없을 때만 최상위로 돌아간다.
 
-    /** 문서 복구는 항상 최상위로 돌아간다. 소유자가 보기 폴더의 자기 문서를 삭제·복구하면 폴더 밖으로 나온다. */
+    /** 복구는 넣기·꺼내기가 아니라 원위치 복귀라 보기 폴더에도 돌아간다. 소유자가 폴더 밖으로 꺼내는 경로가 되지 않는다. */
+    @ParameterizedTest(name = "{0}: {1}")
+    @CsvSource({
+            "author, edit", "author, view", "author, inherited", "author, reset", "author, root",
+            "owner, edit", "owner, view", "owner, inherited", "owner, reset", "owner, root"
+    })
+    void trashRestoreReturnsDocumentToOriginalFolder(String actor, String location) {
+        DocumentPositionResponse own = authorDocumentIn(folderAt(location));
+
+        restore(user(actor), own.id(), trash(user(actor), own));
+
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isEqualTo(folderAt(location));
+    }
+
     @Test
-    void trashRestorePutsDocumentAtRoot() {
-        DocumentPositionResponse own = authorDocumentIn(view);
+    void trashRestoreIsPlacedLastAmongFolderSiblings() {
+        DocumentPositionResponse own = authorDocumentIn(edit);
+        DocumentPositionResponse sibling = authorDocumentIn(edit);
+        FolderResponse siblingFolder = folder(owner, "뒤 폴더", edit);
+        long deleted = trash(author, own);
 
-        var deleted = documentService.delete(workspace, author, own.id(), key(),
-                new DocumentLifecycleRequest(own.currentVersion()));
-        documentService.restore(workspace, author, own.id(), key(),
-                new DocumentLifecycleRequest(deleted.currentVersion()));
+        long sortOrder = documentService.restore(workspace, author, own.id(), key(),
+                new DocumentLifecycleRequest(deleted)).sortOrder();
+
+        assertThat(sortOrder).isGreaterThan(documents.findById(sibling.id()).orElseThrow().getSortOrder())
+                .isGreaterThan(folders.findById(siblingFolder.id()).orElseThrow().getSortOrder());
+        assertThat(documents.findById(own.id()).orElseThrow().getSortOrder()).isEqualTo(sortOrder);
+    }
+
+    /** 복구 권한은 그대로다. 문서 소유자도 OWNER도 아니면 어느 폴더든 복구할 수 없다. */
+    @Test
+    void trashRestoreStillRequiresDocumentOwnerOrWorkspaceOwner() {
+        DocumentPositionResponse own = authorDocumentIn(edit);
+        long deleted = trash(author, own);
+
+        assertThatThrownBy(() -> restore(member, own.id(), deleted))
+                .isInstanceOf(DocumentWriteForbiddenException.class);
+
+        assertThat(documents.findById(own.id()).orElseThrow().getDeletedAt()).isNotNull();
+    }
+
+    /** 복구로 돌아온 뒤에도 꺼내기 규칙은 그대로라 소유자가 보기 폴더 밖으로 옮길 수 없다. */
+    @Test
+    void ownerCannotMoveDocumentOutAfterRestoringIntoViewFolder() {
+        DocumentPositionResponse own = authorDocumentIn(view);
+        restore(author, own.id(), trash(author, own));
+        long version = documents.findById(own.id()).orElseThrow().getCurrentVersion();
+
+        assertForbidden(() -> placementService.move(workspace, author, own.id(), key(),
+                new DocumentPositionRequest(edit, null, version)));
+
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isEqualTo(view);
+    }
+
+    /** 휴지통 안의 문서는 다른 폴더로 옮길 수 없어 복구가 다른 폴더로 넣는 경로가 되지 않는다. */
+    @Test
+    void trashedDocumentCannotBeRedirectedToAnotherFolderBeforeRestore() {
+        DocumentPositionResponse own = authorDocumentIn(edit);
+        long deleted = trash(author, own);
+
+        assertThatThrownBy(() -> placementService.move(workspace, owner, own.id(), key(),
+                new DocumentPositionRequest(view, null, deleted)))
+                .isInstanceOf(HierarchyItemNotFoundException.class);
+
+        restore(author, own.id(), deleted);
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isEqualTo(edit);
+    }
+
+    /** 삭제한 뒤 폴더가 보기로 바뀌어도 원위치 복귀라 돌아간다. */
+    @Test
+    void trashRestoreReturnsToFolderThatBecameViewAfterDelete() {
+        UUID later = folder(owner, "나중에 보기", null).id();
+        DocumentPositionResponse own = authorDocumentIn(later);
+        long deleted = trash(author, own);
+        permissionService.setFolder(workspace, owner, later, "view");
+
+        restore(author, own.id(), deleted);
+
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isEqualTo(later);
+    }
+
+    /** 삭제한 뒤 폴더가 옮겨졌으면 폴더의 지금 위치를 따라간다. */
+    @Test
+    void trashRestoreFollowsFolderMovedAfterDelete() {
+        FolderResponse moving = folder(owner, "옮겨지는 폴더", null);
+        DocumentPositionResponse own = authorDocumentIn(moving.id());
+        long deleted = trash(author, own);
+        folderService.move(workspace, owner, moving.id(), key(),
+                new FolderPositionRequest(edit, null, moving.currentVersion()));
+
+        restore(author, own.id(), deleted);
+
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isEqualTo(moving.id());
+    }
+
+    @Test
+    void trashRestoreGoesToRootWhenOriginalFolderIsDeleted() {
+        FolderResponse doomed = folder(owner, "지울 폴더", null);
+        DocumentPositionResponse own = authorDocumentIn(doomed.id());
+        long deleted = trash(author, own);
+        folderService.delete(workspace, owner, doomed.id(), key(), doomed.currentVersion());
+
+        restore(author, own.id(), deleted);
+
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isNull();
+    }
+
+    /** 폴더와 함께 지워진 문서를 폴더보다 먼저 복구해도 지워진 폴더 안에 들어가지 않는다. */
+    @Test
+    void trashRestoreOfDocumentDeletedWithFolderGoesToRoot() {
+        FolderResponse doomed = folder(owner, "함께 지울 폴더", null);
+        DocumentPositionResponse own = authorDocumentIn(doomed.id());
+        folderService.delete(workspace, owner, doomed.id(), key(), doomed.currentVersion());
+        long deleted = documents.findById(own.id()).orElseThrow().getCurrentVersion();
+
+        restore(author, own.id(), deleted);
+
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isNull();
+    }
+
+    /** 폴더 행이 영구 삭제되면 FK가 folder_id를 비운다. */
+    @Test
+    void trashRestoreGoesToRootWhenOriginalFolderIsGone() {
+        FolderResponse doomed = folder(owner, "사라질 폴더", null);
+        DocumentPositionResponse own = authorDocumentIn(doomed.id());
+        long deleted = trash(author, own);
+        folders.deleteById(doomed.id());
+
+        restore(author, own.id(), deleted);
+
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isNull();
+    }
+
+    /** 이름 충돌은 원래 폴더 기준으로 판정한다. 기존 복구처럼 전체를 거절하고 휴지통에 남긴다. */
+    @Test
+    void trashRestoreRejectsDuplicateNameInOriginalFolder() {
+        String name = "겹치는 이름 " + UUID.randomUUID();
+        var own = documentService.createMarkdown(workspace, author, key(),
+                new MarkdownDocumentCreateRequest(name, "# 원래", edit));
+        long deleted = documentService.delete(workspace, author, own.id(), key(),
+                new DocumentLifecycleRequest(own.currentVersion())).currentVersion();
+        documentService.createMarkdown(workspace, owner, key(), new MarkdownDocumentCreateRequest(name, "# 새 문서", edit));
+
+        assertThat(DuplicateResourceName.message(catchThrowable(() -> restore(author, own.id(), deleted)))).isNotNull();
+
+        var kept = documents.findById(own.id()).orElseThrow();
+        assertThat(kept.getDeletedAt()).isNotNull();
+        assertThat(kept.getCurrentVersion()).isEqualTo(deleted);
+    }
+
+    /** 최상위의 같은 이름은 원래 폴더로 돌아가는 복구를 막지 않는다. */
+    @Test
+    void trashRestoreIgnoresSameNameAtRootWhenReturningToFolder() {
+        String name = "최상위와 같은 이름 " + UUID.randomUUID();
+        var own = documentService.createMarkdown(workspace, author, key(),
+                new MarkdownDocumentCreateRequest(name, "# 원래", edit));
+        long deleted = documentService.delete(workspace, author, own.id(), key(),
+                new DocumentLifecycleRequest(own.currentVersion())).currentVersion();
+        documentService.createMarkdown(workspace, owner, key(), new MarkdownDocumentCreateRequest(name, "# 새 문서", null));
+
+        restore(author, own.id(), deleted);
+
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isEqualTo(edit);
+    }
+
+    /** 원래 폴더가 지워져 최상위로 돌아갈 때는 최상위 이름과 비교한다. */
+    @Test
+    void trashRestoreRejectsDuplicateNameAtRootWhenOriginalFolderIsDeleted() {
+        String name = "최상위 충돌 " + UUID.randomUUID();
+        FolderResponse doomed = folder(owner, "충돌 폴더", null);
+        var own = documentService.createMarkdown(workspace, author, key(),
+                new MarkdownDocumentCreateRequest(name, "# 원래", doomed.id()));
+        long deleted = documentService.delete(workspace, author, own.id(), key(),
+                new DocumentLifecycleRequest(own.currentVersion())).currentVersion();
+        folderService.delete(workspace, owner, doomed.id(), key(), doomed.currentVersion());
+        documentService.createMarkdown(workspace, owner, key(), new MarkdownDocumentCreateRequest(name, "# 새 문서", null));
+
+        assertThat(DuplicateResourceName.message(catchThrowable(() -> restore(author, own.id(), deleted)))).isNotNull();
+
+        assertThat(documents.findById(own.id()).orElseThrow().getDeletedAt()).isNotNull();
+    }
+
+    @Test
+    void trashRestoreReplaysSameResponseForSameKey() {
+        DocumentPositionResponse own = authorDocumentIn(view);
+        long deleted = trash(author, own);
+        String idempotencyKey = key();
+
+        var first = documentService.restore(workspace, author, own.id(), idempotencyKey,
+                new DocumentLifecycleRequest(deleted));
+        var replay = documentService.restore(workspace, author, own.id(), idempotencyKey,
+                new DocumentLifecycleRequest(deleted));
+
+        assertThat(replay).isEqualTo(first);
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isEqualTo(view);
+    }
+
+    /**
+     * 남은 우회의 현재 동작을 고정한다. 휴지통 문서는 폴더를 비운 것으로 치므로 멤버가 빈 보기 폴더를 지울 수 있고,
+     * 그 뒤 문서를 복구하면 "원래 폴더 삭제" 규칙에 따라 최상위로 나온다. 막으려면 빈 폴더 삭제 규칙을 바꿔야 한다.
+     */
+    @Test
+    void emptyViewFolderDeleteStillLetsOwnDocumentReachRootOnRestore() {
+        FolderResponse viewOnly = folder(owner, "우회 보기 폴더", null);
+        permissionService.setFolder(workspace, owner, viewOnly.id(), "view");
+        DocumentPositionResponse own = authorDocumentIn(viewOnly.id());
+        long deleted = trash(author, own);
+
+        folderService.delete(workspace, author, viewOnly.id(), key(),
+                folders.findById(viewOnly.id()).orElseThrow().getCurrentVersion());
+        restore(author, own.id(), deleted);
 
         assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isNull();
     }
@@ -485,6 +688,16 @@ class FolderPlacementPermissionIntegrationTest {
 
     private void assertForbidden(ThrowingCallable call) {
         assertThatThrownBy(call).isInstanceOf(DocumentWriteForbiddenException.class).hasMessage(FORBIDDEN);
+    }
+
+    /** 휴지통으로 옮기고 복구에 쓸 현재 버전을 돌려준다. */
+    private long trash(String userId, DocumentPositionResponse document) {
+        return documentService.delete(workspace, userId, document.id(), key(),
+                new DocumentLifecycleRequest(document.currentVersion())).currentVersion();
+    }
+
+    private void restore(String userId, String documentId, long baseVersion) {
+        documentService.restore(workspace, userId, documentId, key(), new DocumentLifecycleRequest(baseVersion));
     }
 
     /** 작성자 소유 문서를 최상위에 만들고 OWNER가 원하는 위치로 옮겨 둔다. */
