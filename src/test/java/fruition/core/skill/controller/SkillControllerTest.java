@@ -391,7 +391,7 @@ class SkillControllerTest {
         });
         pipeline.start();
         try {
-            when(referenceService.read(WORKSPACE_ID, USER_ID, "doc_1"))
+            when(referenceService.read(WORKSPACE_ID, USER_ID, "doc_1", null))
                     .thenThrow(new SkillReferenceDocumentTooLargeException());
             var requester = new PipelineSkillRequester(
                     new PipelineClientFactory("unused-internal-token"),

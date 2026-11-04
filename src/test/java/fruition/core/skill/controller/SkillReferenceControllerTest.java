@@ -39,7 +39,7 @@ class SkillReferenceControllerTest {
 
     @Test
     void read_returnsCurrentMarkdownForServiceToken() throws Exception {
-        when(referenceService.read("ws_1", "user_1", "doc_1"))
+        when(referenceService.read("ws_1", "user_1", "doc_1", null))
                 .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문"));
 
         mockMvc.perform(post(URL)
@@ -49,6 +49,61 @@ class SkillReferenceControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.document_role").value("EDITABLE"))
                 .andExpect(jsonPath("$.markdown").value("# 현재 본문"));
+    }
+
+    @Test
+    void read_withoutMaxCharsOmitsTruncationFields() throws Exception {
+        when(referenceService.read("ws_1", "user_1", "doc_1", null))
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문"));
+
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.truncated").doesNotExist())
+                .andExpect(jsonPath("$.total_chars").doesNotExist());
+    }
+
+    @Test
+    void read_passesMaxCharsAndReturnsTruncationFields() throws Exception {
+        when(referenceService.read("ws_1", "user_1", "doc_1", 5))
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 ", true, 7));
+
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withMaxChars("5")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.markdown").value("# 현재 "))
+                .andExpect(jsonPath("$.truncated").value(true))
+                .andExpect(jsonPath("$.total_chars").value(7));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "-1", "\"abc\"", "3000000000"})
+    void read_rejectsMaxCharsThatIsNotPositiveInteger(String value) throws Exception {
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withMaxChars(value)))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(referenceService);
+    }
+
+    @Test
+    void read_withMaxCharsStillRequiresToken() throws Exception {
+        mockMvc.perform(post(URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withMaxChars("5")))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(referenceService);
+    }
+
+    private static String withMaxChars(String value) {
+        return BODY.substring(0, BODY.length() - 1) + ",\"max_chars\":" + value + "}";
     }
 
     @Test
@@ -84,7 +139,7 @@ class SkillReferenceControllerTest {
             "/internal/agent/skill-authoring/references/%72ead",
             "/internal/agent/skill%2Dauthoring/references/read"})
     void read_returnsMarkdownForPercentEncodedPathWithToken(String path) throws Exception {
-        when(referenceService.read("ws_1", "user_1", "doc_1"))
+        when(referenceService.read("ws_1", "user_1", "doc_1", null))
                 .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문"));
 
         mockMvc.perform(post(URI.create(path))

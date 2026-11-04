@@ -2,6 +2,7 @@
 
 ## 2026-11-04
 
+- 내부 API `/internal/agent/skill-authoring/references/read`에 선택 필드 `max_chars`를 추가했다. 보내면 3만 자 초과 문서도 `413` 없이 앞부분을 돌려주고 응답에 `truncated`·`total_chars`를 넣는다. 글자 수는 코드 포인트로 세고 한 글자 중간에서 자르지 않는다. 생략하면 기존 동작(`413`, 응답 모양 동일)이고 권한 확인은 어느 쪽이든 같다.
 - `POST .../agent/turn`에 참고 문서 `reference_document_ids`(최대 3개)를 추가하고 검증한 ID를 ai command에 같은 키로 전달한다(없으면 빈 배열, 본문은 싣지 않음). 문서 없이도, `documentId`와 함께여도 보낼 수 있고 읽기 권한만 요구한다. 중복과 `documentId`와 같은 ID는 서버가 뺀다. 없는 문서, 다른 워크스페이스 문서, 삭제된 문서, 비 Markdown, 읽을 수 없는 문서, 변환 중이거나 본문 없이 실패한 PDF 변환본이 하나라도 있으면 같은 메시지의 400으로 요청 전체를 거절한다. AI가 본문을 읽는 내부 API(`/internal/agent/skill-authoring/references/read`)는 멤버 확인만 하던 것에 문서 읽기 권한 판정을 더했다. 채팅 메시지에는 저장하지 않는다.
 - Agent turn 결과의 되묻기 이유 코드 `clarify_reason`을 `chat_messages`에 저장하고(V97, NULL 허용) 채팅 메시지 조회 응답으로 내려준다. 화면이 되묻기 문장을 비교하지 않고 코드로 갈래를 정할 수 있고 새로고침 뒤에도 유지된다. `action=clarify`의 문자열 코드(소문자·숫자·밑줄 1~64자)만 받고, 모르는 코드는 그대로 전달하며, 형식이 어긋나면 값만 버린다. 값이 없거나 이전 메시지는 `null`이다.
 - 보기 권한 문서를 연 채 보낸 Agent turn의 그 문서를 `POST .../agent/turn`의 `read_only_document_id`로 받아 `chat_messages`에 저장하고(V97, NULL 허용) 메시지 조회 응답으로 내려준다. 안내 기록이 브라우저에만 있어 다른 기기에서 AI 원문이 보이던 문제를 위한 것이다. 서버가 읽기 가능·편집 불가를 확인한 값만 남기고 그 밖의 값은 오류 없이 무시한다. 표시 전용이며 권한 판단에 쓰지 않고 AI로 보내지 않는다.

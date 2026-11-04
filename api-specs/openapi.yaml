@@ -10100,6 +10100,9 @@ components:
         document_id:
           type: string
           minLength: 1
+        max_chars:
+          type: integer
+          format: int32
         user_id:
           type: string
           minLength: 1
@@ -10117,6 +10120,11 @@ components:
           type: string
         markdown:
           type: string
+        total_chars:
+          type: integer
+          format: int32
+        truncated:
+          type: boolean
     SkillResponse:
       type: object
       description: Skill 하나. 게시된 버전(enabled_version)과 가장 최근 버전(latest_version)이 다를 수 있다.

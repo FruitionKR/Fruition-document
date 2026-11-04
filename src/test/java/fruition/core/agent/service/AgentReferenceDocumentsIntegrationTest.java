@@ -13,6 +13,7 @@ import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.repository.DocumentEditStateRepository;
 import fruition.core.document.service.DocumentAccessPolicy;
 import fruition.core.document.service.DocumentService;
+import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
 import fruition.core.skill.service.SkillReferenceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -94,7 +95,22 @@ class AgentReferenceDocumentsIntegrationTest {
         saveBody(document, "# 보기 전용 본문");
 
         assertThat(turn(List.of(document)).status()).isEqualTo("queued");
-        assertThat(references.read(workspace, user, document).markdown()).isEqualTo("# 보기 전용 본문");
+        assertThat(references.read(workspace, user, document, null).markdown()).isEqualTo("# 보기 전용 본문");
+    }
+
+    /** turn은 긴 문서를 거절하지 않고, AI는 max_chars로 앞부분을 읽는다. 없으면 skill 경로처럼 413이다. */
+    @Test
+    void longDocumentPassesAndIsReadTruncatedOnlyWithMaxChars() {
+        String document = markdown().insert();
+        saveBody(document, "가".repeat(30_001));
+
+        assertThat(turn(List.of(document)).status()).isEqualTo("queued");
+        var truncated = references.read(workspace, user, document, 100);
+        assertThat(truncated.markdown()).hasSize(100);
+        assertThat(truncated.truncated()).isTrue();
+        assertThat(truncated.totalChars()).isEqualTo(30_001);
+        assertThatThrownBy(() -> references.read(workspace, user, document, null))
+                .isInstanceOf(SkillReferenceDocumentTooLargeException.class);
     }
 
     @Test
@@ -116,7 +132,7 @@ class AgentReferenceDocumentsIntegrationTest {
                 new MarkdownDocumentCreateRequest("회의록", "# 회의 내용", null), Document.MEETING_NOTES_ORIGIN).id();
 
         assertThat(turn(List.of(document)).status()).isEqualTo("queued");
-        assertThat(references.read(workspace, user, document).markdown()).contains("# 회의 내용");
+        assertThat(references.read(workspace, user, document, null).markdown()).contains("# 회의 내용");
     }
 
     /** 채팅 내보내기 문서는 본문 편집만 잠겨 있다. 읽을 수 있으므로 근거로 쓸 수 있다. */
@@ -126,7 +142,7 @@ class AgentReferenceDocumentsIntegrationTest {
         saveBody(document, "# 내보낸 대화");
 
         assertThat(turn(List.of(document)).status()).isEqualTo("queued");
-        assertThat(references.read(workspace, user, document).markdown()).isEqualTo("# 내보낸 대화");
+        assertThat(references.read(workspace, user, document, null).markdown()).isEqualTo("# 내보낸 대화");
     }
 
     @Test
@@ -192,7 +208,9 @@ class AgentReferenceDocumentsIntegrationTest {
                 .when(accessPolicy).viewer(workspace, user);
 
         assertRejected(List.of(document));
-        assertThatThrownBy(() -> references.read(workspace, user, document))
+        assertThatThrownBy(() -> references.read(workspace, user, document, null))
+                .isInstanceOf(DocumentNotFoundException.class);
+        assertThatThrownBy(() -> references.read(workspace, user, document, 100))
                 .isInstanceOf(DocumentNotFoundException.class);
     }
 

@@ -1533,8 +1533,8 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 | 목적 | Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다. |
 | 입력 | **Header** — `X-Agent-Service-Token`(필수, 인증 계층 검증): `string`<br>**Body** — `SkillReferenceReadRequest` |
 | 출력 | `200` 성공 — `SkillReferenceReadResponse` |
-| 조건 | 인증 필요<br>`X-Agent-Service-Token`을 검증한다.<br>올바른 내부 서비스 토큰을 가진 서비스만 호출할 수 있다.<br>요청에 포함된 workspace/user scope는 해당 route의 서비스 계층에서 추가 검증한다.<br>요청 user가 읽을 수 없는 문서는 없는 문서와 같이 `404`다. Skill 작성과 Agent turn의 `reference_document_ids`가 함께 쓴다. |
-| 주요 오류 | `401` Agent 서비스 인증 토큰 누락 또는 불일치 |
+| 조건 | 인증 필요<br>`X-Agent-Service-Token`을 검증한다.<br>올바른 내부 서비스 토큰을 가진 서비스만 호출할 수 있다.<br>요청에 포함된 workspace/user scope는 해당 route의 서비스 계층에서 추가 검증한다.<br>요청 user가 읽을 수 없는 문서는 없는 문서와 같이 `404`다. Skill 작성과 Agent turn의 `reference_document_ids`가 함께 쓴다. `max_chars`를 보내면 긴 문서를 거절하지 않고 앞부분만 돌려준다. |
+| 주요 오류 | `400` `max_chars` 형식 오류<br>`401` Agent 서비스 인증 토큰 누락 또는 불일치<br>`404` 문서 없음·읽을 수 없음<br>`413` `max_chars` 없이 3만 자 초과 |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1548,7 +1548,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 
 #### 2. 목적
 
-Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다.
+Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다.
 
 #### 3. Auth 필요 여부
 
@@ -1566,10 +1566,15 @@ Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본
 ```json
 {
   "document_id": "string",
+  "max_chars": 1,
   "user_id": "string",
   "workspace_id": "string"
 }
 ```
+
+| 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| `max_chars` | `integer` | 아니오 | 양의 정수. 있으면 `413` 없이 본문 앞에서 이 글자 수까지 돌려준다. 생략하면 3만 자 초과 문서를 `413`으로 거절한다(Skill 작성의 기존 동작). `0` 이하·정수가 아닌 값은 `400` |
 
 #### 5. Response body
 
@@ -1579,15 +1584,28 @@ Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본
 ```json
 {
   "document_role": "string",
-  "markdown": "string"
+  "markdown": "string",
+  "total_chars": 1,
+  "truncated": true
 }
 ```
 
+| 이름 | 타입 | 설명 |
+|---|---|---|
+| `truncated` | `boolean` | 본문을 잘랐는지. `max_chars`를 보낸 `EDITABLE` 문서에만 온다 |
+| `total_chars` | `integer` | 자르기 전 전체 글자 수. `truncated`와 같은 경우에만 온다 |
+
+- 글자 수(`max_chars`·`total_chars`)는 Unicode 코드 포인트다. UTF-16 단위가 아니므로 이모지도 1자이고 Python `len`과 같다.
+- 경계가 한 글자(서로게이트 쌍, 결합 문자, NFD 한글, 국기, ZWJ 이모지, CRLF)의 중간이면 그 글자를 통째로 뺀다. 그래서 돌려준 본문이 `max_chars`보다 짧을 수 있고, 첫 글자가 `max_chars`보다 길면 빈 문자열일 수 있다.
+- `ORIGINAL` 문서는 `max_chars`와 관계없이 `markdown`·`truncated`·`total_chars`가 없다.
+- `max_chars`를 생략한 응답 모양은 이전과 같다(`truncated`·`total_chars` 없음).
+
 #### 6. Error response
 
+- HTTP `400`: `max_chars`가 양의 정수가 아님
 - HTTP `401`: Agent 서비스 인증 토큰 누락 또는 불일치
-
-- 명세에 별도 오류 응답이 정의되어 있지 않다.
+- HTTP `404`: 문서가 없거나, 이 워크스페이스 문서가 아니거나, 삭제됐거나, 요청 user가 읽을 수 없음(`max_chars`와 관계없음)
+- HTTP `413`: `max_chars`를 생략했고 본문이 3만 자 초과(`REFERENCE_DOCUMENT_TOO_LARGE`)
 
 #### 7. Pagination / filtering
 
@@ -1605,13 +1623,15 @@ Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본
 curl -X POST "$DOCUMENT/internal/agent/skill-authoring/references/read" \
   -H 'X-Agent-Service-Token: <value>' \
   -H 'Content-Type: application/json' \
-  --data '{"document_id":"<value>","user_id":"<value>","workspace_id":"<value>"}'
+  --data '{"document_id":"<value>","max_chars":30000,"user_id":"<value>","workspace_id":"<value>"}'
 ```
 
 ```json
 {
-  "document_role": "string",
-  "markdown": "string"
+  "document_role": "EDITABLE",
+  "markdown": "string",
+  "total_chars": 45210,
+  "truncated": true
 }
 ```
 
