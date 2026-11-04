@@ -26,7 +26,7 @@ workspace AI 모델을 확인한 뒤 ai-svc 내부 HTTP로 전달한다.
 | [`DELETE /api/workspaces/{workspace_id}/skills/{skill_id}`](#delete-skill) | Skill과 버전을 삭제하고 실행 기록을 보존합니다. |
 | [`POST /api/workspaces/{workspace_id}/skills/{skill_id}/disable`](#summary-post-api-workspaces-workspace-id-skills-skill-id-disable) | Skill을 Agent 실행 대상에서 제외합니다. |
 | [`POST /api/workspaces/{workspace_id}/skills/{skill_id}/enable`](#summary-post-api-workspaces-workspace-id-skills-skill-id-enable) | Skill을 Agent 실행 대상에 포함합니다. |
-| [`POST /internal/agent/skill-authoring/references/read`](#summary-post-internal-agent-skill-authoring-references-read) | Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다. |
+| [`POST /internal/agent/skill-authoring/references/read`](#summary-post-internal-agent-skill-authoring-references-read) | Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다. |
 
 ## 한눈에 보기
 
@@ -1530,10 +1530,10 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다. |
+| 목적 | Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다. |
 | 입력 | **Header** — `X-Agent-Service-Token`(필수, 인증 계층 검증): `string`<br>**Body** — `SkillReferenceReadRequest` |
 | 출력 | `200` 성공 — `SkillReferenceReadResponse` |
-| 조건 | 인증 필요<br>`X-Agent-Service-Token`을 검증한다.<br>올바른 내부 서비스 토큰을 가진 서비스만 호출할 수 있다.<br>요청에 포함된 workspace/user scope는 해당 route의 서비스 계층에서 추가 검증한다. |
+| 조건 | 인증 필요<br>`X-Agent-Service-Token`을 검증한다.<br>올바른 내부 서비스 토큰을 가진 서비스만 호출할 수 있다.<br>요청에 포함된 workspace/user scope는 해당 route의 서비스 계층에서 추가 검증한다.<br>요청 user가 읽을 수 없는 문서는 없는 문서와 같이 `404`다. Skill 작성과 Agent turn의 `reference_document_ids`가 함께 쓴다. |
 | 주요 오류 | `401` Agent 서비스 인증 토큰 누락 또는 불일치 |
 
 <details>

@@ -6,6 +6,7 @@ import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.domain.DocumentEditState;
 import fruition.core.document.repository.DocumentEditStateRepository;
 import fruition.core.document.repository.DocumentRepository;
+import fruition.core.document.service.DocumentAccessPolicy;
 import fruition.core.document.service.DocumentEditStateInitializer;
 import fruition.core.skill.dto.SkillReferenceReadResponse;
 import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
@@ -20,17 +21,20 @@ public class SkillReferenceService {
     private final DocumentRepository documentRepository;
     private final DocumentEditStateRepository editStateRepository;
     private final DocumentEditStateInitializer editStateInitializer;
+    private final DocumentAccessPolicy accessPolicy;
 
     public SkillReferenceService(
             WorkspaceAccessGuard workspaceAccessGuard,
             DocumentRepository documentRepository,
             DocumentEditStateRepository editStateRepository,
-            DocumentEditStateInitializer editStateInitializer
+            DocumentEditStateInitializer editStateInitializer,
+            DocumentAccessPolicy accessPolicy
     ) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.documentRepository = documentRepository;
         this.editStateRepository = editStateRepository;
         this.editStateInitializer = editStateInitializer;
+        this.accessPolicy = accessPolicy;
     }
 
     public SkillReferenceReadResponse read(
@@ -38,6 +42,7 @@ public class SkillReferenceService {
     ) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         var document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                .filter(accessPolicy.viewer(workspaceId, userId)::canRead)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
         if (document.getDocumentRole() == DocumentRole.ORIGINAL) {
             return new SkillReferenceReadResponse(DocumentRole.ORIGINAL.name(), null);

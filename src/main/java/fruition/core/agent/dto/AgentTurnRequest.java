@@ -113,7 +113,14 @@ public record AgentTurnRequest(
                 + "그 밖의 값(없는 문서, 다른 워크스페이스 문서, 삭제된 문서, 편집 가능한 문서, 형식 오류)은 오류 없이 무시한다. "
                 + "안내 표시에만 쓰고 권한 판단에 쓰지 않는다.",
                 nullable = true, example = "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83")
-        String readOnlyDocumentId
+        String readOnlyDocumentId,
+
+        @JsonProperty("reference_document_ids") @Size(max = MAX_REFERENCE_DOCUMENTS)
+        @Schema(description = "이번 turn에서 참고할 문서 ID 목록(최대 3개). 문서 없이도, documentId와 함께여도 보낼 수 있다. "
+                + "중복과 documentId와 같은 ID는 서버가 뺀 뒤 개수를 센다. 생략하면 없는 것으로 본다. "
+                + "요청 사용자가 읽을 수 있는 이 워크스페이스의 삭제되지 않은 Markdown 문서만 받으며, "
+                + "하나라도 어긋나면 존재 여부가 드러나지 않는 같은 메시지로 요청 전체를 400으로 거절한다.")
+        List<@NotBlank String> referenceDocumentIds
 ) {
     private static final int MAX_SKILL_ID_LENGTH = 128;
     /**
@@ -121,6 +128,7 @@ public record AgentTurnRequest(
      * 서버가 최근 구간에서 읽어 오는 양(문답 20개)과 같은 선까지만 받는다.
      */
     private static final int MAX_SELECTED_PAIR_IDS = 20;
+    private static final int MAX_REFERENCE_DOCUMENTS = 3;
     private static final Set<String> SKILL_MODES = Set.of("auto", "explicit", "off");
     /** 작업 탭에서 보낸 턴. 생략(null)이면 기존 동작이다. */
     public static final String TASK_MODE = "task";
@@ -160,6 +168,24 @@ public record AgentTurnRequest(
         this(sessionId, documentId, baseVersion, message, provider, model, null, "auto", null, conversationContext,
                 skillDraftSources, skillDraftUserDirectives, skillDraftExcludedLiterals, skillScopeType,
                 editorSnapshot);
+    }
+
+    /** reference_document_ids 이전의 전체 필드 생성자. 참고 문서는 없음(기존 동작)이다. */
+    public AgentTurnRequest(String sessionId, String documentId, Long baseVersion, String message,
+                            String provider, String model, Boolean allowWebSearch,
+                            String skillMode, String skillId,
+                            ConversationContext conversationContext,
+                            List<SkillDraftSourceSelector> skillDraftSources,
+                            List<String> skillDraftUserDirectives,
+                            List<String> skillDraftExcludedLiterals,
+                            String skillScopeType,
+                            EditorSnapshot editorSnapshot,
+                            String mode,
+                            String folderId,
+                            String readOnlyDocumentId) {
+        this(sessionId, documentId, baseVersion, message, provider, model, allowWebSearch, skillMode, skillId,
+                conversationContext, skillDraftSources, skillDraftUserDirectives, skillDraftExcludedLiterals,
+                skillScopeType, editorSnapshot, mode, folderId, readOnlyDocumentId, null);
     }
 
     /** read_only_document_id 이전의 전체 필드 생성자. 보기 전용 문서는 생략(기존 동작)이다. */
@@ -240,6 +266,11 @@ public record AgentTurnRequest(
         skillDraftSources = skillDraftSources == null ? List.of() : List.copyOf(skillDraftSources);
         skillDraftUserDirectives = skillDraftUserDirectives == null ? List.of() : List.copyOf(skillDraftUserDirectives);
         skillDraftExcludedLiterals = skillDraftExcludedLiterals == null ? List.of() : List.copyOf(skillDraftExcludedLiterals);
+        // 개수 검증(@Size)은 이 값으로 한다. null 원소는 @NotBlank가 거절하도록 남긴다.
+        referenceDocumentIds = referenceDocumentIds == null ? List.of() : referenceDocumentIds.stream()
+                .distinct()
+                .filter(id -> id == null || !id.equals(documentId))
+                .toList();
     }
 
     @Schema(description = "이전 대화 맥락. 대화 내용 자체는 서버가 세션에서 읽어 조립한다.")

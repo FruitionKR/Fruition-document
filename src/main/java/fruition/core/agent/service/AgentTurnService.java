@@ -133,9 +133,17 @@ public class AgentTurnService {
         AiModelCatalog.AiModel selectedModel = aiModelCatalog.resolve(request.provider(), request.model());
         List<CanonicalSkillDraftSource> skillDraftSources = canonicalSkillDraftSources(
                 workspaceId, userId, request.skillDraftSources());
+        requireUsableReferences(workspaceId, userId, request.referenceDocumentIds());
         String readOnlyDocumentId = confirmedReadOnlyDocumentId(workspaceId, userId, request);
         return transaction.execute(status ->
                 queueTurn(workspaceId, userId, request, folderId, selectedModel, skillDraftSources, readOnlyDocumentId));
+    }
+
+    /** 조용히 빼면 근거 없이 답하게 되므로 하나라도 어긋나면 거절한다. 사유를 나누지 않아 존재 여부가 응답으로 새지 않는다. */
+    private void requireUsableReferences(String workspaceId, String userId, List<String> documentIds) {
+        if (!documentIds.isEmpty() && !documentService.canUseAsAgentReferences(workspaceId, userId, documentIds)) {
+            throw new InvalidAgentTurnRequestException("고른 문서 중 사용할 수 없는 문서가 있습니다. 다시 골라 주세요.");
+        }
     }
 
     /**
@@ -189,7 +197,8 @@ public class AgentTurnService {
                         request.skillScopeType(),
                         CommandEditorSnapshot.from(request.editorSnapshot()),
                         request.mode(),
-                        folderId == null ? null : folderId.toString()));
+                        folderId == null ? null : folderId.toString(),
+                        request.referenceDocumentIds()));
         if (analytics != null) {
             analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt, "task");
             if ("explicit".equals(request.skillMode()))
@@ -572,7 +581,8 @@ public class AgentTurnService {
             // 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 지정하지 않은 턴은 command 모양을 바꾸지 않도록 키를 싣지 않는다.
             @com.fasterxml.jackson.annotation.JsonProperty("folder_id")
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-            String folderId
+            String folderId,
+            @com.fasterxml.jackson.annotation.JsonProperty("reference_document_ids") List<String> referenceDocumentIds
     ) {}
 
     record CanonicalSkillDraftSource(

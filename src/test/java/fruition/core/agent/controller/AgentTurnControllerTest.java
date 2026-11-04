@@ -80,6 +80,66 @@ class AgentTurnControllerTest {
     }
 
     @Test
+    void turn_referenceDocumentIdsDefaultToEmptyList() throws Exception {
+        assertThat(acceptedReferenceIds("")).isEmpty();
+        assertThat(acceptedReferenceIds(",\"reference_document_ids\":null")).isEmpty();
+        assertThat(acceptedReferenceIds(",\"reference_document_ids\":[]")).isEmpty();
+    }
+
+    @Test
+    void turn_referenceDocumentIdsAreDeduplicatedBeforeCounting() throws Exception {
+        assertThat(acceptedReferenceIds(",\"reference_document_ids\":[\"doc_a\",\"doc_a\",\"doc_b\",\"doc_c\"]"))
+                .containsExactly("doc_a", "doc_b", "doc_c");
+    }
+
+    @Test
+    void turn_referenceDocumentIdSameAsEditTargetIsRemovedBeforeCounting() throws Exception {
+        mockMvc.perform(turnRequest("{\"session_id\":\"session_1\",\"message\":\"수정해줘\",\"documentId\":\"doc_1\","
+                        + "\"baseVersion\":1,\"editorSnapshot\":{\"markdown\":\"# 제목\"},"
+                        + "\"reference_document_ids\":[\"doc_1\",\"doc_a\",\"doc_b\",\"doc_c\"]}"))
+                .andExpect(status().isAccepted());
+
+        var request = org.mockito.ArgumentCaptor.forClass(fruition.core.agent.dto.AgentTurnRequest.class);
+        org.mockito.Mockito.verify(agentTurnService).turn(org.mockito.ArgumentMatchers.eq(WORKSPACE_ID),
+                org.mockito.ArgumentMatchers.eq(USER_ID), request.capture());
+        assertThat(request.getValue().referenceDocumentIds()).containsExactly("doc_a", "doc_b", "doc_c");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "[\"doc_a\",\"doc_b\",\"doc_c\",\"doc_d\"]",
+            "[\"\"]",
+            "[\"   \"]",
+            "[null]",
+            "[{\"id\":\"doc_a\"}]",
+            "\"doc_a\"",
+    })
+    void turn_rejectsInvalidReferenceDocumentIds(String json) throws Exception {
+        mockMvc.perform(turnRequest("{\"session_id\":\"session_1\",\"message\":\"수정해줘\",\"reference_document_ids\":" + json + "}"))
+                .andExpect(status().isBadRequest());
+
+        org.mockito.Mockito.verifyNoInteractions(agentTurnService);
+    }
+
+    private java.util.List<String> acceptedReferenceIds(String field) throws Exception {
+        org.mockito.Mockito.clearInvocations(agentTurnService);
+        mockMvc.perform(turnRequest("{\"session_id\":\"session_1\",\"message\":\"수정해줘\"" + field + "}"))
+                .andExpect(status().isAccepted());
+
+        var request = org.mockito.ArgumentCaptor.forClass(fruition.core.agent.dto.AgentTurnRequest.class);
+        org.mockito.Mockito.verify(agentTurnService).turn(org.mockito.ArgumentMatchers.eq(WORKSPACE_ID),
+                org.mockito.ArgumentMatchers.eq(USER_ID), request.capture());
+        return request.getValue().referenceDocumentIds();
+    }
+
+    private org.springframework.test.web.servlet.RequestBuilder turnRequest(String body) {
+        return post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
+                .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body);
+    }
+
+    @Test
     void cancelTurn_returnsCurrentTurnStatus() throws Exception {
         String runId = "agent_00000000000000000000000000000001";
         when(agentTurnService.cancelTurn(WORKSPACE_ID, USER_ID, runId))

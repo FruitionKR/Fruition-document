@@ -8,6 +8,7 @@ import fruition.core.document.domain.DocumentRole;
 import fruition.core.document.exception.DocumentNotFoundException;
 import fruition.core.document.repository.DocumentEditStateRepository;
 import fruition.core.document.repository.DocumentRepository;
+import fruition.core.document.service.DocumentAccessPolicy;
 import fruition.core.document.service.DocumentEditStateInitializer;
 import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -31,13 +33,28 @@ class SkillReferenceServiceTest {
     @Mock DocumentRepository documentRepository;
     @Mock DocumentEditStateRepository editStateRepository;
     @Mock DocumentEditStateInitializer editStateInitializer;
+    @Mock DocumentAccessPolicy accessPolicy;
+    @Mock DocumentAccessPolicy.Viewer viewer;
     @Mock Document document;
     private SkillReferenceService service;
 
     @BeforeEach
     void setUp() {
         service = new SkillReferenceService(
-                workspaceAccessGuard, documentRepository, editStateRepository, editStateInitializer);
+                workspaceAccessGuard, documentRepository, editStateRepository, editStateInitializer, accessPolicy);
+        lenient().when(accessPolicy.viewer("ws_1", "user_1")).thenReturn(viewer);
+        lenient().when(viewer.canRead(document)).thenReturn(true);
+    }
+
+    @Test
+    void read_doesNotReturnDocumentUserCannotRead() {
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_1", "ws_1"))
+                .thenReturn(Optional.of(document));
+        when(viewer.canRead(document)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.read("ws_1", "user_1", "doc_1"))
+                .isInstanceOf(DocumentNotFoundException.class);
+        verifyNoInteractions(editStateInitializer, editStateRepository);
     }
 
     @Test

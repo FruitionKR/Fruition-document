@@ -118,7 +118,7 @@ import java.util.stream.Collectors;
 public class DocumentService {
 
     /** 서버가 만드는 문서 ID(doc_·chatdoc_ + hex)를 넉넉히 덮는다. 조회 전에 걸러 입력 크기와 문자를 제한한다. */
-    private static final java.util.regex.Pattern READ_ONLY_CHECK_DOCUMENT_ID =
+    private static final java.util.regex.Pattern CLIENT_DOCUMENT_ID =
             java.util.regex.Pattern.compile("[A-Za-z0-9_-]{1,128}");
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -1937,7 +1937,7 @@ public class DocumentService {
      * 형식 검사는 조회 전에 한다. NUL 문자는 PostgreSQL이 거절해 500이 된다.
      */
     public boolean isReadOnlyFor(String workspaceId, String userId, String documentId) {
-        if (documentId == null || !READ_ONLY_CHECK_DOCUMENT_ID.matcher(documentId).matches()) {
+        if (documentId == null || !CLIENT_DOCUMENT_ID.matcher(documentId).matches()) {
             return false;
         }
         return documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
@@ -1946,6 +1946,31 @@ public class DocumentService {
                     return viewer.canRead(document) && !viewer.canEdit(document);
                 })
                 .orElse(false);
+    }
+
+    /**
+     * 모두 이 사용자가 읽을 수 있는 이 워크스페이스의 살아 있는 Markdown 문서이고 실제 본문이 있는지.
+     * 없는 문서·형식 오류도 예외 없이 false다. 멤버인지는 호출하는 쪽이 먼저 확인한다.
+     */
+    public boolean canUseAsAgentReferences(String workspaceId, String userId, List<String> documentIds) {
+        DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
+        return documentIds.stream().allMatch(documentId -> CLIENT_DOCUMENT_ID.matcher(documentId).matches()
+                && documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                        .filter(viewer::canRead)
+                        .filter(document -> document.getDocumentRole() == DocumentRole.EDITABLE)
+                        .filter(this::hasConvertedBody)
+                        .isPresent());
+    }
+
+    /** PDF 변환이 진행 중이거나 첫 batch 전에 실패한 문서의 본문은 안내 문구이거나 일부뿐이라 근거가 되지 못한다. */
+    private boolean hasConvertedBody(Document document) {
+        if (document.isConverting()) {
+            return false;
+        }
+        return document.getStatus() != DocumentStatus.failed
+                || postgresDocumentEditStore.findState(document.getId())
+                        .map(state -> !document.isFailedConvertPlaceholder(state.getMarkdown()))
+                        .orElse(true);
     }
 
     public DocumentDetailResponse findById(String workspaceId, String userId, String documentId) {

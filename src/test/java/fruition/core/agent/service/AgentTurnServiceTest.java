@@ -1245,6 +1245,53 @@ class AgentTurnServiceTest {
         assertThat(response.error()).isEqualTo("agent_turn_failed");
     }
 
+    @Test
+    void turn_rejectsUnusableReferenceDocumentsBeforeQueueing() {
+        when(documentService.canUseAsAgentReferences("ws_1", "user_1", List.of("doc_a")))
+                .thenReturn(false);
+
+        assertThatThrownBy(() -> service.turn("ws_1", "user_1", referenceRequest(List.of("doc_a"))))
+                .isInstanceOf(fruition.core.agent.exception.InvalidAgentTurnRequestException.class)
+                .hasMessage("고른 문서 중 사용할 수 없는 문서가 있습니다. 다시 골라 주세요.");
+
+        verifyNoInteractions(chatTurnRecorder, runRepository, outboxWriter);
+    }
+
+    @Test
+    void turn_sendsValidatedReferenceDocumentIdsInCommand() throws Exception {
+        when(documentService.canUseAsAgentReferences("ws_1", "user_1", List.of("doc_a", "doc_b")))
+                .thenReturn(true);
+
+        service.turn("ws_1", "user_1", referenceRequest(List.of("doc_a", "doc_b")));
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"reference_document_ids\":[\"doc_a\",\"doc_b\"]");
+    }
+
+    @Test
+    void turn_withoutReferencesSendsEmptyArrayAndSkipsLookup() throws Exception {
+        service.turn("ws_1", "user_1", referenceRequest(null));
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"reference_document_ids\":[]");
+        verify(documentService, org.mockito.Mockito.never())
+                .canUseAsAgentReferences(anyString(), anyString(), org.mockito.ArgumentMatchers.any());
+    }
+
+    private AgentTurnRequest referenceRequest(List<String> referenceDocumentIds) {
+        return new AgentTurnRequest("session_1", null, null, "참고해서 답해줘", "openai", "gpt-6-luna",
+                null, "auto", null, null, List.of(), List.of(), List.of(), null, null, null, null, null,
+                referenceDocumentIds);
+    }
+
     private AgentTurnRequest request(String type, int startLine, int endLine) {
         return request(type, startLine, endLine, null);
     }
