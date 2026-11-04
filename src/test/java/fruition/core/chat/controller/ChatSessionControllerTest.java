@@ -195,6 +195,27 @@ class ChatSessionControllerTest {
                 .andExpect(jsonPath("$.messages[1].id").value("chat_assistant_1"));
     }
 
+    /** 값이 없는 메시지도 키는 null로 온다(AI turn 결과의 clarify_reason과 같은 모양). */
+    @Test
+    void getMessages_returnsClarifyReasonOrNull() throws Exception {
+        ChatSession session = new ChatSession(SESSION_ID, WORKSPACE_ID, USER_ID, null);
+        ChatMessage clarify = new ChatMessage("chat_assistant_1", session, "pair_1", "assistant", "", "pending", Instant.now(), null);
+        clarify.completeAgentTurn("clarify", "수정할 Markdown 문서를 연 뒤 다시 요청해 주세요.", "markdown_document_required");
+        when(chatSessionService.verifyOwnedSession(WORKSPACE_ID, USER_ID, SESSION_ID)).thenReturn(session);
+        when(chatMessageRepository.findAllBySessionIdInTurnOrder(SESSION_ID)).thenReturn(List.of(
+                clarify,
+                new ChatMessage("chat_assistant_2", session, "pair_2", "assistant", "답변", "completed", Instant.now(), null)
+        ));
+        when(referenceRepository.findAllByChatMessage_IdIn(any())).thenReturn(List.of());
+        when(relatedPageRepository.findAllByChatMessage_IdIn(any())).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/chat/sessions/" + SESSION_ID + "/messages")
+                        .header("Authorization", bearerToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages[0].clarify_reason").value("markdown_document_required"))
+                .andExpect(jsonPath("$.messages[1].clarify_reason").value(org.hamcrest.Matchers.nullValue()));
+    }
+
     @Test
     void getMessages_notOwnedSession_returns404() throws Exception {
         when(chatSessionService.verifyOwnedSession(WORKSPACE_ID, USER_ID, SESSION_ID))

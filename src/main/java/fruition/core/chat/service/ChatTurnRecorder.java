@@ -123,13 +123,13 @@ public class ChatTurnRecorder {
         });
     }
 
-    /** Agent 결과가 도착했을 때 AI가 고른 갈래와 본문을 채운다. */
+    /** Agent 결과가 도착했을 때 AI가 고른 갈래, 본문, 되묻기 이유 코드를 채운다. */
     @Transactional
-    public void completeAgentTurn(String assistantMessageId, String action, String content) {
+    public void completeAgentTurn(String assistantMessageId, String action, String content, String clarifyReason) {
         ChatMessage assistantMessage = chatMessageRepository.findById(assistantMessageId)
                 .orElseThrow(() -> new IllegalStateException(
                         "처리 중인 assistant 메시지를 찾을 수 없습니다: " + assistantMessageId));
-        assistantMessage.completeAgentTurn(action, AiMarkdownSanitizer.sanitize(content));
+        assistantMessage.completeAgentTurn(action, AiMarkdownSanitizer.sanitize(content), clarifyReason);
         chatMessageRepository.save(assistantMessage);
     }
 

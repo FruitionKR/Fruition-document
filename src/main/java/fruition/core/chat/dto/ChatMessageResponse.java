@@ -75,6 +75,12 @@ public record ChatMessageResponse(
                 example = "markdown_edit")
         String action,
 
+        @JsonProperty("clarify_reason")
+        @Schema(description = "action이 clarify일 때 AI가 되물은 이유 코드. 코드가 없는 되묻기와 다른 메시지는 null이다. "
+                + "화면이 갈래를 정하는 데만 쓰고 사용자 문구로 쓰지 않는다. 값은 늘어날 수 있어 모르는 값은 코드가 없는 되묻기로 다룬다.",
+                example = "markdown_document_required")
+        String clarifyReason,
+
         @Schema(description = "실제 실행 순서대로 저장된 진행 단계")
         List<com.fasterxml.jackson.databind.JsonNode> progress
 ) {}

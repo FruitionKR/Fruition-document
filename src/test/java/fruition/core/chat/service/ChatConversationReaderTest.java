@@ -69,7 +69,7 @@ class ChatConversationReaderTest {
     void keepsAssistantActionAsConversationHint() {
         ChatMessage assistant = message("p1", "assistant", "날씨를 알려주세요.", "completed", 1);
         assistant.assignRun("agent_1");
-        assistant.completeAgentTurn("conversation_reply", "날씨를 알려주세요.");
+        assistant.completeAgentTurn("conversation_reply", "날씨를 알려주세요.", null);
         given(message("p1", "user", "제목을 써줘", "completed", 0), assistant);
 
         var conversation = reader.read("session_1", List.of());

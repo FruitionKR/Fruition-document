@@ -53,6 +53,10 @@ public class ChatMessage {
     @Column(name = "action")
     private String action;
 
+    /** 되묻기의 이유 코드. 화면이 문장 대신 이 값으로 갈래를 정한다. 코드가 없거나 되묻기가 아니면 비어 있다. */
+    @Column(name = "clarify_reason")
+    private String clarifyReason;
+
     @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
     @Column(nullable = false, columnDefinition = "jsonb", insertable = false, updatable = false)
     private java.util.List<com.fasterxml.jackson.databind.JsonNode> progress = java.util.List.of();
@@ -93,8 +97,9 @@ public class ChatMessage {
     public void assignRun(String runId) { this.runId = runId; }
 
     /** 결과가 도착해 AI가 고른 갈래가 정해졌을 때 기록한다. */
-    public void completeAgentTurn(String action, String content) {
+    public void completeAgentTurn(String action, String content, String clarifyReason) {
         this.action = action;
+        this.clarifyReason = clarifyReason;
         complete(content);
     }
 
@@ -122,6 +127,7 @@ public class ChatMessage {
     public String getContent() { return content; }
     public String getRunId() { return runId; }
     public String getAction() { return action; }
+    public String getClarifyReason() { return clarifyReason; }
     public String getStatus() { return status; }
     public Instant getCreatedAt() { return createdAt; }
     public String getErrorMessage() { return errorMessage; }

@@ -1,5 +1,9 @@
 # Backend 변경 기록
 
+## 2026-11-04
+
+- Agent turn 결과의 되묻기 이유 코드 `clarify_reason`을 `chat_messages`에 저장하고(V97, NULL 허용) 채팅 메시지 조회 응답으로 내려준다. 화면이 되묻기 문장을 비교하지 않고 코드로 갈래를 정할 수 있고 새로고침 뒤에도 유지된다. `action=clarify`의 문자열 코드(소문자·숫자·밑줄 1~64자)만 받고, 모르는 코드는 그대로 전달하며, 형식이 어긋나면 값만 버린다. 값이 없거나 이전 메시지는 `null`이다.
+
 ## 2026-11-03
 
 - 외부 호출을 Pod 수만큼 반복하던 스케줄 작업 4개(`DocumentPipelineRunReconciler`·`ChatWikiExportReconciler`·`DocumentOriginalHashWorker`·`FxRateService`)를 회차마다 한 Pod만 하게 했다. 대상이 있을 때만 `scheduler_leases` 행을 조건부 UPSERT 한 문장으로 점유하므로 커넥션·세션 잠금을 쥐지 않고, 일이 없는 서버의 쿼리 수는 그대로다. 주기·결과는 바뀌지 않는다(V96).

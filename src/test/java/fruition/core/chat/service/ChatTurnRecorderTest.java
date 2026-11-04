@@ -69,9 +69,23 @@ class ChatTurnRecorderTest {
                 "chat_assistant_abc123", session, "pair_abc123", "assistant", "", "pending", Instant.now(), null);
         when(chatMessageRepository.findById("chat_assistant_abc123")).thenReturn(Optional.of(assistant));
 
-        recorder.completeAgentTurn("chat_assistant_abc123", "conversation_reply", "[자세히](https://attacker.example/?q=x)");
+        recorder.completeAgentTurn("chat_assistant_abc123", "conversation_reply", "[자세히](https://attacker.example/?q=x)", null);
 
         assertThat(assistant.getContent()).isEqualTo("자세히 (attacker.example)");
+        verify(chatMessageRepository).save(assistant);
+    }
+
+    @Test
+    void completeAgentTurn_storesClarifyReason() {
+        ChatSession session = new ChatSession("session_abc123", "ws_abc123", "user_abc123", null);
+        ChatMessage assistant = new ChatMessage(
+                "chat_assistant_abc123", session, "pair_abc123", "assistant", "", "pending", Instant.now(), null);
+        when(chatMessageRepository.findById("chat_assistant_abc123")).thenReturn(Optional.of(assistant));
+
+        recorder.completeAgentTurn("chat_assistant_abc123", "clarify", "질문", "markdown_document_required");
+
+        assertThat(assistant.getAction()).isEqualTo("clarify");
+        assertThat(assistant.getClarifyReason()).isEqualTo("markdown_document_required");
         verify(chatMessageRepository).save(assistant);
     }
 
