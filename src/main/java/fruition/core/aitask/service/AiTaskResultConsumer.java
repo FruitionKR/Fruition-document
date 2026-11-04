@@ -1,5 +1,8 @@
 package fruition.core.aitask.service;
 
+import fruition.core.document.service.DocumentCopyScrubber;
+import java.util.ArrayList;
+import java.util.List;
 import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,17 +29,20 @@ public class AiTaskResultConsumer {
     private final QueryRunStore queryRunStore;
     private final QueryEventBroker queryEventBroker;
     private final WikiWorkspaceVersionRepository wikiVersions;
+    private final DocumentCopyScrubber copyScrubber;
 
     public AiTaskResultConsumer(ObjectMapper objectMapper,
                                 AiTaskResultApplier applier,
                                 QueryRunStore queryRunStore,
                                 QueryEventBroker queryEventBroker,
-                                WikiWorkspaceVersionRepository wikiVersions) {
+                                WikiWorkspaceVersionRepository wikiVersions,
+                                DocumentCopyScrubber copyScrubber) {
         this.objectMapper = objectMapper;
         this.applier = applier;
         this.queryRunStore = queryRunStore;
         this.queryEventBroker = queryEventBroker;
         this.wikiVersions = wikiVersions;
+        this.copyScrubber = copyScrubber;
     }
 
     @KafkaListener(
@@ -112,7 +118,10 @@ public class AiTaskResultConsumer {
                 return;
             }
             if ("document_purge".equals(kind)) {
-                // 위키를 바꾸지 않는 AI 쪽 복사본 삭제다. 실패 재시도는 AI가 맡아 반영할 결과가 없다.
+                // 위키 내용은 이미 휴지통 이동 때 빠졌다. AI가 소스 페이지를 알려 주면 core_db의 버전 본문을 지운다.
+                List<String> pages = new ArrayList<>();
+                event.path("payload").path("source_page_ids").forEach(page -> pages.add(page.asText()));
+                if (!pages.isEmpty()) copyScrubber.scrubSourcePages(event.path("workspace_id").asText(), pages);
                 return;
             }
             if (!"query".equals(kind)) {

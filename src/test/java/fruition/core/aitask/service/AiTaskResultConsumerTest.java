@@ -27,6 +27,7 @@ class AiTaskResultConsumerTest {
     @Mock QueryRunStore queryRunStore;
     @Mock QueryEventBroker queryEventBroker;
     @Mock WikiWorkspaceVersionRepository wikiVersions;
+    @Mock fruition.core.document.service.DocumentCopyScrubber copyScrubber;
 
     private AiTaskResultConsumer consumer;
 
@@ -34,7 +35,7 @@ class AiTaskResultConsumerTest {
     void setUp() {
         org.mockito.Mockito.lenient().when(applier.acceptsProgress(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         consumer = new AiTaskResultConsumer(
-                new ObjectMapper(), applier, queryRunStore, queryEventBroker, wikiVersions);
+                new ObjectMapper(), applier, queryRunStore, queryEventBroker, wikiVersions, copyScrubber);
     }
 
     @Test
@@ -249,6 +250,24 @@ class AiTaskResultConsumerTest {
                 + "\"run_id\":\"run-1\",\"request\":{\"workspace_id\":\"ws_1\"}}");
 
         verify(wikiVersions).bump("ws_1");
+    }
+
+    @org.junit.jupiter.api.Test
+    void documentPurgeResultScrubsReportedSourcePages() throws Exception {
+        consumer.consume("{\"kind\":\"document_purge\",\"status\":\"succeeded\",\"workspace_id\":\"ws_1\","
+                + "\"run_id\":\"run-1\",\"request\":{\"workspace_id\":\"ws_1\"},"
+                + "\"payload\":{\"source_page_ids\":[\"page-1\"]}}");
+
+        verify(copyScrubber).scrubSourcePages("ws_1", java.util.List.of("page-1"));
+        org.mockito.Mockito.verifyNoInteractions(wikiVersions);
+    }
+
+    @org.junit.jupiter.api.Test
+    void documentPurgeResultWithoutPagesDoesNothing() throws Exception {
+        consumer.consume("{\"kind\":\"document_purge\",\"status\":\"failed\",\"workspace_id\":\"ws_1\","
+                + "\"run_id\":\"run-1\",\"request\":{\"workspace_id\":\"ws_1\"}}");
+
+        org.mockito.Mockito.verifyNoInteractions(copyScrubber);
     }
 
     @org.junit.jupiter.params.ParameterizedTest

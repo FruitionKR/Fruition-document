@@ -45,6 +45,7 @@ class DocumentTrashPurgeWorkerIntegrationTest {
     @Autowired StringRedisTemplate redis;
     @Autowired IngestCommandOutbox ingestCommandOutbox;
     @Autowired DocumentCopyScrubber scrubber;
+    @Autowired MarkdownDiffService diffService;
 
     static final String BODY = "비밀 본문";
     final String workspace = "ws_" + UUID.randomUUID();
@@ -256,6 +257,44 @@ class DocumentTrashPurgeWorkerIntegrationTest {
     }
 
     @Test
+    void sourcePageVersionBodyAndJournalAreRemovedKeepingRowsAndOtherPages() {
+        String gone = "doc_gone_" + UUID.randomUUID();
+        String source = "source_" + UUID.randomUUID();
+        String concept = "concept_" + UUID.randomUUID();
+        String run = insertRun("completed", "document", "{\"kind\":\"document\"}");
+        insertWikiPage(source, gone, null);
+        insertWikiPage(concept, gone, null);
+        insertChange(run, "wiki_page_versions", "{\"page_id\":\"%s\",\"revision\":1}".formatted(source));
+        insertChange(run, "wiki_page_versions", "{\"page_id\":\"%s\",\"revision\":1}".formatted(concept));
+
+        assertThat(scrubber.scrubSourcePages(workspace, List.of(source))).isOne();
+
+        // 행은 남긴다. 버전 기록·변경분·다음 revision 채번이 이 행을 읽는다.
+        assertThat(versionMarkdown(source)).isEmpty();
+        assertThat(versionMarkdown(concept)).isEqualTo(BODY);
+        assertThat(jdbc.queryForList("SELECT row_key->>'page_id' FROM ai_task_changes WHERE run_id = ?",
+                String.class, run)).containsExactly(concept);
+        assertThat(diffService.diff(1, versionMarkdown(source), 2, versionMarkdown(source)).hunks()).isEmpty();
+        // 재전달해도 같다.
+        assertThat(scrubber.scrubSourcePages(workspace, List.of(source))).isOne();
+    }
+
+    @Test
+    void sourcePageScrubRefusesPageBackedByLiveDocumentOrOtherWorkspace() {
+        String live = insertDocument(null, null);
+        String backed = "concept_" + UUID.randomUUID();
+        String foreign = "source_" + UUID.randomUUID();
+        insertWikiPage(backed, "doc_gone_" + UUID.randomUUID(), null);
+        insertWikiPage(backed, live, null);
+        insertWikiPage(foreign, "doc_gone_" + UUID.randomUUID(), "ws_other_" + UUID.randomUUID());
+
+        assertThat(scrubber.scrubSourcePages(workspace, List.of(backed, foreign))).isZero();
+
+        assertThat(versionMarkdown(backed)).isEqualTo(BODY);
+        assertThat(versionMarkdown(foreign)).isEqualTo(BODY);
+    }
+
+    @Test
     void failedObjectDeletionLeavesNoCommand() {
         String expired = insertDocument(null, now.minus(Duration.ofDays(31)));
         StorageProperties missingBucket = new StorageProperties();
@@ -310,6 +349,30 @@ class DocumentTrashPurgeWorkerIntegrationTest {
     }
 
     /** 다른 테스트가 남긴 휴지통 문서도 기준 시각으로는 만료이므로 함께 센다. */
+    private void insertWikiPage(String pageId, String documentId, String operationWorkspace) {
+        String operation = "op_" + UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO ai_operation_logs(operation_id, workspace_id, user_id, operation_type,
+                    status, changed_resource_count, created_at)
+                VALUES (?, ?, ?, 'ingest', 'succeeded', 1, now())
+                """, operation, operationWorkspace == null ? workspace : operationWorkspace, user);
+        jdbc.update("""
+                INSERT INTO wiki_page_contributions(page_id, ingest_operation_id, source_document_id, sequence_revision,
+                    object_key, active, created_at)
+                VALUES (?, ?, ?, 1, 'wiki/contribution', false, now())
+                """, pageId, operation, documentId);
+        jdbc.update("""
+                INSERT INTO wiki_page_versions(page_id, revision, contribution_count, markdown, markdown_key,
+                    content_hash, created_at)
+                VALUES (?, 1, 1, ?, 'wiki/key', 'hash', now()) ON CONFLICT DO NOTHING
+                """, pageId, BODY);
+    }
+
+    private String versionMarkdown(String pageId) {
+        return jdbc.queryForObject("SELECT markdown FROM wiki_page_versions WHERE page_id = ? AND revision = 1",
+                String.class, pageId);
+    }
+
     private String insertRun(String status, String kind, String command) {
         String id = "run_" + UUID.randomUUID();
         jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, status, command) VALUES (?, ?, ?, ?, ?, CAST(? AS jsonb))",
