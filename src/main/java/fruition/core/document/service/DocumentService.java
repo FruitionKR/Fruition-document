@@ -1329,7 +1329,7 @@ public class DocumentService {
         validateIdempotencyKey(idempotencyKey);
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다. 목록의 can_convert와 같은 판정이다.
+        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다. 폴더 판정(아래)까지 합치면 can_convert와 같다.
         documentAccessPolicy.requireConvert(source, userId);
 
         String endpointScope = convertEndpointScope(workspaceId);

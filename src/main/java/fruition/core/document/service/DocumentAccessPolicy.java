@@ -24,6 +24,7 @@ import java.util.function.BooleanSupplier;
  * 휴지통 복구의 원위치 복귀는 넣기 규칙의 예외다. 삭제 뒤 폴더가 보기로 바뀌어도 원래 폴더로 돌아간다.
  * 최상위로 보내면 삭제·복구가 꺼내기 우회가 되기 때문이다.
  * PDF Markdown 변환은 원본 파일이 있는 PDF만 대상이고, 업로더 본인과 {@code document.convert} 권한자(OWNER 포함)만 한다.
+ * 변환본이 원본 폴더에 들어가므로 그 폴더의 편집 권한도 필요하다.
  * 멤버인지는 호출하는 쪽이 먼저 확인한다.
  */
 @Component
@@ -66,8 +67,9 @@ public class DocumentAccessPolicy {
     }
 
     /**
-     * PDF Markdown 변환 요청을 판정한다. 대상이 아니면 400, 권한이 없으면 403. 최종 판정은 목록의 can_convert와
-     * 같은 {@link #canConvert}를 쓴다. 문서 권한 설정을 읽을 필요가 없어 Viewer를 만들지 않는다.
+     * PDF Markdown 변환 요청을 판정한다. 대상이 아니면 400, 권한이 없으면 403. 문서 권한 설정을 읽을 필요가 없어
+     * Viewer를 만들지 않는다. 폴더는 끝난 요청의 멱등 재요청을 막지 않도록 호출하는 쪽이 선점 뒤에
+     * {@link #requirePlacement}로 본다. 둘을 합친 판정이 응답의 can_convert({@link Viewer#canConvert})다.
      */
     public void requireConvert(Document document, String userId) {
         if (!isPdf(document)) {
@@ -167,9 +169,10 @@ public class DocumentAccessPolicy {
             return workspaceOwner || userId.equals(document.getUserId());
         }
 
-        /** 변환 요청({@link DocumentAccessPolicy#requireConvert})이 받아들여지는지. 판정 코드를 함께 쓴다. */
+        /** 변환 요청이 받아들여지는지. {@link DocumentAccessPolicy#requireConvert}와 판정 코드를 함께 쓰고, 변환본이 들어갈 폴더도 본다. */
         public boolean canConvert(Document document) {
-            return DocumentAccessPolicy.canConvert(document, userId, () -> convertPermission);
+            return DocumentAccessPolicy.canConvert(document, userId, () -> convertPermission)
+                    && canEditFolder(document.getFolderId());
         }
 
         public boolean canEditFolder(UUID folderId) {

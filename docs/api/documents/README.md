@@ -27,7 +27,8 @@
 - 목록·트리·상세 응답의 `can_edit`, `can_delete`로 화면이 읽기 전용 여부를 정하고, `permission`은 문서에 직접 건 설정(없으면 `null`), `updated_by`는 마지막으로 본문을 저장한 사용자다.
 - `can_convert`는 그 문서로 [PDF Markdown 변환](../ai.md#detail-post-api-workspaces-workspace-id-documents-document-id-convert-markdown)을
   요청하면 받아들여지는지다. 변환 API와 같은 판정 코드를 쓴다: 삭제되지 않은 PDF(`mime_type`이 `application/pdf`이거나 파일명이 `.pdf`)이고
-  원본 파일(`source_uri`)이 있으며, 업로더 본인이거나 `document.convert` 권한자(OWNER는 항상 가짐)면 `true`다.
+  원본 파일(`source_uri`)이 있으며, 업로더 본인이거나 `document.convert` 권한자(OWNER는 항상 가짐)이고, 문서가 있는 폴더를 편집할 수 있으면 `true`다.
+  변환본이 그 폴더에 들어가므로 보기 폴더의 PDF는 업로더에게도 `false`다([폴더에 넣기·꺼내기](#폴더에-넣기꺼내기)).
   Markdown 등 변환 대상이 아닌 문서는 `false`. 이미 변환한 적이 있는지는 보지 않는다(변환 API도 다시 변환을 허용한다).
 
 ### 폴더에 넣기·꺼내기

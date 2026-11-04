@@ -11,9 +11,11 @@ import fruition.core.agent.service.AgentToolService;
 import fruition.core.authz.WorkspaceAiModelClient;
 import fruition.core.authz.WorkspaceSettingsClient;
 import fruition.core.document.dto.DocumentLifecycleRequest;
+import fruition.core.document.dto.DocumentListResponse;
 import fruition.core.document.dto.DocumentPositionRequest;
 import fruition.core.document.dto.DocumentPositionResponse;
 import fruition.core.document.dto.DocumentRenameRequest;
+import fruition.core.document.dto.DocumentTreeResponse;
 import fruition.core.document.dto.FolderCreateRequest;
 import fruition.core.document.dto.FolderPositionRequest;
 import fruition.core.document.dto.FolderResponse;
@@ -25,6 +27,7 @@ import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.imports.DocumentImportDtos;
 import fruition.core.imports.DocumentImportService;
+import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.shared.util.DuplicateResourceName;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,7 +42,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -69,6 +74,7 @@ class FolderPlacementPermissionIntegrationTest {
     @MockBean AiCommandOutboxPublisher outboxPublisher;
     @MockBean WorkspaceAiModelClient workspaceAiModelClient;
     @MockBean WorkspaceSettingsClient workspaceSettings;
+    @MockBean PipelineWikiStateRequester wikiState;
 
     @Autowired DocumentService documentService;
     @Autowired DocumentPermissionService permissionService;
@@ -105,6 +111,8 @@ class FolderPlacementPermissionIntegrationTest {
         permissionService.setFolder(workspace, owner, reset, "edit");
         when(workspaceAiModelClient.get(anyString()))
                 .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
+        when(wikiState.documentContext(anyString(), anyString()))
+                .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(), null));
     }
 
     // ---------- 문서 이동: 멤버·문서 소유자·OWNER × 넣기·꺼내기 × 보기·상속·재설정·최상위
@@ -308,6 +316,69 @@ class FolderPlacementPermissionIntegrationTest {
         assertForbidden(() -> documentService.convertToMarkdown(workspace, author, pdfId, key()));
 
         assertThat(documentService.convertToMarkdown(workspace, owner, pdfId, key()).folderId()).isEqualTo(view);
+    }
+
+    /** 응답의 can_convert는 변환 요청이 받아들여지는지와 같아야 한다. 폴더 때문에 막히는 경우도 포함한다. */
+    @ParameterizedTest(name = "{0}, {1} = {2}")
+    @CsvSource({
+            "view,     author, false",
+            "view,     member, false",
+            "view,     owner,  true",
+            "inherited,author, false",
+            "inherited,member, false",
+            "inherited,owner,  true",
+            "reset,    author, true",
+            "reset,    member, true",
+            "edit,     author, true",
+            "edit,     member, true",
+            "root,     author, true",
+            "root,     member, true"
+    })
+    void canConvertInEveryResponseMatchesConvertEndpointInFolder(String location, String who, boolean expected) {
+        // member는 업로더가 아니라 document.convert 권한으로 변환한다.
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":" + member,
+                "{\"role\":\"MEMBER\",\"permissions\":[\"document.convert\"]}");
+        UUID folder = folderAt(location);
+        String pdfId = documentService.upload(workspace, author, key(), null, pdf("보고서.pdf")).id();
+        long version = documents.findById(pdfId).orElseThrow().getCurrentVersion();
+        placementService.move(workspace, owner, pdfId, key(), new DocumentPositionRequest(folder, null, version));
+        String userId = user(who);
+
+        assertThat(documentService.findById(workspace, userId, pdfId).canConvert()).isEqualTo(expected);
+        assertThat(documentService.findAll(workspace, userId, null).documents().stream()
+                .filter(document -> document.id().equals(pdfId)).findFirst().orElseThrow().canConvert())
+                .isEqualTo(expected);
+        assertThat(treeDocument(folderService.tree(workspace, userId).items(), pdfId).canConvert())
+                .isEqualTo(expected);
+
+        if (expected) {
+            assertThat(documentService.convertToMarkdown(workspace, userId, pdfId, key()).folderId()).isEqualTo(folder);
+        } else {
+            assertForbidden(() -> documentService.convertToMarkdown(workspace, userId, pdfId, key()));
+        }
+    }
+
+    /** 문서 자체의 편집 설정은 폴더 판정을 바꾸지 않는다. 변환본은 폴더에 들어가기 때문이다. */
+    @Test
+    void canConvertStaysFalseWhenDocumentHasOwnEditSettingInViewFolder() {
+        String pdfId = documentService.upload(workspace, author, key(), null, pdf("보고서.pdf")).id();
+        long version = documents.findById(pdfId).orElseThrow().getCurrentVersion();
+        placementService.move(workspace, owner, pdfId, key(), new DocumentPositionRequest(view, null, version));
+        permissionService.setDocument(workspace, owner, pdfId, "edit");
+
+        assertThat(documentService.findById(workspace, author, pdfId).canConvert()).isFalse();
+        assertForbidden(() -> documentService.convertToMarkdown(workspace, author, pdfId, key()));
+    }
+
+    private DocumentListResponse.DocumentItem treeDocument(List<DocumentTreeResponse.Item> items, String id) {
+        return flatten(items).filter(item -> id.equals(item.id()))
+                .map(DocumentTreeResponse.Item::document)
+                .findFirst().orElseThrow();
+    }
+
+    private static Stream<DocumentTreeResponse.Item> flatten(List<DocumentTreeResponse.Item> items) {
+        return items.stream().flatMap(item -> Stream.concat(Stream.of(item),
+                item.children() == null ? Stream.empty() : flatten(item.children())));
     }
 
     @Test

@@ -143,7 +143,7 @@ public record DocumentListResponse(
             boolean canDelete,
 
             @JsonProperty("can_convert")
-            @Schema(description = "현재 사용자가 이 문서를 PDF Markdown 변환(POST .../convert-markdown)할 수 있는지. 원본 파일이 있는 PDF이고 업로더 본인이거나 document.convert 권한자(OWNER 포함)면 true다. Markdown 등 변환 대상이 아닌 문서는 false다.",
+            @Schema(description = "현재 사용자가 이 문서를 PDF Markdown 변환(POST .../convert-markdown)할 수 있는지. 원본 파일이 있는 PDF이고 업로더 본인이거나 document.convert 권한자(OWNER 포함)이며 문서가 있는 폴더를 편집할 수 있으면 true다. Markdown 등 변환 대상이 아닌 문서는 false다.",
                     example = "false")
             boolean canConvert,
 
