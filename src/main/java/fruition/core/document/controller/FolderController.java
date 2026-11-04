@@ -144,7 +144,7 @@ public class FolderController {
             content = @Content(schema = @Schema(implementation = FolderLifecycleResponse.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 version 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "403", description = "내용이 있는 폴더를 삭제할 권한이 없음",
+        @ApiResponse(responseCode = "403", description = "내용이 있는 폴더를 삭제할 권한이 없음(HIERARCHY_WRITE_FORBIDDEN) 또는 빈 폴더의 편집 권한이 없음(DOCUMENT_WRITE_FORBIDDEN)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "폴더 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

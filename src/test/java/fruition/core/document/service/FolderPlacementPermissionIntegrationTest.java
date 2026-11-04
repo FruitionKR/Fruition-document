@@ -20,6 +20,7 @@ import fruition.core.document.dto.FolderResponse;
 import fruition.core.document.dto.MarkdownDocumentCreateRequest;
 import fruition.core.document.exception.DocumentWriteForbiddenException;
 import fruition.core.document.exception.HierarchyItemNotFoundException;
+import fruition.core.document.exception.HierarchyWriteForbiddenException;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.imports.DocumentImportDtos;
@@ -655,39 +656,131 @@ class FolderPlacementPermissionIntegrationTest {
         assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isEqualTo(view);
     }
 
-    /**
-     * 남은 우회의 현재 동작을 고정한다. 휴지통 문서는 폴더를 비운 것으로 치므로 멤버가 빈 보기 폴더를 지울 수 있고,
-     * 그 뒤 문서를 복구하면 "원래 폴더 삭제" 규칙에 따라 최상위로 나온다. 막으려면 빈 폴더 삭제 규칙을 바꿔야 한다.
-     */
+    /** 보기 폴더를 비워 지운 뒤 복구해 최상위로 꺼내는 경로를 막는다. 휴지통 문서는 내용으로 치지 않으므로 삭제 권한으로 막는다. */
     @Test
-    void emptyViewFolderDeleteStillLetsOwnDocumentReachRootOnRestore() {
+    void emptiedViewFolderCannotBeDeletedSoRestoreStaysInFolder() {
         FolderResponse viewOnly = folder(owner, "우회 보기 폴더", null);
         permissionService.setFolder(workspace, owner, viewOnly.id(), "view");
         DocumentPositionResponse own = authorDocumentIn(viewOnly.id());
         long deleted = trash(author, own);
 
-        folderService.delete(workspace, author, viewOnly.id(), key(),
-                folders.findById(viewOnly.id()).orElseThrow().getCurrentVersion());
+        assertThatThrownBy(() -> folderService.delete(workspace, author, viewOnly.id(), key(),
+                folders.findById(viewOnly.id()).orElseThrow().getCurrentVersion()))
+                .isInstanceOf(DocumentWriteForbiddenException.class);
         restore(author, own.id(), deleted);
 
-        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isNull();
+        assertThat(folders.findById(viewOnly.id()).orElseThrow().getDeletedAt()).isNull();
+        assertThat(documents.findById(own.id()).orElseThrow().getFolderId()).isEqualTo(viewOnly.id());
     }
 
-    /** 빈 폴더는 멤버도 지우고 복구할 수 있고 원래 상위로 돌아간다. 내용이 있으면 OWNER만 된다. */
+    /** 빈 폴더 삭제는 그 폴더의 편집 권한을 따른다. 상속·재설정도 편집 판정과 같고, OWNER는 항상 된다. */
+    @ParameterizedTest(name = "{0}: {1} = {2}")
+    @CsvSource({
+            "member, view, false", "member, inherited, false", "member, reset, true", "member, edit, true", "member, root, true",
+            "author, view, false", "author, inherited, false",
+            "owner, view, true", "owner, inherited, true", "owner, reset, true", "owner, edit, true", "owner, root, true"
+    })
+    void emptyFolderDeleteRequiresEditOnThatFolder(String actor, String kind, boolean allowed) {
+        FolderResponse empty = emptyFolder(kind);
+        long version = folders.findById(empty.id()).orElseThrow().getCurrentVersion();
+
+        Throwable thrown = catchThrowable(() -> folderService.delete(workspace, user(actor), empty.id(), key(), version));
+
+        if (allowed) {
+            assertThat(thrown).isNull();
+            assertThat(folders.findById(empty.id()).orElseThrow().getDeletedAt()).isNotNull();
+        } else {
+            assertThat(thrown).isInstanceOf(DocumentWriteForbiddenException.class);
+            assertThat(folders.findById(empty.id()).orElseThrow().getDeletedAt()).isNull();
+        }
+    }
+
+    /** 내용이 있는 폴더는 편집 권한과 무관하게 지금처럼 OWNER만 지운다. */
+    @Test
+    void folderWithContentKeepsOwnerOnlyRule() {
+        FolderResponse filled = folder(owner, "내용 있는 폴더", null);
+        authorDocumentIn(filled.id());
+
+        assertThatThrownBy(() -> folderService.delete(workspace, member, filled.id(), key(), filled.currentVersion()))
+                .isInstanceOf(HierarchyWriteForbiddenException.class);
+    }
+
+    /** 거절된 요청은 키를 소비하지 않고, 끝난 요청의 재요청은 권한이 회수돼도 저장된 응답을 돌려준다. */
+    @Test
+    void emptyFolderDeleteIdempotencyFollowsOtherPlacementChecks() {
+        FolderResponse rejected = emptyFolder("view");
+        String rejectedKey = key();
+        assertThatThrownBy(() -> folderService.delete(workspace, member, rejected.id(), rejectedKey, rejected.currentVersion()))
+                .isInstanceOf(DocumentWriteForbiddenException.class);
+        permissionService.setFolder(workspace, owner, rejected.id(), "edit");
+        long version = folders.findById(rejected.id()).orElseThrow().getCurrentVersion();
+        assertThat(folderService.delete(workspace, member, rejected.id(), rejectedKey, version).deleted()).isTrue();
+
+        UUID parent = folder(owner, "회수될 상위", null).id();
+        FolderResponse done = folder(owner, "끝난 삭제", parent);
+        String doneKey = key();
+        var first = folderService.delete(workspace, member, done.id(), doneKey, done.currentVersion());
+        permissionService.setFolder(workspace, owner, parent, "view");
+        assertThat(folderService.delete(workspace, member, done.id(), doneKey, done.currentVersion())).isEqualTo(first);
+    }
+
+    /** 취소 보상은 사용자 동작이 아니다. 같은 폴더를 사용자가 직접 지우는 것은 막히고 보상은 지울 수 있다. */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({"inherited-from-parent", "own-view-setting"})
+    void cancelCompensationDeletesCreatedEmptyFolderThatMemberCannotDeleteDirectly(String revocation) throws Exception {
+        UUID parent = folder(owner, "회수될 상위", null).id();
+        FolderResponse created = folder(member, "Agent가 만든 폴더", parent);
+        permissionService.setFolder(workspace, owner,
+                "inherited-from-parent".equals(revocation) ? parent : created.id(), "view");
+        long version = folders.findById(created.id()).orElseThrow().getCurrentVersion();
+        assertThatThrownBy(() -> folderService.delete(workspace, member, created.id(), key(), version))
+                .isInstanceOf(DocumentWriteForbiddenException.class);
+
+        agentTools.execute("delete_folder", tool(member, json.createObjectNode()
+                .put("folder_id", created.id().toString()).put("base_version", version).put("require_empty", true)));
+
+        assertThat(folders.findById(created.id()).orElseThrow().getDeletedAt()).isNotNull();
+    }
+
+    /** 편집할 수 있을 때 지운 빈 폴더는 상위가 그사이 보기로 바뀌어도 멤버가 복구할 수 있고 원래 상위로 돌아간다. 내용이 있으면 OWNER만 된다. */
     @Test
     void trashRestoreOfEmptyFolderReturnsToViewParentForMember() {
-        FolderResponse empty = folder(owner, "빈 폴더", view);
+        UUID parent = folder(owner, "나중에 보기 상위", null).id();
+        FolderResponse empty = folder(owner, "빈 폴더", parent);
 
         var deleted = folderService.delete(workspace, member, empty.id(), key(), empty.currentVersion());
+        permissionService.setFolder(workspace, owner, parent, "view");
         folderService.restore(workspace, member, empty.id(), key(), deleted.currentVersion());
 
-        assertThat(folders.findById(empty.id()).orElseThrow().getParentFolderId()).isEqualTo(view);
+        var restored = folders.findById(empty.id()).orElseThrow();
+        assertThat(restored.getDeletedAt()).isNull();
+        assertThat(restored.getParentFolderId()).isEqualTo(parent);
     }
 
     // ---------- 도우미
 
     private void assertForbidden(ThrowingCallable call) {
         assertThatThrownBy(call).isInstanceOf(DocumentWriteForbiddenException.class).hasMessage(FORBIDDEN);
+    }
+
+    /** 자식이 없는 폴더를 만든다. kind는 setUp 구조와 같은 판정을 받는 위치다. */
+    private FolderResponse emptyFolder(String kind) {
+        return switch (kind) {
+            case "view" -> {
+                FolderResponse own = folder(owner, "빈 보기", null);
+                permissionService.setFolder(workspace, owner, own.id(), "view");
+                yield own;
+            }
+            case "inherited" -> folder(owner, "빈 상속", view);
+            case "reset" -> {
+                FolderResponse own = folder(owner, "빈 재설정", view);
+                permissionService.setFolder(workspace, owner, own.id(), "edit");
+                yield own;
+            }
+            case "edit" -> folder(owner, "빈 편집", edit);
+            case "root" -> folder(owner, "빈 최상위", null);
+            default -> throw new IllegalArgumentException(kind);
+        };
     }
 
     /** 휴지통으로 옮기고 복구에 쓸 현재 버전을 돌려준다. */
