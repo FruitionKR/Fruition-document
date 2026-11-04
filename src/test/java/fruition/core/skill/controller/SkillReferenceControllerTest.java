@@ -8,6 +8,7 @@ import fruition.shared.security.JwtAuthenticationFilter;
 import fruition.shared.security.JwtTokenProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -19,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.net.URI;
 
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -112,6 +114,35 @@ class SkillReferenceControllerTest {
     @ParameterizedTest
     @ValueSource(strings = {"0", "-1", "\"abc\"", "3000000000"})
     void read_rejectsMaxCharsThatIsNotPositiveInteger(String value) throws Exception {
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withMaxChars(value)))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(referenceService);
+    }
+
+    /** 내부 API라 엄격 검증을 두지 않았다. Jackson 기본 변환을 그대로 받으며 docs/api/skills.md와 맞춘다. */
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {"2.7|2", "\"5\"|5", "5.0|5"})
+    void read_acceptsMaxCharsCoercedByJackson(String value, int coerced) throws Exception {
+        when(referenceService.read("ws_1", "user_1", "doc_1", coerced))
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 본문", null, null, "주간 회의록"));
+
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withMaxChars(value)))
+                .andExpect(status().isOk());
+
+        verify(referenceService).read("ws_1", "user_1", "doc_1", coerced);
+    }
+
+    /** 변환 결과가 0이면 양수 검사에서 걸린다. 변환할 수 없는 값도 400이다. */
+    @ParameterizedTest
+    @ValueSource(strings = {"0.5", "true", "[5]", "\"2.7\""})
+    void read_rejectsMaxCharsThatCoercesToNothingUsable(String value) throws Exception {
         mockMvc.perform(post(URL)
                         .header("X-Agent-Service-Token", "test-agent-token")
                         .contentType(MediaType.APPLICATION_JSON)
