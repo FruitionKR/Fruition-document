@@ -2,6 +2,7 @@
 
 ## 2026-11-04
 
+- API 문서의 작업 탭 설명을 고쳤다. `mode=task`도 첨부(`reference_document_ids`)가 있으면 답변을 고를 수 있다.
 - 클라이언트가 먼저 끊은 요청(SSE 구독 해제·다운로드 취소)을 `INTERNAL_ERROR status=500`으로 기록하던 것을 debug 로그로 낮췄다. `AsyncRequestNotUsableException`·`ClientAbortException` 타입만 해당하며 다른 입출력 오류는 지금처럼 500 오류 로그를 남긴다.
 - 첨부 문서를 열지 않고 수정하는 흐름의 document 쪽을 추가했다. 내부 API `/internal/agent/skill-authoring/references/read` 응답에 `edit_revision`(본문과 같은 행의 revision)과 `can_edit`(편집 권한이 있고 `chat_export`가 아니며 변환 중이 아님, 파트 문서는 부모 기준)를 `EDITABLE` 문서에 한해 더했다. `GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`를 추가해 ai-svc 응답에서 지금 읽을 수 있는 문서만 남기고 제목을 현재 값으로 덮어 돌려준다(ai-svc 배포 전에는 404).
 - Agent `apply_document_edit` 저장을 병합 전용으로 바꿨다. 안 겹치는 변경은 지금처럼 병합하고, 겹치거나 기준 버전 스냅샷이 없으면 덮어쓰지 않고 409 `DOCUMENT_VERSION_CONFLICT`로 거절한다(ADR 0032의 예외). 일반 저장, Agent 수동 수락, 회의록 저장은 그대로 last-writer-wins다.
