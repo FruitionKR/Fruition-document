@@ -1,5 +1,6 @@
 package fruition.core.document.service;
 
+import fruition.core.document.repository.IngestCommandOutbox;
 import fruition.core.purge.DataPurgeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,7 +15,9 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 휴지통에 보관 기간보다 오래 있던 문서·폴더를 영구 삭제한다.
@@ -22,6 +25,9 @@ import java.util.List;
  * <p>위키에서는 휴지통으로 옮길 때 이미 뺐으므로({@link DocumentWikiRetirement}) 여기서는 core_db 행과 원본 객체만 지운다.
  * 문서에 딸린 본문·버전·잠금·asset 참조는 CASCADE로 함께 지워진다. 이미지 asset은 다른 문서가 참조하지 않으면
  * 미참조로 표시해 {@link DocumentAssetCleanupWorker}가 보존 기간 뒤 객체와 함께 지우게 한다.
+ *
+ * <p>AI 쪽에 남은 본문 복사본은 같은 트랜잭션의 outbox로 {@code document_purged}를 보내 지우게 한다. 트랜잭션이 되돌려지면
+ * command도 남지 않는다. 휴지통에 있는 동안은 복구할 수 있어 보내지 않는다.
  *
  * <p>대상 행을 {@code FOR UPDATE SKIP LOCKED}로 잡은 채 원본 객체를 먼저 지우고 행을 지운다. 여러 replica가 동시에 돌아도
  * 한 행은 한 번만 처리되고, 객체 삭제가 실패하면 트랜잭션을 되돌려 행을 남기므로 다음 실행에서 다시 시도한다.
@@ -36,15 +42,18 @@ public class DocumentTrashPurgeWorker {
     private final NamedParameterJdbcTemplate jdbc;
     private final TransactionTemplate transactionTemplate;
     private final DataPurgeService purgeService;
+    private final IngestCommandOutbox ingestCommandOutbox;
     private final Duration retention;
 
     public DocumentTrashPurgeWorker(NamedParameterJdbcTemplate jdbc,
                                     TransactionTemplate transactionTemplate,
                                     DataPurgeService purgeService,
+                                    IngestCommandOutbox ingestCommandOutbox,
                                     @Value("${app.document-trash.retention:30d}") Duration retention) {
         this.jdbc = jdbc;
         this.transactionTemplate = transactionTemplate;
         this.purgeService = purgeService;
+        this.ingestCommandOutbox = ingestCommandOutbox;
         this.retention = retention;
     }
 
@@ -84,12 +93,14 @@ public class DocumentTrashPurgeWorker {
 
     private int purgeDocuments(Timestamp cutoff, Timestamp now) {
         List<String> ids = new ArrayList<>();
+        Map<String, String> workspaces = new LinkedHashMap<>();
         List<String> uris = new ArrayList<>();
         jdbc.query("""
-                SELECT id, source_uri, extracted_text_uri FROM documents WHERE deleted_at <= :cutoff
+                SELECT id, workspace_id, source_uri, extracted_text_uri FROM documents WHERE deleted_at <= :cutoff
                 ORDER BY deleted_at LIMIT :limit FOR UPDATE SKIP LOCKED
                 """, new MapSqlParameterSource("cutoff", cutoff).addValue("limit", BATCH_SIZE), row -> {
             ids.add(row.getString("id"));
+            workspaces.put(row.getString("id"), row.getString("workspace_id"));
             addIfPresent(uris, row.getString("source_uri"));
             addIfPresent(uris, row.getString("extracted_text_uri"));
         });
@@ -101,6 +112,7 @@ public class DocumentTrashPurgeWorker {
         List<Object> assetIds = jdbc.queryForList(
                 "SELECT DISTINCT asset_id FROM document_asset_references WHERE document_id IN (:ids)", params, Object.class);
         jdbc.update("DELETE FROM documents WHERE id IN (:ids)", params);
+        workspaces.forEach((documentId, workspaceId) -> ingestCommandOutbox.enqueuePurge(documentId, workspaceId));
         if (!assetIds.isEmpty()) {
             jdbc.update("""
                     UPDATE document_assets a SET unreferenced_since = :now

@@ -111,6 +111,10 @@ public class AiTaskResultConsumer {
                 bumpWikiVersion(event);
                 return;
             }
+            if ("document_purge".equals(kind)) {
+                // 위키를 바꾸지 않는 AI 쪽 복사본 삭제다. 실패 재시도는 AI가 맡아 반영할 결과가 없다.
+                return;
+            }
             if (!"query".equals(kind)) {
                 log.warn("[AI task 결과 소비 생략] kind={} flowId={} reason=unsupported_kind", kind, flowId);
                 return;

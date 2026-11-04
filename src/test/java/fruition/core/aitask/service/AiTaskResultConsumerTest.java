@@ -253,7 +253,7 @@ class AiTaskResultConsumerTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {
-            "query", "agent", "meeting_notes", "meeting_transcription", "convert_batch"})
+            "query", "agent", "meeting_notes", "meeting_transcription", "convert_batch", "document_purge"})
     void nonWikiResultDoesNotBumpWikiVersion(String kind) throws Exception {
         org.mockito.Mockito.lenient().when(applier.applyAgent(any()))
                 .thenReturn(new AiTaskResultApplier.AgentApplyResult(false, null));

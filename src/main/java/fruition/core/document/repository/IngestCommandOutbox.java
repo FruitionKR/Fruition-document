@@ -71,6 +71,16 @@ public class IngestCommandOutbox {
                 new DeleteCommand(runId, "document_deleted", documentId, workspaceId));
     }
 
+    /**
+     * 영구 삭제한 문서의 AI 쪽 본문 복사본을 지우게 한다. 휴지통 이동의 {@link #enqueueDelete}와 달리 복구할 수 없을 때만 보낸다.
+     * key가 documentId라 같은 문서의 document_deleted 뒤에 처리된다.
+     */
+    public void enqueuePurge(String documentId, String workspaceId) {
+        String runId = UUID.randomUUID().toString();
+        writer.enqueue(runId, commandTopic, documentId,
+                new DeleteCommand(runId, "document_purged", documentId, workspaceId));
+    }
+
     /** 문서 이름이 바뀌면 AI가 소유한 소스 페이지 제목을 새 표시 이름으로 맞추게 한다. 문서 단위 순서를 위해 key는 documentId다. */
     public void enqueueRename(String documentId, String workspaceId, String title) {
         String runId = UUID.randomUUID().toString();

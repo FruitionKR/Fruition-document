@@ -1,6 +1,7 @@
 package fruition.core.document.service;
 
 import fruition.TestcontainersConfiguration;
+import fruition.core.document.repository.IngestCommandOutbox;
 import fruition.core.purge.DataPurgeService;
 import fruition.shared.util.StorageProperties;
 import io.minio.MinioClient;
@@ -38,6 +39,7 @@ class DocumentTrashPurgeWorkerIntegrationTest {
     @Autowired MinioClient minio;
     @Autowired StorageProperties storage;
     @Autowired StringRedisTemplate redis;
+    @Autowired IngestCommandOutbox ingestCommandOutbox;
 
     final String workspace = "ws_" + UUID.randomUUID();
     final String user = "user_" + UUID.randomUUID();
@@ -71,12 +73,55 @@ class DocumentTrashPurgeWorkerIntegrationTest {
     }
 
     @Test
+    void purgeRecordsDocumentPurgedCommandOnlyForPermanentlyDeletedDocuments() {
+        String expired = insertDocument(null, now.minus(Duration.ofDays(31)));
+        String recent = insertDocument(null, now.minus(Duration.ofDays(29)));
+        String active = insertDocument(null, null);
+
+        worker.purge(now);
+
+        assertThat(purgedCommands(expired)).singleElement().satisfies(payload -> assertThat(payload)
+                .contains("\"kind\":\"document_purged\"", "\"workspace_id\":\"" + workspace + "\"",
+                        "\"document_id\":\"" + expired + "\"", "\"run_id\":"));
+        // 휴지통에 있는 동안은 복구할 수 있어 AI 쪽 복사본을 지우라고 하지 않는다.
+        assertThat(purgedCommands(recent)).isEmpty();
+        assertThat(purgedCommands(active)).isEmpty();
+    }
+
+    @Test
+    void rolledBackPurgeLeavesNoCommandAndKeepsDocument() {
+        String expired = insertDocument(null, now.minus(Duration.ofDays(31)));
+
+        transactionTemplate.executeWithoutResult(status -> {
+            worker.purge(now);
+            assertThat(exists("documents", expired)).isFalse();
+            status.setRollbackOnly();
+        });
+
+        assertThat(purgedCommands(expired)).isEmpty();
+        assertThat(exists("documents", expired)).isTrue();
+    }
+
+    @Test
+    void failedObjectDeletionLeavesNoCommand() {
+        String expired = insertDocument(null, now.minus(Duration.ofDays(31)));
+        StorageProperties missingBucket = new StorageProperties();
+        missingBucket.setBucket("missing-" + UUID.randomUUID().toString().substring(0, 8));
+        DocumentTrashPurgeWorker failing = new DocumentTrashPurgeWorker(namedJdbc, transactionTemplate,
+                new DataPurgeService(jdbc, transactionTemplate, minio, missingBucket), ingestCommandOutbox, Duration.ofDays(30));
+
+        failing.purge(now);
+
+        assertThat(purgedCommands(expired)).isEmpty();
+    }
+
+    @Test
     void failedObjectDeletionKeepsRowsForNextRun() throws Exception {
         String expired = insertDocument(null, now.minus(Duration.ofDays(31)));
         StorageProperties missingBucket = new StorageProperties();
         missingBucket.setBucket("missing-" + UUID.randomUUID().toString().substring(0, 8));
         DocumentTrashPurgeWorker failing = new DocumentTrashPurgeWorker(namedJdbc, transactionTemplate,
-                new DataPurgeService(jdbc, transactionTemplate, minio, missingBucket), Duration.ofDays(30));
+                new DataPurgeService(jdbc, transactionTemplate, minio, missingBucket), ingestCommandOutbox, Duration.ofDays(30));
 
         failing.purge(now);
         assertThat(exists("documents", expired)).isTrue();
@@ -112,6 +157,13 @@ class DocumentTrashPurgeWorkerIntegrationTest {
     }
 
     /** 다른 테스트가 남긴 휴지통 문서도 기준 시각으로는 만료이므로 함께 센다. */
+    private java.util.List<String> purgedCommands(String documentId) {
+        return jdbc.queryForList("""
+                SELECT payload FROM ai_command_outbox
+                WHERE payload::jsonb->>'kind' = 'document_purged' AND payload::jsonb->>'document_id' = ?
+                """, String.class, documentId);
+    }
+
     private int expiredCount() {
         return jdbc.queryForObject("SELECT count(*) FROM documents WHERE deleted_at <= ?", Integer.class,
                 Timestamp.from(now.minus(Duration.ofDays(30))));

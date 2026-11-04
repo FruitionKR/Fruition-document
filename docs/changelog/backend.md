@@ -2,6 +2,7 @@
 
 ## 2026-11-04
 
+- 휴지통 보관 기간이 지나 문서를 영구 삭제할 때 같은 트랜잭션에서 `document_purged` command를 AI로 보낸다. AI가 수정안·되돌리기 스냅샷 등 본문 복사본을 지운다(AI를 먼저 배포해야 한다. 구 AI는 이 command를 폐기한다). 결과 event `document_purge`는 건너뛴다. 오류 문구 `document_purged`·`rollback_document_purged`를 추가했다. API 변경은 없다.
 - agent·query command에 `session_title_needed`를 추가했다. 세션 제목이 비었거나 `새 채팅`이면 `true`, 그 밖에는 `false`다. 저장하지 못할 제목을 만드느라 LLM을 부르던 호출을 AI가 건너뛴다(AI 배포 전에는 무시된다). 판단 기준은 `applySessionTitle`과 `ChatSession.DEFAULT_TITLE`·`isTitleUnset`으로 맞췄고, agent는 소유권 확인이, query는 누적 요약 조회가 읽은 세션을 재사용해 쿼리·트랜잭션이 늘지 않는다.
 - `POST .../agent/turn`이 열린 문서의 편집 잠금으로 423 `DOCUMENT_EDIT_LOCKED`를 줄 때 잠긴 문서 제목을 `error.locked_document_name`에 담는다. 첨부를 고치는 요청도 열린 문서 잠금으로 막히는데 메시지로는 어느 문서인지 알 수 없었다. 거절 동작과 메시지는 그대로이고, 요청자가 읽을 수 없으면 키가 빠진다. 다른 API의 423 응답은 바뀌지 않는다.
 - 클라이언트가 먼저 끊은 요청(SSE 구독 해제·다운로드 취소)을 `INTERNAL_ERROR status=500`으로 기록하던 것을 debug 로그로 낮췄다. `AsyncRequestNotUsableException`·`ClientAbortException` 타입만 해당하며 다른 입출력 오류는 지금처럼 500 오류 로그를 남긴다.
