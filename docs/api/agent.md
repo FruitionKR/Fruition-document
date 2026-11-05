@@ -719,7 +719,7 @@ document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 
 document-svc는 클라이언트 값을 믿지 않고, 이 워크스페이스의 삭제되지 않은 문서이고 요청 사용자가 읽을 수 있으면서 편집은 못 할 때만
 assistant 메시지(`chat_messages.read_only_document_id`)에 남겨 [메시지 조회](chat.md) 응답으로 돌려준다. 없는 문서, 다른 워크스페이스 문서, 삭제된 문서,
 편집 가능한 문서, 형식 오류(문자열이 아닌 값 포함), `documentId`와 함께 온 값은 오류 없이 무시하고 턴 응답도 같아 존재 여부가 드러나지 않는다.
-안내 표시에만 쓰고 권한 판단에 쓰지 않으며, ai command에 싣지 않는다.
+확인된 값은 ai command의 `read_only_document_id` 키로도 보낸다(확인되지 않으면 키를 싣지 않는다). AI가 "이 문서"를 그 문서로 읽어 다른 첨부를 고치지 않고 권한을 안내한다. 안내 표시와 이 해석에만 쓰고 권한 판단에 쓰지 않는다.
 
 참고 문서를 붙이려면 `reference_document_ids`에 문서 ID를 최대 3개 보낸다. 문서를 열지 않은 턴에도, `documentId`와 함께도 보낼 수 있고 편집 권한은 요구하지 않는다.
 중복과 `documentId`와 같은 ID는 서버가 뺀 뒤 개수를 센다. 빈 문자열이나 중복 제거 뒤 3개 초과는 `400`이다.
@@ -759,7 +759,7 @@ document-svc는 소유권을 확인할 때 읽은 세션 제목으로 ai command
 | body | `editorSnapshot` | `object` | 아니오 | 편집 시작 시점의 에디터 상태 |
 | body | `mode` | `string` | 아니오 | `task`(작업 탭 턴) 또는 `chat`(채팅 탭 문서 질문). 생략하면 기존 동작 |
 | body | `folder_id` | `string(uuid)` | 아니오 | 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 생략하면 루트·워크스페이스 전체 |
-| body | `read_only_document_id` | `string` | 아니오 | 보기 권한 문서를 연 채 보낸 요청의 그 문서. 서버가 확인해 맞을 때만 메시지에 남기고 틀린 값은 무시한다(`400` 없음). AI로 보내지 않는다 |
+| body | `read_only_document_id` | `string` | 아니오 | 보기 권한 문서를 연 채 보낸 요청의 그 문서. 서버가 확인해 맞을 때만 메시지에 남기고 ai command에 싣는다. 틀린 값은 무시한다(`400` 없음) |
 | body | `reference_document_ids` | `string[]` | 아니오 | 참고할 문서(최대 3개). 읽을 수 있는 이 워크스페이스의 Markdown 문서만 받고, 하나라도 어긋나면 요청 전체가 `400`이다. 중복과 `documentId`와 같은 ID는 서버가 뺀다 |
 | body | `allow_web_search` | `boolean` | 아니오 | Query와 웹 근거 기반 새 문서 생성에서 웹 검색을 허용할지. 편집·Skill 갈래에는 영향이 없다 |
 | body | `conversationContext.selected_pair_ids` | `string[]` | 아니오 | 맥락으로 쓸 문답 ID(최대 20개). 비우면 세션의 최근 완결 문답을 쓴다 |

@@ -370,8 +370,9 @@ class SpeechSynthesisIntegrationTest {
         assertThat(upstreamClosed.await(10, TimeUnit.SECONDS)).isTrue();
         eventually(() -> "failed".equals(runStatus()));
         // 끊긴 합성도 사용량 수집이 걸린다(ai가 cancelled로 마감한 호출을 과금).
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM usage_collect_queue WHERE run_id LIKE 'speech_synthesis:%' "
-                + "AND run_id IN (SELECT id FROM ai_task_runs WHERE user_id = ?)", Integer.class, userId)).isPositive();
+        // 상태와 대기열은 따로 커밋된다(failRun 뒤 enqueue). failed를 본 직후에는 대기열 행이 아직 없을 수 있다.
+        eventually(() -> jdbc.queryForObject("SELECT count(*) FROM usage_collect_queue WHERE run_id LIKE 'speech_synthesis:%' "
+                + "AND run_id IN (SELECT id FROM ai_task_runs WHERE user_id = ?)", Integer.class, userId) > 0);
         assertThat(speechRows(messageId)).isZero();
         assertThat(objectsOf(messageId)).isEmpty();
     }
