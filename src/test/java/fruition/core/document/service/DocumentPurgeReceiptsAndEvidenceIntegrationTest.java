@@ -135,20 +135,6 @@ class DocumentPurgeReceiptsAndEvidenceIntegrationTest {
     }
 
     @Test
-    void resultArrivingAfterPurgeBlanksEvidenceCitingTheMissingDocumentOnlyInSourceRefs() throws Exception {
-        String missing = "doc_" + UUID.randomUUID();
-        String kept = insertDocument(null);
-        String another = insertDocument(null);
-        String run = insertRun("agent", "{}");
-        projections.create(run, workspace, user, null, null, null);
-
-        assertThat(applier.applyAgent(agentEvent(run, mapper.readTree(multiDocumentEvidence(kept, missing, another)))).applied()).isTrue();
-
-        assertThat(projectionResult(run).toString()).doesNotContain(BODY).contains(OTHER);
-        assertThat(receiptPayload(run)).doesNotContain(BODY).contains(OTHER);
-    }
-
-    @Test
     void chatProjectionJournalStaysEqualToTheRowSoCancelDoesNotConflict() throws Exception {
         String purged = insertDocument(now.minus(Duration.ofDays(31)));
         String kept = insertDocument(null);

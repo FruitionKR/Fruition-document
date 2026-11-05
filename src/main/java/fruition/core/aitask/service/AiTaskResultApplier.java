@@ -605,9 +605,8 @@ public class AiTaskResultApplier {
         event.path("payload").path("chat").path("evidence_snippets").forEach(snippets::add);
         java.util.Set<String> ids = new java.util.HashSet<>();
         for (JsonNode snippet : snippets) {
-            for (String id : citedDocumentIds(snippet)) {
-                if (!id.isBlank() && !id.startsWith("web:")) ids.add(id);
-            }
+            String id = snippet.path("source_document_id").asText("");
+            if (!id.isBlank() && !id.startsWith("web:")) ids.add(id);
         }
         if (ids.isEmpty()) return event;
         ids.removeAll(jdbcTemplate.queryForList(
@@ -618,20 +617,12 @@ public class AiTaskResultApplier {
         for (JsonNode list : java.util.List.of(cleaned.path("payload").path("evidence_snippets"),
                 cleaned.path("payload").path("chat").path("evidence_snippets"))) {
             for (JsonNode snippet : list) {
-                if (citedDocumentIds(snippet).stream().anyMatch(ids::contains)) {
+                if (ids.contains(snippet.path("source_document_id").asText(""))) {
                     ((com.fasterxml.jackson.databind.node.ObjectNode) snippet).put("text", "");
                 }
             }
         }
         return cleaned;
-    }
-
-    /** 여러 문서를 걸친 근거는 대표 id가 다른 문서이거나 비어 있어 source_refs도 본다. 본문을 문서별로 나눌 수 없어 하나라도 없으면 함께 비운다. */
-    private static java.util.List<String> citedDocumentIds(JsonNode snippet) {
-        java.util.List<String> ids = new java.util.ArrayList<>();
-        ids.add(snippet.path("source_document_id").asText(""));
-        snippet.path("source_refs").forEach(ref -> ids.add(ref.path("source_document_id").asText("")));
-        return ids;
     }
 
     private JsonNode canonicalQueryEvent(String runId) {
