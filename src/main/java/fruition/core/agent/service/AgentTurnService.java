@@ -131,7 +131,7 @@ public class AgentTurnService {
             // 다른 사용자가 편집 중이면 pipeline 호출 전에 423으로 거절한다.
             // 첨부 수정도 열린 문서 잠금으로 막히므로 어느 문서 때문인지 응답에 담는다.
             // 채팅 탭의 질문은 문서를 바꾸지 않으므로 다른 사람이 편집 중이어도 받는다.
-            if (!request.isChatMode()) {
+            if (!request.asksFromChatTab()) {
                 editLockService.requireWritableNamingDocument(workspaceId, userId, request.documentId());
             }
             // 오래된 snapshot(baseVersion)이어도 거절하지 않는다. 적용 저장이 baseVersion 스냅샷 기준으로
@@ -191,7 +191,7 @@ public class AgentTurnService {
         // 편집안을 적용할 때 되돌려받을 표. source=agent 문자열 대신 이 값으로 AI 작업 여부를 가린다.
         // 적용할 문서가 없으면 표도 만들지 않는다.
         // 채팅 탭의 질문은 적용할 결과가 없다. 표도 문서도 남기지 않아 이 run으로는 적용 경로가 성립하지 않는다.
-        boolean appliesToDocument = request.hasDocumentContext() && !request.isChatMode();
+        boolean appliesToDocument = request.hasDocumentContext() && !request.asksFromChatTab();
         String applyOperationId = appliesToDocument ? applyOperationStore.newOperationId() : null;
         runRepository.create(runId, workspaceId, userId, appliesToDocument ? request.documentId() : null,
                 appliesToDocument ? request.baseVersion() : null, applyOperationId, folderId);
@@ -215,7 +215,7 @@ public class AgentTurnService {
                         request.referenceDocumentIds(), sessionTitleNeeded));
         if (analytics != null) {
             analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt,
-                    request.isChatMode() ? "chat" : "task");
+                    request.asksFromChatTab() ? "chat" : "task");
             if ("explicit".equals(request.skillMode()))
                 analytics.explicitSkillRun(runId, request.skillId(), userId, workspaceId, requestedAt);
         }

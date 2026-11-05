@@ -151,7 +151,7 @@ public record AgentTurnRequest(
     }
 
     /** 채팅 탭의 문서 질문인지. 열린 문서는 근거일 뿐 편집 대상이 아니다. */
-    public boolean isChatMode() {
+    public boolean asksFromChatTab() {
         return CHAT_MODE.equals(mode);
     }
 
