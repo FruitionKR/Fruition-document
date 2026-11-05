@@ -122,7 +122,7 @@ public class AgentTurnService {
         // 문서를 열지 않은 턴은 적용할 대상이 없어 편집 전제 검사를 하지 않는다.
         // AI는 이 경우 chat_answer·conversation_reply·clarify·reject만 낼 수 있다.
         // 작업 탭 턴(mode=task)은 문서 없이 폴더 정리·워크플로를 낼 수 있고, 문서 편집이면 AI가 되묻는다.
-        // 답변은 첨부(reference_document_ids)가 있는 작업 탭 턴에서만 나온다.
+        // 작업 탭은 답하지 않고, 채팅 탭의 문서 질문(mode=chat)은 답만 한다.
         if (request.hasDocumentContext()) {
             DocumentDetailResponse document = documentService.findById(workspaceId, userId, request.documentId());
             if (!isMarkdown(document)) {
@@ -130,7 +130,10 @@ public class AgentTurnService {
             }
             // 다른 사용자가 편집 중이면 pipeline 호출 전에 423으로 거절한다.
             // 첨부 수정도 열린 문서 잠금으로 막히므로 어느 문서 때문인지 응답에 담는다.
-            editLockService.requireWritableNamingDocument(workspaceId, userId, request.documentId());
+            // 채팅 탭의 질문은 문서를 바꾸지 않으므로 다른 사람이 편집 중이어도 받는다.
+            if (!request.asksFromChatTab()) {
+                editLockService.requireWritableNamingDocument(workspaceId, userId, request.documentId());
+            }
             // 오래된 snapshot(baseVersion)이어도 거절하지 않는다. 적용 저장이 baseVersion 스냅샷 기준으로
             // 그 사이 변경과 자동 병합한다(ADR 0032).
             validateTarget(request.editorSnapshot());
@@ -157,7 +160,7 @@ public class AgentTurnService {
 
     /**
      * 메시지에 남길 보기 전용 문서. 클라이언트 값을 믿지 않고 서버가 확인한 것만 남기며, 맞지 않으면 오류 없이 버려 존재 여부가 응답으로 새지 않는다.
-     * 편집 문맥이 있는 요청은 보기 전용 문서를 연 요청이 아니다. 안내 표시에만 쓰고 AI로 보내지 않는다.
+     * 편집 문맥이 있는 요청은 보기 전용 문서를 연 요청이 아니다. 안내 표시와 AI의 "이 문서" 해석에 쓰고 권한 판단에는 쓰지 않는다.
      */
     private String confirmedReadOnlyDocumentId(String workspaceId, String userId, AgentTurnRequest request) {
         String documentId = request.readOnlyDocumentId();
@@ -187,9 +190,11 @@ public class AgentTurnService {
         outboxWriter.begin(runId, workspaceId, userId, "agent");
         // 편집안을 적용할 때 되돌려받을 표. source=agent 문자열 대신 이 값으로 AI 작업 여부를 가린다.
         // 적용할 문서가 없으면 표도 만들지 않는다.
-        String applyOperationId = request.hasDocumentContext() ? applyOperationStore.newOperationId() : null;
-        runRepository.create(runId, workspaceId, userId, request.documentId(),
-                request.baseVersion(), applyOperationId, folderId);
+        // 채팅 탭의 질문은 적용할 결과가 없다. 표도 문서도 남기지 않아 이 run으로는 적용 경로가 성립하지 않는다.
+        boolean appliesToDocument = request.hasDocumentContext() && !request.asksFromChatTab();
+        String applyOperationId = appliesToDocument ? applyOperationStore.newOperationId() : null;
+        runRepository.create(runId, workspaceId, userId, appliesToDocument ? request.documentId() : null,
+                appliesToDocument ? request.baseVersion() : null, applyOperationId, folderId);
         // 질의와 같이 sessionId를 key로 쓴다. 두 갈래가 같은 세션에 쌓이고 세션 단위 누적 요약을
         // 함께 갱신하므로, 한 세션의 턴은 같은 파티션에서 보낸 순서대로 처리돼야 한다.
         outboxWriter.enqueue(runId, commandTopic, request.sessionId(),
@@ -207,15 +212,16 @@ public class AgentTurnService {
                         CommandEditorSnapshot.from(request.editorSnapshot()),
                         request.mode(),
                         folderId == null ? null : folderId.toString(),
-                        request.referenceDocumentIds(), sessionTitleNeeded));
+                        request.referenceDocumentIds(), sessionTitleNeeded, readOnlyDocumentId));
         if (analytics != null) {
-            analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt, "task");
+            analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt,
+                    request.asksFromChatTab() ? "chat" : "task");
             if ("explicit".equals(request.skillMode()))
                 analytics.explicitSkillRun(runId, request.skillId(), userId, workspaceId, requestedAt);
         }
         return new AgentTurnResponse(
-                request.documentId(),
-                request.baseVersion(),
+                appliesToDocument ? request.documentId() : null,
+                appliesToDocument ? request.baseVersion() : null,
                 runId,
                 applyOperationId,
                 "queued",
@@ -613,7 +619,11 @@ public class AgentTurnService {
             String folderId,
             @com.fasterxml.jackson.annotation.JsonProperty("reference_document_ids") List<String> referenceDocumentIds,
             // false면 사용자가 제목을 정한 세션이라 AI가 제목을 만들지 않는다.
-            @com.fasterxml.jackson.annotation.JsonProperty("session_title_needed") boolean sessionTitleNeeded
+            @com.fasterxml.jackson.annotation.JsonProperty("session_title_needed") boolean sessionTitleNeeded,
+            // 서버가 확인한 보기 전용 문서. AI가 "이 문서"를 첨부로 오해해 고치지 않게 한다. 그 밖의 턴은 command 모양을 바꾸지 않도록 키를 싣지 않는다.
+            @com.fasterxml.jackson.annotation.JsonProperty("read_only_document_id")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String readOnlyDocumentId
     ) {}
 
     record CanonicalSkillDraftSource(

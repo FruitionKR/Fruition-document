@@ -1,5 +1,11 @@
 # Backend 변경 기록
 
+## 2026-11-06
+
+- 보기 권한 문서를 연 채 `이 문서 고쳐 줘`라고 했을 때 첨부가 수정될 수 있던 문제의 document 쪽이다. 서버가 확인한 `read_only_document_id`를 agent command에 싣는다(그 밖의 턴은 키가 없다). 구 AI는 키를 무시하고, 새 AI가 구 document-svc를 받으면 기존 동작이라 배포 순서는 상관없다.
+- 문서 영구 삭제의 빈틈을 메운다. `source_refs`에만 그 문서가 있는 근거도 본문을 비운다(`agent_apply_projections.result`, 변경 기록, 질의 receipt). 대표 문서는 살아 있고 `source_refs`의 다른 문서만 이 기능 전에 지워진 인용은 정리 작업이 원문을 비운다(V107, `CONCURRENTLY`). 다른 문서의 근거와 살아 있는 문서만 가리키는 인용은 그대로다.
+- `POST .../ai/tasks/{id}/cancel`이 이미 끝난(`completed`·`failed`) Agent turn을 `409`로 거절한다. `POST .../agent/turn/{id}/cancel`과 같은 조건이다. 되돌리면 완료된 답변이 `pending`으로 돌아가 세션이 잠겼다. 다른 종류의 작업은 그대로다.
+
 ## 2026-11-04
 
 - 문서 영구 삭제가 채팅 인용의 원문을 지운다. 그 문서를 가리키는 `chat_message_references.quote`를 빈 문자열로 비우고 `ai_task_changes`의 같은 행 기록도 맞춘다(V104~V106, 응답의 `references[].text`가 `""`). 여러 문서를 걸친 인용은 원문을 나눌 수 없어 함께 비우고, 살아 있는 대표 문서는 남긴다. 이전에 지운 문서의 인용은 정리 작업이 찾아 지운다. 인용 위치와 답변 본문은 그대로다.
@@ -60,3 +66,7 @@
 
 - 인코딩된 내부 API 경로의 토큰 검사, 삭제된 대화의 늦은 결과 종결, 폴더 복원 권한, 이미지·음성 저장 보상과 파기 경합, 회의 연결·녹음 멤버십 재검사를 보강한다. 최신 main의 RSA·자동 병합 계약을 유지한다.
 - 기존 수정의 격리 회귀 검증을 수행했고 최신 main 통합본은 CI에서 전체 회귀를 확인한다.
+
+## 2026-11-05 채팅 탭 문서 질문
+
+- Agent turn이 `mode=chat`을 받는다. 채팅 탭에서 첨부·열린 문서를 근거로 묻는 턴으로, 편집 잠금을 보지 않고 적용 표(`apply_operation_id`·문서 값)를 만들지 않는다. command에는 근거로 쓸 `document_id`·`editor_snapshot`을 그대로 싣는다. 작업 탭(`mode=task`)과 생략은 그대로다.

@@ -22,7 +22,7 @@ import java.util.Set;
 
 @Schema(description = "Agent turn 요청. 접수되면 202로 돌아오고 결과는 비동기로 만들어진다. "
         + "문서를 열지 않은 상태에서도 보낼 수 있으며, 그때는 편집 대신 답변·되물음만 나온다"
-        + "(mode=task면 폴더 정리·워크플로·되물음이 나오고, 답변은 reference_document_ids로 첨부했을 때만 나온다). "
+        + "(mode=task면 폴더 정리·워크플로·되물음이 나오고 답변은 나오지 않는다. mode=chat이면 답변·되물음만 나온다). "
         + "skill_* 필드는 snake_case이고 나머지는 camelCase다.")
 public record AgentTurnRequest(
         @JsonProperty("session_id") @NotBlank
@@ -89,14 +89,16 @@ public record AgentTurnRequest(
         @Schema(description = "편집 시작 시점의 에디터 상태. documentId와 함께 생략한다.", nullable = true)
         EditorSnapshot editorSnapshot,
 
-        @Pattern(regexp = "task")
-        @Schema(description = "턴을 보낸 화면. 작업 탭이면 \"task\"를 보낸다. "
-                + "task면 첨부(reference_document_ids)가 없을 때 AI가 위키 질문 답변(chat_answer)·대화 답변(conversation_reply)을 "
+        @Pattern(regexp = "task|chat")
+        @Schema(description = "턴을 보낸 화면. 작업 탭이면 \"task\", 채팅 탭에서 첨부·열린 문서를 근거로 묻는 턴이면 \"chat\"을 보낸다. "
+                + "task면 AI가 위키 질문 답변(chat_answer)·대화 답변(conversation_reply)을 "
                 + "고르지 않고 문서 편집·폴더 정리·워크플로·Skill·되물음(clarify) 중에서만 고른다. "
-                + "첨부가 있으면 답변도 고를 수 있어 첨부 문서를 근거로 답한다. "
+                + "질문은 첨부가 있어도 채팅 탭으로 돌려보낸다. "
                 + "열린 문서 없이도 받으며, 문서 편집이 필요하면 AI가 문서를 열어 달라고 되묻는다. "
+                + "chat이면 AI는 답변·거절·안내만 내고 문서를 바꾸지 않는다. documentId·editorSnapshot은 근거로만 쓰며 "
+                + "편집 잠금을 보지 않고 apply_operation_id를 만들지 않는다. "
                 + "생략하면 기존 동작이다.",
-                allowableValues = {"task"}, nullable = true, example = "task")
+                allowableValues = {"task", "chat"}, nullable = true, example = "task")
         String mode,
 
         @JsonProperty("folder_id")
@@ -109,10 +111,10 @@ public record AgentTurnRequest(
 
         @JsonProperty("read_only_document_id")
         @JsonDeserialize(using = StringOrNullDeserializer.class)
-        @Schema(description = "보기 권한 문서를 연 채 보낸 요청이면 그 문서 ID. 편집 대상(documentId)과 다르며 AI로 보내지 않는다. "
+        @Schema(description = "보기 권한 문서를 연 채 보낸 요청이면 그 문서 ID. 편집 대상(documentId)과 다르다. "
                 + "서버가 이 사용자가 읽을 수 있고 편집은 못 하는 문서인지 확인해 맞을 때만 메시지에 남기고, "
                 + "그 밖의 값(없는 문서, 다른 워크스페이스 문서, 삭제된 문서, 편집 가능한 문서, 형식 오류)은 오류 없이 무시한다. "
-                + "안내 표시에만 쓰고 권한 판단에 쓰지 않는다.",
+                + "확인된 값은 AI command에도 실어 \"이 문서\"가 첨부가 아니라 이 문서를 가리키게 한다. 안내 표시와 이 해석에만 쓰고 권한 판단에 쓰지 않는다.",
                 nullable = true, example = "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83")
         String readOnlyDocumentId,
 
@@ -133,6 +135,8 @@ public record AgentTurnRequest(
     private static final Set<String> SKILL_MODES = Set.of("auto", "explicit", "off");
     /** 작업 탭에서 보낸 턴. 생략(null)이면 기존 동작이다. */
     public static final String TASK_MODE = "task";
+    /** 채팅 탭에서 문서를 근거로 묻는 턴. 문서를 바꾸지 않는다. */
+    public static final String CHAT_MODE = "chat";
 
     /** 표시용 힌트라 형식이 틀려도 요청을 거절하지 않는다. 문자열이 아니면(숫자·배열·객체) 값이 없는 것으로 본다. */
     static final class StringOrNullDeserializer extends JsonDeserializer<String> {
@@ -144,6 +148,11 @@ public record AgentTurnRequest(
             parser.skipChildren();
             return null;
         }
+    }
+
+    /** 채팅 탭의 문서 질문인지. 열린 문서는 근거일 뿐 편집 대상이 아니다. */
+    public boolean asksFromChatTab() {
+        return CHAT_MODE.equals(mode);
     }
 
     /** 편집 대상이 정해진 요청인지. 셋은 함께 있거나 함께 없다. */
@@ -238,8 +247,8 @@ public record AgentTurnRequest(
     }
 
     public AgentTurnRequest {
-        if (mode != null && !TASK_MODE.equals(mode)) {
-            throw new IllegalArgumentException("mode must be task or omitted");
+        if (mode != null && !TASK_MODE.equals(mode) && !CHAT_MODE.equals(mode)) {
+            throw new IllegalArgumentException("mode must be task, chat, or omitted");
         }
         // 문서 셋은 함께 있거나 함께 없다. 하나만 오면 적용 경로가 반쯤 성립해 뒤에서 NPE로 터진다.
         boolean hasDocumentId = documentId != null && !documentId.isBlank();

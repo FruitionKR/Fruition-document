@@ -697,12 +697,14 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 모두 생략하며, 적용할 대상이 없어 AI는 답변·되물음만 낸다. 셋은 함께 있거나 함께 없어야 하고
 하나만 오면 `400`이다.
 
-작업 탭에서 보내는 턴은 `"mode": "task"`를 넣는다. 첨부(`reference_document_ids`)가 없으면 AI는 위키 질문
+작업 탭에서 보내는 턴은 `"mode": "task"`를 넣는다. AI는 위키 질문
 답변(`chat_answer`)·대화 답변(`conversation_reply`)을 고르지 않고 문서 편집·새 문서·폴더 정리·워크플로·Skill·
-되물음(`clarify`) 중에서만 고르며, 위키 질문처럼 보이면 채팅 탭에서 질문하라는 `clarify`를 돌려준다. 첨부가
-있으면 답변도 고를 수 있어 첨부 문서를 근거로 답한다. 열린 문서가 없어도 받으므로 폴더 정리·폴더 Skill은
-문서 없이 실행되고, 문서 편집이 필요한데 문서가 없으면 문서를 열어 달라는 `clarify`가 나온다. `mode`를
-생략하면 기존 동작이며, `task` 외의 값은 `400`이다.
+되물음(`clarify`) 중에서만 고르며, 질문처럼 보이면 첨부(`reference_document_ids`)가 있어도 채팅 탭에서 질문하라는
+`clarify`(`clarify_reason=chat_tab_question`)를 돌려준다. 열린 문서가 없어도 받으므로 폴더 정리·폴더 Skill은
+문서 없이 실행되고, 문서 편집이 필요한데 문서가 없으면 문서를 열어 달라는 `clarify`가 나온다.
+
+채팅 탭에서 첨부·열린 문서를 근거로 묻는 턴은 `"mode": "chat"`을 넣는다. AI는 답변·거절·안내만 내고 문서를 바꾸지 않는다. `documentId`·`editorSnapshot`은 근거로만 쓰므로 편집 잠금을 보지 않고(`423` 없음) `apply_operation_id`와 적용 표의 문서 값을 만들지 않는다.
+생략하면 기존 동작이며, `task`·`chat` 외의 값은 `400`이다.
 document-svc는 `mode`를 ai command의 `mode` 키로 그대로 전달한다(생략 시 키 자체를 싣지 않는다).
 
 작업 대상 폴더는 `folder_id`로 보낸다. 폴더 정리의 범위이자 새 문서를 둘 위치다. 생략하면 대상 폴더를
@@ -717,7 +719,7 @@ document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 
 document-svc는 클라이언트 값을 믿지 않고, 이 워크스페이스의 삭제되지 않은 문서이고 요청 사용자가 읽을 수 있으면서 편집은 못 할 때만
 assistant 메시지(`chat_messages.read_only_document_id`)에 남겨 [메시지 조회](chat.md) 응답으로 돌려준다. 없는 문서, 다른 워크스페이스 문서, 삭제된 문서,
 편집 가능한 문서, 형식 오류(문자열이 아닌 값 포함), `documentId`와 함께 온 값은 오류 없이 무시하고 턴 응답도 같아 존재 여부가 드러나지 않는다.
-안내 표시에만 쓰고 권한 판단에 쓰지 않으며, ai command에 싣지 않는다.
+확인된 값은 ai command의 `read_only_document_id` 키로도 보낸다(확인되지 않으면 키를 싣지 않는다). AI가 "이 문서"를 그 문서로 읽어 다른 첨부를 고치지 않고 권한을 안내한다. 안내 표시와 이 해석에만 쓰고 권한 판단에 쓰지 않는다.
 
 참고 문서를 붙이려면 `reference_document_ids`에 문서 ID를 최대 3개 보낸다. 문서를 열지 않은 턴에도, `documentId`와 함께도 보낼 수 있고 편집 권한은 요구하지 않는다.
 중복과 `documentId`와 같은 ID는 서버가 뺀 뒤 개수를 센다. 빈 문자열이나 중복 제거 뒤 3개 초과는 `400`이다.
@@ -755,9 +757,9 @@ document-svc는 소유권을 확인할 때 읽은 세션 제목으로 ai command
 | body | `documentId` | `string` | 아니오 | 편집 대상 문서. 생략하면 `baseVersion`·`editorSnapshot`도 함께 생략한다 |
 | body | `baseVersion` | `integer` | 아니오 | 편집 기준 문서 버전. 현재 버전보다 오래되어도 거절하지 않고, 적용 저장이 이 버전 스냅샷 기준으로 그 사이 변경과 자동 병합한다([자동 병합](documents/content.md#자동-병합)) |
 | body | `editorSnapshot` | `object` | 아니오 | 편집 시작 시점의 에디터 상태 |
-| body | `mode` | `string` | 아니오 | `task`(작업 탭 턴)만 허용. 생략하면 기존 동작 |
+| body | `mode` | `string` | 아니오 | `task`(작업 탭 턴) 또는 `chat`(채팅 탭 문서 질문). 생략하면 기존 동작 |
 | body | `folder_id` | `string(uuid)` | 아니오 | 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 생략하면 루트·워크스페이스 전체 |
-| body | `read_only_document_id` | `string` | 아니오 | 보기 권한 문서를 연 채 보낸 요청의 그 문서. 서버가 확인해 맞을 때만 메시지에 남기고 틀린 값은 무시한다(`400` 없음). AI로 보내지 않는다 |
+| body | `read_only_document_id` | `string` | 아니오 | 보기 권한 문서를 연 채 보낸 요청의 그 문서. 서버가 확인해 맞을 때만 메시지에 남기고 ai command에 싣는다. 틀린 값은 무시한다(`400` 없음) |
 | body | `reference_document_ids` | `string[]` | 아니오 | 참고할 문서(최대 3개). 읽을 수 있는 이 워크스페이스의 Markdown 문서만 받고, 하나라도 어긋나면 요청 전체가 `400`이다. 중복과 `documentId`와 같은 ID는 서버가 뺀다 |
 | body | `allow_web_search` | `boolean` | 아니오 | Query와 웹 근거 기반 새 문서 생성에서 웹 검색을 허용할지. 편집·Skill 갈래에는 영향이 없다 |
 | body | `conversationContext.selected_pair_ids` | `string[]` | 아니오 | 맥락으로 쓸 문답 ID(최대 20개). 비우면 세션의 최근 완결 문답을 쓴다 |

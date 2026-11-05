@@ -200,6 +200,50 @@ class AiTaskResultApplierTest {
         verify(jdbcTemplate, never()).update(contains("SET status = 'ready'"), any(), any(), any());
     }
 
+    /** 채팅 탭 문서 질문은 열린 문서를 command에만 싣고 적용 표에는 남기지 않는다. 그래도 결과는 받아들인다. */
+    @Test
+    void chatQuestionWithOpenDocumentBecomesReadyWithoutApplyValues() throws Exception {
+        JsonNode event = objectMapper.readTree("""
+                {"event_id":"agent:run-chat:succeeded","run_id":"run-chat","kind":"agent",
+                 "status":"succeeded","request":{"workspace_id":"ws-1","user_id":"user-1","mode":"chat",
+                 "document_id":"doc-1","base_version":1,"apply_operation_id":null,
+                 "editor_snapshot":{"markdown":"old"}},
+                 "payload":{"action":"chat_answer","chat":{"answer":"답"}}}
+                """);
+        when(jdbcTemplate.update(any(String.class), eq("agent:run-chat:succeeded"),
+                eq("run-chat"), any())).thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(ResultSetExtractor.class), eq("run-chat")))
+                .thenReturn(new AiTaskResultApplier.AgentProjection("ws-1", "user-1", null, null, null));
+        when(jdbcTemplate.update(contains("SET status = 'ready'"), any(), any(), eq("run-chat"))).thenReturn(1);
+
+        applier.applyAgent(event);
+
+        verify(jdbcTemplate).update(contains("SET status = 'ready'"), any(), any(), eq("run-chat"));
+        verify(jdbcTemplate, never()).update(contains("SET status = 'failed'"), any(), any());
+    }
+
+    /** 작업 탭 턴은 문서 값이 적용 표와 달라지면 그대로 실패다. */
+    @Test
+    void taskTurnWithDocumentMissingFromProjectionStillFails() throws Exception {
+        JsonNode event = objectMapper.readTree("""
+                {"event_id":"agent:run-task:succeeded","run_id":"run-task","kind":"agent",
+                 "status":"succeeded","request":{"workspace_id":"ws-1","user_id":"user-1","mode":"task",
+                 "document_id":"doc-1","base_version":1,"apply_operation_id":null},
+                 "payload":{"action":"chat_answer","chat":{"answer":"답"}}}
+                """);
+        when(jdbcTemplate.update(any(String.class), eq("agent:run-task:succeeded"),
+                eq("run-task"), any())).thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(ResultSetExtractor.class), eq("run-task")))
+                .thenReturn(new AiTaskResultApplier.AgentProjection("ws-1", "user-1", null, null, null));
+        when(jdbcTemplate.update(contains("SET status = 'failed'"),
+                eq("agent_result_request_mismatch"), eq("run-task"))).thenReturn(1);
+
+        applier.applyAgent(event);
+
+        verify(jdbcTemplate).update(contains("SET status = 'failed'"),
+                eq("agent_result_request_mismatch"), eq("run-task"));
+    }
+
     /** pipeline이 갱신한 누적 요약은 세션에 쌓여야 다음 턴이 맥락으로 이어 쓴다. */
     @Test
     void querySuccessStoresUpdatedConversationSummary() throws Exception {

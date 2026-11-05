@@ -101,6 +101,40 @@ class DocumentPurgeReceiptsAndEvidenceIntegrationTest {
     }
 
     @Test
+    void evidenceCitingThePurgedDocumentOnlyInSourceRefsIsBlankedAndOtherEvidenceStays() throws Exception {
+        String purged = insertDocument(now.minus(Duration.ofDays(31)));
+        String kept = insertDocument(null);
+        String another = insertDocument(null);
+        String snippets = multiDocumentEvidence(kept, purged, another);
+        String chat = insertProjection("{\"action\":\"chat_answer\",\"chat\":{\"answer\":\"" + ANSWER + "\",\"evidence_snippets\":" + snippets + "}}");
+        String unrelated = insertProjection("{\"action\":\"chat_answer\",\"chat\":{\"answer\":\"" + ANSWER + "\",\"evidence_snippets\":"
+                + multiDocumentEvidence(kept, another, another) + "}}");
+        jdbc.update("""
+                INSERT INTO ai_task_changes(run_id, table_name, row_key, before_value, after_value)
+                SELECT run_id, 'agent_apply_projections', jsonb_build_object('run_id', run_id),
+                       to_jsonb(p) - 'result', to_jsonb(p) FROM agent_apply_projections p WHERE run_id = ?
+                """, chat);
+        String queryRun = insertRun("query", "{}");
+        insertReceipt(queryRun, "query", "{\"payload\":{\"answer\":\"" + ANSWER + "\",\"evidence_snippets\":" + snippets + "}}");
+        String agentRun = insertRun("agent", "{}");
+        insertReceipt(agentRun, "agent", "{\"payload\":{\"chat\":{\"evidence_snippets\":" + snippets + "}}}");
+
+        worker.purge(now);
+
+        JsonNode evidence = projectionResult(chat).path("chat").path("evidence_snippets");
+        assertThat(evidence.get(0).path("text").asText()).isEmpty();
+        assertThat(evidence.get(0).path("source_refs").toString()).contains(purged);
+        assertThat(evidence.get(1).path("text").asText()).isEqualTo(OTHER);
+        assertThat(projectionResult(chat).path("chat").path("answer").asText()).isEqualTo(ANSWER);
+        assertThat(projectionResult(unrelated).toString()).contains(BODY).contains(OTHER);
+        assertThat(jdbc.queryForObject("""
+                SELECT c.after_value = to_jsonb(p) FROM ai_task_changes c JOIN agent_apply_projections p ON p.run_id = c.run_id
+                WHERE c.run_id = ?""", Boolean.class, chat)).isTrue();
+        assertThat(receiptPayload(queryRun)).doesNotContain(BODY).contains(OTHER).contains(ANSWER);
+        assertThat(receiptPayload(agentRun)).isNull();
+    }
+
+    @Test
     void chatProjectionJournalStaysEqualToTheRowSoCancelDoesNotConflict() throws Exception {
         String purged = insertDocument(now.minus(Duration.ofDays(31)));
         String kept = insertDocument(null);
@@ -291,6 +325,18 @@ class DocumentPurgeReceiptsAndEvidenceIntegrationTest {
                 """)).contains("idx_ai_task_result_receipts_evidence");
     }
 
+    @Test
+    void lookupsThatAlsoReadSourceRefsUseTheSameEvidenceIndexes() {
+        String item = "jsonb_build_object('source_document_id', 'd')";
+        String refs = "jsonb_build_object('source_refs', jsonb_build_array(" + item + "))";
+        String projection = "result #> '{chat,evidence_snippets}'";
+        assertThat(plan("SELECT run_id FROM agent_apply_projections WHERE " + projection + " @> jsonb_build_array(" + item + ") OR "
+                + projection + " @> jsonb_build_array(" + refs + ")")).contains("idx_agent_apply_projections_evidence");
+        String receipt = "COALESCE(event_payload #> '{payload,chat,evidence_snippets}', event_payload #> '{payload,evidence_snippets}')";
+        assertThat(plan("SELECT run_id FROM ai_task_result_receipts WHERE event_payload IS NOT NULL AND (" + receipt + " @> jsonb_build_array(" + item + ") OR "
+                + receipt + " @> jsonb_build_array(" + refs + "))")).contains("idx_ai_task_result_receipts_evidence");
+    }
+
     private String plan(String query) {
         return transaction.execute(status -> {
             jdbc.execute("SET LOCAL enable_seqscan = off");
@@ -304,6 +350,16 @@ class DocumentPurgeReceiptsAndEvidenceIntegrationTest {
                   {"rank":1,"source_document_id":"%s","text":"%s"},
                   {"rank":2,"source_document_id":"%s","text":"%s"}]}}
                 """.formatted(ANSWER, firstDocument, BODY, secondDocument, OTHER);
+    }
+
+    /** 첫 근거는 대표 문서와 다른 문서에 걸치고, 둘째 근거는 대표 문서와 또 다른 문서에 걸친다. */
+    private static String multiDocumentEvidence(String representative, String secondRef, String otherRef) {
+        return """
+                [{"rank":1,"source_document_id":"%1$s","text":"%4$s",
+                  "source_refs":[{"source_document_id":"%1$s","source_block_id":"B1"},{"source_document_id":"%2$s","source_block_id":"B2"}]},
+                 {"rank":2,"source_document_id":"%1$s","text":"%5$s",
+                  "source_refs":[{"source_document_id":"%1$s","source_block_id":"B3"},{"source_document_id":"%3$s","source_block_id":"B4"}]}]
+                """.formatted(representative, secondRef, otherRef, BODY, OTHER);
     }
 
     private JsonNode evidenceOf(String documentId) {

@@ -9,12 +9,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@SpringBootTest
+// 표시용 속성은 이 클래스의 컨텍스트를 따로 두려고 넣는다. 아래에서 주기 실행을 멈추므로 다른 테스트와 공유하면 안 된다.
+@SpringBootTest(properties = "test.ai-task.scheduled-resume=stopped")
 @Import(TestcontainersConfiguration.class)
 class AiTaskRollbackIntegrationTest {
     @Autowired JdbcTemplate jdbc;
@@ -24,6 +26,16 @@ class AiTaskRollbackIntegrationTest {
     @Autowired com.fasterxml.jackson.databind.ObjectMapper mapper;
     @org.springframework.boot.test.mock.mockito.MockBean
     fruition.core.aitask.repository.PipelineTaskCancellationClient pipeline;
+    @Autowired org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor scheduling;
+
+    /**
+     * 1초 주기 resume이 같은 run을 먼저 선점하면 테스트가 부른 resume·cancel은 선점 실패로 그냥 돌아와, 진행 전 상태를 단정하게 된다.
+     * 이 클래스는 진행을 직접 부른다. 여러 Pod 경쟁은 anotherPodSkipsRun...이 latch로 재현한다.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void stopScheduledResume() {
+        scheduling.postProcessBeforeDestruction(cancellation, "aiTaskCancellationService");
+    }
 
     @Test
     void cancellationWaitsForPythonThenRestoresCoreAndRejectsWrongActor() throws Exception {
@@ -142,6 +154,53 @@ class AiTaskRollbackIntegrationTest {
                 .isEqualTo(AiTaskCancellationService.AgentTurnCancel.REQUESTED);
         assertThat(jdbc.queryForObject("SELECT status FROM chat_messages WHERE id = ?", String.class, "assistant-" + legacy))
                 .isEqualTo("pending");
+    }
+
+    @Test
+    void taskCancelRejectsFinishedAgentTurnSoItsAnswerDoesNotGoBackToPending() {
+        for (String status : List.of("completed", "failed")) {
+            String id = "agent_" + UUID.randomUUID().toString().replace("-", "");
+            String workspace = "ws-" + id;
+            redis.opsForValue().set("authz:role:v2:" + workspace + ":user", "{\"role\":\"MEMBER\",\"permissions\":[]}");
+            redis.opsForValue().set("authz:role:v2:" + workspace + ":boss", "{\"role\":\"OWNER\",\"permissions\":[]}");
+            jdbc.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind, command) VALUES (?, ?, 'user', 'agent', CAST(? AS jsonb))",
+                    id, workspace, mapper.createObjectNode().put("run_id", id).put("kind", "agent")
+                            .put("workspace_id", workspace).put("user_id", "user").toString());
+            jdbc.update("INSERT INTO chat_sessions(id, workspace_id, user_id, created_at, title) VALUES (?, ?, 'user', now(), '작업')", id, workspace);
+            jdbc.update("INSERT INTO chat_messages(id, content, created_at, pair_id, role, status, session_id, run_id) "
+                    + "VALUES (?, '', now(), 'pair', 'assistant', 'pending', ?, ?)", "assistant-" + id, id, id);
+            // 결과 반영은 복구 기록을 남기며 말풍선을 채운다. 되돌리면 말풍선이 pending으로 돌아가 세션이 잠긴다.
+            new TransactionTemplate(manager).executeWithoutResult(tx -> {
+                jdbc.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, id);
+                jdbc.update("UPDATE chat_messages SET status = 'completed', content = '답변' WHERE id = ?", "assistant-" + id);
+            });
+            jdbc.update("UPDATE ai_task_runs SET status = ? WHERE id = ?", status, id);
+
+            for (String actor : List.of("user", "boss")) {
+                assertThatThrownBy(() -> cancellation.cancel(id, workspace, actor))
+                        .isInstanceOfSatisfying(org.springframework.web.server.ResponseStatusException.class,
+                                e -> assertThat(e.getStatusCode().value()).isEqualTo(409));
+            }
+
+            assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, id)).isEqualTo(status);
+            assertThat(jdbc.queryForObject("SELECT status FROM chat_messages WHERE id = ?", String.class, "assistant-" + id)).isEqualTo("completed");
+            org.mockito.Mockito.verifyNoInteractions(pipeline);
+        }
+    }
+
+    @Test
+    void taskCancelStillUndoesAFinishedTaskThatIsNotAnAgentTurn() throws Exception {
+        String id = "query-finished-" + UUID.randomUUID();
+        String workspace = "ws-" + id;
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":user", "{\"role\":\"MEMBER\",\"permissions\":[]}");
+        var command = mapper.createObjectNode().put("run_id", id).put("kind", "query")
+                .put("workspace_id", workspace).put("user_id", "user");
+        cancellation.register(command);
+        cancellation.finish(id);
+        org.mockito.Mockito.when(pipeline.cancel(id, workspace, "user", command)).thenReturn(
+                new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "rolling_back", null));
+
+        assertThat(cancellation.cancel(id, workspace, "user").get("status")).isEqualTo("rolling_back");
     }
 
     @Test
