@@ -18,7 +18,8 @@ import java.util.List;
  * 끝난 뒤 {@link #scrubOrphans}가 "문서가 더 없는 행"을 찾아 지운다. 기억해 둘 대기열이 없어 이 기능 전에 지운 문서도 함께 정리된다.
  * 다시 취소를 요청할 수 있는 끝난 실행은 {@code document_purged} 표시를 남겨 AI가 해시 대조를 건너뛰게 한다.
  *
- * <p>사용자 메시지(conversation_context, message)와 채팅 기록은 범위 밖이라 지우지 않는다. 채팅 메시지·참조의 변경 기록도 같은 값이라 남긴다.
+ * <p>사용자 메시지(conversation_context, message)와 답변 본문은 범위 밖이라 지우지 않는다. 채팅 메시지의 변경 기록도 같은 값이라 남긴다.
+ * 채팅 인용은 위치(문서·블록)를 남기고 원문(quote)만 비운다({@link #scrubCitations}).
  */
 @Component
 public class DocumentCopyScrubber {
@@ -67,6 +68,11 @@ public class DocumentCopyScrubber {
                                  ORDER BY position)
                 FROM jsonb_array_elements(%1$s #> '%2$s') WITH ORDINALITY AS item(snippet, position)))""";
 
+    /** V106 인덱스의 표현식과 같아야 인덱스를 탄다. 여러 문서를 가리키는 인용은 대표 문서(document_id)만으로 찾을 수 없다. */
+    private static final String CITATION_OF_DOCUMENT = "(document_id = :id OR source_refs::jsonb" + CITES_DOCUMENT + ")";
+    /** 대표 문서가 지워진 인용. 근거 저장은 문서가 있는 인용만 남기므로 document_id가 NULL이면 FK가 비운 행이다(V105). */
+    private static final String ORPHAN_CITATION = "document_id IS NULL AND quote <> ''";
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public DocumentCopyScrubber(NamedParameterJdbcTemplate jdbc) {
@@ -111,6 +117,32 @@ public class DocumentCopyScrubber {
         jdbc.update("UPDATE ai_task_result_receipts SET event_payload = %s WHERE task_kind = 'query' AND event_payload IS NOT NULL AND %s"
                 .formatted(BLANK_EVIDENCE.formatted("event_payload", "{payload,evidence_snippets}"),
                         RECEIPT_EVIDENCE + CITES_DOCUMENT), params);
+    }
+
+    /**
+     * 이 문서들을 가리키는 인용의 원문을 비운다. 문서 FK가 document_id를 NULL로 비우면 찾을 수 없어 문서 행을 지우기 전에 부른다.
+     * 여러 문서를 가리키는 인용은 원문을 문서별로 나눌 수 없어 함께 비우고, 살아 있는 대표 문서는 남긴다.
+     */
+    public void scrubCitations(List<String> documentIds) {
+        for (String documentId : documentIds) {
+            blankCitations(CITATION_OF_DOCUMENT, new MapSqlParameterSource("id", documentId), """
+                    %1$s || CASE WHEN %1$s->>'document_id' = :id THEN '{"quote": "", "document_id": null}'::jsonb
+                                 ELSE '{"quote": ""}'::jsonb END""");
+        }
+    }
+
+    /**
+     * 변경 기록을 먼저 고친다. 되돌리기가 기록 → 행 순서로 잠그므로 같은 순서여야 교착하지 않는다.
+     * 되돌리기는 "현재 값 = 변경 후 값"을 대조하므로 기록을 행과 같게 맞춘다. 문서 FK가 비우는 document_id는 기록에 남지 않아 함께 고친다.
+     *
+     * @return 원문을 비운 인용 수
+     */
+    private int blankCitations(String condition, MapSqlParameterSource params, String journalValue) {
+        jdbc.update("UPDATE ai_task_changes SET before_value = %s, after_value = %s "
+                .formatted(journalValue.formatted("before_value"), journalValue.formatted("after_value"))
+                + "WHERE table_name = 'chat_message_references' AND row_key->>'id' IN "
+                + "(SELECT id::text FROM chat_message_references WHERE " + condition + ")", params);
+        return jdbc.update("UPDATE chat_message_references SET quote = '' WHERE " + condition, params);
     }
 
     /**
@@ -181,6 +213,17 @@ public class DocumentCopyScrubber {
                       AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = p.document_id)
                     LIMIT :limit FOR UPDATE OF c SKIP LOCKED)
                 """, params);
-        return commands + projections + receipts + changes;
+        return commands + projections + receipts + changes + scrubOrphanCitations(limit);
+    }
+
+    /** 이 기능 전에 영구 삭제한 문서의 인용. 찾아 둔 id로만 고쳐 묶음 크기를 지킨다. */
+    private int scrubOrphanCitations(int limit) {
+        List<Long> citations = jdbc.queryForList("SELECT id FROM chat_message_references WHERE " + ORPHAN_CITATION + " LIMIT :limit",
+                new MapSqlParameterSource("limit", limit), Long.class);
+        if (citations.isEmpty()) {
+            return 0;
+        }
+        return blankCitations("id IN (:citations)", new MapSqlParameterSource("citations", citations),
+                "%s || '{\"quote\": \"\", \"document_id\": null}'::jsonb");
     }
 }

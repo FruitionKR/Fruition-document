@@ -2,6 +2,7 @@
 
 ## 2026-11-04
 
+- 문서 영구 삭제가 채팅 인용의 원문을 지운다. 그 문서를 가리키는 `chat_message_references.quote`를 빈 문자열로 비우고 `ai_task_changes`의 같은 행 기록도 맞춘다(V104~V106, 응답의 `references[].text`가 `""`). 여러 문서를 걸친 인용은 원문을 나눌 수 없어 함께 비우고, 살아 있는 대표 문서는 남긴다. 이전에 지운 문서의 인용은 정리 작업이 찾아 지운다. 인용 위치와 답변 본문은 그대로다.
 - 문서 영구 삭제가 남기던 복사본을 더 지운다. 이 문서의 agent 결과 receipt는 키만 남기고 `event_payload`를 비운다. 문서를 열지 않은 질의는 근거의 `source_document_id`로 찾아 `agent_apply_projections.result`, 그 변경 기록, 질의 receipt의 근거 본문만 비우고(V102·V103, CONCURRENTLY), agent receipt는 `event_payload`를 비운다. 답변 본문은 채팅 표시와 조회 API가 쓰여 남긴다. 삭제 뒤에 도착한 agent·질의 결과는 문서 행을 `FOR KEY SHARE`로 잠근 뒤 문서가 없는 근거의 본문을 비워 저장한다. `scrubOrphans`가 늦게 끝난 run의 receipt와 projection 변경 기록도 정리한다.
 - 휴지통 보관 기간이 지나 문서를 영구 삭제할 때 같은 트랜잭션에서 `document_purged` command를 AI로 보낸다. AI가 수정안·되돌리기 스냅샷 등 본문 복사본을 지운다(AI를 먼저 배포해야 한다. 구 AI는 이 command를 폐기한다). 같은 트랜잭션에서 그 문서의 `ai_task_runs.command` 본문 필드, `agent_apply_projections`의 본문, `ai_task_changes`의 문서 변경 기록을 지운다(V98~V100 인덱스, `CONCURRENTLY`). 진행 중인 실행은 끝난 뒤 다음 실행에서 지운다. AI 결과 event `document_purge`가 알린 소스 페이지의 `wiki_page_versions.markdown`과 그 변경 기록도 지운다(V101). 오류 문구 `document_purged`·`rollback_document_purged`를 추가했다. API 변경은 없다.
 - agent·query command에 `session_title_needed`를 추가했다. 세션 제목이 비었거나 `새 채팅`이면 `true`, 그 밖에는 `false`다. 저장하지 못할 제목을 만드느라 LLM을 부르던 호출을 AI가 건너뛴다(AI 배포 전에는 무시된다). 판단 기준은 `applySessionTitle`과 `ChatSession.DEFAULT_TITLE`·`isTitleUnset`으로 맞췄고, agent는 소유권 확인이, query는 누적 요약 조회가 읽은 세션을 재사용해 쿼리·트랜잭션이 늘지 않는다.

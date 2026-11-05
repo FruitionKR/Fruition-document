@@ -48,7 +48,7 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | chat_sessions | document-svc | 채팅 세션(workspace당 10개) | `context_summary` |
 | chat_messages | document-svc | 질의응답 메시지 | `pair_id`로 user·assistant 쌍 식별, user·assistant 모두 `ai_provider`·`ai_model`·`web_search_enabled` snapshot. `clarify_reason`은 `action=clarify` 결과의 이유 코드 복사본(없으면 NULL), `read_only_document_id`는 요청 때 보기 권한만 있다고 서버가 확인한 열린 문서 ID(assistant만, 없으면 NULL). 표시 전용이라 FK 없이 문서 영구 삭제 뒤에도 ID만 남고, 사용자·워크스페이스 파기 때 세션과 함께 지워진다; V97 |
 | agent_route_outcomes (view) | document-svc | Agent route 운영 평가 후보 | 기존 적용 projection과 채팅을 연결하며 편집 적용은 `accepted`, 실행 실패는 `technical_failure`, 나머지는 `unlabeled`로 노출 |
-| chat_message_references | document-svc | 답변 근거 source block 스니펫 | chat_messages 1:N, `source_block_ids` |
+| chat_message_references | document-svc | 답변 근거 source block 스니펫 | chat_messages 1:N, `source_block_ids`. 근거 문서를 영구 삭제하면 `quote`를 빈 문자열로 비우고 위치는 남긴다 |
 | chat_message_speech | document-svc | 끝까지 합성된 답변 음성(WAV) 저장 기록 | PK `message_id`(chat_messages FK, 삭제 CASCADE), `workspace_id`·`user_id`, `object_key`, `byte_size`, `created_at`(30일 뒤 정리). 객체는 저장마다 새 키 `assets/{workspace_id}/speech/{message_id}/{uuid}.wav`(교체하면 이전 객체를 지운다). V73 |
 | chat_message_related_pages | document-svc | 답변 관련 Wiki 페이지 목록 | chat_messages 1:N, `relevance_score`·`depth` |
 | chat_partial_wiki | document-svc | 채팅 export 문답↔페이지 멤버십 | `UNIQUE(pair_id, wiki_page_id)` |

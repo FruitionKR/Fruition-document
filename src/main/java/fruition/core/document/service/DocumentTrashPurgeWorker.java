@@ -132,6 +132,7 @@ public class DocumentTrashPurgeWorker {
         MapSqlParameterSource params = new MapSqlParameterSource("ids", ids).addValue("now", now);
         List<Object> assetIds = jdbc.queryForList(
                 "SELECT DISTINCT asset_id FROM document_asset_references WHERE document_id IN (:ids)", params, Object.class);
+        copyScrubber.scrubCitations(ids);
         jdbc.update("DELETE FROM documents WHERE id IN (:ids)", params);
         workspaces.forEach((documentId, workspaceId) -> ingestCommandOutbox.enqueuePurge(documentId, workspaceId));
         copyScrubber.scrub(ids);

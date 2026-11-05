@@ -6705,7 +6705,7 @@ components:
             $ref: "#/components/schemas/ChatSourceRef"
         text:
           type: string
-          description: 근거 구절 원문
+          description: 근거 구절 원문. 근거 문서를 영구 삭제하면 빈 문자열이다.
     ChatMessageRelatedPageResponse:
       type: object
       description: 답변과 관련된 Wiki 페이지
