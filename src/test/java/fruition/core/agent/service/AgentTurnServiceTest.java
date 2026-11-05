@@ -192,6 +192,48 @@ class AgentTurnServiceTest {
     }
 
     @Test
+    void turn_chatModeReadsTheOpenDocumentWithoutLockOrApplyOperation() throws Exception {
+        // 채팅 탭의 질문은 열린 문서를 근거로만 쓴다. 다른 사람이 편집 중이어도 받고, 적용 표를 만들지 않는다.
+        when(documentService.findById("ws_1", "user_1", "doc_1"))
+                .thenReturn(document("note.md", "text/markdown", 3));
+        var request = new AgentTurnRequest("session_1", "doc_1", 3L, "이 문서 요약해 줘",
+                "openai", "gpt-6-luna", null, "off", null, null,
+                java.util.List.of(), java.util.List.of(), java.util.List.of(), null, request("whole_document", 1, 2, null).editorSnapshot(), "chat");
+
+        var response = service.turn("ws_1", "user_1", request);
+
+        assertThat(response.applyOperationId()).isNull();
+        assertThat(response.documentId()).isNull();
+        verifyNoInteractions(editLockService, applyOperationStore);
+        verify(documentService).findById("ws_1", "user_1", "doc_1");
+        verify(runRepository).create(anyString(), org.mockito.ArgumentMatchers.eq("ws_1"), org.mockito.ArgumentMatchers.eq("user_1"),
+                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.isNull());
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(command.getValue().mode()).isEqualTo("chat");
+        assertThat(command.getValue().documentId()).isEqualTo("doc_1");
+        assertThat(command.getValue().applyOperationId()).isNull();
+    }
+
+    @Test
+    void turn_taskModeStillChecksTheEditLock() {
+        when(documentService.findById("ws_1", "user_1", "doc_1"))
+                .thenReturn(document("note.md", "text/markdown", 3));
+        when(applyOperationStore.newOperationId()).thenReturn("apply_1");
+        var request = new AgentTurnRequest("session_1", "doc_1", 3L, "오타 고쳐 줘",
+                "openai", "gpt-6-luna", null, "auto", null, null,
+                java.util.List.of(), java.util.List.of(), java.util.List.of(), null, request("whole_document", 1, 2, null).editorSnapshot(), "task");
+
+        var response = service.turn("ws_1", "user_1", request);
+
+        assertThat(response.applyOperationId()).isEqualTo("apply_1");
+        verify(editLockService).requireWritableNamingDocument("ws_1", "user_1", "doc_1");
+    }
+
+    @Test
     void turn_withTargetFolderForwardsFolderAndEchoesIt() throws Exception {
         // 작업 탭에서 대상 폴더를 고르고 문서 없이 실행한다(폴더 정리 범위·새 문서 위치).
         java.util.UUID folderId = java.util.UUID.fromString("44444444-4444-4444-4444-444444444444");
@@ -279,7 +321,7 @@ class AgentTurnServiceTest {
     void request_rejectsUnknownMode() {
         assertThatThrownBy(() -> new AgentTurnRequest("session_1", null, null, "정리해줘", "openai", "gpt-6-luna",
                 null, "auto", null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), null, null,
-                "chat"))
+                "wiki"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
