@@ -512,6 +512,24 @@ class AgentTurnServiceTest {
         verifyRecordedReadOnlyDocument(response.requestId(), "doc_view");
     }
 
+    @Test
+    void turn_sendsOnlyTheConfirmedReadOnlyDocumentToAi() throws Exception {
+        when(documentService.isReadOnlyFor("ws_1", "user_1", "doc_view")).thenReturn(true);
+        when(documentService.isReadOnlyFor("ws_1", "user_1", "doc_other")).thenReturn(false);
+
+        service.turn("ws_1", "user_1", readOnlyRequest("doc_view"));
+        service.turn("ws_1", "user_1", readOnlyRequest("doc_other"));
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter, org.mockito.Mockito.times(2)).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                anyString(), command.capture());
+        assertThat(new ObjectMapper().writeValueAsString(command.getAllValues().get(0)))
+                .contains("\"read_only_document_id\":\"doc_view\"");
+        assertThat(new ObjectMapper().writeValueAsString(command.getAllValues().get(1)))
+                .doesNotContain("read_only_document_id");
+    }
+
     /** 클라이언트 값을 믿지 않는다. 확인되지 않으면 오류 없이 남기지 않는다. */
     @Test
     void turn_ignoresReadOnlyDocumentTheServerDidNotConfirm() {

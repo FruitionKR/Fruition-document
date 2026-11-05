@@ -157,7 +157,7 @@ public class AgentTurnService {
 
     /**
      * 메시지에 남길 보기 전용 문서. 클라이언트 값을 믿지 않고 서버가 확인한 것만 남기며, 맞지 않으면 오류 없이 버려 존재 여부가 응답으로 새지 않는다.
-     * 편집 문맥이 있는 요청은 보기 전용 문서를 연 요청이 아니다. 안내 표시에만 쓰고 AI로 보내지 않는다.
+     * 편집 문맥이 있는 요청은 보기 전용 문서를 연 요청이 아니다. 안내 표시와 AI의 "이 문서" 해석에 쓰고 권한 판단에는 쓰지 않는다.
      */
     private String confirmedReadOnlyDocumentId(String workspaceId, String userId, AgentTurnRequest request) {
         String documentId = request.readOnlyDocumentId();
@@ -207,7 +207,7 @@ public class AgentTurnService {
                         CommandEditorSnapshot.from(request.editorSnapshot()),
                         request.mode(),
                         folderId == null ? null : folderId.toString(),
-                        request.referenceDocumentIds(), sessionTitleNeeded));
+                        request.referenceDocumentIds(), sessionTitleNeeded, readOnlyDocumentId));
         if (analytics != null) {
             analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt, "task");
             if ("explicit".equals(request.skillMode()))
@@ -613,7 +613,11 @@ public class AgentTurnService {
             String folderId,
             @com.fasterxml.jackson.annotation.JsonProperty("reference_document_ids") List<String> referenceDocumentIds,
             // false면 사용자가 제목을 정한 세션이라 AI가 제목을 만들지 않는다.
-            @com.fasterxml.jackson.annotation.JsonProperty("session_title_needed") boolean sessionTitleNeeded
+            @com.fasterxml.jackson.annotation.JsonProperty("session_title_needed") boolean sessionTitleNeeded,
+            // 서버가 확인한 보기 전용 문서. AI가 "이 문서"를 첨부로 오해해 고치지 않게 한다. 그 밖의 턴은 command 모양을 바꾸지 않도록 키를 싣지 않는다.
+            @com.fasterxml.jackson.annotation.JsonProperty("read_only_document_id")
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String readOnlyDocumentId
     ) {}
 
     record CanonicalSkillDraftSource(

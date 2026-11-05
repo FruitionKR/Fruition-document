@@ -109,10 +109,10 @@ public record AgentTurnRequest(
 
         @JsonProperty("read_only_document_id")
         @JsonDeserialize(using = StringOrNullDeserializer.class)
-        @Schema(description = "보기 권한 문서를 연 채 보낸 요청이면 그 문서 ID. 편집 대상(documentId)과 다르며 AI로 보내지 않는다. "
+        @Schema(description = "보기 권한 문서를 연 채 보낸 요청이면 그 문서 ID. 편집 대상(documentId)과 다르다. "
                 + "서버가 이 사용자가 읽을 수 있고 편집은 못 하는 문서인지 확인해 맞을 때만 메시지에 남기고, "
                 + "그 밖의 값(없는 문서, 다른 워크스페이스 문서, 삭제된 문서, 편집 가능한 문서, 형식 오류)은 오류 없이 무시한다. "
-                + "안내 표시에만 쓰고 권한 판단에 쓰지 않는다.",
+                + "확인된 값은 AI command에도 실어 \"이 문서\"가 첨부가 아니라 이 문서를 가리키게 한다. 안내 표시와 이 해석에만 쓰고 권한 판단에 쓰지 않는다.",
                 nullable = true, example = "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83")
         String readOnlyDocumentId,
 
