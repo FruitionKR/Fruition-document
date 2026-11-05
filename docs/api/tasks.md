@@ -44,6 +44,7 @@ Bearer access token. 해당 workspace 구성원이면서 작업을 시작한 사
 ### 6. Error response
 
 인증 실패 `401`, 권한 실패 `403`, 작업을 시작한 사용자도 OWNER도 아닌 actor의 요청 또는 없는 작업 `404`.
+이미 끝난(`completed`·`failed`) Agent turn의 취소 요청은 `409`이며 상태를 바꾸지 않는다([Agent turn 취소](agent.md)와 같은 조건). 되돌리면 완료된 답변이 `pending`으로 돌아가 세션이 잠긴다.
 복구 실패는 상태의 `error_code`로 확인합니다. 연결 장애는 `rollback_retry_pending`을 남기고 자동 재시도합니다.
 `rollback_failed`는 같은 취소 요청으로 재시도할 수 있으며 이미 복구한 단계는 재실행하지 않습니다. `rollback_document_purged`는 영구 삭제한 문서가 있어 그 문서만 되돌리지 못하고 나머지는 되돌렸다는 뜻이며 다시 요청해도 같습니다.
 Agent 복구 worker가 응답 없이 종료되면 마지막 시도의 lease도 만료 후 회수합니다.

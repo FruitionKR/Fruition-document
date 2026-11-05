@@ -123,6 +123,32 @@ class DocumentPurgeCitationsIntegrationTest {
     }
 
     @Test
+    void orphanSweepBlanksALiveDocumentsCitationWhenAnEarlierPurgedDocumentIsOnlyInSourceRefs() {
+        String purged = insertDocument(null);
+        String kept = insertDocument(null);
+        String another = insertDocument(null);
+        String trashed = insertDocument(now.minus(Duration.ofDays(1)));
+        String run = insertRun();
+        String message = insertAnswer();
+        long mixed = journaled(run, () -> insertCitation(message, kept, BODY, sourceRefs(kept, purged)));
+        long live = insertCitation(message, kept, OTHER, sourceRefs(kept, another));
+        long inTrash = insertCitation(message, kept, OTHER, sourceRefs(kept, trashed));
+        long web = insertCitation(message, kept, OTHER, sourceRefs(kept, "web:https://example.com"));
+        // 이 기능 전의 영구 삭제: 인용은 대표 문서만 FK로 걸려 있어 그대로 남았다.
+        jdbc.update("DELETE FROM documents WHERE id = ?", purged);
+
+        assertThat(scrubber.scrubOrphans(100)).isPositive();
+
+        assertThat(quote(mixed)).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT document_id FROM chat_message_references WHERE id = ?", String.class, mixed)).isEqualTo(kept);
+        assertThat(journalEqualsRow(mixed)).isTrue();
+        assertThat(journalText(mixed)).doesNotContain(BODY);
+        assertThat(quote(live)).isEqualTo(OTHER);
+        assertThat(quote(inTrash)).isEqualTo(OTHER);
+        assertThat(quote(web)).isEqualTo(OTHER);
+    }
+
+    @Test
     void citationLookupsUseTheirIndexes() {
         assertThat(plan("""
                 SELECT id FROM chat_message_references
@@ -130,6 +156,8 @@ class DocumentPurgeCitationsIntegrationTest {
                 """)).contains("idx_cmr_document", "idx_cmr_source_refs");
         assertThat(plan("SELECT id FROM chat_message_references WHERE document_id IS NULL AND quote <> ''"))
                 .contains("idx_cmr_orphan_quote");
+        assertThat(plan("SELECT id FROM chat_message_references WHERE document_id IS NOT NULL AND quote <> '' AND jsonb_path_exists(source_refs::jsonb, '$[1]')"))
+                .contains("idx_cmr_multi_source_quote");
         assertThat(plan("SELECT id FROM ai_task_changes WHERE table_name = 'chat_message_references' AND row_key->>'id' = '1'"))
                 .contains("idx_ai_task_changes_citation");
     }

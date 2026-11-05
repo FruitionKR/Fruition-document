@@ -155,15 +155,20 @@ class ChatReadOnlyDocumentIntegrationTest {
     }
 
     @Test
-    void valueIsNotSentToAi() {
+    void onlyTheConfirmedValueIsSentToAi() {
         String document = insertDocument(workspace, AUTHOR, null);
         setDocumentAccess(workspace, document, "view");
+        String other = "ws_" + UUID.randomUUID();
+        String foreign = insertDocument(other, AUTHOR, null);
+        setDocumentAccess(other, foreign, "view");
 
-        AgentTurnResponse response = turn(document);
+        assertThat(commandPayload(turn(document))).contains("\"read_only_document_id\":\"" + document + "\"");
+        assertThat(commandPayload(turn(foreign))).doesNotContain(foreign).doesNotContain("read_only");
+        assertThat(commandPayload(turn(null))).doesNotContain("read_only");
+    }
 
-        String payload = jdbc.queryForObject("SELECT payload FROM ai_command_outbox WHERE run_id = ?", String.class,
-                response.requestId());
-        assertThat(payload).doesNotContain(document).doesNotContain("read_only");
+    private String commandPayload(AgentTurnResponse response) {
+        return jdbc.queryForObject("SELECT payload FROM ai_command_outbox WHERE run_id = ?", String.class, response.requestId());
     }
 
     /** 휴지통 영구 삭제(행 삭제) 뒤에도 대화는 그대로 읽힌다. FK가 없어 문서 삭제가 메시지에 막히지 않는다. */

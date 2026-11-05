@@ -61,10 +61,14 @@ public class DocumentCopyScrubber {
             "COALESCE(event_payload #> '{payload,chat,evidence_snippets}', event_payload #> '{payload,evidence_snippets}')";
     private static final String CITES_DOCUMENT =
             " @> jsonb_build_array(jsonb_build_object('source_document_id', CAST(:id AS text)))";
-    /** 이 문서의 근거 본문만 비운다. 순서와 다른 문서의 근거, 답변은 그대로다. */
+    /** 여러 문서를 걸친 근거는 대표 id가 다른 문서이거나 비어 있어 source_refs도 본다. 같은 GIN 인덱스(V102·V103)를 타므로 인덱스를 더 두지 않는다. */
+    private static final String REFS_DOCUMENT =
+            " @> jsonb_build_array(jsonb_build_object('source_refs', jsonb_build_array(jsonb_build_object('source_document_id', CAST(:id AS text)))))";
+    /** 이 문서를 가리키는 근거 본문만 비운다. 문서별로 나눌 수 없는 여러 문서 근거는 함께 비운다. 순서와 다른 문서의 근거, 답변은 그대로다. */
     private static final String BLANK_EVIDENCE = """
             jsonb_set(%1$s, '%2$s', (
-                SELECT jsonb_agg(CASE WHEN snippet->>'source_document_id' = :id THEN snippet || '{"text": ""}' ELSE snippet END
+                SELECT jsonb_agg(CASE WHEN snippet->>'source_document_id' = :id OR snippet->'source_refs'""" + CITES_DOCUMENT + """
+             THEN snippet || '{"text": ""}' ELSE snippet END
                                  ORDER BY position)
                 FROM jsonb_array_elements(%1$s #> '%2$s') WITH ORDINALITY AS item(snippet, position)))""";
 
@@ -72,6 +76,16 @@ public class DocumentCopyScrubber {
     private static final String CITATION_OF_DOCUMENT = "(document_id = :id OR source_refs::jsonb" + CITES_DOCUMENT + ")";
     /** 대표 문서가 지워진 인용. 근거 저장은 문서가 있는 인용만 남기므로 document_id가 NULL이면 FK가 비운 행이다(V105). */
     private static final String ORPHAN_CITATION = "document_id IS NULL AND quote <> ''";
+    /**
+     * 대표 문서는 살아 있고 source_refs의 다른 문서만 이 기능 전에 지워진 인용. EXISTS 앞의 세 조건은 V107 부분 인덱스와 같아야 인덱스를 탄다.
+     * 웹 근거는 문서가 아니고, 휴지통 문서는 행이 있어 대상이 아니다.
+     */
+    private static final String ORPHAN_SOURCE_REF_CITATION = """
+            document_id IS NOT NULL AND quote <> ''
+              AND jsonb_path_exists(source_refs::jsonb, '$[1]')
+              AND EXISTS (SELECT 1 FROM jsonb_path_query(source_refs::jsonb, '$[*].source_document_id') AS ref(value)
+                          WHERE value #>> '{}' NOT LIKE 'web:%' AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = value #>> '{}'))
+            """;
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -106,17 +120,22 @@ public class DocumentCopyScrubber {
      */
     private void blankEvidence(String documentId) {
         MapSqlParameterSource params = new MapSqlParameterSource("id", documentId);
-        String citing = PROJECTION_EVIDENCE + CITES_DOCUMENT;
+        String citing = citesInEvidence(PROJECTION_EVIDENCE);
         for (String column : List.of("before_value", "after_value")) {
-            jdbc.update("UPDATE ai_task_changes SET %1$s = %2$s WHERE table_name = 'agent_apply_projections' AND %1$s #> '{result,chat,evidence_snippets}'%3$s AND run_id IN (SELECT run_id FROM agent_apply_projections WHERE %4$s)"
-                    .formatted(column, BLANK_EVIDENCE.formatted(column, "{result,chat,evidence_snippets}"), CITES_DOCUMENT, citing), params);
+            jdbc.update("UPDATE ai_task_changes SET %1$s = %2$s WHERE table_name = 'agent_apply_projections' AND %3$s AND run_id IN (SELECT run_id FROM agent_apply_projections WHERE %4$s)"
+                    .formatted(column, BLANK_EVIDENCE.formatted(column, "{result,chat,evidence_snippets}"),
+                            citesInEvidence(column + " #> '{result,chat,evidence_snippets}'"), citing), params);
         }
         jdbc.update("UPDATE agent_apply_projections SET result = %s WHERE %s"
                 .formatted(BLANK_EVIDENCE.formatted("result", "{chat,evidence_snippets}"), citing), params);
-        jdbc.update(CLEAR_AGENT_RECEIPT + "AND " + RECEIPT_EVIDENCE + CITES_DOCUMENT, params);
+        String citingReceipt = citesInEvidence(RECEIPT_EVIDENCE);
+        jdbc.update(CLEAR_AGENT_RECEIPT + "AND " + citingReceipt, params);
         jdbc.update("UPDATE ai_task_result_receipts SET event_payload = %s WHERE task_kind = 'query' AND event_payload IS NOT NULL AND %s"
-                .formatted(BLANK_EVIDENCE.formatted("event_payload", "{payload,evidence_snippets}"),
-                        RECEIPT_EVIDENCE + CITES_DOCUMENT), params);
+                .formatted(BLANK_EVIDENCE.formatted("event_payload", "{payload,evidence_snippets}"), citingReceipt), params);
+    }
+
+    private static String citesInEvidence(String evidence) {
+        return "(" + evidence + CITES_DOCUMENT + " OR " + evidence + REFS_DOCUMENT + ")";
     }
 
     /**
@@ -218,12 +237,16 @@ public class DocumentCopyScrubber {
 
     /** 이 기능 전에 영구 삭제한 문서의 인용. 찾아 둔 id로만 고쳐 묶음 크기를 지킨다. */
     private int scrubOrphanCitations(int limit) {
-        List<Long> citations = jdbc.queryForList("SELECT id FROM chat_message_references WHERE " + ORPHAN_CITATION + " LIMIT :limit",
+        return blankFoundCitations(ORPHAN_CITATION, limit, "%s || '{\"quote\": \"\", \"document_id\": null}'::jsonb")
+                + blankFoundCitations(ORPHAN_SOURCE_REF_CITATION, limit, "%s || '{\"quote\": \"\"}'::jsonb");
+    }
+
+    private int blankFoundCitations(String condition, int limit, String journalValue) {
+        List<Long> citations = jdbc.queryForList("SELECT id FROM chat_message_references WHERE " + condition + " LIMIT :limit",
                 new MapSqlParameterSource("limit", limit), Long.class);
         if (citations.isEmpty()) {
             return 0;
         }
-        return blankCitations("id IN (:citations)", new MapSqlParameterSource("citations", citations),
-                "%s || '{\"quote\": \"\", \"document_id\": null}'::jsonb");
+        return blankCitations("id IN (:citations)", new MapSqlParameterSource("citations", citations), journalValue);
     }
 }

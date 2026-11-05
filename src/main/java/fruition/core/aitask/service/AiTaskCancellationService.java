@@ -35,6 +35,9 @@ public class AiTaskCancellationService {
     private static final java.util.Set<String> WIKI_KINDS =
             java.util.Set.of("document", "post_ingest", "lint", "restore_ingest", "restore_lint");
 
+    /** 결과가 반영됐거나 실패한 Agent turn. 취소해도 되돌릴 진행이 없다. */
+    private static final java.util.Set<String> FINISHED_AGENT_TURN = java.util.Set.of("completed", "failed");
+
     public AiTaskCancellationService(JdbcTemplate jdbc, PlatformTransactionManager manager,
             PipelineTaskCancellationClient pipeline, WorkspaceAccessGuard access, ObjectMapper mapper,
             QueryRunStore queryRuns, fruition.core.query.service.QueryEventBroker events, io.minio.MinioClient storage, fruition.shared.util.StorageProperties storageProperties,
@@ -98,7 +101,11 @@ public class AiTaskCancellationService {
         access.requireMember(workspaceId, userId);
         String taskUserId = taskOwner(id, workspaceId, userId);
         transaction.executeWithoutResult(tx -> {
-            owned(id, workspaceId, taskUserId, true);
+            Map<String, Object> task = owned(id, workspaceId, taskUserId, true);
+            // 결과를 반영한 말풍선은 복구 기록에 있어 되돌리면 pending으로 돌아가 세션이 잠긴다. Agent turn 취소와 같은 조건으로 막는다.
+            if ("agent".equals(task.get("kind")) && FINISHED_AGENT_TURN.contains(task.get("status"))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 끝난 작업은 취소할 수 없습니다.");
+            }
             requestCancel(id);
             cancelPendingAgentMessage(id);
         });
@@ -121,7 +128,7 @@ public class AiTaskCancellationService {
                     + "AND user_id = ? AND kind = 'agent' FOR UPDATE", String.class, id, workspaceId, userId);
             if (states.isEmpty()) return AgentTurnCancel.NOT_FOUND;
             String status = states.getFirst();
-            if (List.of("completed", "failed").contains(status)) return AgentTurnCancel.FINISHED;
+            if (FINISHED_AGENT_TURN.contains(status)) return AgentTurnCancel.FINISHED;
             // rollback_failed는 기존 취소처럼 다시 요청해 재시도한다.
             if (List.of("running", "rollback_failed").contains(status)) {
                 requestCancel(id);
