@@ -68,8 +68,12 @@ public class UsageChargeService {
     private static final Duration RECONCILE_CHUNK = Duration.ofDays(1);
     private static final Duration MAX_PERIOD = Duration.ofDays(366);
     private static final int RECOMPUTE_BATCH = 500;
-    /** 선점 뒤 시도 횟수가 바뀌었으면 수집 중에 다시 넣은 요청이라 지우지 않는다({@link #enqueueNow}). */
-    private static final String DELETE_CLAIMED = "DELETE FROM usage_collect_queue WHERE run_id = ? AND attempts = ?";
+    /**
+     * 선점이 바뀌었으면 수집 중에 다시 넣은 요청이라 지우지 않는다({@link #enqueueNow}). 시도 횟수는 다시 넣을 때 0이 되어
+     * 다른 Pod가 곧바로 선점하면 처음 값과 같아지므로, 선점이 정한 시각까지 함께 본다.
+     */
+    private static final String STILL_CLAIMED = "run_id = ? AND attempts = ? AND available_at = ?";
+    private static final String DELETE_CLAIMED = "DELETE FROM usage_collect_queue WHERE " + STILL_CLAIMED;
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
@@ -304,18 +308,19 @@ public class UsageChargeService {
                     UPDATE usage_collect_queue SET attempts = attempts + 1, available_at = now() + interval '5 minutes'
                     WHERE run_id = (SELECT run_id FROM usage_collect_queue WHERE available_at <= now()
                                     ORDER BY available_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-                    RETURNING run_id, attempts
+                    RETURNING run_id, attempts, available_at
                     """);
             if (claimed.isEmpty()) return;
             String runId = (String) claimed.getFirst().get("run_id");
             int attempts = ((Number) claimed.getFirst().get("attempts")).intValue();
+            Object claimedUntil = claimed.getFirst().get("available_at");
             try {
                 collectRun(runId);
-                jdbc.update(DELETE_CLAIMED, runId, attempts);
+                jdbc.update(DELETE_CLAIMED, runId, attempts, claimedUntil);
             } catch (RuntimeException e) {
                 if (attempts >= MAX_ATTEMPTS) {
                     log.warn("[사용 금액 수집 포기] runId={} attempts={} 종료 시각 대사가 채운다. error={}", runId, attempts, e.toString());
-                    jdbc.update(DELETE_CLAIMED, runId, attempts);
+                    jdbc.update(DELETE_CLAIMED, runId, attempts, claimedUntil);
                 } else {
                     // 아직 끝나지 않은 호출을 기다리는 재시도는 정상 지연이다(답변 음성 정지 직후 등). 장애와 구분한다.
                     if (e instanceof IllegalStateException) {
@@ -324,7 +329,7 @@ public class UsageChargeService {
                         log.warn("[사용 금액 수집 실패] runId={} attempts={} error={}", runId, attempts, e.toString());
                     }
                     jdbc.update("UPDATE usage_collect_queue SET available_at = now() + make_interval(mins => ?) "
-                            + "WHERE run_id = ? AND attempts = ?", attempts * attempts, runId, attempts);
+                            + "WHERE " + STILL_CLAIMED, attempts * attempts, runId, attempts, claimedUntil);
                 }
                 return;
             }

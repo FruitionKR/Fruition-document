@@ -15,8 +15,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-// 표시용 속성은 이 클래스의 컨텍스트를 따로 두려고 넣는다. 아래에서 주기 실행을 멈추므로 다른 테스트와 공유하면 안 된다.
-@SpringBootTest(properties = "test.ai-task.scheduled-resume=stopped")
+// 다른 컨텍스트의 1초 주기 resume도 공유 DB의 run을 선점한다. 자기 DB를 받아 그 경쟁을 없앤다.
+@SpringBootTest(properties = "test.isolated-database=ai_task_rollback_test")
 @Import(TestcontainersConfiguration.class)
 class AiTaskRollbackIntegrationTest {
     @Autowired JdbcTemplate jdbc;
@@ -29,7 +29,7 @@ class AiTaskRollbackIntegrationTest {
     @Autowired org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor scheduling;
 
     /**
-     * 1초 주기 resume이 같은 run을 먼저 선점하면 테스트가 부른 resume·cancel은 선점 실패로 그냥 돌아와, 진행 전 상태를 단정하게 된다.
+     * 자기 컨텍스트의 1초 주기 resume이 같은 run을 먼저 선점하면 테스트가 부른 resume·cancel은 선점 실패로 그냥 돌아와, 진행 전 상태를 단정하게 된다.
      * 이 클래스는 진행을 직접 부른다. 여러 Pod 경쟁은 anotherPodSkipsRun...이 latch로 재현한다.
      */
     @org.junit.jupiter.api.BeforeEach
