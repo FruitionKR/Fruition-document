@@ -5,6 +5,7 @@ import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.data.redis.RedisConnectionDetails;
 import org.springframework.boot.autoconfigure.jdbc.JdbcConnectionDetails;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -15,6 +16,12 @@ import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.lifecycle.Startables;
 import org.testcontainers.utility.DockerImageName;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 
 // 컨테이너를 Spring @Bean으로 두면 테스트 컨텍스트마다(캐시 최대 32개) 3개씩 새로 떠서 로컬 Docker VM 메모리를 다 쓴다.
 // 그래서 JVM 전체에서 한 벌만 static으로 띄우고, 컨텍스트에는 접속 정보만 넘긴다. 종료는 Ryuk가 JVM 종료 때 맡는다.
@@ -47,8 +54,13 @@ public class TestcontainersConfiguration {
 		Startables.deepStart(POSTGRES, REDIS, MINIO).join();
 	}
 
+	/**
+	 * 캐시된 컨텍스트의 스케줄러는 다른 테스트가 도는 동안에도 공유 DB의 행을 선점한다. 스케줄러가 쓰는 행의 진행을 단정하는 테스트는
+	 * {@code test.isolated-database}로 자기 DB를 받는다. 이름이 곧 컨텍스트 캐시 키의 일부라 다른 테스트와 컨텍스트도 나누지 않는다.
+	 */
 	@Bean
-	JdbcConnectionDetails postgresConnectionDetails() {
+	JdbcConnectionDetails postgresConnectionDetails(@Value("${test.isolated-database:}") String isolatedDatabase) {
+		String jdbcUrl = isolatedDatabase.isBlank() ? POSTGRES.getJdbcUrl() : createDatabase(isolatedDatabase);
 		return new JdbcConnectionDetails() {
 			@Override
 			public String getUsername() {
@@ -62,9 +74,26 @@ public class TestcontainersConfiguration {
 
 			@Override
 			public String getJdbcUrl() {
-				return POSTGRES.getJdbcUrl();
+				return jdbcUrl;
 			}
 		};
+	}
+
+	private static String createDatabase(String name) {
+		if (!name.matches("[a-z][a-z0-9_]*")) {
+			throw new IllegalArgumentException("test.isolated-database: " + name);
+		}
+		try (Connection connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+				Statement statement = connection.createStatement()) {
+			try (ResultSet exists = statement.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + name + "'")) {
+				if (!exists.next()) {
+					statement.execute("CREATE DATABASE " + name);
+				}
+			}
+		} catch (SQLException e) {
+			throw new IllegalStateException("격리 DB를 만들지 못했습니다: " + name, e);
+		}
+		return "jdbc:postgresql://" + POSTGRES.getHost() + ":" + POSTGRES.getMappedPort(PostgreSQLContainer.POSTGRESQL_PORT) + "/" + name;
 	}
 
 	@Bean

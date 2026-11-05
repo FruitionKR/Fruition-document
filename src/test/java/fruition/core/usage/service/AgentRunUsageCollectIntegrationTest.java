@@ -35,10 +35,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * AgentRun 사용량 수집(#206). AI 원장은 가짜 서버로 대신한다. 앱의 수집 worker도 같은 대기열을 보지만 AI 주소가 없어 실패만
- * 하므로, 미뤄 둔 행을 다시 당겨 와서 처리한다. 금액은 입력 1,000토큰 = 1,000 milli-KRW가 되는 단가·환율이다.
+ * AgentRun 사용량 수집(#206). AI 원장은 가짜 서버로 대신하고 수집은 테스트가 직접 부른다. 미뤄 둔 행은 다시 당겨 와서 처리한다. 금액은 입력 1,000토큰 = 1,000 milli-KRW가 되는 단가·환율이다.
  */
-@SpringBootTest
+// 모든 컨텍스트의 수집 worker가 같은 대기열을 선점한다. 자기 DB를 받고 자기 worker를 멈춰 미룬 시각·행 삭제를 단정할 수 있게 한다.
+@SpringBootTest(properties = "test.isolated-database=agent_run_usage_collect_test")
 @Import(TestcontainersConfiguration.class)
 class AgentRunUsageCollectIntegrationTest {
 
@@ -56,6 +56,8 @@ class AgentRunUsageCollectIntegrationTest {
     @Autowired QueryEventBroker events;
     @Autowired MinioClient storage;
     @Autowired StorageProperties storageProperties;
+    @Autowired UsageChargeService appWorker;
+    @Autowired org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor scheduling;
 
     private HttpServer server;
     private final String user = "user-" + UUID.randomUUID();
@@ -66,6 +68,7 @@ class AgentRunUsageCollectIntegrationTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        scheduling.postProcessBeforeDestruction(appWorker, "usageChargeService");
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/internal/model-usage/calls", exchange -> {
             String query = exchange.getRequestURI().getQuery();
@@ -286,6 +289,30 @@ class AgentRunUsageCollectIntegrationTest {
         claimAndCollect(charges);
         drain(charges);
 
+        assertThat(chargedAmounts()).containsExactlyInAnyOrder(1000L, 2000L);
+    }
+
+    /**
+     * 수집 중 다시 넣은 요청을 다른 Pod가 바로 선점하면 시도 횟수가 처음 선점과 같아진다. 처음 worker가 그 행을 지우면,
+     * 다른 Pod가 실패했을 때 조회 뒤에 끝난 호출을 다시 가져올 행이 없다.
+     */
+    @Test
+    void requeueClaimedByAnotherPodIsNotDeletedByTheFirstWorker() {
+        var charges = charges(false);
+        ledger.add(call("agent_planning", "succeeded", 1000));
+        charges.collectAgentPlan(runId);
+        onFetch = () -> {
+            onFetch = () -> { };
+            ledger.add(call("agent_execution", "succeeded", 2000));
+            charges.collectAgentPlan(runId);
+            jdbc.update("UPDATE usage_collect_queue SET attempts = attempts + 1, available_at = now() + interval '5 minutes' "
+                    + "WHERE run_id = ?", runId);
+        };
+
+        claimAndCollect(charges);
+
+        assertThat(queued()).isTrue();
+        drain(charges);
         assertThat(chargedAmounts()).containsExactlyInAnyOrder(1000L, 2000L);
     }
 
