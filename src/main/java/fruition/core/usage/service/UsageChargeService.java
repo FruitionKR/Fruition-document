@@ -41,7 +41,7 @@ import java.util.stream.Stream;
  * 호출 단위 AI 사용 금액(#78). AI 원장의 호출 1건을 {@code usage_charges} 1행으로 옮기며 금액을 계산한다.
  *
  * <ul>
- *   <li>수집: 실행이 끝나면 run_id를 대기열에 넣고, worker가 AI {@code GET /internal/model-usage/calls?run_id=}로
+ *   <li>수집: 실행이 끝나면(AgentRun은 계획이 승인 대기에 들어갈 때도) run_id를 대기열에 넣고, worker가 AI {@code GET /internal/model-usage/calls?run_id=}로
  *       호출을 가져온다. 늦게 커밋된 호출은 1시간 넘게 지난 종료 시각 구간을 하루치씩 다시 조회해 채운다.</li>
  *   <li>같은 호출(call_id)은 여러 번 수집해도 한 행이다. 금액이 확정된({@code charged}) 행은 다시 계산하지 않아
  *       이후 단가가 바뀌어도 과거 청구가 변하지 않는다.</li>
@@ -68,6 +68,8 @@ public class UsageChargeService {
     private static final Duration RECONCILE_CHUNK = Duration.ofDays(1);
     private static final Duration MAX_PERIOD = Duration.ofDays(366);
     private static final int RECOMPUTE_BATCH = 500;
+    /** 선점 뒤 시도 횟수가 바뀌었으면 수집 중에 다시 넣은 요청이라 지우지 않는다({@link #enqueueNow}). */
+    private static final String DELETE_CLAIMED = "DELETE FROM usage_collect_queue WHERE run_id = ? AND attempts = ?";
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
@@ -126,8 +128,7 @@ public class UsageChargeService {
             return;
         }
         try {
-            runs.register(mapper.createObjectNode().put("run_id", runId).put("kind", AUTONOMOUS_KIND)
-                    .put("workspace_id", workspaceId).put("user_id", userId));
+            runs.register(autonomousCommand(runId, workspaceId, userId));
         } catch (CreditService.InsufficientCreditException e) {
             throw new CreditService.InsufficientCreditException(AiErrorMessages.INSUFFICIENT_CREDIT_STOPPED);
         }
@@ -141,9 +142,9 @@ public class UsageChargeService {
         if (credits.enforcing()) credits.abort(runId, userId);
     }
 
-    /** AgentRun 응답의 상태가 끝났으면 {@link #endAutonomousRun}으로 닫는다. 등록하지 않은 실행이면 아무 일도 없다. */
-    public void endAutonomousRunIfTerminal(String runId, JsonNode run) {
-        if (isAutonomousTerminal(run)) endAutonomousRun(runId);
+    /** AgentRun 응답의 상태가 끝났으면 {@link #endAutonomousRun}으로 닫는다. 호출자는 이 응답으로 소유를 확인한 뒤 부른다. */
+    public void endAutonomousRunIfTerminal(String runId, String workspaceId, String userId, JsonNode run) {
+        if (isAutonomousTerminal(run)) endAutonomousRun(runId, workspaceId, userId);
     }
 
     /** AgentRun 응답의 상태가 AI가 더 일하지 않는 끝난 상태인지. */
@@ -151,12 +152,45 @@ public class UsageChargeService {
         return run != null && AUTONOMOUS_TERMINAL.contains(run.path("status").asText());
     }
 
-    /** 등록한 AgentRun 실행을 닫고 사용량 수집·정산을 대기열에 넣는다. 이미 닫았으면 다시 넣지 않는다. */
-    public void endAutonomousRun(String runId) {
-        if (jdbc.update("UPDATE ai_task_runs SET status = 'completed', updated_at = now() WHERE id = ? AND kind = ? "
-                + "AND status = 'running'", runId, AUTONOMOUS_KIND) == 1) {
-            enqueue(runId);
-        }
+    /**
+     * AgentRun 실행을 닫고 사용량 수집·정산을 대기열에 넣는다. 이미 닫았으면 다시 넣지 않아 끝난 run을 계속 조회해도 한 번만 수집한다.
+     * 예약한 적 없는 실행(enforce 꺼짐, 승인 없이 끝난 계획)은 닫힌 행을 새로 만든다. 등록({@code register})이 아니므로 사용 한도를
+     * 보지 않고 예약하지 않는다. 이미 쓴 호출을 기록할 뿐 새 실행이 아니다.
+     */
+    public void endAutonomousRun(String runId, String workspaceId, String userId) {
+        transaction.executeWithoutResult(tx -> {
+            if (jdbc.update("""
+                    INSERT INTO ai_task_runs (id, workspace_id, user_id, kind, status, command)
+                    VALUES (?, ?, ?, ?, 'completed', CAST(? AS jsonb))
+                    ON CONFLICT (id) DO UPDATE SET status = 'completed', updated_at = now()
+                    WHERE ai_task_runs.kind = EXCLUDED.kind AND ai_task_runs.status = 'running'
+                    """, runId, workspaceId, userId, AUTONOMOUS_KIND,
+                    autonomousCommand(runId, workspaceId, userId).toString()) == 1) {
+                enqueueNow(runId);
+            }
+        });
+    }
+
+    private JsonNode autonomousCommand(String runId, String workspaceId, String userId) {
+        return mapper.createObjectNode().put("run_id", runId).put("kind", AUTONOMOUS_KIND)
+                .put("workspace_id", workspaceId).put("user_id", userId);
+    }
+
+    /**
+     * 계획이 승인 대기에 들어갈 때(plan-ready) 그때까지의 호출을 수집한다. 승인이 얼마나 늦어지든 계획 단계 사용량이 바로 보인다.
+     * 실행을 등록하지 않아 다음 승인의 등록·한도 확인·예약은 그대로다. 정산은 쓴 만큼만 차감한다.
+     */
+    public void collectAgentPlan(String runId) {
+        enqueueNow(runId);
+    }
+
+    /**
+     * 한 실행을 여러 번 수집하는 AgentRun용. 이미 대기 중이면 미룬 시각과 시도 횟수를 되돌린다. 시도 횟수가 달라져
+     * 지금 수집 중인 worker는 이 행을 지우거나 미루지 않으므로, 그 조회 뒤에 끝난 호출도 다음 수집이 가져온다.
+     */
+    private void enqueueNow(String runId) {
+        jdbc.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) "
+                + "ON CONFLICT (run_id) DO UPDATE SET attempts = 0, available_at = now()", runId);
     }
 
     /**
@@ -277,11 +311,11 @@ public class UsageChargeService {
             int attempts = ((Number) claimed.getFirst().get("attempts")).intValue();
             try {
                 collectRun(runId);
-                jdbc.update("DELETE FROM usage_collect_queue WHERE run_id = ?", runId);
+                jdbc.update(DELETE_CLAIMED, runId, attempts);
             } catch (RuntimeException e) {
                 if (attempts >= MAX_ATTEMPTS) {
                     log.warn("[사용 금액 수집 포기] runId={} attempts={} 종료 시각 대사가 채운다. error={}", runId, attempts, e.toString());
-                    jdbc.update("DELETE FROM usage_collect_queue WHERE run_id = ?", runId);
+                    jdbc.update(DELETE_CLAIMED, runId, attempts);
                 } else {
                     // 아직 끝나지 않은 호출을 기다리는 재시도는 정상 지연이다(답변 음성 정지 직후 등). 장애와 구분한다.
                     if (e instanceof IllegalStateException) {
@@ -290,7 +324,7 @@ public class UsageChargeService {
                         log.warn("[사용 금액 수집 실패] runId={} attempts={} error={}", runId, attempts, e.toString());
                     }
                     jdbc.update("UPDATE usage_collect_queue SET available_at = now() + make_interval(mins => ?) "
-                            + "WHERE run_id = ?", attempts * attempts, runId);
+                            + "WHERE run_id = ? AND attempts = ?", attempts * attempts, runId, attempts);
                 }
                 return;
             }

@@ -72,6 +72,8 @@ class MeetingNotesIntegrationTest {
     @Autowired AiTaskResultConsumer consumer;
     @Autowired CreditService credits;
     @Autowired MeetingNotesService notesService;
+    @Autowired fruition.core.document.service.FolderService folderService;
+    @Autowired fruition.core.document.service.DocumentPermissionService permissionService;
 
     private String userId;
     private String workspaceId;
@@ -296,6 +298,27 @@ class MeetingNotesIntegrationTest {
         mockMvc.perform(get(notesUrl(meetingId))
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(other, other + "@x.com")))
                 .andExpect(status().isNotFound());
+    }
+
+    /** 보기 폴더에는 회의록을 새 문서로 넣을 수 없다. 거절되면 선점을 풀어 다른 위치로 다시 저장할 수 있다. */
+    @Test
+    void apply_createInViewFolderIsForbiddenAndReleasesClaim() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        generated(meetingId, "k1");
+        java.util.UUID folderId = folderService.create(workspaceId, userId, UUID.randomUUID().toString(),
+                new fruition.core.document.dto.FolderCreateRequest("보기", null)).id();
+        permissionService.setFolder(workspaceId, userId, folderId, "view");
+        redisTemplate.opsForValue().set("authz:role:v2:" + workspaceId + ":" + userId, "{\"role\":\"MEMBER\",\"permissions\":[]}");
+
+        apply(meetingId, 1, "a1", "{\"mode\":\"create\",\"folder_id\":\"" + folderId + "\"}")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("DOCUMENT_WRITE_FORBIDDEN"))
+                .andExpect(jsonPath("$.error.message").value("이 폴더에 넣거나 꺼낼 권한이 없습니다."));
+
+        String documentId = json(apply(meetingId, 1, "a2", "{\"mode\":\"create\"}").andExpect(status().isOk()))
+                .path("applied").path("document_id").asText();
+        assertThat(jdbc.queryForObject("SELECT folder_id FROM documents WHERE id = ?", java.util.UUID.class, documentId))
+                .isNull();
     }
 
     @Test

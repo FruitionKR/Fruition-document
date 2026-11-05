@@ -98,6 +98,8 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = DocumentUploadResponse.class))),
         @ApiResponse(responseCode = "400", description = "파일 없음 또는 잘못된 요청",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "대상 폴더를 편집할 수 없음(메시지 \"이 폴더에 넣거나 꺼낼 권한이 없습니다.\")",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Idempotency-Key 충돌",
@@ -142,6 +144,8 @@ public class DocumentController {
         @ApiResponse(responseCode = "201", description = "생성 성공 또는 멱등 재요청",
             content = @Content(schema = @Schema(implementation = DocumentUploadResponse.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 본문 또는 Idempotency-Key, 열린 가져오기 세션이 아님(IMPORT_INVALID)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "대상 폴더를 편집할 수 없음(메시지 \"이 폴더에 넣거나 꺼낼 권한이 없습니다.\")",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -317,7 +321,7 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.trash(workspaceId, userId));
     }
 
-    @Operation(summary = "문서 복구", description = "삭제 문서를 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다.")
+    @Operation(summary = "문서 복구", description = "삭제 문서를 원래 폴더의 마지막 위치에 복구합니다. 원래 폴더가 삭제됐거나 없으면 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "복구 성공",
             content = @Content(schema = @Schema(implementation = DocumentLifecycleResponse.class))),
@@ -327,7 +331,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "삭제 문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "문서 version 또는 멱등 키 충돌, TRASH_RETENTION_EXPIRED(휴지통 보관 기간 경과)",
+        @ApiResponse(responseCode = "409", description = "문서 version 또는 멱등 키 충돌, TRASH_RETENTION_EXPIRED(휴지통 보관 기간 경과), DUPLICATE_NAME(복구 위치에 같은 이름이 있음)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping("/{document_id}/restore")
@@ -374,7 +378,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = DocumentDuplicateResponse.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 Idempotency-Key",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "403", description = "문서 소유자가 아니거나 편집 문서가 아님",
+        @ApiResponse(responseCode = "403", description = "편집 문서가 아니거나, 원본이 있는 폴더를 편집할 수 없음(문서 소유자 예외 없음, 메시지 \"이 폴더에 넣거나 꺼낼 권한이 없습니다.\")",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -469,7 +473,7 @@ public class DocumentController {
             content = @Content(schema = @Schema(implementation = DocumentUploadResponse.class))),
         @ApiResponse(responseCode = "400", description = "PDF 원본 문서가 아니거나 잘못된 Idempotency-Key",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "403", description = "남이 올린 PDF인데 document.convert 권한이 없음(WORKSPACE_PERMISSION_REQUIRED). 업로더 본인과 OWNER는 항상 가능",
+        @ApiResponse(responseCode = "403", description = "남이 올린 PDF인데 document.convert 권한이 없음(WORKSPACE_PERMISSION_REQUIRED, 업로더 본인과 OWNER는 항상 가능), 또는 변환본이 들어갈 원본 폴더를 편집할 수 없음(메시지 \"이 폴더에 넣거나 꺼낼 권한이 없습니다.\")",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),

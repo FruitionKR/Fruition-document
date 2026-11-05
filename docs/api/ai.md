@@ -970,7 +970,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/ai-ope
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string` |
 | 출력 | `202` 변환 요청 접수 및 placeholder 문서 생성 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` PDF 원본 문서가 아니거나 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 남이 올린 PDF인데 `document.convert` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`). 업로더 본인과 OWNER는 항상 가능 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
+| 주요 오류 | `400` PDF 원본 문서가 아니거나 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 변환본이 들어갈 원본 폴더를 편집할 수 없음(업로더 예외 없음, `DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") — `ErrorResponse`<br>`403` 남이 올린 PDF인데 `document.convert` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`). 업로더 본인과 OWNER는 항상 가능 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1028,6 +1028,7 @@ PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | PDF 원본 문서가 아니거나 잘못된 Idempotency-Key | `ErrorResponse` |
+| `403` | 변환본이 들어갈 원본 폴더를 편집할 수 없음(업로더 예외 없음, `DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") | `ErrorResponse` |
 | `403` | 남이 올린 PDF인데 `document.convert` 권한이 없음(`WORKSPACE_PERMISSION_REQUIRED`). 업로더 본인과 OWNER는 항상 가능 | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 | `ErrorResponse` |
@@ -1057,6 +1058,7 @@ PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을
 - 인증된 사용자만 호출할 수 있다.
 - path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
 - 원본 PDF를 올린 사용자 본인, 워크스페이스 OWNER, `document.convert` 권한을 받은 멤버만 변환을 요청할 수 있다.
+- 변환본이 원본과 같은 폴더에 들어가므로 그 폴더를 편집할 수 있어야 한다. 보기 폴더의 PDF는 업로더도 `403 DOCUMENT_WRITE_FORBIDDEN`이다. 끝난 요청의 멱등 재요청은 저장된 응답을 돌려준다.
 - 대상은 원본 파일(`source_uri`)이 있는 PDF(`mime_type`이 `application/pdf`이거나 파일명이 `.pdf`)다. 이미 변환한 문서도 다시 변환할 수 있다.
 - 문서 목록·트리·상세의 `can_convert`가 이 판정과 같은 코드로 계산된다. 화면은 `can_convert`가 `false`면 변환 메뉴를 숨기거나 막으면 된다.
 - 변환이 끝나면 워크스페이스 설정 `auto_ingest_on_upload`가 켜져 있고 요청자에게 `wiki.ingest`가 있을 때만 자동으로 위키에 편입한다(AWS 묶음 경로와 단일 경로 모두). 그렇지 않으면 편입하지 않는다.
