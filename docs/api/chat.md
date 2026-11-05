@@ -512,6 +512,16 @@ Agent turn이 만든 메시지는 `run_id`와 `action`이 함께 온다. 질의 
 화면은 `action`으로 편집 미리보기와 일반 답변을 나누고, 승인 상태와 미리보기 본문은 `run_id`가
 가리키는 run에서 읽는다.
 
+`clarify_reason`은 `action=clarify`일 때 AI가 되물은 이유 코드다. 코드가 없는 되묻기, 다른 갈래, 질의 메시지, 이 필드가 생기기 전에 저장된
+메시지는 키가 `null`로 온다. 화면은 문장 비교 대신 이 값으로 갈래를 정하고, 값 자체를 사용자 문구로 쓰지 않는다. 코드는 늘어날 수
+있으므로 모르는 값은 다른 이유의 되묻기로 본다(문장 비교로 돌아가지 않는다). 현재 코드는 `markdown_document_required`([Agent API](agent.md)의 turn 결과와 같은 값)뿐이다.
+AI 값이 문자열이 아니거나 소문자·숫자·밑줄 1~64자 형식이 아니면 값만 버리고(`null`) 메시지는 그대로 저장한다.
+
+`read_only_document_id`는 요청 때 사용자가 읽을 수 있고 편집은 못 한다고 서버가 확인한 열린 문서 ID다([Agent API](agent.md)의 같은 이름 요청 필드).
+agent turn의 assistant 메시지에만 있고, 그 밖의 메시지와 이 필드가 생기기 전에 저장된 메시지는 키가 `null`로 온다. 화면은 지금 연 문서와 같을 때
+되묻기를 보기 권한 안내로 바꾸는 데만 쓰고 권한 판단에는 쓰지 않는다. 요청 시점 값이라 뒤에 권한이 바뀌어도 그대로이며, 문서가 영구 삭제돼도
+ID만 남는다(메시지는 세션과 함께 지워진다).
+
 `folder_organize`·`workspace_workflow`는 채팅 답변 안에 작업 계획을 표시한다. 메시지의
 `run_id`로 `GET /agent/turn/{run_id}`를 조회한 뒤, 결과의 `run_id`로
 `GET /agent/runs/{run_id}`를 조회한다(모두 워크스페이스 API 경로 기준).
@@ -529,6 +539,7 @@ Agent turn이 만든 메시지는 `run_id`와 `action`이 함께 온다. 질의 
   "messages": [
     {
       "action": "markdown_edit",
+      "clarify_reason": "markdown_document_required",
       "content": "string",
       "created_at": "2026-08-13T04:25:24.371948Z",
       "error_message": "string",
@@ -612,6 +623,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/s
   "messages": [
     {
       "action": "markdown_edit",
+      "clarify_reason": "markdown_document_required",
       "content": "string",
       "created_at": "2026-08-13T04:25:24.371948Z",
       "error_message": "string",

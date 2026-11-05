@@ -395,7 +395,7 @@ class AgentTurnServiceTest {
         var order = org.mockito.Mockito.inOrder(chatTurnRecorder, outboxWriter);
         order.verify(chatTurnRecorder).createPendingAgentPair(anyString(), anyString(), anyString(), anyString(),
                 anyString(), org.mockito.ArgumentMatchers.any(), anyString(), anyString(),
-                org.mockito.ArgumentMatchers.eq(response.requestId()));
+                org.mockito.ArgumentMatchers.eq(response.requestId()), org.mockito.ArgumentMatchers.isNull());
         order.verify(outboxWriter).begin(response.requestId(), "ws_1", "user_1", "agent");
     }
 
@@ -470,7 +470,57 @@ class AgentTurnServiceTest {
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.eq("openai"),
                 org.mockito.ArgumentMatchers.eq("gpt-6-luna"),
-                org.mockito.ArgumentMatchers.eq(response.requestId()));
+                org.mockito.ArgumentMatchers.eq(response.requestId()),
+                org.mockito.ArgumentMatchers.isNull());
+    }
+
+    @Test
+    void turn_recordsReadOnlyDocumentTheServerConfirmed() {
+        when(documentService.isReadOnlyFor("ws_1", "user_1", "doc_view")).thenReturn(true);
+
+        var response = service.turn("ws_1", "user_1", readOnlyRequest("doc_view"));
+
+        verifyRecordedReadOnlyDocument(response.requestId(), "doc_view");
+    }
+
+    /** 클라이언트 값을 믿지 않는다. 확인되지 않으면 오류 없이 남기지 않는다. */
+    @Test
+    void turn_ignoresReadOnlyDocumentTheServerDidNotConfirm() {
+        when(documentService.isReadOnlyFor("ws_1", "user_1", "doc_other")).thenReturn(false);
+
+        var response = service.turn("ws_1", "user_1", readOnlyRequest("doc_other"));
+
+        assertThat(response.status()).isEqualTo("queued");
+        verifyRecordedReadOnlyDocument(response.requestId(), null);
+    }
+
+    /** 편집 문맥이 있는 요청은 보기 전용 문서를 연 요청이 아니다. 옛 화면 상태가 섞여 와도 남기지 않는다. */
+    @Test
+    void turn_withEditContextIgnoresReadOnlyDocument() {
+        when(documentService.findById("ws_1", "user_1", "doc_1")).thenReturn(document("note.md", "text/markdown", 7));
+        when(applyOperationStore.newOperationId()).thenReturn("op_apply_1");
+        var base = request("whole_document", 1, 2, null);
+        var request = new AgentTurnRequest(base.sessionId(), base.documentId(), base.baseVersion(), base.message(),
+                base.provider(), base.model(), base.allowWebSearch(), base.skillMode(), base.skillId(),
+                base.conversationContext(), base.skillDraftSources(), base.skillDraftUserDirectives(),
+                base.skillDraftExcludedLiterals(), base.skillScopeType(), base.editorSnapshot(), base.mode(),
+                base.folderId(), "doc_view");
+
+        var response = service.turn("ws_1", "user_1", request);
+
+        verify(documentService, never()).isReadOnlyFor(anyString(), anyString(), anyString());
+        verifyRecordedReadOnlyDocument(response.requestId(), null);
+    }
+
+    private static AgentTurnRequest readOnlyRequest(String documentId) {
+        return new AgentTurnRequest("session_1", null, null, "수정해줘", "openai", "gpt-6-luna", null, "auto", null,
+                null, List.of(), List.of(), List.of(), null, null, "task", null, documentId);
+    }
+
+    private void verifyRecordedReadOnlyDocument(String runId, String documentId) {
+        verify(chatTurnRecorder).createPendingAgentPair(anyString(), anyString(), anyString(), anyString(),
+                anyString(), org.mockito.ArgumentMatchers.any(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.eq(runId), org.mockito.ArgumentMatchers.eq(documentId));
     }
 
     @Test

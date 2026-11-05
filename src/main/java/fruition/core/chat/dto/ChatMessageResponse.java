@@ -75,6 +75,19 @@ public record ChatMessageResponse(
                 example = "markdown_edit")
         String action,
 
+        @JsonProperty("clarify_reason")
+        @Schema(description = "action이 clarify일 때 AI가 되물은 이유 코드. 코드가 없는 되묻기와 다른 메시지는 null이다. "
+                + "화면이 갈래를 정하는 데만 쓰고 사용자 문구로 쓰지 않는다. 값은 늘어날 수 있어 모르는 값은 다른 이유의 되묻기로 본다(문장 비교로 돌아가지 않는다).",
+                example = "markdown_document_required")
+        String clarifyReason,
+
+        @JsonProperty("read_only_document_id")
+        @Schema(description = "요청 때 사용자가 읽을 수 있고 편집은 못 한다고 서버가 확인한 열린 문서 ID. "
+                + "assistant 메시지에만 있고 그 밖에는 null이다. 안내 문구를 고르는 데만 쓰고 권한 판단에 쓰지 않는다. "
+                + "문서가 지워지면 남은 ID를 가리키는 문서는 없다.",
+                example = "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83")
+        String readOnlyDocumentId,
+
         @Schema(description = "실제 실행 순서대로 저장된 진행 단계")
         List<com.fasterxml.jackson.databind.JsonNode> progress
 ) {}

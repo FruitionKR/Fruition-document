@@ -53,6 +53,14 @@ public class ChatMessage {
     @Column(name = "action")
     private String action;
 
+    /** 되묻기의 이유 코드. 화면이 문장 대신 이 값으로 갈래를 정한다. 코드가 없거나 되묻기가 아니면 비어 있다. */
+    @Column(name = "clarify_reason")
+    private String clarifyReason;
+
+    /** 요청 때 보기 권한만 있던 열린 문서. 그 문서에서 받은 되묻기를 안내로 바꾸는 데만 쓴다. 권한 판단에 쓰지 않는다. */
+    @Column(name = "read_only_document_id")
+    private String readOnlyDocumentId;
+
     @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
     @Column(nullable = false, columnDefinition = "jsonb", insertable = false, updatable = false)
     private java.util.List<com.fasterxml.jackson.databind.JsonNode> progress = java.util.List.of();
@@ -92,9 +100,13 @@ public class ChatMessage {
     /** Agent turn 요청 시점에 어느 run이 이 메시지를 채울지 새겨 둔다. */
     public void assignRun(String runId) { this.runId = runId; }
 
+    /** 서버가 보기 권한만 있다고 확인한 문서를 요청 시점에 새겨 둔다. */
+    public void markReadOnlyDocument(String documentId) { this.readOnlyDocumentId = documentId; }
+
     /** 결과가 도착해 AI가 고른 갈래가 정해졌을 때 기록한다. */
-    public void completeAgentTurn(String action, String content) {
+    public void completeAgentTurn(String action, String content, String clarifyReason) {
         this.action = action;
+        this.clarifyReason = clarifyReason;
         complete(content);
     }
 
@@ -122,6 +134,8 @@ public class ChatMessage {
     public String getContent() { return content; }
     public String getRunId() { return runId; }
     public String getAction() { return action; }
+    public String getClarifyReason() { return clarifyReason; }
+    public String getReadOnlyDocumentId() { return readOnlyDocumentId; }
     public String getStatus() { return status; }
     public Instant getCreatedAt() { return createdAt; }
     public String getErrorMessage() { return errorMessage; }

@@ -117,6 +117,10 @@ import java.util.stream.Collectors;
 @Service
 public class DocumentService {
 
+    /** 서버가 만드는 문서 ID(doc_·chatdoc_ + hex)를 넉넉히 덮는다. 조회 전에 걸러 입력 크기와 문자를 제한한다. */
+    private static final java.util.regex.Pattern READ_ONLY_CHECK_DOCUMENT_ID =
+            java.util.regex.Pattern.compile("[A-Za-z0-9_-]{1,128}");
+
     @org.springframework.beans.factory.annotation.Autowired
     private fruition.core.analytics.DocumentAnalytics analytics;
 
@@ -1935,6 +1939,23 @@ public class DocumentService {
      * DB 작업은 짧은 트랜잭션으로 끝내고 AI 위키 연결 조회는 트랜잭션 밖에서 한다. 연결을 쥔 채 AI 응답을 기다리면
      * AI가 느릴 때 연결 풀이 바닥나 AI와 무관한 API까지 멈춘다.
      */
+    /**
+     * 이 사용자가 읽을 수 있고 편집은 못 하는 이 워크스페이스의 살아 있는 문서인지. 클라이언트가 보낸 ID를 믿지 않으려는 확인이라
+     * 없는 문서·형식 오류도 예외 없이 false다. 멤버인지는 호출하는 쪽이 먼저 확인한다.
+     * 형식 검사는 조회 전에 한다. NUL 문자는 PostgreSQL이 거절해 500이 된다.
+     */
+    public boolean isReadOnlyFor(String workspaceId, String userId, String documentId) {
+        if (documentId == null || !READ_ONLY_CHECK_DOCUMENT_ID.matcher(documentId).matches()) {
+            return false;
+        }
+        return documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                .map(document -> {
+                    DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
+                    return viewer.canRead(document) && !viewer.canEdit(document);
+                })
+                .orElse(false);
+    }
+
     public DocumentDetailResponse findById(String workspaceId, String userId, String documentId) {
         verifyWorkspaceOwnership(workspaceId, userId);
         record Loaded(Document doc, Optional<DocumentEditState> editState) {}

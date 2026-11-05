@@ -23,6 +23,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.mockito.ArgumentCaptor;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
@@ -47,6 +48,36 @@ class AgentTurnControllerTest {
     @Autowired JwtTokenProvider jwtTokenProvider;
     @MockBean AgentTurnService agentTurnService;
     @MockBean fruition.core.query.service.QueryEventBroker runEventBroker;
+
+    @Test
+    void turn_passesReadOnlyDocumentIdToService() throws Exception {
+        assertThat(acceptedReadOnlyDocumentId("\"doc_view\"")).isEqualTo("doc_view");
+    }
+
+    /** 표시용 힌트라 형식이 틀려도 요청을 거절하지 않는다. 값의 존재 여부가 응답으로 새지 않게 한다. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"null", "123", "true", "[\"doc_1\"]", "{\"id\":\"doc_1\"}"})
+    void turn_nonStringReadOnlyDocumentIdIsIgnored(String json) throws Exception {
+        assertThat(acceptedReadOnlyDocumentId(json)).isNull();
+    }
+
+    private String acceptedReadOnlyDocumentId(String json) throws Exception {
+        org.mockito.Mockito.reset(agentTurnService);
+        when(agentTurnService.turn(org.mockito.ArgumentMatchers.eq(WORKSPACE_ID), org.mockito.ArgumentMatchers.eq(USER_ID),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new AgentTurnResponse(null, null, "agent_1", null, "queued", null, null));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"session_id\":\"session_1\",\"message\":\"수정해줘\",\"read_only_document_id\":" + json + "}"))
+                .andExpect(status().isAccepted());
+
+        var request = org.mockito.ArgumentCaptor.forClass(fruition.core.agent.dto.AgentTurnRequest.class);
+        org.mockito.Mockito.verify(agentTurnService).turn(org.mockito.ArgumentMatchers.eq(WORKSPACE_ID),
+                org.mockito.ArgumentMatchers.eq(USER_ID), request.capture());
+        return request.getValue().readOnlyDocumentId();
+    }
 
     @Test
     void cancelTurn_returnsCurrentTurnStatus() throws Exception {

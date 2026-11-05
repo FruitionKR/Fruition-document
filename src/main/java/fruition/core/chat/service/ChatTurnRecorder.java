@@ -79,7 +79,7 @@ public class ChatTurnRecorder {
 
     /**
      * Agent turn용 쌍. 질의와 달리 assistant 메시지에 run ID를 새겨, 결과가 왔을 때
-     * 어느 말풍선을 채울지와 승인 상태를 어디서 읽을지 정한다.
+     * 어느 말풍선을 채울지와 승인 상태를 어디서 읽을지 정한다. {@code readOnlyDocumentId}는 호출자가 권한을 확인한 값이다.
      */
     @Transactional
     public void createPendingAgentPair(String sessionId,
@@ -90,12 +90,14 @@ public class ChatTurnRecorder {
                                        Instant createdAt,
                                        String provider,
                                        String model,
-                                       String runId) {
+                                       String runId,
+                                       String readOnlyDocumentId) {
         ChatSession session = chatSessionRepository.findById(sessionId)
                 .orElseThrow(() -> new ChatSessionNotFoundException(sessionId));
         ChatMessage assistant = new ChatMessage(assistantMessageId, session, pairId, "assistant", "", "pending",
                 createdAt, null, provider, model, false);
         assistant.assignRun(runId);
+        assistant.markReadOnlyDocument(readOnlyDocumentId);
         chatMessageRepository.saveAll(List.of(
                 new ChatMessage(userMessageId, session, pairId, "user", message, "completed", createdAt,
                         null, provider, model, false),
@@ -123,13 +125,13 @@ public class ChatTurnRecorder {
         });
     }
 
-    /** Agent 결과가 도착했을 때 AI가 고른 갈래와 본문을 채운다. */
+    /** Agent 결과가 도착했을 때 AI가 고른 갈래, 본문, 되묻기 이유 코드를 채운다. */
     @Transactional
-    public void completeAgentTurn(String assistantMessageId, String action, String content) {
+    public void completeAgentTurn(String assistantMessageId, String action, String content, String clarifyReason) {
         ChatMessage assistantMessage = chatMessageRepository.findById(assistantMessageId)
                 .orElseThrow(() -> new IllegalStateException(
                         "처리 중인 assistant 메시지를 찾을 수 없습니다: " + assistantMessageId));
-        assistantMessage.completeAgentTurn(action, AiMarkdownSanitizer.sanitize(content));
+        assistantMessage.completeAgentTurn(action, AiMarkdownSanitizer.sanitize(content), clarifyReason);
         chatMessageRepository.save(assistantMessage);
     }
 

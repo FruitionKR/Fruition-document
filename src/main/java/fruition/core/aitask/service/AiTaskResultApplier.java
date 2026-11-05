@@ -353,7 +353,7 @@ public class AiTaskResultApplier {
             if (errorCode == null) {
                 JsonNode payload = event.path("payload");
                 chatTurnRecorder.completeAgentTurn(assistantMessageId,
-                        payload.path("action").asText(null), agentMessageContent(payload));
+                        payload.path("action").asText(null), agentMessageContent(payload), clarifyReason(event));
                 recordAgentChatEvidence(assistantMessageId, payload);
             } else {
                 chatTurnRecorder.markFailed(assistantMessageId, AiErrorMessages.agent(errorCode));
@@ -365,6 +365,26 @@ public class AiTaskResultApplier {
     }
 
     public record AgentApplyResult(boolean applied, String error) {}
+
+    /** 소문자·숫자·밑줄 코드만 받는다. 저장 전에 거르므로 잘린 코드나 문장이 화면으로 나가지 않는다. */
+    private static final java.util.regex.Pattern CLARIFY_REASON_FORMAT = java.util.regex.Pattern.compile("[a-z0-9_]{1,64}");
+
+    /**
+     * 되묻기의 이유 코드. 모르는 코드는 그대로 전달해 AI가 먼저 배포돼도 된다.
+     * 부가 정보라 형식이 어긋나면 값만 버리고 답변은 남긴다. 값은 신뢰할 수 없어 로그에 남기지 않는다.
+     */
+    private String clarifyReason(JsonNode event) {
+        JsonNode payload = event.path("payload");
+        JsonNode reason = payload.path("clarify_reason");
+        if (reason.isMissingNode() || reason.isNull() || !"clarify".equals(payload.path("action").asText())) {
+            return null;
+        }
+        if (reason.isTextual() && CLARIFY_REASON_FORMAT.matcher(reason.textValue()).matches()) {
+            return reason.textValue();
+        }
+        log.warn("[Agent 되묻기 이유 코드 무시] runId={} nodeType={}", text(event, "run_id"), reason.getNodeType());
+        return null;
+    }
 
     /**
      * AI가 질의로 판정한 턴은 답변과 함께 근거가 온다. 질의 경로와 같은 자리에 남겨야
