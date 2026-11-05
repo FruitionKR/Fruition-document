@@ -73,6 +73,8 @@ public final class AiErrorMessages {
             Map.entry("agent_result_missing_canonical_markdown", "편집안 본문이 비어 있어 적용할 수 없습니다."),
             Map.entry("agent_result_request_mismatch", "요청과 결과가 달라 적용할 수 없습니다."),
             Map.entry("rollback_failed", "변경을 되돌리지 못했습니다. 작업 기록을 확인해 주세요."),
+            Map.entry("rollback_document_purged", "영구 삭제된 문서의 변경은 되돌릴 수 없습니다. 나머지 변경은 되돌렸습니다."),
+            Map.entry("document_purged", "영구 삭제된 문서라 실행하지 않았습니다."),
             Map.entry("mutation_intent_required", "어떤 변경을 원하시는지 조금 더 구체적으로 알려 주세요."),
             Map.entry("ready_markdown_migration_unrecoverable", "이전 편집안을 복구할 수 없어 적용하지 못했습니다. 다시 요청해 주세요."),
             // document 자체 코드

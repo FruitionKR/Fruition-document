@@ -112,6 +112,39 @@ class InternalPurgeIntegrationTest {
     }
 
     @Test
+    void workspacePurgeRemovesPendingDocumentPurgedCommandAndAddsNone() throws Exception {
+        String workspace = "ws_" + UUID.randomUUID();
+        String user = "user_" + UUID.randomUUID();
+        seedWorkspace(workspace, user);
+        insertOutbox("{\"kind\":\"document_purged\",\"workspace_id\":\"" + workspace + "\",\"document_id\":\"gone\"}");
+
+        purgeWorkspaces(workspace).andExpect(status().isOk());
+
+        // AI 쪽은 access가 이어서 부르는 파기가 워크스페이스째 지운다. 문서별 command는 필요 없다.
+        assertThat(outboxCount("workspace_id", workspace)).isZero();
+    }
+
+    @Test
+    void userPurgeLeavesDocumentPurgedCommandOfSharedWorkspace() throws Exception {
+        String workspace = "ws_" + UUID.randomUUID();
+        String leaving = "user_" + UUID.randomUUID();
+        seedWorkspace(workspace, leaving);
+        insertOutbox("{\"kind\":\"document_purged\",\"workspace_id\":\"" + workspace + "\",\"document_id\":\"gone\"}");
+
+        mockMvc.perform(post("/internal/purge/users").header("X-Internal-Token", token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"user_id\":\"" + leaving + "\"}"))
+                .andExpect(status().isOk());
+
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM ai_command_outbox
+                WHERE payload::jsonb->>'kind' = 'document_purged' AND payload::jsonb->>'workspace_id' = ?
+                """, Integer.class, workspace)).isOne();
+        // 공유 문서는 탈퇴로 지우지 않으므로 command를 새로 만들지 않는다.
+        assertThat(count("documents", workspace)).isOne();
+    }
+
+    @Test
     void rejectsMissingToken() throws Exception {
         mockMvc.perform(post("/internal/purge/workspaces").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"workspace_ids\":[\"ws\"]}"))

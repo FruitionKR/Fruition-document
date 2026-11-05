@@ -276,7 +276,8 @@ public class AiTaskResultApplier {
      * @return 최초 반영 여부와 실제 projection 반영 오류. 호출부는 이 결과로 SSE를 한 번만 종료한다.
      */
     @Transactional
-    public AgentApplyResult applyAgent(JsonNode event) {
+    public AgentApplyResult applyAgent(JsonNode received) {
+        JsonNode event = withoutPurgedEvidence(received);
         String eventId = text(event, "event_id");
         String runId = text(event, "run_id");
         if (!beginResult(runId)) return new AgentApplyResult(false, null);
@@ -545,7 +546,8 @@ public class AiTaskResultApplier {
     }
 
     @Transactional
-    public QueryProjection applyQuery(JsonNode event) {
+    public QueryProjection applyQuery(JsonNode received) {
+        JsonNode event = withoutPurgedEvidence(received);
         String runId = text(event, "run_id");
         if (!beginResult(runId)) return null;
         boolean first = jdbcTemplate.update("""
@@ -589,6 +591,38 @@ public class AiTaskResultApplier {
             if (analytics != null) analytics.queryCompleted(canonical, false, error);
         }
         return new QueryProjection(runId, null, error);
+    }
+
+    /**
+     * 영구 삭제 전에 근거를 읽은 질의의 결과가 삭제 뒤에 오면, 이미 끝난 정리는 이 결과를 다시 보지 않는다. 문서가 없는 근거의 본문을 여기서 비운다.
+     *
+     * <p>문서 행을 먼저 잠근다. 삭제 트랜잭션과 겹치면 커밋을 기다렸다가 문서가 없음을 보고, 잠근 쪽이 먼저면 영구 삭제가 SKIP LOCKED로
+     * 이 문서를 다음 실행으로 미룬 뒤 커밋된 값을 정리한다. 영구 삭제와 같은 문서 → 실행 순서라 교착하지 않는다.
+     */
+    private JsonNode withoutPurgedEvidence(JsonNode event) {
+        java.util.List<JsonNode> snippets = new java.util.ArrayList<>();
+        event.path("payload").path("evidence_snippets").forEach(snippets::add);
+        event.path("payload").path("chat").path("evidence_snippets").forEach(snippets::add);
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (JsonNode snippet : snippets) {
+            String id = snippet.path("source_document_id").asText("");
+            if (!id.isBlank() && !id.startsWith("web:")) ids.add(id);
+        }
+        if (ids.isEmpty()) return event;
+        ids.removeAll(jdbcTemplate.queryForList(
+                "SELECT id FROM documents WHERE id IN (" + String.join(",", java.util.Collections.nCopies(ids.size(), "?")) + ") FOR KEY SHARE",
+                String.class, ids.toArray()));
+        if (ids.isEmpty()) return event;
+        JsonNode cleaned = event.deepCopy();
+        for (JsonNode list : java.util.List.of(cleaned.path("payload").path("evidence_snippets"),
+                cleaned.path("payload").path("chat").path("evidence_snippets"))) {
+            for (JsonNode snippet : list) {
+                if (ids.contains(snippet.path("source_document_id").asText(""))) {
+                    ((com.fasterxml.jackson.databind.node.ObjectNode) snippet).put("text", "");
+                }
+            }
+        }
+        return cleaned;
     }
 
     private JsonNode canonicalQueryEvent(String runId) {

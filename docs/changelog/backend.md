@@ -2,6 +2,9 @@
 
 ## 2026-11-04
 
+- 문서 영구 삭제가 채팅 인용의 원문을 지운다. 그 문서를 가리키는 `chat_message_references.quote`를 빈 문자열로 비우고 `ai_task_changes`의 같은 행 기록도 맞춘다(V104~V106, 응답의 `references[].text`가 `""`). 여러 문서를 걸친 인용은 원문을 나눌 수 없어 함께 비우고, 살아 있는 대표 문서는 남긴다. 이전에 지운 문서의 인용은 정리 작업이 찾아 지운다. 인용 위치와 답변 본문은 그대로다.
+- 문서 영구 삭제가 남기던 복사본을 더 지운다. 이 문서의 agent 결과 receipt는 키만 남기고 `event_payload`를 비운다. 문서를 열지 않은 질의는 근거의 `source_document_id`로 찾아 `agent_apply_projections.result`, 그 변경 기록, 질의 receipt의 근거 본문만 비우고(V102·V103, CONCURRENTLY), agent receipt는 `event_payload`를 비운다. 답변 본문은 채팅 표시와 조회 API가 쓰여 남긴다. 삭제 뒤에 도착한 agent·질의 결과는 문서 행을 `FOR KEY SHARE`로 잠근 뒤 문서가 없는 근거의 본문을 비워 저장한다. `scrubOrphans`가 늦게 끝난 run의 receipt와 projection 변경 기록도 정리한다.
+- 휴지통 보관 기간이 지나 문서를 영구 삭제할 때 같은 트랜잭션에서 `document_purged` command를 AI로 보낸다. AI가 수정안·되돌리기 스냅샷 등 본문 복사본을 지운다(AI를 먼저 배포해야 한다. 구 AI는 이 command를 폐기한다). 같은 트랜잭션에서 그 문서의 `ai_task_runs.command` 본문 필드, `agent_apply_projections`의 본문, `ai_task_changes`의 문서 변경 기록을 지운다(V98~V100 인덱스, `CONCURRENTLY`). 진행 중인 실행은 끝난 뒤 다음 실행에서 지운다. AI 결과 event `document_purge`가 알린 소스 페이지의 `wiki_page_versions.markdown`과 그 변경 기록도 지운다(V101). 오류 문구 `document_purged`·`rollback_document_purged`를 추가했다. API 변경은 없다.
 - agent·query command에 `session_title_needed`를 추가했다. 세션 제목이 비었거나 `새 채팅`이면 `true`, 그 밖에는 `false`다. 저장하지 못할 제목을 만드느라 LLM을 부르던 호출을 AI가 건너뛴다(AI 배포 전에는 무시된다). 판단 기준은 `applySessionTitle`과 `ChatSession.DEFAULT_TITLE`·`isTitleUnset`으로 맞췄고, agent는 소유권 확인이, query는 누적 요약 조회가 읽은 세션을 재사용해 쿼리·트랜잭션이 늘지 않는다.
 - `POST .../agent/turn`이 열린 문서의 편집 잠금으로 423 `DOCUMENT_EDIT_LOCKED`를 줄 때 잠긴 문서 제목을 `error.locked_document_name`에 담는다. 첨부를 고치는 요청도 열린 문서 잠금으로 막히는데 메시지로는 어느 문서인지 알 수 없었다. 거절 동작과 메시지는 그대로이고, 요청자가 읽을 수 없으면 키가 빠진다. 다른 API의 423 응답은 바뀌지 않는다.
 - 클라이언트가 먼저 끊은 요청(SSE 구독 해제·다운로드 취소)을 `INTERNAL_ERROR status=500`으로 기록하던 것을 debug 로그로 낮췄다. `AsyncRequestNotUsableException`·`ClientAbortException` 타입만 해당하며 다른 입출력 오류는 지금처럼 500 오류 로그를 남긴다.
@@ -13,6 +16,12 @@
 - `POST .../agent/turn`에 참고 문서 `reference_document_ids`(최대 3개)를 추가하고 검증한 ID를 ai command에 같은 키로 전달한다(없으면 빈 배열, 본문은 싣지 않음). 문서 없이도, `documentId`와 함께여도 보낼 수 있고 읽기 권한만 요구한다. 중복과 `documentId`와 같은 ID는 서버가 뺀다. 없는 문서, 다른 워크스페이스 문서, 삭제된 문서, 비 Markdown, 읽을 수 없는 문서, 변환 중이거나 본문 없이 실패한 PDF 변환본이 하나라도 있으면 같은 메시지의 400으로 요청 전체를 거절한다. AI가 본문을 읽는 내부 API(`/internal/agent/skill-authoring/references/read`)는 멤버 확인만 하던 것에 문서 읽기 권한 판정을 더했다. 채팅 메시지에는 저장하지 않는다.
 - Agent turn 결과의 되묻기 이유 코드 `clarify_reason`을 `chat_messages`에 저장하고(V97, NULL 허용) 채팅 메시지 조회 응답으로 내려준다. 화면이 되묻기 문장을 비교하지 않고 코드로 갈래를 정할 수 있고 새로고침 뒤에도 유지된다. `action=clarify`의 문자열 코드(소문자·숫자·밑줄 1~64자)만 받고, 모르는 코드는 그대로 전달하며, 형식이 어긋나면 값만 버린다. 값이 없거나 이전 메시지는 `null`이다.
 - 보기 권한 문서를 연 채 보낸 Agent turn의 그 문서를 `POST .../agent/turn`의 `read_only_document_id`로 받아 `chat_messages`에 저장하고(V97, NULL 허용) 메시지 조회 응답으로 내려준다. 안내 기록이 브라우저에만 있어 다른 기기에서 AI 원문이 보이던 문제를 위한 것이다. 서버가 읽기 가능·편집 불가를 확인한 값만 남기고 그 밖의 값은 오류 없이 무시한다. 표시 전용이며 권한 판단에 쓰지 않고 AI로 보내지 않는다.
+- 폴더를 편집할 수 없는 사람이 그 폴더에 넣거나 꺼내지 못하게 했다. 문서·폴더 이동(출발·목적지), 새 폴더, 새 문서, 파일·직접 업로드, Notion 가져오기, 복제, PDF 변환, 회의록 새 문서 저장, Agent 도구가 `403 DOCUMENT_WRITE_FORBIDDEN`("이 폴더에 넣거나 꺼낼 권한이 없습니다.")로 거절한다. 문서 소유자 예외가 없고 OWNER는 항상 되며 최상위는 멤버면 된다. 같은 폴더 안 순서 변경과 폴더 안 문서의 본문 편집·이름 변경에 대한 소유자 예외는 그대로다. 끝난 요청의 멱등 재요청은 권한이 회수돼도 저장된 응답을 돌려준다.
+- 기존에 멤버가 하던 동작이 막힌다: 보기 폴더로 옮기기·새 항목 만들기, 보기 폴더의 자기 문서 꺼내기, 보기 폴더 문서 복제·PDF 변환.
+- 문서 목록·트리·상세의 `can_convert`가 폴더를 보지 않아, 보기 폴더의 PDF에서 `true`인데 `convert-markdown`이 403이던 것을 맞췄다. 업로더와 `document.convert` 권한자도 그 폴더를 편집할 수 없으면 `false`이고 OWNER는 그대로다. 응답 모양은 같다.
+- Agent 자동 승인이 출발 폴더도 본다(`move_document`·`move_folder`). 실행 때 거절될 계획은 승인 대기로 남고, 실행 때 허용되는 같은 폴더 안 순서 변경은 자동 승인 대상이 된다.
+- 문서 복구가 항상 최상위로 가던 것을 원래 폴더의 마지막 위치로 돌아가게 했다. 소유자가 보기 폴더의 자기 문서를 삭제·복구해 꺼내는 경로를 막는다. 원래 폴더가 삭제됐거나 없을 때만 최상위로 돌아가고, 이름 충돌은 복구 위치 기준으로 `409 DUPLICATE_NAME`이다. 복구 권한은 그대로다. 삭제해도 `folder_id`가 남아 있어 스키마 변경이 없고, 이미 휴지통에 있는 문서에도 적용된다.
+- 멤버의 빈 폴더 삭제에 그 폴더의 편집 권한을 요구한다(`403 DOCUMENT_WRITE_FORBIDDEN`). 보기 폴더를 비워 지운 뒤 문서를 복구해 최상위로 꺼내는 경로를 막는다. OWNER와 편집 가능한 빈 폴더는 그대로이고, 빈 폴더 복구와 Agent 취소 보상(`delete_folder`의 `require_empty`)은 권한이 회수돼도 그대로 동작한다.
 
 ## 2026-11-03
 

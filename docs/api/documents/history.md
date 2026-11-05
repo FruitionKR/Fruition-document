@@ -13,7 +13,7 @@
 | [`GET /api/workspaces/{workspace_id}/documents/trash`](#summary-get-api-workspaces-workspace-id-documents-trash) | 워크스페이스에서 소프트 삭제된 문서 중 보관 기간이 지나지 않은 문서를 삭제 시각 역순으로 반환합니다. |
 | [`DELETE /api/workspaces/{workspace_id}/documents/{document_id}`](#summary-delete-api-workspaces-workspace-id-documents-document-id) | 원본과 편집 상태를 유지한 채 문서를 소프트 삭제하고 AI에 위키 정리를 요청합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/diff`](#summary-get-api-workspaces-workspace-id-documents-document-id-diff) | 두 Markdown 버전을 줄 단위로 비교해 GitHub 스타일 diff hunk를 반환합니다. |
-| [`POST /api/workspaces/{workspace_id}/documents/{document_id}/restore`](#summary-post-api-workspaces-workspace-id-documents-document-id-restore) | 삭제 문서를 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다. |
+| [`POST /api/workspaces/{workspace_id}/documents/{document_id}/restore`](#summary-post-api-workspaces-workspace-id-documents-document-id-restore) | 삭제 문서를 원래 폴더의 마지막 위치에 복구합니다. 원래 폴더가 삭제됐거나 없으면 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/versions`](#summary-get-api-workspaces-workspace-id-documents-document-id-versions) | 편집 가능 Markdown 문서의 콘텐츠 버전 이력을 최신 순으로 반환합니다. 본문은 제외한 메타데이터만 제공합니다. |
 | [`GET /api/workspaces/{workspace_id}/documents/{document_id}/versions/{version}`](#summary-get-api-workspaces-workspace-id-documents-document-id-versions-version) | 특정 버전의 전체 Markdown 본문을 반환합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/{document_id}/versions/{version}/restore`](#summary-post-api-workspaces-workspace-id-documents-document-id-versions-version-restore) | 과거 버전을 새 버전으로 복원합니다(비파괴적). base_version이 현재 version과 일치할 때만 반영합니다. |
@@ -432,11 +432,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | 삭제 문서를 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다. |
+| 목적 | 삭제 문서를 원래 폴더의 마지막 위치에 복구합니다. 원래 폴더가 삭제됐거나 없으면 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다. |
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `DocumentLifecycleRequest` |
 | 출력 | `200` 복구 성공 — `DocumentLifecycleResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 base_version 또는 Idempotency-Key — `ErrorResponse`<br>`403` 문서 소유자나 워크스페이스 OWNER가 아님 — `ErrorResponse`<br>`404` 삭제 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 또는 멱등 키 충돌, `TRASH_RETENTION_EXPIRED` 휴지통 보관 기간 경과 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 base_version 또는 Idempotency-Key — `ErrorResponse`<br>`403` 문서 소유자나 워크스페이스 OWNER가 아님 — `ErrorResponse`<br>`404` 삭제 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 문서 version 또는 멱등 키 충돌, `TRASH_RETENTION_EXPIRED` 휴지통 보관 기간 경과, `DUPLICATE_NAME` 복구 위치에 같은 이름이 있음 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -450,7 +450,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 #### 2. 목적
 
-삭제 문서를 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다.
+삭제 문서를 원래 폴더의 마지막 위치에 복구합니다. 원래 폴더가 삭제됐거나 없으면 역할별 최상위 마지막 위치에 복구합니다. 편집 문서는 미편입 상태로 돌아오므로 다시 편입해야 합니다.
 
 #### 3. Auth 필요 여부
 

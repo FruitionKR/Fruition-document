@@ -86,6 +86,7 @@ public class FolderService {
                 response -> response.id().toString(), () -> {
                     verifyMembership(workspaceId, userId);
                     verifyParentFolder(workspaceId, parentFolderId);
+                    documentAccessPolicy.requirePlacement(workspaceId, parentFolderId, userId);
                     Folder folder = new Folder(
                             UUID.randomUUID(), workspaceId, parentFolderId, name,
                             nextSortOrder(workspaceId, parentFolderId));
@@ -125,13 +126,13 @@ public class FolderService {
                 userId, scope, idempotencyKey, hash, FolderResponse.class, 200,
                 response -> folderId.toString(), () -> {
                     verifyMembership(workspaceId, userId);
-                    requireFolder(workspaceId, folderId);
+                    Folder folder = requireFolder(workspaceId, folderId);
+                    verifyParentFolder(workspaceId, targetParentId);
+                    documentAccessPolicy.requireMove(workspaceId, folder.getParentFolderId(), targetParentId, userId);
                     documentAccessPolicy.requireFolderEdit(workspaceId, folderId, userId);
-                    if (targetParentId != null) {
-                        verifyParentFolder(workspaceId, targetParentId);
-                        if (folderRepository.countAncestorMatches(targetParentId, folderId) > 0) {
-                            throw new HierarchyCycleException("폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.");
-                        }
+                    if (targetParentId != null
+                            && folderRepository.countAncestorMatches(targetParentId, folderId) > 0) {
+                        throw new HierarchyCycleException("폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.");
                     }
                     long sortOrder = siblingReorderer.placeFolder(
                             workspaceId, targetParentId, folderId, request.position());
@@ -171,6 +172,11 @@ public class FolderService {
                     }
                     if (hasChildren(workspaceId, folderId) && !isWorkspaceOwner(workspaceId, userId)) {
                         throw new HierarchyWriteForbiddenException("내용이 있는 폴더는 워크스페이스 소유자만 삭제할 수 있습니다.");
+                    }
+                    // 휴지통 문서는 내용으로 치지 않으므로, 막지 않으면 보기 폴더를 비워 지운 뒤 문서를 복구해 최상위로 꺼낼 수 있다.
+                    // 취소 보상(requireEmpty)은 사용자 동작이 아니라 run이 만든 폴더를 되돌리는 것이라 권한 회수 뒤에도 동작한다.
+                    if (!requireEmpty) {
+                        documentAccessPolicy.requireFolderEdit(workspaceId, folderId, userId);
                     }
                     UUID operationId = UUID.randomUUID();
                     Instant now = Instant.now();

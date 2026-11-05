@@ -158,6 +158,13 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             @Param("updatedBy") String updatedBy
     );
 
+    /** 문서의 폴더만 잠금 없이 읽는다. 폴더 행을 문서 행보다 먼저 잠글 때 쓴다. 최상위거나 문서가 없으면 비어 있다. */
+    @Query("SELECT d.folderId FROM Document d WHERE d.id = :documentId AND d.workspaceId = :workspaceId")
+    Optional<java.util.UUID> findFolderIdById(
+            @Param("documentId") String documentId,
+            @Param("workspaceId") String workspaceId
+    );
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT d FROM Document d WHERE d.id = :documentId "
             + "AND d.workspaceId = :workspaceId")
@@ -384,7 +391,7 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
     @Modifying(flushAutomatically = true)
     @Query("UPDATE Document d SET d.currentVersion = d.currentVersion + 1, "
             + "d.deletedAt = NULL, d.deletedBy = NULL, d.deleteOperationId = NULL, "
-            + "d.folderId = NULL, "
+            + "d.folderId = :folderId, "
             + "d.sortOrder = :sortOrder, d.updatedAt = :restoredAt "
             + "WHERE d.id = :documentId AND d.workspaceId = :workspaceId "
             + "AND d.deletedAt IS NOT NULL AND d.currentVersion = :baseVersion")
@@ -392,6 +399,7 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             @Param("documentId") String documentId,
             @Param("workspaceId") String workspaceId,
             @Param("baseVersion") long baseVersion,
+            @Param("folderId") java.util.UUID folderId,
             @Param("sortOrder") long sortOrder,
             @Param("restoredAt") Instant restoredAt
     );

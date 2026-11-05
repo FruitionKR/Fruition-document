@@ -988,7 +988,7 @@ class AgentTurnServiceTest {
 
             // 뒤늦게 첫 요청이 커밋·종료되면 기존 정산 경로로 예약을 해제한다.
             assertThat(service.getRun("ws_1", "user_1", runId)).isEqualTo(completed);
-            verify(usageCharges).endAutonomousRunIfTerminal(runId, completed);
+            verify(usageCharges).endAutonomousRunIfTerminal(runId, "ws_1", "user_1", completed);
         }
     }
 
@@ -1066,7 +1066,7 @@ class AgentTurnServiceTest {
         order.verify(statusRequester).revise("ws_1", "user_1", runId, "좁혀줘");
         order.verify(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
         order.verify(statusRequester).approve("ws_1", "user_1", runId, 1, "a".repeat(64));
-        verify(usageCharges, never()).endAutonomousRun(anyString());
+        verify(usageCharges, never()).endAutonomousRun(anyString(), anyString(), anyString());
 
         org.mockito.Mockito.doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("부족"))
                 .when(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
@@ -1162,7 +1162,7 @@ class AgentTurnServiceTest {
                 .isInstanceOf(IllegalStateException.class);
 
         verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
-        verify(usageCharges, never()).endAutonomousRun(anyString());
+        verify(usageCharges, never()).endAutonomousRun(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -1192,7 +1192,7 @@ class AgentTurnServiceTest {
 
         service.getRun("ws_1", "user_1", runId);
 
-        verify(usageCharges).endAutonomousRunIfTerminal(runId, done);
+        verify(usageCharges).endAutonomousRunIfTerminal(runId, "ws_1", "user_1", done);
     }
 
     @Test

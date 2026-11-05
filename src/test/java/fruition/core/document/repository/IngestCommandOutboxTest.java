@@ -48,6 +48,26 @@ class IngestCommandOutboxTest {
     }
 
     @Test
+    void enqueuePurge_serializesDocumentPurgedWithoutUserOrBody() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        AiCommandOutboxWriter writer = new AiCommandOutboxWriter(outboxRepository, objectMapper,
+                org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class),
+                org.mockito.Mockito.mock(jakarta.persistence.EntityManager.class),
+                org.mockito.Mockito.mock(fruition.core.usage.service.CreditService.class),
+                org.mockito.Mockito.mock(fruition.core.usage.limit.AiUsageLimiter.class));
+
+        new IngestCommandOutbox(writer, "ai.ingest.command", objectMapper).enqueuePurge("doc_1", "ws_1");
+
+        ArgumentCaptor<AiCommandOutbox> saved = ArgumentCaptor.forClass(AiCommandOutbox.class);
+        verify(outboxRepository).save(saved.capture());
+        // 같은 문서의 document_deleted와 순서가 지켜지도록 key는 문서 id다. user_id가 없어 실행 행·크레딧을 만들지 않는다.
+        assertThat(saved.getValue().getMessageKey()).isEqualTo("doc_1");
+        assertThat(saved.getValue().getPayload())
+                .contains("\"kind\":\"document_purged\"", "\"document_id\":\"doc_1\"", "\"workspace_id\":\"ws_1\"")
+                .doesNotContain("user_id");
+    }
+
+    @Test
     void enqueueRename_serializesDocumentRenamedWithoutUser() {
         ObjectMapper objectMapper = new ObjectMapper();
         AiCommandOutboxWriter writer = spy(new AiCommandOutboxWriter(outboxRepository, objectMapper,
