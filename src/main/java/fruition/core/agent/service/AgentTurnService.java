@@ -312,14 +312,16 @@ public class AgentTurnService {
         JsonNode run = statusRequester.getAutonomousRun(workspaceId, userId, runId);
         // 승인 대기 계획은 사용자의 자동 승인 설정을 지금 다시 적용해 본다. ai-svc의 계획 알림이 실패했거나
         // 알림 뒤에 설정을 켠 경우에도 화면이 계획을 열 때 판단한다.
-        return closeIfTerminal(runId, autoApproveIfAllowed(workspaceId, userId, runId, run));
+        return closeIfTerminal(workspaceId, userId, runId, autoApproveIfAllowed(workspaceId, userId, runId, run));
     }
 
     /**
      * ai-svc가 계획을 만들어 승인 대기에 들어갔을 때 부른다(내부 API). 사용자의 자동 승인 설정과 대상 권한을 보고
      * 승인 확인을 건너뛸 수 있으면 사용자 승인과 같은 경로(크레딧 예약 포함)로 승인한다. 아니면 그대로 둔다.
+     * 계획 단계 사용량은 승인과 관계없이 지금 수집한다. 뒤의 조회·승인이 실패해도 잃지 않게 먼저 넣는다.
      */
     public JsonNode autoApprove(String workspaceId, String userId, String runId) {
+        usageCharges.collectAgentPlan(runId);
         return getRun(workspaceId, userId, runId);
     }
 
@@ -397,7 +399,7 @@ public class AgentTurnService {
 
     public JsonNode reject(String workspaceId, String userId, String runId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return closeIfTerminal(runId, statusRequester.reject(workspaceId, userId, runId));
+        return closeIfTerminal(workspaceId, userId, runId, statusRequester.reject(workspaceId, userId, runId));
     }
 
     public JsonNode cancel(String workspaceId, String userId, String runId) {
@@ -405,7 +407,7 @@ public class AgentTurnService {
         if (cancellation.findStatus(runId, workspaceId, userId).isPresent()) {
             return mapper.valueToTree(cancellation.cancel(runId, workspaceId, userId));
         }
-        return closeIfTerminal(runId, statusRequester.cancel(workspaceId, userId, runId));
+        return closeIfTerminal(workspaceId, userId, runId, statusRequester.cancel(workspaceId, userId, runId));
     }
 
     public JsonNode revise(String workspaceId, String userId, String runId,
@@ -432,12 +434,12 @@ public class AgentTurnService {
         // 이미 끝났거나 이 요청을 받지 않는 상태(예: 이미 승인돼 실행 중)면 ai-svc가 거절한다. 예약을 건드리지 않는다.
         // 여기서 예약하면 거절(409)을 받은 뒤 실행 중인 run의 예약을 풀게 된다(#167).
         if (current == null || !accepting.contains(current.path("status").asText())) {
-            closeIfTerminal(runId, current);
+            closeIfTerminal(workspaceId, userId, runId, current);
             return forward.get();
         }
         usageCharges.reserveAutonomousRun(runId, workspaceId, userId);
         try {
-            return closeIfTerminal(runId, forward.get());
+            return closeIfTerminal(workspaceId, userId, runId, forward.get());
         } catch (RuntimeException e) {
             // 이번 요청이 거절됐어도 이전 요청이 아직 커밋 전일 수 있다. run 단위 예약은 유지한다.
             reconcileFailedForward(workspaceId, userId, runId, e);
@@ -452,7 +454,7 @@ public class AgentTurnService {
             return;
         }
         try {
-            closeIfTerminal(runId, statusRequester.getAutonomousRun(workspaceId, userId, runId));
+            closeIfTerminal(workspaceId, userId, runId, statusRequester.getAutonomousRun(workspaceId, userId, runId));
         } catch (RuntimeException unknown) {
             // 정산 확인 실패가 원래 전달 오류를 덮어쓰지 않도록 한다.
             log.warn("[Agent 전달 결과 확인 실패] runId={} 예약 유지 error={}", runId, unknown.toString());
@@ -460,8 +462,8 @@ public class AgentTurnService {
     }
 
     /** AgentRun이 끝났으면 크레딧 실행을 닫아 사용량 수집·정산(예약 해제)을 시작한다. */
-    private JsonNode closeIfTerminal(String runId, JsonNode run) {
-        usageCharges.endAutonomousRunIfTerminal(runId, run);
+    private JsonNode closeIfTerminal(String workspaceId, String userId, String runId, JsonNode run) {
+        usageCharges.endAutonomousRunIfTerminal(runId, workspaceId, userId, run);
         return run;
     }
 

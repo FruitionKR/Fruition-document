@@ -38,6 +38,8 @@ public class DocumentPositionController {
             content = @Content(schema = @Schema(implementation = DocumentPositionResponse.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 위치 또는 version, 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "다른 폴더로 옮기는데 출발 또는 대상 폴더를 편집할 수 없음(문서 소유자 예외 없음, 메시지 \"이 폴더에 넣거나 꺼낼 권한이 없습니다.\"), 또는 문서를 편집할 수 없음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "문서, 대상 폴더 또는 워크스페이스를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용)",
