@@ -2055,7 +2055,7 @@ class DocumentServiceBlocksTest {
         verify(documentRepository, never()).softDeleteIfVersionMatches(
                 anyString(), anyString(), anyLong(), anyString(), any(), any());
         verify(documentRepository, never()).restoreIfVersionMatches(
-                anyString(), anyString(), anyLong(), anyLong(), any());
+                anyString(), anyString(), anyLong(), any(), anyLong(), any());
     }
 
     @Test
@@ -2287,7 +2287,7 @@ class DocumentServiceBlocksTest {
         when(documentRepository.findRootItemsForUpdate(WORKSPACE_ID, DocumentRole.EDITABLE))
                 .thenReturn(List.of(root));
         when(documentRepository.restoreIfVersionMatches(
-                eq(deleted.getId()), eq(WORKSPACE_ID), eq(2L), eq(5L), any()))
+                eq(deleted.getId()), eq(WORKSPACE_ID), eq(2L), isNull(), eq(5L), any()))
                 .thenReturn(1);
 
         DocumentLifecycleResponse response = documentService.restore(
@@ -2317,7 +2317,7 @@ class DocumentServiceBlocksTest {
                 WORKSPACE_ID, USER_ID, "doc_expired", "restore-key", new DocumentLifecycleRequest(2L)))
                 .isInstanceOf(TrashRetentionExpiredException.class);
 
-        verify(documentRepository, never()).restoreIfVersionMatches(any(), any(), anyLong(), anyLong(), any());
+        verify(documentRepository, never()).restoreIfVersionMatches(any(), any(), anyLong(), any(), anyLong(), any());
     }
 
     @Test

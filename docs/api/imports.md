@@ -17,6 +17,7 @@ Notion "Markdown & CSV" 내보내기를 가져온다(alpha MVP). zip 해석·폴
    - `POST /documents/uploads`·`POST /documents/uploads/complete`: PDF 직접 업로드. 시작 때 헤더의 세션을 ticket에 묶고, 확정에도
      같은 헤더가 와야 한다(빠지거나 다르면 `400 IMPORT_INVALID`). 확정한 PDF 문서는 그 세션 문서(`origin=notion_import`)이고 항목 1개.
      100MB·저장 공간·`Idempotency-Key` 동작은 일반 직접 업로드와 같다(멱등 재요청은 다시 세지 않는다). `parts`·`abort`는 ticket만 본다.
+   - 폴더에 넣는 쓰기는 일반 경로와 같이 [폴더 편집 권한](documents/README.md#폴더에-넣기꺼내기)을 본다. 편집할 수 없는 폴더면 `403`이다.
 3. `POST /imports/{id}/complete`로 닫는다. 이후 그 세션으로 쓰면 `400 IMPORT_INVALID`.
 4. 사용자가 원할 때만 `GET .../ingest-estimate`로 예상 비용을 보여 주고 `POST .../ingest`로 편입한다.
 

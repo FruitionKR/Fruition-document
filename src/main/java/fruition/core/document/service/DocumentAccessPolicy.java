@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
 
@@ -19,7 +20,11 @@ import java.util.function.BooleanSupplier;
  * 'view'면 보기만 할 수 있다. 문서는 자기 설정 → 가장 가까운 상위 폴더 설정 → 기본값(편집) 순으로 따른다.
  *
  * <p>문서 소유자와 워크스페이스 OWNER는 설정과 관계없이 편집할 수 있다. 삭제·휴지통 복구는 문서 소유자와 OWNER만 한다.
+ * 폴더에 넣거나 꺼내는 것은 그 폴더의 편집 권한을 따르며 문서 소유자 예외가 없다(OWNER는 된다).
+ * 휴지통 복구의 원위치 복귀는 넣기 규칙의 예외다. 삭제 뒤 폴더가 보기로 바뀌어도 원래 폴더로 돌아간다.
+ * 최상위로 보내면 삭제·복구가 꺼내기 우회가 되기 때문이다.
  * PDF Markdown 변환은 원본 파일이 있는 PDF만 대상이고, 업로더 본인과 {@code document.convert} 권한자(OWNER 포함)만 한다.
+ * 변환본이 원본 폴더에 들어가므로 그 폴더의 편집 권한도 필요하다.
  * 멤버인지는 호출하는 쪽이 먼저 확인한다.
  */
 @Component
@@ -62,8 +67,9 @@ public class DocumentAccessPolicy {
     }
 
     /**
-     * PDF Markdown 변환 요청을 판정한다. 대상이 아니면 400, 권한이 없으면 403. 최종 판정은 목록의 can_convert와
-     * 같은 {@link #canConvert}를 쓴다. 문서 권한 설정을 읽을 필요가 없어 Viewer를 만들지 않는다.
+     * PDF Markdown 변환 요청을 판정한다. 대상이 아니면 400, 권한이 없으면 403. 문서 권한 설정을 읽을 필요가 없어
+     * Viewer를 만들지 않는다. 폴더는 끝난 요청의 멱등 재요청을 막지 않도록 호출하는 쪽이 선점 뒤에
+     * {@link #requirePlacement}로 본다. 둘을 합친 판정이 응답의 can_convert({@link Viewer#canConvert})다.
      */
     public void requireConvert(Document document, String userId) {
         if (!isPdf(document)) {
@@ -109,6 +115,31 @@ public class DocumentAccessPolicy {
         }
     }
 
+    /**
+     * 이 폴더에 새 항목을 넣을 수 있는지. 폴더 null은 최상위라 멤버면 된다. 폴더가 살아 있고 이 워크스페이스 것인지는
+     * 호출하는 쪽이 먼저 확인한다(없는 폴더는 설정이 없어 편집으로 판정된다).
+     */
+    public void requirePlacement(String workspaceId, UUID folderId, String userId) {
+        if (folderId != null && !viewer(workspaceId, userId).canEditFolder(folderId)) {
+            throw placementForbidden();
+        }
+    }
+
+    /** 다른 폴더로 옮길 때 출발·목적지를 모두 편집할 수 있는지. 같은 폴더 안 순서 변경은 넣기·꺼내기가 아니라 보지 않는다. */
+    public void requireMove(String workspaceId, UUID fromFolderId, UUID toFolderId, String userId) {
+        if (Objects.equals(fromFolderId, toFolderId)) {
+            return;
+        }
+        Viewer viewer = viewer(workspaceId, userId);
+        if (!viewer.canEditFolder(fromFolderId) || !viewer.canEditFolder(toFolderId)) {
+            throw placementForbidden();
+        }
+    }
+
+    private static DocumentWriteForbiddenException placementForbidden() {
+        return new DocumentWriteForbiddenException("이 폴더에 넣거나 꺼낼 권한이 없습니다.");
+    }
+
     /** {@code convertPermission}: document.convert 권한 보유 여부. OWNER는 항상 true다. */
     public record Viewer(String userId, boolean workspaceOwner, boolean convertPermission,
                          Map<String, String> documentAccess, Map<UUID, String> folderAccess, Map<UUID, UUID> parents) {
@@ -138,9 +169,10 @@ public class DocumentAccessPolicy {
             return workspaceOwner || userId.equals(document.getUserId());
         }
 
-        /** 변환 요청({@link DocumentAccessPolicy#requireConvert})이 받아들여지는지. 판정 코드를 함께 쓴다. */
+        /** 변환 요청이 받아들여지는지. {@link DocumentAccessPolicy#requireConvert}와 판정 코드를 함께 쓰고, 변환본이 들어갈 폴더도 본다. */
         public boolean canConvert(Document document) {
-            return DocumentAccessPolicy.canConvert(document, userId, () -> convertPermission);
+            return DocumentAccessPolicy.canConvert(document, userId, () -> convertPermission)
+                    && canEditFolder(document.getFolderId());
         }
 
         public boolean canEditFolder(UUID folderId) {

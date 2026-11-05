@@ -36,7 +36,7 @@
 | 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `FolderCreateRequest` |
 | 출력 | `201` 생성 성공 또는 멱등 재요청 — `FolderResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 이름 또는 위치, 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) — `ErrorResponse`<br>`404` 워크스페이스 또는 상위 폴더를 찾을 수 없음 — `ErrorResponse`<br>`409` IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 이름 또는 위치, 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) — `ErrorResponse`<br>`403` 상위 폴더를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") — `ErrorResponse`<br>`404` 워크스페이스 또는 상위 폴더를 찾을 수 없음 — `ErrorResponse`<br>`409` IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -97,6 +97,7 @@
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 이름 또는 위치, 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) | `ErrorResponse` |
+| `403` | 상위 폴더를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") | `ErrorResponse` |
 | `404` | 워크스페이스 또는 상위 폴더를 찾을 수 없음 | `ErrorResponse` |
 | `409` | IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) | `ErrorResponse` |
 
@@ -299,7 +300,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/fold
 | 입력 | **Path** — `workspace_id`: `string`, `folder_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `DocumentLifecycleRequest` |
 | 출력 | `200` 삭제 성공 또는 멱등 재요청 — `FolderLifecycleResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 version 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) — `ErrorResponse`<br>`403` 내용이 있는 폴더를 삭제할 권한이 없음 — `ErrorResponse`<br>`404` 폴더 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 version 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) — `ErrorResponse`<br>`403` 내용이 있는 폴더를 삭제할 권한이 없음(HIERARCHY_WRITE_FORBIDDEN) 또는 빈 폴더의 편집 권한이 없음(DOCUMENT_WRITE_FORBIDDEN) — `ErrorResponse`<br>`404` 폴더 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -356,7 +357,7 @@ curl -X PATCH "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/fold
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 version 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) | `ErrorResponse` |
-| `403` | 내용이 있는 폴더를 삭제할 권한이 없음 | `ErrorResponse` |
+| `403` | 내용이 있는 폴더를 삭제할 권한이 없음(HIERARCHY_WRITE_FORBIDDEN) 또는 빈 폴더의 편집 권한이 없음(DOCUMENT_WRITE_FORBIDDEN) | `ErrorResponse` |
 | `404` | 폴더 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) | `ErrorResponse` |
 
@@ -548,7 +549,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folder
 | 입력 | **Path** — `workspace_id`: `string`, `folder_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `FolderPositionRequest` |
 | 출력 | `200` 이동 성공 또는 멱등 재요청 — `FolderResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 요청 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) — `ErrorResponse`<br>`404` 폴더, 대상 폴더 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 순환 이동, version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 요청 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) — `ErrorResponse`<br>`403` 다른 상위로 옮기는데 출발 또는 대상 상위를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다."), 또는 옮길 폴더를 편집할 수 없음("이 폴더를 편집할 권한이 없습니다.") — `ErrorResponse`<br>`404` 폴더, 대상 폴더 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 순환 이동, version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -609,6 +610,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/folder
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 요청 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) | `ErrorResponse` |
+| `403` | 다른 상위로 옮기는데 출발 또는 대상 상위를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다."), 또는 옮길 폴더를 편집할 수 없음("이 폴더를 편집할 권한이 없습니다.") | `ErrorResponse` |
 | `404` | 폴더, 대상 폴더 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | 순환 이동, version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) | `ErrorResponse` |
 

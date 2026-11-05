@@ -352,7 +352,10 @@ public class DocumentService {
             AtomicReference<String> storedKey = new AtomicReference<>();
             return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope,
                     idempotencyKey, requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
-                    () -> storeUploadOriginal(workspaceId, userId, file, mimeType, storedKey),
+                    () -> {
+                        documentAccessPolicy.requirePlacement(workspaceId, folderId, userId);
+                        return storeUploadOriginal(workspaceId, userId, file, mimeType, storedKey);
+                    },
                     documentId -> {
                         registerStoredSourceCleanup(storedKey);
                         return storeUpload(workspaceId, userId, folderId, file, skillReference, uploadFilename,
@@ -492,7 +495,8 @@ public class DocumentService {
 
     /** 업로드 거절(4xx)로 그대로 올리는 예외. 나머지는 DocumentUploadException으로 감싼다. */
     private static boolean isUploadRejection(Exception e) {
-        return e instanceof InvalidDocumentFilenameException
+        return e instanceof DocumentWriteForbiddenException
+                || e instanceof InvalidDocumentFilenameException
                 || e instanceof InvalidDocumentOriginException
                 || e instanceof InvalidIdempotencyKeyException
                 || e instanceof IdempotencyConflictException
@@ -651,6 +655,7 @@ public class DocumentService {
         AtomicReference<String> storedKey = new AtomicReference<>();
         return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope, idempotencyKey,
                 requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id, () -> {
+                    documentAccessPolicy.requirePlacement(workspaceId, request.folderId(), userId);
                     // 새 문서는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
                     if (accounting.limited() && uploadLimits != null) {
                         uploadLimits.precheck(userId, content.bytes().length);
@@ -684,7 +689,7 @@ public class DocumentService {
         validateIdempotencyKey(idempotencyKey);
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        // 복제본은 요청한 사람 소유의 새 문서다. 원본을 읽을 수 있는 멤버면 복제할 수 있다.
+        // 복제본은 요청한 사람 소유의 새 문서다. 원본을 읽을 수 있고 원본이 있는 폴더에 넣을 수 있는 멤버면 복제할 수 있다.
         if (source.getDocumentRole() != DocumentRole.EDITABLE) {
             throw new DocumentWriteForbiddenException("편집 가능한 Markdown 문서만 복제할 수 있습니다.");
         }
@@ -704,6 +709,7 @@ public class DocumentService {
         if (replay.isPresent()) {
             return replay.get();
         }
+        documentAccessPolicy.requirePlacement(workspaceId, source.getFolderId(), userId);
 
         Set<String> existingNames = new java.util.HashSet<>(
                 documentRepository.findActiveSiblingNames(workspaceId, source.getFolderId()));
@@ -1323,7 +1329,7 @@ public class DocumentService {
         validateIdempotencyKey(idempotencyKey);
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다. 목록의 can_convert와 같은 판정이다.
+        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다. 폴더 판정(아래)까지 합치면 can_convert와 같다.
         documentAccessPolicy.requireConvert(source, userId);
 
         String endpointScope = convertEndpointScope(workspaceId);
@@ -1336,6 +1342,8 @@ public class DocumentService {
         return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope,
                 idempotencyKey, requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
                 () -> {
+                    // 변환본은 원본과 같은 폴더에 새 문서로 들어간다.
+                    documentAccessPolicy.requirePlacement(workspaceId, source.getFolderId(), userId);
                     String placeholderId = newDocumentId();
                     Prefetched<String> stored = Prefetched.of(() -> putMarkdownSource(placeholderId, content.bytes()));
                     storedKey.set(stored.value());
@@ -2794,6 +2802,11 @@ public class DocumentService {
         verifyWorkspaceOwnership(workspaceId, userId);
         validateIdempotencyKey(idempotencyKey);
         validateLifecycleRequest(request);
+        // 삭제해도 folder_id는 남으므로 원래 폴더로 돌아간다. 폴더 삭제·이동과 같은 순서로 폴더 행을 문서 행보다 먼저 잠근다.
+        // 반대 순서면 교착하고, 잠그지 않으면 빈 폴더 검사와 폴더 삭제 사이에 문서가 들어갈 수 있다.
+        UUID originalFolderId = documentRepository.findFolderIdById(documentId, workspaceId).orElse(null);
+        boolean originalFolderActive = originalFolderId != null
+                && folderRepository.findActiveForUpdate(originalFolderId, workspaceId).isPresent();
         Document document = documentRepository
                 .findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
@@ -2814,17 +2827,23 @@ public class DocumentService {
         if (isTrashExpired(document.getDeletedAt(), Instant.now())) {
             throw new TrashRetentionExpiredException("휴지통 보관 기간이 지나 복구할 수 없습니다.");
         }
-        List<Document> rootItems = documentRepository.findRootItemsForUpdate(
-                workspaceId, document.getDocumentRole());
-        long sortOrder = rootItems.stream()
-                .mapToLong(Document::getSortOrder)
-                .max()
-                .orElse(-1) + 1;
+        // 잠그기 전에 읽은 폴더와 다르면 그사이 복구·이동·재삭제가 있었던 것이라 잠근 폴더를 믿을 수 없다.
+        if (!Objects.equals(originalFolderId, document.getFolderId())) {
+            throw versionConflict();
+        }
+        UUID targetFolderId = originalFolderActive ? originalFolderId : null;
+        long sortOrder = targetFolderId != null
+                ? placementSortOrder(workspaceId, targetFolderId, document.getDocumentRole())
+                : documentRepository.findRootItemsForUpdate(workspaceId, document.getDocumentRole()).stream()
+                        .mapToLong(Document::getSortOrder)
+                        .max()
+                        .orElse(-1) + 1;
         Instant restoredAt = Instant.now();
         int updated = documentRepository.restoreIfVersionMatches(
                 documentId,
                 workspaceId,
                 request.baseVersion(),
+                targetFolderId,
                 sortOrder,
                 restoredAt
         );

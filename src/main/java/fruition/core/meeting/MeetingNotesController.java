@@ -137,7 +137,7 @@ public class MeetingNotesController {
             content = @Content(schema = @Schema(implementation = MeetingNotesResponse.class))),
         @ApiResponse(responseCode = "400", description = "잘못된 mode·대상·base_revision 또는 Idempotency-Key",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "403", description = "문서를 편집할 수 없음",
+        @ApiResponse(responseCode = "403", description = "문서를 편집할 수 없음, 또는 새 문서를 넣을 폴더를 편집할 수 없음(메시지 \"이 폴더에 넣거나 꺼낼 권한이 없습니다.\")",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "회의·초안·문서를 찾을 수 없음",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
