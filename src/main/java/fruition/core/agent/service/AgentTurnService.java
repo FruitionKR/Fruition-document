@@ -1,6 +1,7 @@
 package fruition.core.agent.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.agent.dto.AgentRunEditPreviewsResponse;
 import fruition.core.agent.dto.AgentTurnRequest;
 import fruition.core.agent.dto.AgentTurnResponse;
 import fruition.core.agent.dto.AgentRunApproveRequest;
@@ -13,6 +14,7 @@ import fruition.core.agent.repository.PipelineAgentRunStatusRequester;
 import fruition.core.aihistory.service.AgentApplyOperationStore;
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.chat.service.ChatConversationReader;
+import fruition.core.chat.domain.ChatSession;
 import fruition.core.chat.service.ChatSessionService;
 import fruition.core.chat.service.ChatTurnRecorder;
 import fruition.core.document.repository.AiCommandOutboxWriter;
@@ -29,6 +31,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -112,17 +116,21 @@ public class AgentTurnService {
      * 말풍선·실행 등록·command 적재만 한 트랜잭션에 둔다. 검증은 잠금 없는 읽기라 순서와 오류는 그대로다.
      */
     public AgentTurnResponse turn(String workspaceId, String userId, AgentTurnRequest request) {
-        chatSessionService.verifyOwnedSession(workspaceId, userId, request.sessionId());
+        // 소유권 확인이 읽은 세션을 재사용해 제목을 판단한다. 세션 조회를 더하지 않는다.
+        boolean sessionTitleNeeded = ChatSession.isTitleUnset(
+                chatSessionService.verifyOwnedSession(workspaceId, userId, request.sessionId()).getTitle());
         // 문서를 열지 않은 턴은 적용할 대상이 없어 편집 전제 검사를 하지 않는다.
         // AI는 이 경우 chat_answer·conversation_reply·clarify·reject만 낼 수 있다.
         // 작업 탭 턴(mode=task)은 문서 없이 폴더 정리·워크플로를 낼 수 있고, 문서 편집이면 AI가 되묻는다.
+        // 답변은 첨부(reference_document_ids)가 있는 작업 탭 턴에서만 나온다.
         if (request.hasDocumentContext()) {
             DocumentDetailResponse document = documentService.findById(workspaceId, userId, request.documentId());
             if (!isMarkdown(document)) {
                 throw new InvalidAgentTurnRequestException("Markdown 문서만 Agent 편집을 요청할 수 있습니다.");
             }
             // 다른 사용자가 편집 중이면 pipeline 호출 전에 423으로 거절한다.
-            editLockService.requireWritable(request.documentId(), userId);
+            // 첨부 수정도 열린 문서 잠금으로 막히므로 어느 문서 때문인지 응답에 담는다.
+            editLockService.requireWritableNamingDocument(workspaceId, userId, request.documentId());
             // 오래된 snapshot(baseVersion)이어도 거절하지 않는다. 적용 저장이 baseVersion 스냅샷 기준으로
             // 그 사이 변경과 자동 병합한다(ADR 0032).
             validateTarget(request.editorSnapshot());
@@ -133,9 +141,18 @@ public class AgentTurnService {
         AiModelCatalog.AiModel selectedModel = aiModelCatalog.resolve(request.provider(), request.model());
         List<CanonicalSkillDraftSource> skillDraftSources = canonicalSkillDraftSources(
                 workspaceId, userId, request.skillDraftSources());
+        requireUsableReferences(workspaceId, userId, request.referenceDocumentIds());
         String readOnlyDocumentId = confirmedReadOnlyDocumentId(workspaceId, userId, request);
         return transaction.execute(status ->
-                queueTurn(workspaceId, userId, request, folderId, selectedModel, skillDraftSources, readOnlyDocumentId));
+                queueTurn(workspaceId, userId, request, folderId, selectedModel, skillDraftSources, readOnlyDocumentId,
+                        sessionTitleNeeded));
+    }
+
+    /** 조용히 빼면 근거 없이 답하게 되므로 하나라도 어긋나면 거절한다. 사유를 나누지 않아 존재 여부가 응답으로 새지 않는다. */
+    private void requireUsableReferences(String workspaceId, String userId, List<String> documentIds) {
+        if (!documentIds.isEmpty() && !documentService.canUseAsAgentReferences(workspaceId, userId, documentIds)) {
+            throw new InvalidAgentTurnRequestException("고른 문서 중 사용할 수 없는 문서가 있습니다. 다시 골라 주세요.");
+        }
     }
 
     /**
@@ -153,7 +170,7 @@ public class AgentTurnService {
     private AgentTurnResponse queueTurn(String workspaceId, String userId, AgentTurnRequest request, UUID folderId,
                                         AiModelCatalog.AiModel selectedModel,
                                         List<CanonicalSkillDraftSource> skillDraftSources,
-                                        String readOnlyDocumentId) {
+                                        String readOnlyDocumentId, boolean sessionTitleNeeded) {
         String runId = "agent_" + UUID.randomUUID().toString().replace("-", "");
         // 질의와 같은 방식으로 말풍선을 먼저 만들고 결과가 오면 채운다. command와 같은 트랜잭션이라
         // 발행에 실패하면 메시지도 남지 않는다.
@@ -189,7 +206,8 @@ public class AgentTurnService {
                         request.skillScopeType(),
                         CommandEditorSnapshot.from(request.editorSnapshot()),
                         request.mode(),
-                        folderId == null ? null : folderId.toString()));
+                        folderId == null ? null : folderId.toString(),
+                        request.referenceDocumentIds(), sessionTitleNeeded));
         if (analytics != null) {
             analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt, "task");
             if ("explicit".equals(request.skillMode()))
@@ -313,6 +331,24 @@ public class AgentTurnService {
         // 승인 대기 계획은 사용자의 자동 승인 설정을 지금 다시 적용해 본다. ai-svc의 계획 알림이 실패했거나
         // 알림 뒤에 설정을 켠 경우에도 화면이 계획을 열 때 판단한다.
         return closeIfTerminal(workspaceId, userId, runId, autoApproveIfAllowed(workspaceId, userId, runId, run));
+    }
+
+    /**
+     * 첨부 문서 수정 계획의 변경 미리 보기. run 소유는 AI가 user_id로 가른다(남의 run은 404).
+     * 계획을 세운 뒤 권한이 바뀌었을 수 있으므로 문서마다 지금 읽을 수 있는지 다시 보고, 제목은 현재 값으로 덮는다.
+     */
+    public AgentRunEditPreviewsResponse getEditPreviews(String workspaceId, String userId, String runId) {
+        workspaceAccessGuard.requireMember(workspaceId, userId);
+        AgentRunEditPreviewsResponse previews = statusRequester.getEditPreviews(workspaceId, userId, runId);
+        List<AgentRunEditPreviewsResponse.Item> items = previews.items().stream().filter(Objects::nonNull).toList();
+        Map<String, String> titles = documentService.readableDocumentTitles(workspaceId, userId,
+                items.stream().map(AgentRunEditPreviewsResponse.Item::documentId).toList());
+        return new AgentRunEditPreviewsResponse(
+                items.stream()
+                        .filter(item -> titles.containsKey(item.documentId()))
+                        .map(item -> item.withDisplayName(titles.get(item.documentId())))
+                        .toList(),
+                previews.expiresAt());
     }
 
     /**
@@ -574,7 +610,10 @@ public class AgentTurnService {
             // 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 지정하지 않은 턴은 command 모양을 바꾸지 않도록 키를 싣지 않는다.
             @com.fasterxml.jackson.annotation.JsonProperty("folder_id")
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-            String folderId
+            String folderId,
+            @com.fasterxml.jackson.annotation.JsonProperty("reference_document_ids") List<String> referenceDocumentIds,
+            // false면 사용자가 제목을 정한 세션이라 AI가 제목을 만들지 않는다.
+            @com.fasterxml.jackson.annotation.JsonProperty("session_title_needed") boolean sessionTitleNeeded
     ) {}
 
     record CanonicalSkillDraftSource(

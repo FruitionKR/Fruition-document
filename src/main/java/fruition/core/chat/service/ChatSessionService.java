@@ -49,10 +49,20 @@ public class ChatSessionService {
      */
     @Transactional(readOnly = true)
     public String contextSummary(String sessionId) {
+        return commandState(sessionId).contextSummary();
+    }
+
+    /** AI command에 실을 세션 값. 요약과 제목 판단을 세션 한 번 읽기로 함께 구한다. */
+    public record CommandSessionState(String contextSummary, boolean titleNeeded) {}
+
+    @Transactional(readOnly = true)
+    public CommandSessionState commandState(String sessionId) {
         return chatSessionRepository.findById(sessionId)
-                .map(ChatSession::getContextSummary)
-                .filter(summary -> !summary.isBlank())
-                .orElse(null);
+                .map(session -> new CommandSessionState(
+                        session.getContextSummary() == null || session.getContextSummary().isBlank()
+                                ? null : session.getContextSummary(),
+                        ChatSession.isTitleUnset(session.getTitle())))
+                .orElse(new CommandSessionState(null, false));
     }
 
     @Transactional

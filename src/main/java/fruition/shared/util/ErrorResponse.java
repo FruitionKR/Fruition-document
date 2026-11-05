@@ -38,7 +38,12 @@ public record ErrorResponse(
             @JsonProperty("reset_at")
             @Schema(description = "AI 사용 한도 초과(429 AI_USAGE_LIMIT_EXCEEDED)일 때만 존재한다. 한도가 풀리는 다음 0시(Asia/Seoul), ISO-8601 offset 시각.",
                     example = "2026-11-03T00:00:00+09:00")
-            String resetAt) {
+            String resetAt,
+
+            @JsonProperty("locked_document_name")
+            @Schema(description = "Agent turn이 열린 문서의 편집 잠금으로 거절됐을 때(423 DOCUMENT_EDIT_LOCKED)만 존재한다. 잠긴 문서의 제목이며, 요청자가 읽을 수 있을 때만 담는다.",
+                    example = "회의록")
+            String lockedDocumentName) {
 
         public record FieldError(
                 @Schema(description = "문제가 된 요청 필드명", example = "email")
@@ -49,18 +54,22 @@ public record ErrorResponse(
     }
 
     public static ErrorResponse of(String code, String message) {
-        return new ErrorResponse(new ErrorDetail(code, message, null, null, null, null));
+        return new ErrorResponse(new ErrorDetail(code, message, null, null, null, null, null));
+    }
+
+    public static ErrorResponse ofDocumentLocked(String message, String lockedDocumentName) {
+        return new ErrorResponse(new ErrorDetail("DOCUMENT_EDIT_LOCKED", message, null, null, null, null, lockedDocumentName));
     }
 
     public static ErrorResponse ofVersionConflict(String message, Long currentRevision) {
-        return new ErrorResponse(new ErrorDetail("DOCUMENT_VERSION_CONFLICT", message, null, currentRevision, null, null));
+        return new ErrorResponse(new ErrorDetail("DOCUMENT_VERSION_CONFLICT", message, null, currentRevision, null, null, null));
     }
 
     public static ErrorResponse ofUsageLimit(String code, String message, String limitType, String resetAt) {
-        return new ErrorResponse(new ErrorDetail(code, message, null, null, limitType, resetAt));
+        return new ErrorResponse(new ErrorDetail(code, message, null, null, limitType, resetAt, null));
     }
 
     public static ErrorResponse ofValidation(List<ErrorDetail.FieldError> details) {
-        return new ErrorResponse(new ErrorDetail("INVALID_REQUEST", "요청 형식이 올바르지 않습니다.", details, null, null, null));
+        return new ErrorResponse(new ErrorDetail("INVALID_REQUEST", "요청 형식이 올바르지 않습니다.", details, null, null, null, null));
     }
 }

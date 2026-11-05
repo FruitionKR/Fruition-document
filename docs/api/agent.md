@@ -5,13 +5,14 @@
 사용자용 Agent 실행·승인과 내부 Tool 실행 API다. Agent turn은 Kafka `ai.agent.command`,
 계획 조회·승인·거절·취소·수정은 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 16
+- API 수: 17
 
 ## API 목차
 
 | API | 목적 |
 |---|---|
 | [`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}`](#summary-get-api-workspaces-workspace-id-agent-runs-run-id) | 자율 AgentRun 계획과 실행 상태를 조회합니다. |
+| [`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`](#summary-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews) | 첨부 문서 수정 계획의 문서별 변경을 조회합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/approve`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-approve) | 현재 AgentRun 계획을 승인합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/cancel`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-cancel) | 현재 AgentRun을 취소합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/reject`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-reject) | 현재 AgentRun 계획을 거절합니다. |
@@ -160,6 +161,123 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-runs-run-id)
+
+</details>
+
+<a id="summary-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews"></a>
+### `GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 첨부 문서 수정 계획의 문서별 변경을 조회합니다. |
+| 입력 | **Path** — `workspace_id`: `string`, `run_id`: `string` |
+| 출력 | `200` 성공 — `AgentRunEditPreviewsResponse` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다.<br>요청자의 run만 볼 수 있다(ai-svc가 `user_id`로 가른다). |
+| 주요 오류 | `401` 인증 실패<br>`404` 워크스페이스 멤버가 아니거나, run이 없거나 다른 사용자의 run, ai-svc가 이 API를 아직 제공하지 않음<br>`503` ai-svc 오류·깨진 응답 |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews"></a>
+### `GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews` 상세
+
+#### 1. Method + Path
+
+`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`
+
+#### 2. 목적
+
+첨부 문서 수정 계획의 문서별 변경을 조회합니다. ai-svc `GET /agent/runs/{run_id}/edit-previews`를 호출하고, 문서마다 지금 읽을 수 있는지 다시 확인해 읽을 수 없거나 삭제된 문서를 뺀 뒤, `display_name`을 현재 제목으로 덮어 돌려준다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| path | `run_id` | `string` | 예 | - |
+
+- Body: 없음
+
+#### 5. Response body
+
+- HTTP `200`: OK
+- Content-Type: `*/*` (`AgentRunEditPreviewsResponse`)
+
+```json
+{
+  "items": [
+    {
+      "operation_id": "op_1",
+      "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+      "display_name": "주간 회의록",
+      "base_version": 3,
+      "summary": "결론 문단을 고칩니다.",
+      "added_lines": 1,
+      "removed_lines": 1,
+      "hunks": [
+        {
+          "before_start": 10,
+          "after_start": 10,
+          "lines": [
+            { "type": "context", "text": "## 결론" },
+            { "type": "delete", "text": "다음 주에 정한다." },
+            { "type": "insert", "text": "이번 주에 정한다." }
+          ]
+        }
+      ]
+    }
+  ],
+  "expires_at": "2026-11-05T09:00:00Z"
+}
+```
+
+| 이름 | 타입 | 설명 |
+|---|---|---|
+| `items[].operation_id` | `string` | 계획의 작업 ID. 부분 승인의 `operation_ids`에 쓴다 |
+| `items[].display_name` | `string` | 문서의 현재 제목 |
+| `items[].base_version` | `integer` | 편집안의 기준 편집 revision |
+| `items[].hunks[].lines[].type` | `string` | `context`·`delete`·`insert` |
+| `expires_at` | `string` \| `null` | 편집안 만료 시각. 지나면 수락할 수 없다 |
+
+- 일부 문서가 빠져도 오류가 아니다. 왜 빠졌는지는 알려 주지 않는다. 보기 권한 문서는 빠지지 않는다(저장 때 편집 권한으로 막힌다).
+- 문서 내용이 담긴 응답이라 document-svc는 본문과 ai-svc의 오류 본문을 로그·오류 응답에 남기지 않는다.
+
+#### 6. Error response
+
+- HTTP `401`: 인증 실패
+- HTTP `404`: 워크스페이스 멤버가 아니거나, run이 없거나 다른 사용자의 run이다. ai-svc의 404를 그대로 돌려주므로 ai-svc 배포 전에도 404다
+- HTTP `503`: ai-svc 오류·깨진 응답
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 인증된 사용자만 호출할 수 있다.
+- path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 문서마다 현재 읽기 권한을 확인한다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/runs/<value>/edit-previews" \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getEditPreviews`)
+- 하위 호출: ai-svc `GET ${AGENT_RUN_ENDPOINT}/{runId}/edit-previews` (`PipelineAgentRunStatusRequester`, `X-Agent-Service-Token`)
+
+[↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews)
 
 </details>
 
@@ -555,7 +673,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `AgentTurnRequest` |
 | 출력 | `202` Agent 실행이 대기열에 등록됨 — `AgentTurnResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`423` 다른 사용자가 열린 문서를 편집 중(`DOCUMENT_EDIT_LOCKED`, `error.locked_document_name`에 제목) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -579,11 +697,12 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 모두 생략하며, 적용할 대상이 없어 AI는 답변·되물음만 낸다. 셋은 함께 있거나 함께 없어야 하고
 하나만 오면 `400`이다.
 
-작업 탭에서 보내는 턴은 `"mode": "task"`를 넣는다. 이때 AI는 위키 질문 답변(`chat_answer`)·대화
-답변(`conversation_reply`)을 고르지 않고 문서 편집·새 문서·폴더 정리·워크플로·Skill·되물음(`clarify`)
-중에서만 고른다. 위키 질문처럼 보이면 채팅 탭에서 질문하라는 `clarify`를 돌려준다. 열린 문서가 없어도
-받으므로 폴더 정리·폴더 Skill은 문서 없이 실행되고, 문서 편집이 필요한데 문서가 없으면 문서를 열어
-달라는 `clarify`가 나온다. `mode`를 생략하면 기존 동작이며, `task` 외의 값은 `400`이다.
+작업 탭에서 보내는 턴은 `"mode": "task"`를 넣는다. 첨부(`reference_document_ids`)가 없으면 AI는 위키 질문
+답변(`chat_answer`)·대화 답변(`conversation_reply`)을 고르지 않고 문서 편집·새 문서·폴더 정리·워크플로·Skill·
+되물음(`clarify`) 중에서만 고르며, 위키 질문처럼 보이면 채팅 탭에서 질문하라는 `clarify`를 돌려준다. 첨부가
+있으면 답변도 고를 수 있어 첨부 문서를 근거로 답한다. 열린 문서가 없어도 받으므로 폴더 정리·폴더 Skill은
+문서 없이 실행되고, 문서 편집이 필요한데 문서가 없으면 문서를 열어 달라는 `clarify`가 나온다. `mode`를
+생략하면 기존 동작이며, `task` 외의 값은 `400`이다.
 document-svc는 `mode`를 ai command의 `mode` 키로 그대로 전달한다(생략 시 키 자체를 싣지 않는다).
 
 작업 대상 폴더는 `folder_id`로 보낸다. 폴더 정리의 범위이자 새 문서를 둘 위치다. 생략하면 대상 폴더를
@@ -599,6 +718,15 @@ document-svc는 클라이언트 값을 믿지 않고, 이 워크스페이스의 
 assistant 메시지(`chat_messages.read_only_document_id`)에 남겨 [메시지 조회](chat.md) 응답으로 돌려준다. 없는 문서, 다른 워크스페이스 문서, 삭제된 문서,
 편집 가능한 문서, 형식 오류(문자열이 아닌 값 포함), `documentId`와 함께 온 값은 오류 없이 무시하고 턴 응답도 같아 존재 여부가 드러나지 않는다.
 안내 표시에만 쓰고 권한 판단에 쓰지 않으며, ai command에 싣지 않는다.
+
+참고 문서를 붙이려면 `reference_document_ids`에 문서 ID를 최대 3개 보낸다. 문서를 열지 않은 턴에도, `documentId`와 함께도 보낼 수 있고 편집 권한은 요구하지 않는다.
+중복과 `documentId`와 같은 ID는 서버가 뺀 뒤 개수를 센다. 빈 문자열이나 중복 제거 뒤 3개 초과는 `400`이다.
+요청 사용자가 읽을 수 있는 이 워크스페이스의 삭제되지 않은 Markdown 문서(`document_role=EDITABLE`)만 받는다. 저장한 회의록, 채팅 내보내기 문서, 변환이 끝난 PDF 변환본, 보기 권한 문서는 통과한다.
+PDF 원본(`document_role=ORIGINAL`)과 변환 중이거나 첫 batch 전에 실패해 본문이 안내 문구뿐인 변환본은 거절한다.
+하나라도 어긋나면 조용히 빼지 않고 요청 전체를 `400 INVALID_REQUEST`("고른 문서 중 사용할 수 없는 문서가 있습니다. 다시 골라 주세요.")로 거절한다. 사유를 나누지 않아 존재 여부가 드러나지 않는다.
+document-svc는 검증한 ID를 ai command의 `reference_document_ids`로 전달하고(없으면 빈 배열) 본문은 싣지 않는다. AI는 [`POST /internal/agent/skill-authoring/references/read`](skills.md#detail-post-internal-agent-skill-authoring-references-read)로 본문을 읽는다. 채팅 메시지에는 저장하지 않는다.
+
+document-svc는 소유권을 확인할 때 읽은 세션 제목으로 ai command의 `session_title_needed`를 정한다. 제목이 비었거나 `새 채팅`이면 `true`, 그 밖에는 `false`이고, `false`면 AI가 제목을 만들지 않는다. 판단 기준은 `session_title` 결과를 저장하는 조건과 같다.
 
 열린 문서에서 저장·반영을 명시한 편집 요청은 `workspace_workflow` AgentRun으로 전환한다.
 이때 편집 대상 문서와 기준 버전을 계획에 고정하고,
@@ -630,6 +758,7 @@ assistant 메시지(`chat_messages.read_only_document_id`)에 남겨 [메시지 
 | body | `mode` | `string` | 아니오 | `task`(작업 탭 턴)만 허용. 생략하면 기존 동작 |
 | body | `folder_id` | `string(uuid)` | 아니오 | 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 생략하면 루트·워크스페이스 전체 |
 | body | `read_only_document_id` | `string` | 아니오 | 보기 권한 문서를 연 채 보낸 요청의 그 문서. 서버가 확인해 맞을 때만 메시지에 남기고 틀린 값은 무시한다(`400` 없음). AI로 보내지 않는다 |
+| body | `reference_document_ids` | `string[]` | 아니오 | 참고할 문서(최대 3개). 읽을 수 있는 이 워크스페이스의 Markdown 문서만 받고, 하나라도 어긋나면 요청 전체가 `400`이다. 중복과 `documentId`와 같은 ID는 서버가 뺀다 |
 | body | `allow_web_search` | `boolean` | 아니오 | Query와 웹 근거 기반 새 문서 생성에서 웹 검색을 허용할지. 편집·Skill 갈래에는 영향이 없다 |
 | body | `conversationContext.selected_pair_ids` | `string[]` | 아니오 | 맥락으로 쓸 문답 ID(최대 20개). 비우면 세션의 최근 완결 문답을 쓴다 |
 | body | `conversationContext.pendingSkillProposal` | `object` | 아니오 | 채팅에서 "게시"를 기다리는 Skill 제안. 필드는 snake_case(`scope_type`, `name`, `description`, `instructions_markdown`, `capabilities`, `allowed_tools`, `requires_source`)이고 ai command의 `conversation_context.pending_skill_proposal`로 그대로 옮긴다 |
@@ -717,7 +846,7 @@ assistant 메시지(`chat_messages.read_only_document_id`)에 남겨 [메시지 
 | `400` | 잘못된 요청 | `ErrorResponse` |
 | `402` | 크레딧 부족(`app.billing.enforce`, `INSUFFICIENT_CREDIT`) | `ErrorResponse` |
 | `404` | 문서·대상 폴더(`folder_id`) 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `423` | 다른 사용자가 문서를 편집 중 | `ErrorResponse` |
+| `423` | 다른 사용자가 열린 문서(`documentId`)를 편집 중(`DOCUMENT_EDIT_LOCKED`). 첨부 문서를 고치는 요청도 열린 문서가 잠기면 거절된다. `error.locked_document_name`에 잠긴 문서의 제목이 오며, 요청자가 읽을 수 없으면 키가 빠진다. 다른 API의 423에는 이 키가 없다 | `ErrorResponse` |
 
 ```json
 {
@@ -1421,7 +1550,17 @@ curl -X POST "$DOCUMENT/internal/agent/skill-execution/folder-sources/read" \
 
 - HTTP `401`: Agent 서비스 인증 토큰 누락 또는 불일치
 
-- 명세에 별도 오류 응답이 정의되어 있지 않다.
+`apply_document_edit`:
+
+| 상황 | 결과 |
+|---|---|
+| 기준 revision이 지났고 안 겹침 | `200`, 자동 병합(`merge.status=merged`) |
+| 겹치거나 기준 버전 스냅샷이 없음 | `409` `DOCUMENT_VERSION_CONFLICT`. 덮어쓰지 않는다(ADR 0032의 예외). 적용 표는 `consumed`, 감사 로그는 `conflict`로 남는다 |
+| 다른 사람이 편집 중 | `423` `DOCUMENT_EDIT_LOCKED`. 적용 표는 `ready`, 감사 로그는 만들지 않는다 |
+| 편집 권한 없음 | `403` |
+| 문서 없음·삭제됨 | `404` |
+| 변환 중 | `409` `DOCUMENT_ALREADY_PROCESSING` |
+| `chat_export` 문서 | `400` |
 
 #### 7. Pagination / filtering
 

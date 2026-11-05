@@ -8,6 +8,7 @@ import fruition.shared.security.JwtAuthenticationFilter;
 import fruition.shared.security.JwtTokenProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -19,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.net.URI;
 
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -39,8 +41,8 @@ class SkillReferenceControllerTest {
 
     @Test
     void read_returnsCurrentMarkdownForServiceToken() throws Exception {
-        when(referenceService.read("ws_1", "user_1", "doc_1"))
-                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문"));
+        when(referenceService.read("ws_1", "user_1", "doc_1", null))
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문", null, null, "주간 회의록"));
 
         mockMvc.perform(post(URL)
                         .header("X-Agent-Service-Token", "test-agent-token")
@@ -49,6 +51,119 @@ class SkillReferenceControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.document_role").value("EDITABLE"))
                 .andExpect(jsonPath("$.markdown").value("# 현재 본문"));
+    }
+
+    @Test
+    void read_returnsEditRevisionAndCanEditForEditableDocument() throws Exception {
+        when(referenceService.read("ws_1", "user_1", "doc_1", null))
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문", null, null, "주간 회의록", 7L, false));
+
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.edit_revision").value(7))
+                .andExpect(jsonPath("$.can_edit").value(false));
+    }
+
+    @Test
+    void read_omitsEditFieldsForOriginalDocument() throws Exception {
+        when(referenceService.read("ws_1", "user_1", "doc_1", null))
+                .thenReturn(new SkillReferenceReadResponse("ORIGINAL", null, null, null, "원본.pdf"));
+
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.edit_revision").doesNotExist())
+                .andExpect(jsonPath("$.can_edit").doesNotExist());
+    }
+
+    @Test
+    void read_withoutMaxCharsOmitsTruncationFields() throws Exception {
+        when(referenceService.read("ws_1", "user_1", "doc_1", null))
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문", null, null, "주간 회의록"));
+
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.truncated").doesNotExist())
+                .andExpect(jsonPath("$.total_chars").doesNotExist());
+    }
+
+    @Test
+    void read_passesMaxCharsAndReturnsTruncationFields() throws Exception {
+        when(referenceService.read("ws_1", "user_1", "doc_1", 5))
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 ", true, 7, "주간 회의록"));
+
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withMaxChars("5")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.markdown").value("# 현재 "))
+                .andExpect(jsonPath("$.truncated").value(true))
+                .andExpect(jsonPath("$.total_chars").value(7))
+                .andExpect(jsonPath("$.display_name").value("주간 회의록"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "-1", "\"abc\"", "3000000000"})
+    void read_rejectsMaxCharsThatIsNotPositiveInteger(String value) throws Exception {
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withMaxChars(value)))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(referenceService);
+    }
+
+    /** 내부 API라 엄격 검증을 두지 않았다. Jackson 기본 변환을 그대로 받으며 docs/api/skills.md와 맞춘다. */
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {"2.7|2", "\"5\"|5", "5.0|5"})
+    void read_acceptsMaxCharsCoercedByJackson(String value, int coerced) throws Exception {
+        when(referenceService.read("ws_1", "user_1", "doc_1", coerced))
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 본문", null, null, "주간 회의록"));
+
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withMaxChars(value)))
+                .andExpect(status().isOk());
+
+        verify(referenceService).read("ws_1", "user_1", "doc_1", coerced);
+    }
+
+    /** 변환 결과가 0이면 양수 검사에서 걸린다. 변환할 수 없는 값도 400이다. */
+    @ParameterizedTest
+    @ValueSource(strings = {"0.5", "true", "[5]", "\"2.7\""})
+    void read_rejectsMaxCharsThatCoercesToNothingUsable(String value) throws Exception {
+        mockMvc.perform(post(URL)
+                        .header("X-Agent-Service-Token", "test-agent-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withMaxChars(value)))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(referenceService);
+    }
+
+    @Test
+    void read_withMaxCharsStillRequiresToken() throws Exception {
+        mockMvc.perform(post(URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withMaxChars("5")))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(referenceService);
+    }
+
+    private static String withMaxChars(String value) {
+        return BODY.substring(0, BODY.length() - 1) + ",\"max_chars\":" + value + "}";
     }
 
     @Test
@@ -84,8 +199,8 @@ class SkillReferenceControllerTest {
             "/internal/agent/skill-authoring/references/%72ead",
             "/internal/agent/skill%2Dauthoring/references/read"})
     void read_returnsMarkdownForPercentEncodedPathWithToken(String path) throws Exception {
-        when(referenceService.read("ws_1", "user_1", "doc_1"))
-                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문"));
+        when(referenceService.read("ws_1", "user_1", "doc_1", null))
+                .thenReturn(new SkillReferenceReadResponse("EDITABLE", "# 현재 본문", null, null, "주간 회의록"));
 
         mockMvc.perform(post(URI.create(path))
                         .header("X-Agent-Service-Token", "test-agent-token")

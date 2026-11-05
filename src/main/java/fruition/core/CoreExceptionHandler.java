@@ -336,7 +336,7 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         logHandled(e, HttpStatus.LOCKED, "DOCUMENT_EDIT_LOCKED");
         return ResponseEntity
                 .status(HttpStatus.LOCKED)
-                .body(ErrorResponse.of("DOCUMENT_EDIT_LOCKED", e.getMessage()));
+                .body(ErrorResponse.ofDocumentLocked(e.getMessage(), e.getDocumentName()));
     }
 
     @ExceptionHandler(EditLockLostException.class)
@@ -598,7 +598,7 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
     public ResponseEntity<ErrorResponse> handleWikiPageVersionConflict(WikiPageVersionConflictException e) {
         logHandled(e, HttpStatus.CONFLICT, "WIKI_PAGE_VERSION_CONFLICT");
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(new ErrorResponse.ErrorDetail(
-                "WIKI_PAGE_VERSION_CONFLICT", e.getMessage(), null, e.getCurrentRevision(), null, null)));
+                "WIKI_PAGE_VERSION_CONFLICT", e.getMessage(), null, e.getCurrentRevision(), null, null, null)));
     }
 
     @ExceptionHandler(WikiPageVersionNotFoundException.class)

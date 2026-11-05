@@ -33,6 +33,13 @@ public class ChatSession {
     /** 제목을 주지 않고 만든 세션의 기본 제목. 화면이 쓰던 표시값과 같게 맞춘다. */
     public static final String DEFAULT_TITLE = "새 채팅";
 
+    /** AI 제목을 받을 수 있는 제목인지. AiTaskResultApplier.applySessionTitle의 btrim처럼 앞뒤 공백 문자(U+0020)만 지우고 본다. */
+    public static boolean isTitleUnset(String title) {
+        if (title == null) return true;
+        String trimmed = title.replaceAll("^ +| +$", "");
+        return trimmed.isEmpty() || DEFAULT_TITLE.equals(trimmed);
+    }
+
     protected ChatSession() {}
 
     public ChatSession(String id, String workspaceId, String userId, String title) {

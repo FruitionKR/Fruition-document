@@ -223,9 +223,9 @@ public class AgentToolService {
                     "승인된 Agent 문서 편집 대상과 일치하지 않습니다.");
         }
         prepareToolApply(request, documentId, baseVersion, artifact.markdown());
-        return documentService.saveContent(
+        return documentService.saveContentMergeOnly(
                 request.workspaceId(), request.userId(), documentId, artifact.markdown(),
-                baseVersion, request.idempotencyKey(), "agent", request.operationId());
+                baseVersion, request.idempotencyKey(), request.operationId());
     }
 
     private void prepareToolApply(

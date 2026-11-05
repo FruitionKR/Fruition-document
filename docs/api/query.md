@@ -2,7 +2,7 @@
 
 [서비스 문서](../README.md) / [document-svc](README.md)
 
-동기·비동기 질의 모두 Kafka `ai.query.command`로 전달하며 같은 취소·복구 경로를 사용한다.
+동기·비동기 질의 모두 Kafka `ai.query.command`로 전달하며 같은 취소·복구 경로를 사용한다. command의 `session_title_needed`는 세션 제목이 비었거나 `새 채팅`이면 `true`, 그 밖에는 `false`이며, 누적 요약을 읽는 세션 조회 한 번으로 함께 정한다. `false`면 AI가 제목을 만들지 않는다.
 동기는 결과를 기다려 기존 응답 body를 반환한다. 선택 query parameter `run_id`로 실행 ID를
 미리 지정하면 대기 중에도 [취소 API](tasks.md)를 호출할 수 있다. 성공 응답의
 `X-AI-Run-Id` 헤더에도 실행 ID를 담는다. ID 재사용과 취소 완료된 질의는 `409`이며,

@@ -64,6 +64,9 @@ class AgentTurnServiceTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient()
+                .when(chatSessionService.verifyOwnedSession(anyString(), anyString(), anyString()))
+                .thenReturn(new fruition.core.chat.domain.ChatSession("session_1", "ws_1", "user_1", null));
         // 대화 조립은 ChatConversationReaderTest 가 검증한다. 여기서는 빈 맥락으로 둔다.
         org.mockito.Mockito.lenient()
                 .when(chatConversationReader.read(anyString(), org.mockito.ArgumentMatchers.any()))
@@ -356,6 +359,32 @@ class AgentTurnServiceTest {
         assertThat(objectMapper.writeValueAsString(command.getValue()))
                 .contains("\"run_id\":\"agent_missing\"")
                 .contains("\"agent_route\":null");
+    }
+
+    /** 제목 판단은 소유권 확인이 이미 읽은 세션으로 한다. 세션 조회를 더하지 않고 사용자 제목 세션에는 false를 싣는다. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(nullValues = "NULL", value = {
+            "분기 회고, false",
+            "새 채팅, true",
+            "'', true",
+            "NULL, true"
+    })
+    void turn_sendsSessionTitleNeededFromVerifiedSession(String title, boolean expected) throws Exception {
+        var session = new fruition.core.chat.domain.ChatSession("session_1", "ws_1", "user_1", null);
+        session.rename(title);
+        when(chatSessionService.verifyOwnedSession("ws_1", "user_1", "session_1")).thenReturn(session);
+
+        service.turn("ws_1", "user_1",
+                new AgentTurnRequest("session_1", null, null, "질문", "openai", "gpt-6-luna", null, null));
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), anyString(), anyString(), command.capture());
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"session_title_needed\":" + expected);
+        verify(chatSessionService, org.mockito.Mockito.times(1))
+                .verifyOwnedSession("ws_1", "user_1", "session_1");
+        org.mockito.Mockito.verifyNoMoreInteractions(chatSessionService);
     }
 
     @Test
@@ -1243,6 +1272,53 @@ class AgentTurnServiceTest {
 
         assertThat(response.status()).isEqualTo("failed");
         assertThat(response.error()).isEqualTo("agent_turn_failed");
+    }
+
+    @Test
+    void turn_rejectsUnusableReferenceDocumentsBeforeQueueing() {
+        when(documentService.canUseAsAgentReferences("ws_1", "user_1", List.of("doc_a")))
+                .thenReturn(false);
+
+        assertThatThrownBy(() -> service.turn("ws_1", "user_1", referenceRequest(List.of("doc_a"))))
+                .isInstanceOf(fruition.core.agent.exception.InvalidAgentTurnRequestException.class)
+                .hasMessage("고른 문서 중 사용할 수 없는 문서가 있습니다. 다시 골라 주세요.");
+
+        verifyNoInteractions(chatTurnRecorder, runRepository, outboxWriter);
+    }
+
+    @Test
+    void turn_sendsValidatedReferenceDocumentIdsInCommand() throws Exception {
+        when(documentService.canUseAsAgentReferences("ws_1", "user_1", List.of("doc_a", "doc_b")))
+                .thenReturn(true);
+
+        service.turn("ws_1", "user_1", referenceRequest(List.of("doc_a", "doc_b")));
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"reference_document_ids\":[\"doc_a\",\"doc_b\"]");
+    }
+
+    @Test
+    void turn_withoutReferencesSendsEmptyArrayAndSkipsLookup() throws Exception {
+        service.turn("ws_1", "user_1", referenceRequest(null));
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"reference_document_ids\":[]");
+        verify(documentService, org.mockito.Mockito.never())
+                .canUseAsAgentReferences(anyString(), anyString(), org.mockito.ArgumentMatchers.any());
+    }
+
+    private AgentTurnRequest referenceRequest(List<String> referenceDocumentIds) {
+        return new AgentTurnRequest("session_1", null, null, "참고해서 답해줘", "openai", "gpt-6-luna",
+                null, "auto", null, null, List.of(), List.of(), List.of(), null, null, null, null, null,
+                referenceDocumentIds);
     }
 
     private AgentTurnRequest request(String type, int startLine, int endLine) {

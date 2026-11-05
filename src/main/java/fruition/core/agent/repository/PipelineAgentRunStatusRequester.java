@@ -2,6 +2,7 @@ package fruition.core.agent.repository;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
+import fruition.core.agent.dto.AgentRunEditPreviewsResponse;
 import fruition.core.agent.exception.AgentRunNotFoundException;
 import fruition.core.agent.exception.PipelineAgentException;
 import fruition.shared.http.PipelineClientFactory;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -64,6 +66,23 @@ public class PipelineAgentRunStatusRequester {
                 .body(JsonNode.class), runId);
     }
 
+    /** 문서 내용이 담긴 응답이다. 오류·깨진 응답의 본문은 예외(따라서 로그)에 싣지 않는다. */
+    public AgentRunEditPreviewsResponse getEditPreviews(String workspaceId, String userId, String runId) {
+        AgentRunEditPreviewsResponse previews;
+        try {
+            previews = requestAutonomous(() -> autonomousRunRestClient.get()
+                    .uri(autonomousUri(workspaceId, userId, runId, "edit-previews"))
+                    .retrieve()
+                    .body(AgentRunEditPreviewsResponse.class), runId);
+        } catch (RestClientException e) {
+            throw new PipelineAgentException("AgentRun 변경 미리 보기를 읽지 못했습니다.", 503, null);
+        }
+        if (previews == null) {
+            throw new PipelineAgentException("AgentRun 변경 미리 보기를 읽지 못했습니다.", 503, null);
+        }
+        return previews;
+    }
+
     public JsonNode approve(String workspaceId, String userId, String runId,
                             int planVersion, String operationHash) {
         return approve(workspaceId, userId, runId, planVersion, operationHash, null);
@@ -107,7 +126,7 @@ public class PipelineAgentRunStatusRequester {
                 .body(JsonNode.class), runId);
     }
 
-    private JsonNode requestAutonomous(java.util.function.Supplier<JsonNode> request, String runId) {
+    private <T> T requestAutonomous(java.util.function.Supplier<T> request, String runId) {
         try {
             return request.get();
         } catch (HttpClientErrorException.NotFound e) {
@@ -120,9 +139,10 @@ public class PipelineAgentRunStatusRequester {
         }
     }
 
-    private URI autonomousUri(String workspaceId, String userId, String runId) {
+    private URI autonomousUri(String workspaceId, String userId, String runId, String... subresource) {
         return UriComponentsBuilder.fromUriString(autonomousRunEndpoint)
                 .pathSegment(runId)
+                .pathSegment(subresource)
                 .queryParam("workspace_id", workspaceId)
                 .queryParam("user_id", userId)
                 .build()

@@ -16,6 +16,9 @@ import fruition.core.document.repository.PostgresDocumentEditStore;
  *       직전 서버 본은 저장 경로가 버전 이력에 남기므로 그 버전 번호를 알려 준다.</li>
  *   <li>기준 버전이 현재보다 크면 병합할 근거가 없어 충돌(409)로 남긴다.</li>
  * </ul>
+ *
+ * <p>{@link #mergeOnly}는 겹치거나 기준 버전 스냅샷이 없으면 덮어쓰지 않고 충돌(409)로 남긴다. 사용자가 보고 있지 않은
+ * 문서에 승인된 Agent 편집을 적용할 때 쓴다(ADR 0032의 예외).
  */
 final class ContentSaveMerge implements PostgresDocumentEditStore.StaleBaseResolver {
 
@@ -23,15 +26,27 @@ final class ContentSaveMerge implements PostgresDocumentEditStore.StaleBaseResol
     private final String documentId;
     private final long baseRevision;
     private final String mine;
+    private final boolean rejectOverlap;
 
     private Merge outcome = Merge.NONE;
     private String mergedMarkdown;
 
     ContentSaveMerge(DocumentContentVersionRepository versions, String documentId, long baseRevision, String mine) {
+        this(versions, documentId, baseRevision, mine, false);
+    }
+
+    private ContentSaveMerge(DocumentContentVersionRepository versions, String documentId, long baseRevision,
+                             String mine, boolean rejectOverlap) {
         this.versions = versions;
         this.documentId = documentId;
         this.baseRevision = baseRevision;
         this.mine = mine;
+        this.rejectOverlap = rejectOverlap;
+    }
+
+    static ContentSaveMerge mergeOnly(DocumentContentVersionRepository versions, String documentId, long baseRevision,
+                                      String mine) {
+        return new ContentSaveMerge(versions, documentId, baseRevision, mine, true);
     }
 
     @Override
@@ -43,6 +58,9 @@ final class ContentSaveMerge implements PostgresDocumentEditStore.StaleBaseResol
                 .map(DocumentContentVersion::getMarkdown)
                 .map(base -> LineThreeWayMerge.merge(base, currentMarkdown, mine))
                 .orElseGet(() -> new LineThreeWayMerge.Result(mine, !mine.equals(currentMarkdown)));
+        if (rejectOverlap && result.conflicted()) {
+            return null;
+        }
         DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(result.markdown());
         mergedMarkdown = content.markdown();
         outcome = result.conflicted()

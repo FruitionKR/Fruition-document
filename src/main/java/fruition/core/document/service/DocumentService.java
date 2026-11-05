@@ -118,7 +118,7 @@ import java.util.stream.Collectors;
 public class DocumentService {
 
     /** 서버가 만드는 문서 ID(doc_·chatdoc_ + hex)를 넉넉히 덮는다. 조회 전에 걸러 입력 크기와 문자를 제한한다. */
-    private static final java.util.regex.Pattern READ_ONLY_CHECK_DOCUMENT_ID =
+    private static final java.util.regex.Pattern CLIENT_DOCUMENT_ID =
             java.util.regex.Pattern.compile("[A-Za-z0-9_-]{1,128}");
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -1945,7 +1945,7 @@ public class DocumentService {
      * 형식 검사는 조회 전에 한다. NUL 문자는 PostgreSQL이 거절해 500이 된다.
      */
     public boolean isReadOnlyFor(String workspaceId, String userId, String documentId) {
-        if (documentId == null || !READ_ONLY_CHECK_DOCUMENT_ID.matcher(documentId).matches()) {
+        if (documentId == null || !CLIENT_DOCUMENT_ID.matcher(documentId).matches()) {
             return false;
         }
         return documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
@@ -1954,6 +1954,46 @@ public class DocumentService {
                     return viewer.canRead(document) && !viewer.canEdit(document);
                 })
                 .orElse(false);
+    }
+
+    /**
+     * 모두 이 사용자가 읽을 수 있는 이 워크스페이스의 살아 있는 Markdown 문서이고 실제 본문이 있는지.
+     * 없는 문서·형식 오류도 예외 없이 false다. 멤버인지는 호출하는 쪽이 먼저 확인한다.
+     */
+    public boolean canUseAsAgentReferences(String workspaceId, String userId, List<String> documentIds) {
+        DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
+        return documentIds.stream().allMatch(documentId -> CLIENT_DOCUMENT_ID.matcher(documentId).matches()
+                && documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                        .filter(viewer::canRead)
+                        .filter(document -> document.getDocumentRole() == DocumentRole.EDITABLE)
+                        .filter(this::hasConvertedBody)
+                        .isPresent());
+    }
+
+    /**
+     * 그중 이 사용자가 지금 읽을 수 있는 이 워크스페이스의 살아 있는 문서의 현재 제목. 없는 문서·형식 오류는 결과에서 빠진다.
+     * 멤버인지는 호출하는 쪽이 먼저 확인한다.
+     */
+    public Map<String, String> readableDocumentTitles(String workspaceId, String userId, List<String> documentIds) {
+        DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
+        return documentIds.stream()
+                .filter(documentId -> documentId != null && CLIENT_DOCUMENT_ID.matcher(documentId).matches())
+                .distinct()
+                .flatMap(documentId -> documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                        .filter(viewer::canRead)
+                        .stream())
+                .collect(java.util.stream.Collectors.toMap(Document::getId, Document::getDisplayName));
+    }
+
+    /** PDF 변환이 진행 중이거나 첫 batch 전에 실패한 문서의 본문은 안내 문구이거나 일부뿐이라 근거가 되지 못한다. */
+    private boolean hasConvertedBody(Document document) {
+        if (document.isConverting()) {
+            return false;
+        }
+        return document.getStatus() != DocumentStatus.failed
+                || postgresDocumentEditStore.findState(document.getId())
+                        .map(state -> !document.isFailedConvertPlaceholder(state.getMarkdown()))
+                        .orElse(true);
     }
 
     public DocumentDetailResponse findById(String workspaceId, String userId, String documentId) {
@@ -2051,7 +2091,24 @@ public class DocumentService {
     ) {
         String versionSource = applyOperationId != null && !applyOperationId.isBlank() ? "agent" : "user";
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                versionSource, applyOperationId, false, null, true);
+                versionSource, applyOperationId, false, null, StaleBasePolicy.MERGE_OR_OVERWRITE);
+    }
+
+    /**
+     * 승인된 Agent 도구의 문서 편집 저장. 안 겹치는 변경은 병합하고, 겹치거나 기준 스냅샷이 없으면 덮어쓰지 않고 409다.
+     * 사용자가 보고 있지 않은 문서라 ADR 0032의 last-writer-wins를 적용하지 않는다.
+     */
+    public DocumentContentSaveResponse saveContentMergeOnly(
+            String workspaceId,
+            String userId,
+            String documentId,
+            String markdown,
+            Long baseRevision,
+            String revisionWriteId,
+            String applyOperationId
+    ) {
+        return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
+                "agent", applyOperationId, false, null, StaleBasePolicy.MERGE_ONLY);
     }
 
     /** 사용자가 수락한 회의록을 기존 문서에 덧붙인다. 버전 이력에 meeting_notes로 남는다. */
@@ -2064,7 +2121,7 @@ public class DocumentService {
             String revisionWriteId
     ) {
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                "meeting_notes", null, false, null, true);
+                "meeting_notes", null, false, null, StaleBasePolicy.MERGE_OR_OVERWRITE);
     }
 
     private DocumentContentSaveResponse saveContent(
@@ -2078,13 +2135,13 @@ public class DocumentService {
             String applyOperationId,
             boolean applyOperationClaimed,
             Long restoredFromVersion,
-            boolean autoMerge
+            StaleBasePolicy staleBase
     ) {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
         try {
             return executeWithSaveRetry(() -> saveTransaction.execute(status -> saveContentInTransaction(
                     workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                    versionSource, applyOperationId, applyOperationClaimed, restoredFromVersion, autoMerge)));
+                    versionSource, applyOperationId, applyOperationClaimed, restoredFromVersion, staleBase)));
         } catch (DocumentVersionConflictException conflict) {
             if (applyOperationId != null && !applyOperationId.isBlank()) {
                 recordConflictInIndependentTransaction(
@@ -2134,7 +2191,18 @@ public class DocumentService {
         }
         return saveContentInTransaction(
                 workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                versionSource, null, false, null, autoMerge);
+                versionSource, null, false, null,
+                autoMerge ? StaleBasePolicy.MERGE_OR_OVERWRITE : StaleBasePolicy.REJECT);
+    }
+
+    /** 기준 revision이 지나간 저장을 어떻게 처리할지. */
+    private enum StaleBasePolicy {
+        /** 병합하지 않고 409. 버전 복원처럼 정확히 그 본문이어야 하는 저장. */
+        REJECT,
+        /** 병합하고, 겹치면 요청 본으로 덮어쓴다(ADR 0032). */
+        MERGE_OR_OVERWRITE,
+        /** 병합하고, 겹치면 409. */
+        MERGE_ONLY
     }
 
     private DocumentContentSaveResponse saveContentInTransaction(
@@ -2148,7 +2216,7 @@ public class DocumentService {
             String applyOperationId,
             boolean applyOperationClaimed,
             Long restoredFromVersion,
-            boolean autoMerge
+            StaleBasePolicy staleBase
     ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         if (applyOperationId != null && !applyOperationId.isBlank()
@@ -2180,9 +2248,13 @@ public class DocumentService {
         editStateInitializer.initializeIfNeeded(document);
         // 기준 버전이 지나간 저장은 409 대신 서버에서 자동 병합한다(ADR 0032). 버전 복원·충돌 해결처럼
         // 정확히 그 본문이어야 하는 내부 저장은 병합하지 않고 기존처럼 충돌로 거절한다.
-        ContentSaveMerge merge = autoMerge
-                ? new ContentSaveMerge(contentVersionRepository, documentId, baseRevision, content.markdown())
-                : null;
+        ContentSaveMerge merge = switch (staleBase) {
+            case REJECT -> null;
+            case MERGE_OR_OVERWRITE ->
+                    new ContentSaveMerge(contentVersionRepository, documentId, baseRevision, content.markdown());
+            case MERGE_ONLY ->
+                    ContentSaveMerge.mergeOnly(contentVersionRepository, documentId, baseRevision, content.markdown());
+        };
         PostgresDocumentEditSaveResult result = postgresDocumentEditStore.save(
                 workspaceId, documentId, content.markdown(), content.contentHash(), baseRevision,
                 revisionWriteId, userId, hasApplyOperation ? applyOperationId : null, merge);
@@ -2411,7 +2483,8 @@ public class DocumentService {
                 }
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),
-                        baseVersion, revisionWriteId, null, applyOperationId, false, null, true);
+                        baseVersion, revisionWriteId, null, applyOperationId, false, null,
+                        StaleBasePolicy.MERGE_OR_OVERWRITE);
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
                     assetRepository.deleteAllInBatch(insertedAssets);
@@ -2559,7 +2632,7 @@ public class DocumentService {
                 null,
                 false,
                 version,
-                false
+                StaleBasePolicy.REJECT
         );
     }
 

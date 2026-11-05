@@ -26,7 +26,7 @@ workspace AI 모델을 확인한 뒤 ai-svc 내부 HTTP로 전달한다.
 | [`DELETE /api/workspaces/{workspace_id}/skills/{skill_id}`](#delete-skill) | Skill과 버전을 삭제하고 실행 기록을 보존합니다. |
 | [`POST /api/workspaces/{workspace_id}/skills/{skill_id}/disable`](#summary-post-api-workspaces-workspace-id-skills-skill-id-disable) | Skill을 Agent 실행 대상에서 제외합니다. |
 | [`POST /api/workspaces/{workspace_id}/skills/{skill_id}/enable`](#summary-post-api-workspaces-workspace-id-skills-skill-id-enable) | Skill을 Agent 실행 대상에 포함합니다. |
-| [`POST /internal/agent/skill-authoring/references/read`](#summary-post-internal-agent-skill-authoring-references-read) | Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다. |
+| [`POST /internal/agent/skill-authoring/references/read`](#summary-post-internal-agent-skill-authoring-references-read) | Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다. |
 
 ## 한눈에 보기
 
@@ -1530,11 +1530,11 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다. |
+| 목적 | Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다. |
 | 입력 | **Header** — `X-Agent-Service-Token`(필수, 인증 계층 검증): `string`<br>**Body** — `SkillReferenceReadRequest` |
 | 출력 | `200` 성공 — `SkillReferenceReadResponse` |
-| 조건 | 인증 필요<br>`X-Agent-Service-Token`을 검증한다.<br>올바른 내부 서비스 토큰을 가진 서비스만 호출할 수 있다.<br>요청에 포함된 workspace/user scope는 해당 route의 서비스 계층에서 추가 검증한다. |
-| 주요 오류 | `401` Agent 서비스 인증 토큰 누락 또는 불일치 |
+| 조건 | 인증 필요<br>`X-Agent-Service-Token`을 검증한다.<br>올바른 내부 서비스 토큰을 가진 서비스만 호출할 수 있다.<br>요청에 포함된 workspace/user scope는 해당 route의 서비스 계층에서 추가 검증한다.<br>요청 user가 읽을 수 없는 문서는 없는 문서와 같이 `404`다. Skill 작성과 Agent turn의 `reference_document_ids`가 함께 쓴다. `max_chars`를 보내면 긴 문서를 거절하지 않고 앞부분만 돌려준다. |
+| 주요 오류 | `400` `max_chars` 형식 오류<br>`401` Agent 서비스 인증 토큰 누락 또는 불일치<br>`404` 문서 없음·읽을 수 없음<br>`413` `max_chars` 없이 3만 자 초과 |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1548,7 +1548,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/skill
 
 #### 2. 목적
 
-Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다.
+Skill 작성·Agent turn에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본문을 반환합니다.
 
 #### 3. Auth 필요 여부
 
@@ -1566,10 +1566,15 @@ Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본
 ```json
 {
   "document_id": "string",
+  "max_chars": 1,
   "user_id": "string",
   "workspace_id": "string"
 }
 ```
+
+| 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| `max_chars` | `integer` | 아니오 | 양의 정수. 있으면 `413` 없이 본문 앞에서 이 글자 수까지 돌려준다. 생략하면 3만 자 초과 문서를 `413`으로 거절한다(Skill 작성의 기존 동작). Jackson 기본 변환을 그대로 받아 소수는 소수점 아래를 버리고(`2.7` → `2`) 숫자 문자열도 정수로 읽는다(`"5"` → `5`). 호출자는 정수만 보낸다. 변환 결과가 `0` 이하(`0.5` 포함)이거나 정수 범위를 넘거나 변환할 수 없는 값(`"abc"`, `"2.7"`, `true`, `[5]`)은 `400` |
 
 #### 5. Response body
 
@@ -1578,16 +1583,35 @@ Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본
 
 ```json
 {
+  "can_edit": true,
+  "display_name": "string",
   "document_role": "string",
-  "markdown": "string"
+  "edit_revision": 1,
+  "markdown": "string",
+  "total_chars": 1,
+  "truncated": true
 }
 ```
 
+| 이름 | 타입 | 설명 |
+|---|---|---|
+| `display_name` | `string` | 문서 제목. `document_role`과 `max_chars`에 관계없이 온다. 호출자는 무시해도 된다 |
+| `truncated` | `boolean` | 본문을 잘랐는지. `max_chars`를 보낸 `EDITABLE` 문서에만 온다 |
+| `total_chars` | `integer` | 자르기 전 전체 글자 수. `truncated`와 같은 경우에만 온다 |
+| `edit_revision` | `integer` | 현재 편집 revision. `markdown`과 같은 `document_edit_states` 행에서 읽는다. `EDITABLE` 문서에만 온다 |
+| `can_edit` | `boolean` | 이 사용자가 지금 본문을 저장할 수 있는지. 편집 권한이 있고 `chat_export`가 아니며 변환 중이 아닐 때(파트 문서는 부모 기준) `true`다. 편집 잠금은 보지 않는다. `EDITABLE` 문서에만 온다 |
+
+- 글자 수(`max_chars`·`total_chars`)는 Unicode 코드 포인트다. UTF-16 단위가 아니므로 이모지도 1자이고 Python `len`과 같다.
+- 경계가 한 글자(서로게이트 쌍, 결합 문자, NFD 한글, 국기, ZWJ 이모지, CRLF)의 중간이면 그 글자를 통째로 뺀다. 그래서 돌려준 본문이 `max_chars`보다 짧을 수 있고, 첫 글자가 `max_chars`보다 길면 빈 문자열일 수 있다.
+- `ORIGINAL` 문서는 `max_chars`와 관계없이 `markdown`·`truncated`·`total_chars`·`edit_revision`·`can_edit`가 없다.
+- `max_chars`를 생략한 응답 모양은 이전과 같다(`truncated`·`total_chars` 없음).
+
 #### 6. Error response
 
+- HTTP `400`: `max_chars`를 양의 정수로 변환할 수 없음(`max_chars` 설명 참고)
 - HTTP `401`: Agent 서비스 인증 토큰 누락 또는 불일치
-
-- 명세에 별도 오류 응답이 정의되어 있지 않다.
+- HTTP `404`: 문서가 없거나, 이 워크스페이스 문서가 아니거나, 삭제됐거나, 요청 user가 읽을 수 없음(`max_chars`와 관계없음)
+- HTTP `413`: `max_chars`를 생략했고 본문이 3만 자 초과(`REFERENCE_DOCUMENT_TOO_LARGE`)
 
 #### 7. Pagination / filtering
 
@@ -1605,13 +1629,16 @@ Skill 작성에 사용할 참조 문서의 범위와 권한을 검증한 뒤 본
 curl -X POST "$DOCUMENT/internal/agent/skill-authoring/references/read" \
   -H 'X-Agent-Service-Token: <value>' \
   -H 'Content-Type: application/json' \
-  --data '{"document_id":"<value>","user_id":"<value>","workspace_id":"<value>"}'
+  --data '{"document_id":"<value>","max_chars":30000,"user_id":"<value>","workspace_id":"<value>"}'
 ```
 
 ```json
 {
-  "document_role": "string",
-  "markdown": "string"
+  "display_name": "주간 회의록",
+  "document_role": "EDITABLE",
+  "markdown": "string",
+  "total_chars": 45210,
+  "truncated": true
 }
 ```
 

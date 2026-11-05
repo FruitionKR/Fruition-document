@@ -379,8 +379,8 @@ class AgentToolServiceTest {
                 arguments.get("target"), "# 변경\n");
         var expected = org.mockito.Mockito.mock(fruition.core.document.dto.DocumentContentSaveResponse.class);
         when(artifactClient.resolve(request, "apply_document_edit", arguments)).thenReturn(artifact);
-        when(documentService.saveContent(
-                "workspace-1", "user-1", "document-1", "# 변경\n", 2L, "idem-1", "agent", "operation-1"))
+        when(documentService.saveContentMergeOnly(
+                "workspace-1", "user-1", "document-1", "# 변경\n", 2L, "idem-1", "operation-1"))
                 .thenReturn(expected);
 
         assertThat(service.execute("apply_document_edit", request)).isSameAs(expected);
@@ -396,8 +396,8 @@ class AgentToolServiceTest {
         order.verify(runCommandRepository).prepareToolApply(
                 "agent-tool:run-1:operation-1", "workspace-1", "user-1", "document-1", 2L,
                 "operation-1", "# 변경\n");
-        order.verify(documentService).saveContent(
-                "workspace-1", "user-1", "document-1", "# 변경\n", 2L, "idem-1", "agent", "operation-1");
+        order.verify(documentService).saveContentMergeOnly(
+                "workspace-1", "user-1", "document-1", "# 변경\n", 2L, "idem-1", "operation-1");
     }
 
     @Test

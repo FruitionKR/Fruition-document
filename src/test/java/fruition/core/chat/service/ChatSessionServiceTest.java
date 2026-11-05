@@ -49,6 +49,41 @@ class ChatSessionServiceTest {
     }
 
     @Test
+    void isTitleUnset_matchesTitlesTheAiTitleEventCanStillFill() {
+        assertThat(ChatSession.isTitleUnset(null)).isTrue();
+        assertThat(ChatSession.isTitleUnset("")).isTrue();
+        assertThat(ChatSession.isTitleUnset("   ")).isTrue();
+        assertThat(ChatSession.isTitleUnset("새 채팅")).isTrue();
+        assertThat(ChatSession.isTitleUnset(" 새 채팅 ")).isTrue();
+        assertThat(ChatSession.isTitleUnset("분기 회고")).isFalse();
+        assertThat(ChatSession.isTitleUnset("새 채팅 2")).isFalse();
+    }
+
+    @Test
+    void commandState_readsSummaryAndTitleFromOneSessionRead() {
+        ChatSession session = new ChatSession(SESSION_ID, WORKSPACE_ID, USER_ID, "분기 회고");
+        session.updateContextSummary("지금까지의 요약", java.time.Instant.now());
+        when(chatSessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
+
+        var state = chatSessionService.commandState(SESSION_ID);
+
+        assertThat(state.contextSummary()).isEqualTo("지금까지의 요약");
+        assertThat(state.titleNeeded()).isFalse();
+        verify(chatSessionRepository, org.mockito.Mockito.times(1)).findById(SESSION_ID);
+    }
+
+    @Test
+    void commandState_defaultTitleNeedsTitleAndBlankSummaryIsNull() {
+        when(chatSessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(
+                new ChatSession(SESSION_ID, WORKSPACE_ID, USER_ID, null)));
+
+        var state = chatSessionService.commandState(SESSION_ID);
+
+        assertThat(state.contextSummary()).isNull();
+        assertThat(state.titleNeeded()).isTrue();
+    }
+
+    @Test
     void create_withoutTitle_fillsDefaultTitle() {
         stubOwnedWorkspace();
         when(chatSessionRepository.countByWorkspaceIdAndUserId(WORKSPACE_ID, USER_ID)).thenReturn(0L);
