@@ -1,6 +1,7 @@
 package fruition.core.agent.repository;
 
 import com.sun.net.httpserver.HttpServer;
+import fruition.core.agent.exception.AgentRunNotFoundException;
 import fruition.core.agent.exception.PipelineAgentException;
 import fruition.shared.http.PipelineClientFactory;
 import org.junit.jupiter.api.AfterEach;
@@ -88,6 +89,71 @@ class PipelineAgentRunStatusRequesterTest {
     @AfterEach
     void tearDown() {
         server.stop(0);
+    }
+
+    private static final String PREVIEW_MARKER = "미리보기본문표식";
+
+    private void respondEditPreviews(int status, String body) {
+        server.createContext("/agent/runs/run-1/edit-previews", exchange -> {
+            uri.set(exchange.getRequestURI().toString());
+            token.set(exchange.getRequestHeaders().getFirst("X-Agent-Service-Token"));
+            byte[] response = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(status, response.length == 0 ? -1 : response.length);
+            if (response.length > 0) exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+    }
+
+    @Test
+    void getEditPreviewsSendsActorAndReadsContractShape() {
+        respondEditPreviews(200, """
+                {"expires_at":"2026-11-05T00:00:00Z","items":[{"operation_id":"op-1","document_id":"doc-1",
+                 "display_name":"AI 제목","base_version":3,"summary":"요약","added_lines":1,"removed_lines":2,
+                 "hunks":[{"before_start":4,"after_start":5,"lines":[{"type":"insert","text":"새 줄"}]}]}]}
+                """);
+
+        var previews = requester().getEditPreviews("ws-1", "user 1", "run-1");
+
+        assertThat(uri.get()).isEqualTo("/agent/runs/run-1/edit-previews?workspace_id=ws-1&user_id=user%201");
+        assertThat(token.get()).isEqualTo("agent-token");
+        assertThat(previews.expiresAt()).isEqualTo("2026-11-05T00:00:00Z");
+        var item = previews.items().getFirst();
+        assertThat(item.operationId()).isEqualTo("op-1");
+        assertThat(item.documentId()).isEqualTo("doc-1");
+        assertThat(item.baseVersion()).isEqualTo(3);
+        assertThat(item.addedLines()).isEqualTo(1);
+        assertThat(item.removedLines()).isEqualTo(2);
+        assertThat(item.hunks().getFirst().beforeStart()).isEqualTo(4);
+        assertThat(item.hunks().getFirst().afterStart()).isEqualTo(5);
+        assertThat(item.hunks().getFirst().lines().getFirst().text()).isEqualTo("새 줄");
+    }
+
+    /** 다른 사용자의 run이거나 AI가 아직 이 API를 모를 때. 그대로 404다. */
+    @Test
+    void getEditPreviewsTranslatesNotFound() {
+        respondEditPreviews(404, "");
+
+        assertThatThrownBy(() -> requester().getEditPreviews("ws-1", "user-1", "run-1"))
+                .isInstanceOf(AgentRunNotFoundException.class);
+    }
+
+    /** 오류 본문이나 깨진 응답에 문서 내용이 섞여 있어도 예외(따라서 로그)로 새지 않는다. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "500|{\"detail\":\"미리보기본문표식\"}",
+            "200|{\"items\":\"미리보기본문표식\"}",
+            "200|미리보기본문표식"})
+    void getEditPreviewsFailureCarriesNoDocumentText(int status, String body) {
+        respondEditPreviews(status, body);
+
+        assertThatThrownBy(() -> requester().getEditPreviews("ws-1", "user-1", "run-1"))
+                .isInstanceOfSatisfying(PipelineAgentException.class, exception -> {
+                    assertThat(exception.getHttpStatus()).isEqualTo(503);
+                    assertThat(exception.getMessage()).doesNotContain(PREVIEW_MARKER);
+                    assertThat(exception.getResponseBody()).isNull();
+                    assertThat(exception.getCause()).isNull();
+                });
     }
 
     /**

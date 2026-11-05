@@ -2,6 +2,7 @@ package fruition.core.aitask.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.aitask.AiErrorMessages;
+import fruition.core.chat.domain.ChatSession;
 import fruition.core.chat.service.ChatEvidenceRecorder;
 import fruition.core.chat.service.ChatTurnRecorder;
 import org.slf4j.Logger;
@@ -104,16 +105,16 @@ public class AiTaskResultApplier {
         JsonNode value = event.path("payload").path("title");
         if (!value.isTextual()) return;
         String title = value.asText().strip();
-        if (title.isBlank() || title.codePointCount(0, title.length()) > 30 || "새 채팅".equals(title)) return;
+        if (title.isBlank() || title.codePointCount(0, title.length()) > 30 || ChatSession.DEFAULT_TITLE.equals(title)) return;
         // 이미 정한 제목은 덮어쓰지 않는다. 소유자와 완료 문답을 함께 확인한다.
         jdbcTemplate.update("""
                 UPDATE chat_sessions s SET title = ?
                 WHERE s.workspace_id = ? AND s.user_id = ?
-                  AND (s.title IS NULL OR btrim(s.title) IN ('', '새 채팅'))
+                  AND (s.title IS NULL OR btrim(s.title) IN ('', ?))
                   AND EXISTS (SELECT 1 FROM chat_messages m
                     WHERE m.session_id = s.id AND m.run_id = ?
                       AND m.role = 'assistant' AND m.status = 'completed')
-                """, title, text(event, "workspace_id"), text(event, "user_id"), text(event, "run_id"));
+                """, title, text(event, "workspace_id"), text(event, "user_id"), ChatSession.DEFAULT_TITLE, text(event, "run_id"));
     }
 
     @Transactional
@@ -275,7 +276,8 @@ public class AiTaskResultApplier {
      * @return 최초 반영 여부와 실제 projection 반영 오류. 호출부는 이 결과로 SSE를 한 번만 종료한다.
      */
     @Transactional
-    public AgentApplyResult applyAgent(JsonNode event) {
+    public AgentApplyResult applyAgent(JsonNode received) {
+        JsonNode event = withoutPurgedEvidence(received);
         String eventId = text(event, "event_id");
         String runId = text(event, "run_id");
         if (!beginResult(runId)) return new AgentApplyResult(false, null);
@@ -353,7 +355,7 @@ public class AiTaskResultApplier {
             if (errorCode == null) {
                 JsonNode payload = event.path("payload");
                 chatTurnRecorder.completeAgentTurn(assistantMessageId,
-                        payload.path("action").asText(null), agentMessageContent(payload));
+                        payload.path("action").asText(null), agentMessageContent(payload), clarifyReason(event));
                 recordAgentChatEvidence(assistantMessageId, payload);
             } else {
                 chatTurnRecorder.markFailed(assistantMessageId, AiErrorMessages.agent(errorCode));
@@ -365,6 +367,26 @@ public class AiTaskResultApplier {
     }
 
     public record AgentApplyResult(boolean applied, String error) {}
+
+    /** 소문자·숫자·밑줄 코드만 받는다. 저장 전에 거르므로 잘린 코드나 문장이 화면으로 나가지 않는다. */
+    private static final java.util.regex.Pattern CLARIFY_REASON_FORMAT = java.util.regex.Pattern.compile("[a-z0-9_]{1,64}");
+
+    /**
+     * 되묻기의 이유 코드. 모르는 코드는 그대로 전달해 AI가 먼저 배포돼도 된다.
+     * 부가 정보라 형식이 어긋나면 값만 버리고 답변은 남긴다. 값은 신뢰할 수 없어 로그에 남기지 않는다.
+     */
+    private String clarifyReason(JsonNode event) {
+        JsonNode payload = event.path("payload");
+        JsonNode reason = payload.path("clarify_reason");
+        if (reason.isMissingNode() || reason.isNull() || !"clarify".equals(payload.path("action").asText())) {
+            return null;
+        }
+        if (reason.isTextual() && CLARIFY_REASON_FORMAT.matcher(reason.textValue()).matches()) {
+            return reason.textValue();
+        }
+        log.warn("[Agent 되묻기 이유 코드 무시] runId={} nodeType={}", text(event, "run_id"), reason.getNodeType());
+        return null;
+    }
 
     /**
      * AI가 질의로 판정한 턴은 답변과 함께 근거가 온다. 질의 경로와 같은 자리에 남겨야
@@ -524,7 +546,8 @@ public class AiTaskResultApplier {
     }
 
     @Transactional
-    public QueryProjection applyQuery(JsonNode event) {
+    public QueryProjection applyQuery(JsonNode received) {
+        JsonNode event = withoutPurgedEvidence(received);
         String runId = text(event, "run_id");
         if (!beginResult(runId)) return null;
         boolean first = jdbcTemplate.update("""
@@ -568,6 +591,38 @@ public class AiTaskResultApplier {
             if (analytics != null) analytics.queryCompleted(canonical, false, error);
         }
         return new QueryProjection(runId, null, error);
+    }
+
+    /**
+     * 영구 삭제 전에 근거를 읽은 질의의 결과가 삭제 뒤에 오면, 이미 끝난 정리는 이 결과를 다시 보지 않는다. 문서가 없는 근거의 본문을 여기서 비운다.
+     *
+     * <p>문서 행을 먼저 잠근다. 삭제 트랜잭션과 겹치면 커밋을 기다렸다가 문서가 없음을 보고, 잠근 쪽이 먼저면 영구 삭제가 SKIP LOCKED로
+     * 이 문서를 다음 실행으로 미룬 뒤 커밋된 값을 정리한다. 영구 삭제와 같은 문서 → 실행 순서라 교착하지 않는다.
+     */
+    private JsonNode withoutPurgedEvidence(JsonNode event) {
+        java.util.List<JsonNode> snippets = new java.util.ArrayList<>();
+        event.path("payload").path("evidence_snippets").forEach(snippets::add);
+        event.path("payload").path("chat").path("evidence_snippets").forEach(snippets::add);
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (JsonNode snippet : snippets) {
+            String id = snippet.path("source_document_id").asText("");
+            if (!id.isBlank() && !id.startsWith("web:")) ids.add(id);
+        }
+        if (ids.isEmpty()) return event;
+        ids.removeAll(jdbcTemplate.queryForList(
+                "SELECT id FROM documents WHERE id IN (" + String.join(",", java.util.Collections.nCopies(ids.size(), "?")) + ") FOR KEY SHARE",
+                String.class, ids.toArray()));
+        if (ids.isEmpty()) return event;
+        JsonNode cleaned = event.deepCopy();
+        for (JsonNode list : java.util.List.of(cleaned.path("payload").path("evidence_snippets"),
+                cleaned.path("payload").path("chat").path("evidence_snippets"))) {
+            for (JsonNode snippet : list) {
+                if (ids.contains(snippet.path("source_document_id").asText(""))) {
+                    ((com.fasterxml.jackson.databind.node.ObjectNode) snippet).put("text", "");
+                }
+            }
+        }
+        return cleaned;
     }
 
     private JsonNode canonicalQueryEvent(String runId) {

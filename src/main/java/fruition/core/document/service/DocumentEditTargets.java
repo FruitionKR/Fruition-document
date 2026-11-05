@@ -1,5 +1,7 @@
 package fruition.core.document.service;
 
+import fruition.core.document.domain.Document;
+import fruition.core.document.domain.Folder;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.FolderRepository;
 import org.springframework.stereotype.Service;
@@ -31,5 +33,19 @@ public class DocumentEditTargets {
         if (folderId == null) return true;
         return folderRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(folderId, workspaceId).isPresent()
                 && viewer.canEditFolder(folderId);
+    }
+
+    /** 살아 있는 문서가 지금 있는 폴더. 최상위거나 문서가 없으면 null. */
+    public UUID folderOfDocument(String workspaceId, String documentId) {
+        return documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                .map(Document::getFolderId)
+                .orElse(null);
+    }
+
+    /** 살아 있는 폴더의 지금 상위. 최상위거나 폴더가 없으면 null. */
+    public UUID parentOfFolder(String workspaceId, UUID folderId) {
+        return folderRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(folderId, workspaceId)
+                .map(Folder::getParentFolderId)
+                .orElse(null);
     }
 }

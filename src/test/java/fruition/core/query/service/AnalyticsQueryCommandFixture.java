@@ -8,6 +8,6 @@ public final class AnalyticsQueryCommandFixture {
 
     public static Object command(String run, String session, QueryService.QueryMessageContext context) {
         return new QueryRunService.QueryCommand(run, "query", "workspace", "original-actor", session,
-                "private question", "test", "test", false, null, List.of(), context);
+                "private question", "test", "test", false, null, List.of(), context, true);
     }
 }

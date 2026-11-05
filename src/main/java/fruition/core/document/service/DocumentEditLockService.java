@@ -112,13 +112,41 @@ public class DocumentEditLockService {
      */
     @Transactional(readOnly = true)
     public void requireWritable(String documentId, String userId) {
-        DocumentEditLock lock = lockRepository.findById(documentId).orElse(null);
-        if (lock == null || lock.isExpiredAt(Instant.now(clock)) || lock.isHeldBy(userId)) {
-            return;
+        DocumentEditLock lock = heldByOther(documentId, userId);
+        if (lock != null) {
+            throw new DocumentLockedException(lockedMessage(lock));
         }
+    }
+
+    /**
+     * {@link #requireWritable}과 같은 판정이고, 거절할 때 잠긴 문서 제목을 함께 담는다. 요청 화면에 그 문서가 안 보일 수 있는
+     * Agent turn용이다. 제목은 읽을 수 있는 사용자에게만 담고, 아니면 빠진다. 제목이 로그에 남지 않도록 메시지에는 넣지 않는다.
+     * 트랜잭션을 걸지 않아 DB 연결을 쥔 채 Access를 기다리지 않는다.
+     */
+    public void requireWritableNamingDocument(String workspaceId, String userId, String documentId) {
+        DocumentEditLock lock = heldByOther(documentId, userId);
+        if (lock != null) {
+            throw new DocumentLockedException(lockedMessage(lock), readableDocumentName(workspaceId, userId, documentId));
+        }
+    }
+
+    /** 다른 사용자가 쥔 유효한 잠금. 잠금이 없거나 만료됐거나 본인 보유면 null. */
+    private DocumentEditLock heldByOther(String documentId, String userId) {
+        DocumentEditLock lock = lockRepository.findById(documentId).orElse(null);
+        return lock == null || lock.isExpiredAt(Instant.now(clock)) || lock.isHeldBy(userId) ? null : lock;
+    }
+
+    private String lockedMessage(DocumentEditLock lock) {
         String holder = holderDisplayName(lock.getHolderUserId());
         String who = holder != null ? holder + "님이" : "다른 사용자가";
-        throw new DocumentLockedException(who + " 편집 중입니다. 편집이 끝난 뒤 다시 시도해 주세요.");
+        return who + " 편집 중입니다. 편집이 끝난 뒤 다시 시도해 주세요.";
+    }
+
+    private String readableDocumentName(String workspaceId, String userId, String documentId) {
+        return documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                .filter(document -> documentAccessPolicy.viewer(workspaceId, userId).canRead(document))
+                .map(Document::getDisplayName)
+                .orElse(null);
     }
 
     private DocumentEditLock currentLock(String documentId) {

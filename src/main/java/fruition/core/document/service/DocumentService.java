@@ -117,6 +117,10 @@ import java.util.stream.Collectors;
 @Service
 public class DocumentService {
 
+    /** 서버가 만드는 문서 ID(doc_·chatdoc_ + hex)를 넉넉히 덮는다. 조회 전에 걸러 입력 크기와 문자를 제한한다. */
+    private static final java.util.regex.Pattern CLIENT_DOCUMENT_ID =
+            java.util.regex.Pattern.compile("[A-Za-z0-9_-]{1,128}");
+
     @org.springframework.beans.factory.annotation.Autowired
     private fruition.core.analytics.DocumentAnalytics analytics;
 
@@ -352,7 +356,10 @@ public class DocumentService {
             AtomicReference<String> storedKey = new AtomicReference<>();
             return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope,
                     idempotencyKey, requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
-                    () -> storeUploadOriginal(workspaceId, userId, file, mimeType, storedKey),
+                    () -> {
+                        documentAccessPolicy.requirePlacement(workspaceId, folderId, userId);
+                        return storeUploadOriginal(workspaceId, userId, file, mimeType, storedKey);
+                    },
                     documentId -> {
                         registerStoredSourceCleanup(storedKey);
                         return storeUpload(workspaceId, userId, folderId, file, skillReference, uploadFilename,
@@ -492,7 +499,8 @@ public class DocumentService {
 
     /** 업로드 거절(4xx)로 그대로 올리는 예외. 나머지는 DocumentUploadException으로 감싼다. */
     private static boolean isUploadRejection(Exception e) {
-        return e instanceof InvalidDocumentFilenameException
+        return e instanceof DocumentWriteForbiddenException
+                || e instanceof InvalidDocumentFilenameException
                 || e instanceof InvalidDocumentOriginException
                 || e instanceof InvalidIdempotencyKeyException
                 || e instanceof IdempotencyConflictException
@@ -651,6 +659,7 @@ public class DocumentService {
         AtomicReference<String> storedKey = new AtomicReference<>();
         return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope, idempotencyKey,
                 requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id, () -> {
+                    documentAccessPolicy.requirePlacement(workspaceId, request.folderId(), userId);
                     // 새 문서는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
                     if (accounting.limited() && uploadLimits != null) {
                         uploadLimits.precheck(userId, content.bytes().length);
@@ -684,7 +693,7 @@ public class DocumentService {
         validateIdempotencyKey(idempotencyKey);
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        // 복제본은 요청한 사람 소유의 새 문서다. 원본을 읽을 수 있는 멤버면 복제할 수 있다.
+        // 복제본은 요청한 사람 소유의 새 문서다. 원본을 읽을 수 있고 원본이 있는 폴더에 넣을 수 있는 멤버면 복제할 수 있다.
         if (source.getDocumentRole() != DocumentRole.EDITABLE) {
             throw new DocumentWriteForbiddenException("편집 가능한 Markdown 문서만 복제할 수 있습니다.");
         }
@@ -704,6 +713,7 @@ public class DocumentService {
         if (replay.isPresent()) {
             return replay.get();
         }
+        documentAccessPolicy.requirePlacement(workspaceId, source.getFolderId(), userId);
 
         Set<String> existingNames = new java.util.HashSet<>(
                 documentRepository.findActiveSiblingNames(workspaceId, source.getFolderId()));
@@ -1323,7 +1333,7 @@ public class DocumentService {
         validateIdempotencyKey(idempotencyKey);
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
-        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다. 목록의 can_convert와 같은 판정이다.
+        // 남이 올린 PDF의 변환은 업로더 본인·OWNER·document.convert 권한자만 요청한다. 폴더 판정(아래)까지 합치면 can_convert와 같다.
         documentAccessPolicy.requireConvert(source, userId);
 
         String endpointScope = convertEndpointScope(workspaceId);
@@ -1336,6 +1346,8 @@ public class DocumentService {
         return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope,
                 idempotencyKey, requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
                 () -> {
+                    // 변환본은 원본과 같은 폴더에 새 문서로 들어간다.
+                    documentAccessPolicy.requirePlacement(workspaceId, source.getFolderId(), userId);
                     String placeholderId = newDocumentId();
                     Prefetched<String> stored = Prefetched.of(() -> putMarkdownSource(placeholderId, content.bytes()));
                     storedKey.set(stored.value());
@@ -1927,6 +1939,63 @@ public class DocumentService {
      * DB 작업은 짧은 트랜잭션으로 끝내고 AI 위키 연결 조회는 트랜잭션 밖에서 한다. 연결을 쥔 채 AI 응답을 기다리면
      * AI가 느릴 때 연결 풀이 바닥나 AI와 무관한 API까지 멈춘다.
      */
+    /**
+     * 이 사용자가 읽을 수 있고 편집은 못 하는 이 워크스페이스의 살아 있는 문서인지. 클라이언트가 보낸 ID를 믿지 않으려는 확인이라
+     * 없는 문서·형식 오류도 예외 없이 false다. 멤버인지는 호출하는 쪽이 먼저 확인한다.
+     * 형식 검사는 조회 전에 한다. NUL 문자는 PostgreSQL이 거절해 500이 된다.
+     */
+    public boolean isReadOnlyFor(String workspaceId, String userId, String documentId) {
+        if (documentId == null || !CLIENT_DOCUMENT_ID.matcher(documentId).matches()) {
+            return false;
+        }
+        return documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                .map(document -> {
+                    DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
+                    return viewer.canRead(document) && !viewer.canEdit(document);
+                })
+                .orElse(false);
+    }
+
+    /**
+     * 모두 이 사용자가 읽을 수 있는 이 워크스페이스의 살아 있는 Markdown 문서이고 실제 본문이 있는지.
+     * 없는 문서·형식 오류도 예외 없이 false다. 멤버인지는 호출하는 쪽이 먼저 확인한다.
+     */
+    public boolean canUseAsAgentReferences(String workspaceId, String userId, List<String> documentIds) {
+        DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
+        return documentIds.stream().allMatch(documentId -> CLIENT_DOCUMENT_ID.matcher(documentId).matches()
+                && documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                        .filter(viewer::canRead)
+                        .filter(document -> document.getDocumentRole() == DocumentRole.EDITABLE)
+                        .filter(this::hasConvertedBody)
+                        .isPresent());
+    }
+
+    /**
+     * 그중 이 사용자가 지금 읽을 수 있는 이 워크스페이스의 살아 있는 문서의 현재 제목. 없는 문서·형식 오류는 결과에서 빠진다.
+     * 멤버인지는 호출하는 쪽이 먼저 확인한다.
+     */
+    public Map<String, String> readableDocumentTitles(String workspaceId, String userId, List<String> documentIds) {
+        DocumentAccessPolicy.Viewer viewer = documentAccessPolicy.viewer(workspaceId, userId);
+        return documentIds.stream()
+                .filter(documentId -> documentId != null && CLIENT_DOCUMENT_ID.matcher(documentId).matches())
+                .distinct()
+                .flatMap(documentId -> documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                        .filter(viewer::canRead)
+                        .stream())
+                .collect(java.util.stream.Collectors.toMap(Document::getId, Document::getDisplayName));
+    }
+
+    /** PDF 변환이 진행 중이거나 첫 batch 전에 실패한 문서의 본문은 안내 문구이거나 일부뿐이라 근거가 되지 못한다. */
+    private boolean hasConvertedBody(Document document) {
+        if (document.isConverting()) {
+            return false;
+        }
+        return document.getStatus() != DocumentStatus.failed
+                || postgresDocumentEditStore.findState(document.getId())
+                        .map(state -> !document.isFailedConvertPlaceholder(state.getMarkdown()))
+                        .orElse(true);
+    }
+
     public DocumentDetailResponse findById(String workspaceId, String userId, String documentId) {
         verifyWorkspaceOwnership(workspaceId, userId);
         record Loaded(Document doc, Optional<DocumentEditState> editState) {}
@@ -2022,7 +2091,24 @@ public class DocumentService {
     ) {
         String versionSource = applyOperationId != null && !applyOperationId.isBlank() ? "agent" : "user";
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                versionSource, applyOperationId, false, null, true);
+                versionSource, applyOperationId, false, null, StaleBasePolicy.MERGE_OR_OVERWRITE);
+    }
+
+    /**
+     * 승인된 Agent 도구의 문서 편집 저장. 안 겹치는 변경은 병합하고, 겹치거나 기준 스냅샷이 없으면 덮어쓰지 않고 409다.
+     * 사용자가 보고 있지 않은 문서라 ADR 0032의 last-writer-wins를 적용하지 않는다.
+     */
+    public DocumentContentSaveResponse saveContentMergeOnly(
+            String workspaceId,
+            String userId,
+            String documentId,
+            String markdown,
+            Long baseRevision,
+            String revisionWriteId,
+            String applyOperationId
+    ) {
+        return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
+                "agent", applyOperationId, false, null, StaleBasePolicy.MERGE_ONLY);
     }
 
     /** 사용자가 수락한 회의록을 기존 문서에 덧붙인다. 버전 이력에 meeting_notes로 남는다. */
@@ -2035,7 +2121,7 @@ public class DocumentService {
             String revisionWriteId
     ) {
         return saveContent(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                "meeting_notes", null, false, null, true);
+                "meeting_notes", null, false, null, StaleBasePolicy.MERGE_OR_OVERWRITE);
     }
 
     private DocumentContentSaveResponse saveContent(
@@ -2049,13 +2135,13 @@ public class DocumentService {
             String applyOperationId,
             boolean applyOperationClaimed,
             Long restoredFromVersion,
-            boolean autoMerge
+            StaleBasePolicy staleBase
     ) {
         TransactionTemplate saveTransaction = requiresNewSaveTransactionTemplate();
         try {
             return executeWithSaveRetry(() -> saveTransaction.execute(status -> saveContentInTransaction(
                     workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                    versionSource, applyOperationId, applyOperationClaimed, restoredFromVersion, autoMerge)));
+                    versionSource, applyOperationId, applyOperationClaimed, restoredFromVersion, staleBase)));
         } catch (DocumentVersionConflictException conflict) {
             if (applyOperationId != null && !applyOperationId.isBlank()) {
                 recordConflictInIndependentTransaction(
@@ -2105,7 +2191,18 @@ public class DocumentService {
         }
         return saveContentInTransaction(
                 workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
-                versionSource, null, false, null, autoMerge);
+                versionSource, null, false, null,
+                autoMerge ? StaleBasePolicy.MERGE_OR_OVERWRITE : StaleBasePolicy.REJECT);
+    }
+
+    /** 기준 revision이 지나간 저장을 어떻게 처리할지. */
+    private enum StaleBasePolicy {
+        /** 병합하지 않고 409. 버전 복원처럼 정확히 그 본문이어야 하는 저장. */
+        REJECT,
+        /** 병합하고, 겹치면 요청 본으로 덮어쓴다(ADR 0032). */
+        MERGE_OR_OVERWRITE,
+        /** 병합하고, 겹치면 409. */
+        MERGE_ONLY
     }
 
     private DocumentContentSaveResponse saveContentInTransaction(
@@ -2119,7 +2216,7 @@ public class DocumentService {
             String applyOperationId,
             boolean applyOperationClaimed,
             Long restoredFromVersion,
-            boolean autoMerge
+            StaleBasePolicy staleBase
     ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         if (applyOperationId != null && !applyOperationId.isBlank()
@@ -2151,9 +2248,13 @@ public class DocumentService {
         editStateInitializer.initializeIfNeeded(document);
         // 기준 버전이 지나간 저장은 409 대신 서버에서 자동 병합한다(ADR 0032). 버전 복원·충돌 해결처럼
         // 정확히 그 본문이어야 하는 내부 저장은 병합하지 않고 기존처럼 충돌로 거절한다.
-        ContentSaveMerge merge = autoMerge
-                ? new ContentSaveMerge(contentVersionRepository, documentId, baseRevision, content.markdown())
-                : null;
+        ContentSaveMerge merge = switch (staleBase) {
+            case REJECT -> null;
+            case MERGE_OR_OVERWRITE ->
+                    new ContentSaveMerge(contentVersionRepository, documentId, baseRevision, content.markdown());
+            case MERGE_ONLY ->
+                    ContentSaveMerge.mergeOnly(contentVersionRepository, documentId, baseRevision, content.markdown());
+        };
         PostgresDocumentEditSaveResult result = postgresDocumentEditStore.save(
                 workspaceId, documentId, content.markdown(), content.contentHash(), baseRevision,
                 revisionWriteId, userId, hasApplyOperation ? applyOperationId : null, merge);
@@ -2382,7 +2483,8 @@ public class DocumentService {
                 }
                 DocumentContentSaveResponse value = saveContentInTransaction(
                         workspaceId, userId, documentId, content.markdown(),
-                        baseVersion, revisionWriteId, null, applyOperationId, false, null, true);
+                        baseVersion, revisionWriteId, null, applyOperationId, false, null,
+                        StaleBasePolicy.MERGE_OR_OVERWRITE);
                 if (!value.changed()) {
                     // 본문이 그대로면 새 asset row도 남기지 않는다. object storage 정리는 호출부가 한다.
                     assetRepository.deleteAllInBatch(insertedAssets);
@@ -2530,7 +2632,7 @@ public class DocumentService {
                 null,
                 false,
                 version,
-                false
+                StaleBasePolicy.REJECT
         );
     }
 
@@ -2794,6 +2896,11 @@ public class DocumentService {
         verifyWorkspaceOwnership(workspaceId, userId);
         validateIdempotencyKey(idempotencyKey);
         validateLifecycleRequest(request);
+        // 삭제해도 folder_id는 남으므로 원래 폴더로 돌아간다. 폴더 삭제·이동과 같은 순서로 폴더 행을 문서 행보다 먼저 잠근다.
+        // 반대 순서면 교착하고, 잠그지 않으면 빈 폴더 검사와 폴더 삭제 사이에 문서가 들어갈 수 있다.
+        UUID originalFolderId = documentRepository.findFolderIdById(documentId, workspaceId).orElse(null);
+        boolean originalFolderActive = originalFolderId != null
+                && folderRepository.findActiveForUpdate(originalFolderId, workspaceId).isPresent();
         Document document = documentRepository
                 .findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
@@ -2814,17 +2921,23 @@ public class DocumentService {
         if (isTrashExpired(document.getDeletedAt(), Instant.now())) {
             throw new TrashRetentionExpiredException("휴지통 보관 기간이 지나 복구할 수 없습니다.");
         }
-        List<Document> rootItems = documentRepository.findRootItemsForUpdate(
-                workspaceId, document.getDocumentRole());
-        long sortOrder = rootItems.stream()
-                .mapToLong(Document::getSortOrder)
-                .max()
-                .orElse(-1) + 1;
+        // 잠그기 전에 읽은 폴더와 다르면 그사이 복구·이동·재삭제가 있었던 것이라 잠근 폴더를 믿을 수 없다.
+        if (!Objects.equals(originalFolderId, document.getFolderId())) {
+            throw versionConflict();
+        }
+        UUID targetFolderId = originalFolderActive ? originalFolderId : null;
+        long sortOrder = targetFolderId != null
+                ? placementSortOrder(workspaceId, targetFolderId, document.getDocumentRole())
+                : documentRepository.findRootItemsForUpdate(workspaceId, document.getDocumentRole()).stream()
+                        .mapToLong(Document::getSortOrder)
+                        .max()
+                        .orElse(-1) + 1;
         Instant restoredAt = Instant.now();
         int updated = documentRepository.restoreIfVersionMatches(
                 documentId,
                 workspaceId,
                 request.baseVersion(),
+                targetFolderId,
                 sortOrder,
                 restoredAt
         );

@@ -23,6 +23,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.mockito.ArgumentCaptor;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
@@ -47,6 +48,96 @@ class AgentTurnControllerTest {
     @Autowired JwtTokenProvider jwtTokenProvider;
     @MockBean AgentTurnService agentTurnService;
     @MockBean fruition.core.query.service.QueryEventBroker runEventBroker;
+
+    @Test
+    void turn_passesReadOnlyDocumentIdToService() throws Exception {
+        assertThat(acceptedReadOnlyDocumentId("\"doc_view\"")).isEqualTo("doc_view");
+    }
+
+    /** 표시용 힌트라 형식이 틀려도 요청을 거절하지 않는다. 값의 존재 여부가 응답으로 새지 않게 한다. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"null", "123", "true", "[\"doc_1\"]", "{\"id\":\"doc_1\"}"})
+    void turn_nonStringReadOnlyDocumentIdIsIgnored(String json) throws Exception {
+        assertThat(acceptedReadOnlyDocumentId(json)).isNull();
+    }
+
+    private String acceptedReadOnlyDocumentId(String json) throws Exception {
+        org.mockito.Mockito.reset(agentTurnService);
+        when(agentTurnService.turn(org.mockito.ArgumentMatchers.eq(WORKSPACE_ID), org.mockito.ArgumentMatchers.eq(USER_ID),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new AgentTurnResponse(null, null, "agent_1", null, "queued", null, null));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"session_id\":\"session_1\",\"message\":\"수정해줘\",\"read_only_document_id\":" + json + "}"))
+                .andExpect(status().isAccepted());
+
+        var request = org.mockito.ArgumentCaptor.forClass(fruition.core.agent.dto.AgentTurnRequest.class);
+        org.mockito.Mockito.verify(agentTurnService).turn(org.mockito.ArgumentMatchers.eq(WORKSPACE_ID),
+                org.mockito.ArgumentMatchers.eq(USER_ID), request.capture());
+        return request.getValue().readOnlyDocumentId();
+    }
+
+    @Test
+    void turn_referenceDocumentIdsDefaultToEmptyList() throws Exception {
+        assertThat(acceptedReferenceIds("")).isEmpty();
+        assertThat(acceptedReferenceIds(",\"reference_document_ids\":null")).isEmpty();
+        assertThat(acceptedReferenceIds(",\"reference_document_ids\":[]")).isEmpty();
+    }
+
+    @Test
+    void turn_referenceDocumentIdsAreDeduplicatedBeforeCounting() throws Exception {
+        assertThat(acceptedReferenceIds(",\"reference_document_ids\":[\"doc_a\",\"doc_a\",\"doc_b\",\"doc_c\"]"))
+                .containsExactly("doc_a", "doc_b", "doc_c");
+    }
+
+    @Test
+    void turn_referenceDocumentIdSameAsEditTargetIsRemovedBeforeCounting() throws Exception {
+        mockMvc.perform(turnRequest("{\"session_id\":\"session_1\",\"message\":\"수정해줘\",\"documentId\":\"doc_1\","
+                        + "\"baseVersion\":1,\"editorSnapshot\":{\"markdown\":\"# 제목\"},"
+                        + "\"reference_document_ids\":[\"doc_1\",\"doc_a\",\"doc_b\",\"doc_c\"]}"))
+                .andExpect(status().isAccepted());
+
+        var request = org.mockito.ArgumentCaptor.forClass(fruition.core.agent.dto.AgentTurnRequest.class);
+        org.mockito.Mockito.verify(agentTurnService).turn(org.mockito.ArgumentMatchers.eq(WORKSPACE_ID),
+                org.mockito.ArgumentMatchers.eq(USER_ID), request.capture());
+        assertThat(request.getValue().referenceDocumentIds()).containsExactly("doc_a", "doc_b", "doc_c");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "[\"doc_a\",\"doc_b\",\"doc_c\",\"doc_d\"]",
+            "[\"\"]",
+            "[\"   \"]",
+            "[null]",
+            "[{\"id\":\"doc_a\"}]",
+            "\"doc_a\"",
+    })
+    void turn_rejectsInvalidReferenceDocumentIds(String json) throws Exception {
+        mockMvc.perform(turnRequest("{\"session_id\":\"session_1\",\"message\":\"수정해줘\",\"reference_document_ids\":" + json + "}"))
+                .andExpect(status().isBadRequest());
+
+        org.mockito.Mockito.verifyNoInteractions(agentTurnService);
+    }
+
+    private java.util.List<String> acceptedReferenceIds(String field) throws Exception {
+        org.mockito.Mockito.clearInvocations(agentTurnService);
+        mockMvc.perform(turnRequest("{\"session_id\":\"session_1\",\"message\":\"수정해줘\"" + field + "}"))
+                .andExpect(status().isAccepted());
+
+        var request = org.mockito.ArgumentCaptor.forClass(fruition.core.agent.dto.AgentTurnRequest.class);
+        org.mockito.Mockito.verify(agentTurnService).turn(org.mockito.ArgumentMatchers.eq(WORKSPACE_ID),
+                org.mockito.ArgumentMatchers.eq(USER_ID), request.capture());
+        return request.getValue().referenceDocumentIds();
+    }
+
+    private org.springframework.test.web.servlet.RequestBuilder turnRequest(String body) {
+        return post("/api/workspaces/" + WORKSPACE_ID + "/agent/turn")
+                .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body);
+    }
 
     @Test
     void cancelTurn_returnsCurrentTurnStatus() throws Exception {
@@ -283,6 +374,52 @@ class AgentTurnControllerTest {
                         .content("{\"plan_version\":1,\"operation_hash\":\"" + "a".repeat(64)
                                 + "\",\"operation_ids\":[]}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void getEditPreviews_returnsContractShape() throws Exception {
+        String runId = "run-autonomous";
+        when(agentTurnService.getEditPreviews(WORKSPACE_ID, USER_ID, runId)).thenReturn(
+                new fruition.core.agent.dto.AgentRunEditPreviewsResponse(java.util.List.of(
+                        new fruition.core.agent.dto.AgentRunEditPreviewsResponse.Item(
+                                "op-1", "doc-1", "회의록", 3, "요약", 1, 2, java.util.List.of(
+                                new fruition.core.agent.dto.AgentRunEditPreviewsResponse.Hunk(4, 5, java.util.List.of(
+                                        new fruition.core.agent.dto.AgentRunEditPreviewsResponse.Line("insert", "새 줄")))))),
+                        null));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/agent/runs/" + runId + "/edit-previews")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.expires_at").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.items[0].operation_id").value("op-1"))
+                .andExpect(jsonPath("$.items[0].document_id").value("doc-1"))
+                .andExpect(jsonPath("$.items[0].display_name").value("회의록"))
+                .andExpect(jsonPath("$.items[0].base_version").value(3))
+                .andExpect(jsonPath("$.items[0].summary").value("요약"))
+                .andExpect(jsonPath("$.items[0].added_lines").value(1))
+                .andExpect(jsonPath("$.items[0].removed_lines").value(2))
+                .andExpect(jsonPath("$.items[0].hunks[0].before_start").value(4))
+                .andExpect(jsonPath("$.items[0].hunks[0].after_start").value(5))
+                .andExpect(jsonPath("$.items[0].hunks[0].lines[0].type").value("insert"))
+                .andExpect(jsonPath("$.items[0].hunks[0].lines[0].text").value("새 줄"));
+    }
+
+    @Test
+    void getEditPreviews_notFoundKeepsFourOhFour() throws Exception {
+        String runId = "run-of-someone-else";
+        when(agentTurnService.getEditPreviews(WORKSPACE_ID, USER_ID, runId))
+                .thenThrow(new fruition.core.agent.exception.AgentRunNotFoundException(runId));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/agent/runs/" + runId + "/edit-previews")
+                        .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com")))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void getEditPreviews_requiresLogin() throws Exception {
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/agent/runs/run-1/edit-previews"))
+                .andExpect(status().isUnauthorized());
+        org.mockito.Mockito.verifyNoInteractions(agentTurnService);
     }
 
     @Test

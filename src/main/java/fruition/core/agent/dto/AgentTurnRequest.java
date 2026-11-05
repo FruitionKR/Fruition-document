@@ -2,6 +2,11 @@ package fruition.core.agent.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -10,13 +15,14 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 @Schema(description = "Agent turn 요청. 접수되면 202로 돌아오고 결과는 비동기로 만들어진다. "
         + "문서를 열지 않은 상태에서도 보낼 수 있으며, 그때는 편집 대신 답변·되물음만 나온다"
-        + "(mode=task면 답변 대신 폴더 정리·워크플로·되물음이 나온다). "
+        + "(mode=task면 폴더 정리·워크플로·되물음이 나오고, 답변은 reference_document_ids로 첨부했을 때만 나온다). "
         + "skill_* 필드는 snake_case이고 나머지는 camelCase다.")
 public record AgentTurnRequest(
         @JsonProperty("session_id") @NotBlank
@@ -85,8 +91,9 @@ public record AgentTurnRequest(
 
         @Pattern(regexp = "task")
         @Schema(description = "턴을 보낸 화면. 작업 탭이면 \"task\"를 보낸다. "
-                + "task면 AI가 위키 질문 답변(chat_answer)·대화 답변(conversation_reply)을 고르지 않고 "
-                + "문서 편집·폴더 정리·워크플로·Skill·되물음(clarify) 중에서만 고른다. "
+                + "task면 첨부(reference_document_ids)가 없을 때 AI가 위키 질문 답변(chat_answer)·대화 답변(conversation_reply)을 "
+                + "고르지 않고 문서 편집·폴더 정리·워크플로·Skill·되물음(clarify) 중에서만 고른다. "
+                + "첨부가 있으면 답변도 고를 수 있어 첨부 문서를 근거로 답한다. "
                 + "열린 문서 없이도 받으며, 문서 편집이 필요하면 AI가 문서를 열어 달라고 되묻는다. "
                 + "생략하면 기존 동작이다.",
                 allowableValues = {"task"}, nullable = true, example = "task")
@@ -98,7 +105,23 @@ public record AgentTurnRequest(
                 + "폴더 정리는 워크스페이스 전체를 범위로 본다(기존 동작). "
                 + "이 워크스페이스의 삭제되지 않은 폴더여야 한다(없으면 404). 문서 없이도 보낼 수 있다.",
                 format = "uuid", nullable = true, example = "44444444-4444-4444-4444-444444444444")
-        String folderId
+        String folderId,
+
+        @JsonProperty("read_only_document_id")
+        @JsonDeserialize(using = StringOrNullDeserializer.class)
+        @Schema(description = "보기 권한 문서를 연 채 보낸 요청이면 그 문서 ID. 편집 대상(documentId)과 다르며 AI로 보내지 않는다. "
+                + "서버가 이 사용자가 읽을 수 있고 편집은 못 하는 문서인지 확인해 맞을 때만 메시지에 남기고, "
+                + "그 밖의 값(없는 문서, 다른 워크스페이스 문서, 삭제된 문서, 편집 가능한 문서, 형식 오류)은 오류 없이 무시한다. "
+                + "안내 표시에만 쓰고 권한 판단에 쓰지 않는다.",
+                nullable = true, example = "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83")
+        String readOnlyDocumentId,
+
+        @JsonProperty("reference_document_ids") @Size(max = MAX_REFERENCE_DOCUMENTS)
+        @Schema(description = "이번 turn에서 참고할 문서 ID 목록(최대 3개). 문서 없이도, documentId와 함께여도 보낼 수 있다. "
+                + "중복과 documentId와 같은 ID는 서버가 뺀 뒤 개수를 센다. 생략하면 없는 것으로 본다. "
+                + "요청 사용자가 읽을 수 있는 이 워크스페이스의 삭제되지 않은 Markdown 문서만 받으며, "
+                + "하나라도 어긋나면 존재 여부가 드러나지 않는 같은 메시지로 요청 전체를 400으로 거절한다.")
+        List<@NotBlank String> referenceDocumentIds
 ) {
     private static final int MAX_SKILL_ID_LENGTH = 128;
     /**
@@ -106,9 +129,22 @@ public record AgentTurnRequest(
      * 서버가 최근 구간에서 읽어 오는 양(문답 20개)과 같은 선까지만 받는다.
      */
     private static final int MAX_SELECTED_PAIR_IDS = 20;
+    private static final int MAX_REFERENCE_DOCUMENTS = 3;
     private static final Set<String> SKILL_MODES = Set.of("auto", "explicit", "off");
     /** 작업 탭에서 보낸 턴. 생략(null)이면 기존 동작이다. */
     public static final String TASK_MODE = "task";
+
+    /** 표시용 힌트라 형식이 틀려도 요청을 거절하지 않는다. 문자열이 아니면(숫자·배열·객체) 값이 없는 것으로 본다. */
+    static final class StringOrNullDeserializer extends JsonDeserializer<String> {
+        @Override
+        public String deserialize(JsonParser parser, DeserializationContext context) throws IOException {
+            if (parser.currentToken() == JsonToken.VALUE_STRING) {
+                return parser.getText();
+            }
+            parser.skipChildren();
+            return null;
+        }
+    }
 
     /** 편집 대상이 정해진 요청인지. 셋은 함께 있거나 함께 없다. */
     public boolean hasDocumentContext() {
@@ -133,6 +169,41 @@ public record AgentTurnRequest(
         this(sessionId, documentId, baseVersion, message, provider, model, null, "auto", null, conversationContext,
                 skillDraftSources, skillDraftUserDirectives, skillDraftExcludedLiterals, skillScopeType,
                 editorSnapshot);
+    }
+
+    /** reference_document_ids 이전의 전체 필드 생성자. 참고 문서는 없음(기존 동작)이다. */
+    public AgentTurnRequest(String sessionId, String documentId, Long baseVersion, String message,
+                            String provider, String model, Boolean allowWebSearch,
+                            String skillMode, String skillId,
+                            ConversationContext conversationContext,
+                            List<SkillDraftSourceSelector> skillDraftSources,
+                            List<String> skillDraftUserDirectives,
+                            List<String> skillDraftExcludedLiterals,
+                            String skillScopeType,
+                            EditorSnapshot editorSnapshot,
+                            String mode,
+                            String folderId,
+                            String readOnlyDocumentId) {
+        this(sessionId, documentId, baseVersion, message, provider, model, allowWebSearch, skillMode, skillId,
+                conversationContext, skillDraftSources, skillDraftUserDirectives, skillDraftExcludedLiterals,
+                skillScopeType, editorSnapshot, mode, folderId, readOnlyDocumentId, null);
+    }
+
+    /** read_only_document_id 이전의 전체 필드 생성자. 보기 전용 문서는 생략(기존 동작)이다. */
+    public AgentTurnRequest(String sessionId, String documentId, Long baseVersion, String message,
+                            String provider, String model, Boolean allowWebSearch,
+                            String skillMode, String skillId,
+                            ConversationContext conversationContext,
+                            List<SkillDraftSourceSelector> skillDraftSources,
+                            List<String> skillDraftUserDirectives,
+                            List<String> skillDraftExcludedLiterals,
+                            String skillScopeType,
+                            EditorSnapshot editorSnapshot,
+                            String mode,
+                            String folderId) {
+        this(sessionId, documentId, baseVersion, message, provider, model, allowWebSearch, skillMode, skillId,
+                conversationContext, skillDraftSources, skillDraftUserDirectives, skillDraftExcludedLiterals,
+                skillScopeType, editorSnapshot, mode, folderId, null);
     }
 
     /** folder_id 이전의 전체 필드 생성자. 대상 폴더는 생략(기존 동작)이다. */
@@ -196,6 +267,11 @@ public record AgentTurnRequest(
         skillDraftSources = skillDraftSources == null ? List.of() : List.copyOf(skillDraftSources);
         skillDraftUserDirectives = skillDraftUserDirectives == null ? List.of() : List.copyOf(skillDraftUserDirectives);
         skillDraftExcludedLiterals = skillDraftExcludedLiterals == null ? List.of() : List.copyOf(skillDraftExcludedLiterals);
+        // 개수 검증(@Size)은 이 값으로 한다. null 원소는 @NotBlank가 거절하도록 남긴다.
+        referenceDocumentIds = referenceDocumentIds == null ? List.of() : referenceDocumentIds.stream()
+                .distinct()
+                .filter(id -> id == null || !id.equals(documentId))
+                .toList();
     }
 
     @Schema(description = "이전 대화 맥락. 대화 내용 자체는 서버가 세션에서 읽어 조립한다.")

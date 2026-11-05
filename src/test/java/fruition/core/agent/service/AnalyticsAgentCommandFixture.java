@@ -8,6 +8,6 @@ public final class AnalyticsAgentCommandFixture {
         var context = new AgentTurnService.AgentMessageContext(pair, userMessage, assistantMessage);
         return new AgentTurnService.AgentCommand(run, "agent", "workspace", "original-actor", session,
                 context, null, null, null, "private question", "test", "test", false,
-                null, null, null, null, null, null, null, null, "task", null);
+                null, null, null, null, null, null, null, null, "task", null, java.util.List.of(), true);
     }
 }

@@ -44,6 +44,8 @@ class QueryRunServiceTest {
                 org.mockito.Mockito.mock(fruition.core.usage.limit.AiUsageLimiter.class)));
         service = new QueryRunService(queryRunStore, queryService, chatSessionService, outboxWriter,
                 "ai.query.command", cancellation, 30);
+        org.mockito.Mockito.lenient().when(chatSessionService.commandState(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(new ChatSessionService.CommandSessionState(null, true));
     }
 
     @Test
@@ -90,7 +92,8 @@ class QueryRunServiceTest {
                 .thenReturn(new QueryService.QueryMessageContext(
                         "pair_abc123", "chat_user_abc123", "chat_assistant_abc123", pending.createdAt(),
                         List.of()));
-        when(chatSessionService.contextSummary("session_abc123")).thenReturn("지금까지 인덱싱을 다뤘다.");
+        when(chatSessionService.commandState("session_abc123"))
+                .thenReturn(new ChatSessionService.CommandSessionState("지금까지 인덱싱을 다뤘다.", true));
 
         service.start("ws_abc123", "user_abc123", "session_abc123", "질문");
 
@@ -98,6 +101,31 @@ class QueryRunServiceTest {
         verify(outboxRepository).save(outbox.capture());
         assertThat(outbox.getValue().getPayload())
                 .contains("\"recent_conversation_summary\":\"지금까지 인덱싱을 다뤘다.\"");
+    }
+
+    /** 사용자가 제목을 정한 세션은 AI가 제목 LLM을 부르지 않게 알린다. 세션 제목 판단은 commandState가 맡는다. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void start_sendsSessionTitleNeededFromSessionState(boolean titleNeeded) {
+        QueryRun pending = QueryRun.pending("query_abc123", "ws_abc123", "session_abc123",
+                "질문", Instant.parse("2026-06-20T10:00:00Z"));
+        when(queryRunStore.create("ws_abc123", "session_abc123", "openai", "gpt-6-luna", "질문"))
+                .thenReturn(pending);
+        when(queryService.prepareMessages("session_abc123", "질문", "query_abc123",
+                "openai", "gpt-6-luna"))
+                .thenReturn(new QueryService.QueryMessageContext(
+                        "pair_abc123", "chat_user_abc123", "chat_assistant_abc123", pending.createdAt(),
+                        List.of()));
+        when(chatSessionService.commandState("session_abc123"))
+                .thenReturn(new ChatSessionService.CommandSessionState(null, titleNeeded));
+
+        service.start("ws_abc123", "user_abc123", "session_abc123", "질문");
+
+        ArgumentCaptor<AiCommandOutbox> outbox = ArgumentCaptor.forClass(AiCommandOutbox.class);
+        verify(outboxRepository).save(outbox.capture());
+        assertThat(outbox.getValue().getPayload()).contains("\"session_title_needed\":" + titleNeeded);
+        verify(chatSessionService).commandState("session_abc123");
+        org.mockito.Mockito.verifyNoMoreInteractions(chatSessionService);
     }
 
     @Test

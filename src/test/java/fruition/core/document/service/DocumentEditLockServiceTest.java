@@ -164,6 +164,66 @@ class DocumentEditLockServiceTest {
     }
 
     @Test
+    void requireWritableNamingDocument_whenHeldByOther_carriesDocumentName() {
+        DocumentEditLock held = lock("other", false);
+        when(lockRepository.findById(DOC)).thenReturn(Optional.of(held));
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(DOC, WS)).thenReturn(Optional.of(otherUsersDocument()));
+
+        assertThatThrownBy(() -> service().requireWritableNamingDocument(WS, USER, DOC))
+                .isInstanceOfSatisfying(DocumentLockedException.class, e -> {
+                    assertThat(e.getDocumentName()).isEqualTo("회의록");
+                    // 메시지는 로그에 남으므로 제목을 넣지 않는다.
+                    assertThat(e.getMessage()).doesNotContain("회의록");
+                });
+    }
+
+    @Test
+    void requireWritableNamingDocument_whenCannotRead_leavesNameOut() {
+        DocumentEditLock held = lock("other", false);
+        when(lockRepository.findById(DOC)).thenReturn(Optional.of(held));
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(DOC, WS)).thenReturn(Optional.of(otherUsersDocument()));
+        // 읽기 판정은 모르는 설정 값을 읽지 못하는 것으로 본다.
+        org.mockito.Mockito.doAnswer(invocation -> {
+            java.sql.ResultSet row = org.mockito.Mockito.mock(java.sql.ResultSet.class);
+            when(row.getString("document_id")).thenReturn(DOC);
+            when(row.getString("access")).thenReturn("none");
+            invocation.<org.springframework.jdbc.core.RowCallbackHandler>getArgument(1).processRow(row);
+            return null;
+        }).when(jdbcTemplate).query(any(String.class), any(org.springframework.jdbc.core.RowCallbackHandler.class), any(Object[].class));
+
+        assertThatThrownBy(() -> service().requireWritableNamingDocument(WS, USER, DOC))
+                .isInstanceOfSatisfying(DocumentLockedException.class,
+                        e -> assertThat(e.getDocumentName()).isNull());
+    }
+
+    @Test
+    void requireWritableNamingDocument_whenDocumentIsNotInWorkspace_leavesNameOut() {
+        DocumentEditLock held = lock("other", false);
+        when(lockRepository.findById(DOC)).thenReturn(Optional.of(held));
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(DOC, WS)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service().requireWritableNamingDocument(WS, USER, DOC))
+                .isInstanceOfSatisfying(DocumentLockedException.class,
+                        e -> assertThat(e.getDocumentName()).isNull());
+    }
+
+    @Test
+    void requireWritableNamingDocument_whenFreeOrSelf_passesWithoutReadingDocument() {
+        when(lockRepository.findById(DOC)).thenReturn(Optional.empty());
+        assertThatCode(() -> service().requireWritableNamingDocument(WS, USER, DOC)).doesNotThrowAnyException();
+
+        DocumentEditLock self = lock(USER, false);
+        when(lockRepository.findById(DOC)).thenReturn(Optional.of(self));
+        assertThatCode(() -> service().requireWritableNamingDocument(WS, USER, DOC)).doesNotThrowAnyException();
+
+        org.mockito.Mockito.verifyNoInteractions(documentRepository);
+    }
+
+    private Document otherUsersDocument() {
+        return new Document(DOC, WS, "other", "회의록.md", "text/markdown", 10L, "sources/documents/doc_1/original", "h");
+    }
+
+    @Test
     void getStatus_whenExpired_returnsNull() {
         DocumentEditLock l = lock("other", true);
         when(lockRepository.findById(DOC)).thenReturn(Optional.of(l));

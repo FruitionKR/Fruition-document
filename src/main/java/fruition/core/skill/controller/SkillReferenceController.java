@@ -39,7 +39,7 @@ public class SkillReferenceController {
     public ResponseEntity<SkillReferenceReadResponse> read(
             @Valid @RequestBody SkillReferenceReadRequest request) {
         return ResponseEntity.ok(referenceService.read(
-                request.workspaceId(), request.userId(), request.documentId()));
+                request.workspaceId(), request.userId(), request.documentId(), request.maxChars()));
     }
 }
 

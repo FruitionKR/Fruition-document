@@ -248,7 +248,7 @@ class AiTaskResultApplierTest {
 
         ArgumentCaptor<String> content = ArgumentCaptor.forClass(String.class);
         verify(chatTurnRecorder).completeAgentTurn(eq("chat_assistant_1"), eq("markdown_create"),
-                content.capture());
+                content.capture(), eq(null));
         assertThat(content.getValue()).isNotBlank();
     }
 
@@ -312,7 +312,7 @@ class AiTaskResultApplierTest {
         // 답변은 남고 근거만 포기한다.
         assertThat(result.applied()).isTrue();
         assertThat(result.error()).isNull();
-        verify(chatTurnRecorder).completeAgentTurn(eq("chat_assistant_3"), any(), any());
+        verify(chatTurnRecorder).completeAgentTurn(eq("chat_assistant_3"), any(), any(), any());
         verify(chatEvidenceRecorder, never()).record(anyString(), any());
     }
 
@@ -399,6 +399,103 @@ class AiTaskResultApplierTest {
         assertThat(result.error()).isEqualTo("agent_result_unsupported_action");
     }
 
+    /** 프론트는 문장 대신 이 코드로 갈래를 정한다. 값이 메시지까지 와야 새로고침 뒤에도 남는다. */
+    @Test
+    void clarifyReasonReachesChatMessage() throws Exception {
+        applyClarify("""
+                {"action":"clarify","message":"수정할 Markdown 문서를 연 뒤 다시 요청해 주세요.",
+                 "clarify_reason":"markdown_document_required"}
+                """);
+
+        verify(chatTurnRecorder).completeAgentTurn("chat_assistant_1", "clarify",
+                "수정할 Markdown 문서를 연 뒤 다시 요청해 주세요.", "markdown_document_required");
+    }
+
+    /** 첨부 문서 수정에서 대상을 못 고른 되묻기. 화면이 이 코드로 첨부 칩을 유지한다. */
+    @Test
+    void attachmentTargetRequiredReasonReachesChatMessage() throws Exception {
+        applyClarify("""
+                {"action":"clarify","message":"어느 문서를 고칠까요?","clarify_reason":"attachment_target_required"}
+                """);
+
+        verify(chatTurnRecorder).completeAgentTurn("chat_assistant_1", "clarify",
+                "어느 문서를 고칠까요?", "attachment_target_required");
+    }
+
+    /** AI가 먼저 새 코드를 내보내도 document 배포 없이 전달돼야 한다. 뜻은 화면이 판단한다. */
+    @Test
+    void unknownClarifyReasonCodeIsKept() throws Exception {
+        applyClarify("""
+                {"action":"clarify","message":"다시 요청해 주세요.","clarify_reason":"future_reason_2"}
+                """);
+
+        verify(chatTurnRecorder).completeAgentTurn("chat_assistant_1", "clarify",
+                "다시 요청해 주세요.", "future_reason_2");
+    }
+
+    /** 구 AI 응답은 키가 없고, 코드가 없는 되묻기는 null이다. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "{\"action\":\"clarify\",\"message\":\"질문\"}",
+            "{\"action\":\"clarify\",\"message\":\"질문\",\"clarify_reason\":null}"
+    })
+    void missingClarifyReasonIsNull(String payload) throws Exception {
+        applyClarify(payload);
+
+        verify(chatTurnRecorder).completeAgentTurn("chat_assistant_1", "clarify", "질문", null);
+    }
+
+    /** 이유 코드는 부가 정보다. 형식이 어긋나면 값만 버리고 답변은 그대로 남긴다. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "123", "true", "{\"code\":\"x\"}", "[\"x\"]", "\"\"", "\"  \"",
+            "\"보기 권한만 있어요\"", "\"Bad Code\"", "\"line_one\\nline_two\""
+    })
+    void malformedClarifyReasonIsDroppedWithoutFailingTheTurn(String reason) throws Exception {
+        var result = applyClarify("{\"action\":\"clarify\",\"message\":\"질문\",\"clarify_reason\":" + reason + "}");
+
+        assertThat(result.applied()).isTrue();
+        assertThat(result.error()).isNull();
+        verify(chatTurnRecorder).completeAgentTurn("chat_assistant_1", "clarify", "질문", null);
+    }
+
+    @Test
+    void clarifyReasonLongerThanLimitIsDropped() throws Exception {
+        String atLimit = "a".repeat(64);
+        applyClarify("{\"action\":\"clarify\",\"message\":\"질문\",\"clarify_reason\":\"" + atLimit + "\"}");
+        verify(chatTurnRecorder).completeAgentTurn("chat_assistant_1", "clarify", "질문", atLimit);
+
+        org.mockito.Mockito.clearInvocations(chatTurnRecorder);
+        applyClarify("{\"action\":\"clarify\",\"message\":\"질문\",\"clarify_reason\":\"" + atLimit + "a\"}");
+        verify(chatTurnRecorder).completeAgentTurn("chat_assistant_1", "clarify", "질문", null);
+    }
+
+    /** AI 계약상 clarify 갈래에만 온다. 다른 갈래에 붙어 오면 화면이 되묻기로 오인하지 않게 버린다. */
+    @Test
+    void clarifyReasonOnOtherActionIsDropped() throws Exception {
+        applyClarify("""
+                {"action":"conversation_reply","message":"답변","clarify_reason":"markdown_document_required"}
+                """);
+
+        verify(chatTurnRecorder).completeAgentTurn("chat_assistant_1", "conversation_reply", "답변", null);
+    }
+
+    private AiTaskResultApplier.AgentApplyResult applyClarify(String payload) throws Exception {
+        JsonNode event = objectMapper.readTree("""
+                {"event_id":"agent:run-clarify:succeeded","run_id":"run-clarify","kind":"agent",
+                 "status":"succeeded","request":{"workspace_id":"ws-1","user_id":"user-1",
+                 "message_context":{"assistant_message_id":"chat_assistant_1"}},
+                 "payload":%s}
+                """.formatted(payload));
+        when(jdbcTemplate.update(any(String.class), eq("agent:run-clarify:succeeded"),
+                eq("run-clarify"), any())).thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(ResultSetExtractor.class), eq("run-clarify")))
+                .thenReturn(new AiTaskResultApplier.AgentProjection("ws-1", "user-1", null, null, null));
+        when(jdbcTemplate.update(contains("SET status = 'ready'"), any(), any(), eq("run-clarify")))
+                .thenReturn(1);
+        return applier.applyAgent(event);
+    }
+
     @Test
     void internallyRejectedAgentSuccessFailsTheChatMessage() throws Exception {
         JsonNode event = objectMapper.readTree("""
@@ -416,7 +513,7 @@ class AiTaskResultApplierTest {
         assertThat(result.error()).isEqualTo("agent_result_unsupported_action");
         // 말풍선에는 코드 대신 문장이 남아야 한다.
         verify(chatTurnRecorder).markFailed("chat_assistant_1", "지원하지 않는 Agent 처리 결과입니다.");
-        verify(chatTurnRecorder, never()).completeAgentTurn(anyString(), any(), any());
+        verify(chatTurnRecorder, never()).completeAgentTurn(anyString(), any(), any(), any());
     }
 
     @org.junit.jupiter.params.ParameterizedTest

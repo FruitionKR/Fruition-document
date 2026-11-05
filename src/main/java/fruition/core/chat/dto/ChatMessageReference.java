@@ -28,7 +28,7 @@ public record ChatMessageReference(
         @Schema(description = "근거가 된 원문 block ID 목록")
         List<String> sourceBlockIds,
 
-        @Schema(description = "근거 구절 원문")
+        @Schema(description = "근거 구절 원문. 근거 문서를 영구 삭제하면 빈 문자열이다.")
         String text,
 
         @JsonProperty("source_refs")

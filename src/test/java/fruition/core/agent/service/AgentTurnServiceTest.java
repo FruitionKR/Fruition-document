@@ -64,6 +64,9 @@ class AgentTurnServiceTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient()
+                .when(chatSessionService.verifyOwnedSession(anyString(), anyString(), anyString()))
+                .thenReturn(new fruition.core.chat.domain.ChatSession("session_1", "ws_1", "user_1", null));
         // 대화 조립은 ChatConversationReaderTest 가 검증한다. 여기서는 빈 맥락으로 둔다.
         org.mockito.Mockito.lenient()
                 .when(chatConversationReader.read(anyString(), org.mockito.ArgumentMatchers.any()))
@@ -358,6 +361,32 @@ class AgentTurnServiceTest {
                 .contains("\"agent_route\":null");
     }
 
+    /** 제목 판단은 소유권 확인이 이미 읽은 세션으로 한다. 세션 조회를 더하지 않고 사용자 제목 세션에는 false를 싣는다. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(nullValues = "NULL", value = {
+            "분기 회고, false",
+            "새 채팅, true",
+            "'', true",
+            "NULL, true"
+    })
+    void turn_sendsSessionTitleNeededFromVerifiedSession(String title, boolean expected) throws Exception {
+        var session = new fruition.core.chat.domain.ChatSession("session_1", "ws_1", "user_1", null);
+        session.rename(title);
+        when(chatSessionService.verifyOwnedSession("ws_1", "user_1", "session_1")).thenReturn(session);
+
+        service.turn("ws_1", "user_1",
+                new AgentTurnRequest("session_1", null, null, "질문", "openai", "gpt-6-luna", null, null));
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), anyString(), anyString(), command.capture());
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"session_title_needed\":" + expected);
+        verify(chatSessionService, org.mockito.Mockito.times(1))
+                .verifyOwnedSession("ws_1", "user_1", "session_1");
+        org.mockito.Mockito.verifyNoMoreInteractions(chatSessionService);
+    }
+
     @Test
     void turn_carriesWebSearchFlagIntoCommand() {
         // 질의 엔드포인트가 받던 옵션이다. 한 입력창으로 합치면 이 경로로만 들어오므로 끊기면 안 된다.
@@ -395,7 +424,7 @@ class AgentTurnServiceTest {
         var order = org.mockito.Mockito.inOrder(chatTurnRecorder, outboxWriter);
         order.verify(chatTurnRecorder).createPendingAgentPair(anyString(), anyString(), anyString(), anyString(),
                 anyString(), org.mockito.ArgumentMatchers.any(), anyString(), anyString(),
-                org.mockito.ArgumentMatchers.eq(response.requestId()));
+                org.mockito.ArgumentMatchers.eq(response.requestId()), org.mockito.ArgumentMatchers.isNull());
         order.verify(outboxWriter).begin(response.requestId(), "ws_1", "user_1", "agent");
     }
 
@@ -470,7 +499,57 @@ class AgentTurnServiceTest {
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.eq("openai"),
                 org.mockito.ArgumentMatchers.eq("gpt-6-luna"),
-                org.mockito.ArgumentMatchers.eq(response.requestId()));
+                org.mockito.ArgumentMatchers.eq(response.requestId()),
+                org.mockito.ArgumentMatchers.isNull());
+    }
+
+    @Test
+    void turn_recordsReadOnlyDocumentTheServerConfirmed() {
+        when(documentService.isReadOnlyFor("ws_1", "user_1", "doc_view")).thenReturn(true);
+
+        var response = service.turn("ws_1", "user_1", readOnlyRequest("doc_view"));
+
+        verifyRecordedReadOnlyDocument(response.requestId(), "doc_view");
+    }
+
+    /** 클라이언트 값을 믿지 않는다. 확인되지 않으면 오류 없이 남기지 않는다. */
+    @Test
+    void turn_ignoresReadOnlyDocumentTheServerDidNotConfirm() {
+        when(documentService.isReadOnlyFor("ws_1", "user_1", "doc_other")).thenReturn(false);
+
+        var response = service.turn("ws_1", "user_1", readOnlyRequest("doc_other"));
+
+        assertThat(response.status()).isEqualTo("queued");
+        verifyRecordedReadOnlyDocument(response.requestId(), null);
+    }
+
+    /** 편집 문맥이 있는 요청은 보기 전용 문서를 연 요청이 아니다. 옛 화면 상태가 섞여 와도 남기지 않는다. */
+    @Test
+    void turn_withEditContextIgnoresReadOnlyDocument() {
+        when(documentService.findById("ws_1", "user_1", "doc_1")).thenReturn(document("note.md", "text/markdown", 7));
+        when(applyOperationStore.newOperationId()).thenReturn("op_apply_1");
+        var base = request("whole_document", 1, 2, null);
+        var request = new AgentTurnRequest(base.sessionId(), base.documentId(), base.baseVersion(), base.message(),
+                base.provider(), base.model(), base.allowWebSearch(), base.skillMode(), base.skillId(),
+                base.conversationContext(), base.skillDraftSources(), base.skillDraftUserDirectives(),
+                base.skillDraftExcludedLiterals(), base.skillScopeType(), base.editorSnapshot(), base.mode(),
+                base.folderId(), "doc_view");
+
+        var response = service.turn("ws_1", "user_1", request);
+
+        verify(documentService, never()).isReadOnlyFor(anyString(), anyString(), anyString());
+        verifyRecordedReadOnlyDocument(response.requestId(), null);
+    }
+
+    private static AgentTurnRequest readOnlyRequest(String documentId) {
+        return new AgentTurnRequest("session_1", null, null, "수정해줘", "openai", "gpt-6-luna", null, "auto", null,
+                null, List.of(), List.of(), List.of(), null, null, "task", null, documentId);
+    }
+
+    private void verifyRecordedReadOnlyDocument(String runId, String documentId) {
+        verify(chatTurnRecorder).createPendingAgentPair(anyString(), anyString(), anyString(), anyString(),
+                anyString(), org.mockito.ArgumentMatchers.any(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.eq(runId), org.mockito.ArgumentMatchers.eq(documentId));
     }
 
     @Test
@@ -867,7 +946,7 @@ class AgentTurnServiceTest {
 
             // 뒤늦게 첫 요청이 커밋·종료되면 기존 정산 경로로 예약을 해제한다.
             assertThat(service.getRun("ws_1", "user_1", runId)).isEqualTo(completed);
-            verify(usageCharges).endAutonomousRunIfTerminal(runId, completed);
+            verify(usageCharges).endAutonomousRunIfTerminal(runId, "ws_1", "user_1", completed);
         }
     }
 
@@ -945,7 +1024,7 @@ class AgentTurnServiceTest {
         order.verify(statusRequester).revise("ws_1", "user_1", runId, "좁혀줘");
         order.verify(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
         order.verify(statusRequester).approve("ws_1", "user_1", runId, 1, "a".repeat(64));
-        verify(usageCharges, never()).endAutonomousRun(anyString());
+        verify(usageCharges, never()).endAutonomousRun(anyString(), anyString(), anyString());
 
         org.mockito.Mockito.doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("부족"))
                 .when(usageCharges).reserveAutonomousRun(runId, "ws_1", "user_1");
@@ -1041,7 +1120,7 @@ class AgentTurnServiceTest {
                 .isInstanceOf(IllegalStateException.class);
 
         verify(usageCharges, never()).abortAutonomousAttempt(anyString(), anyString());
-        verify(usageCharges, never()).endAutonomousRun(anyString());
+        verify(usageCharges, never()).endAutonomousRun(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -1071,7 +1150,7 @@ class AgentTurnServiceTest {
 
         service.getRun("ws_1", "user_1", runId);
 
-        verify(usageCharges).endAutonomousRunIfTerminal(runId, done);
+        verify(usageCharges).endAutonomousRunIfTerminal(runId, "ws_1", "user_1", done);
     }
 
     @Test
@@ -1193,6 +1272,53 @@ class AgentTurnServiceTest {
 
         assertThat(response.status()).isEqualTo("failed");
         assertThat(response.error()).isEqualTo("agent_turn_failed");
+    }
+
+    @Test
+    void turn_rejectsUnusableReferenceDocumentsBeforeQueueing() {
+        when(documentService.canUseAsAgentReferences("ws_1", "user_1", List.of("doc_a")))
+                .thenReturn(false);
+
+        assertThatThrownBy(() -> service.turn("ws_1", "user_1", referenceRequest(List.of("doc_a"))))
+                .isInstanceOf(fruition.core.agent.exception.InvalidAgentTurnRequestException.class)
+                .hasMessage("고른 문서 중 사용할 수 없는 문서가 있습니다. 다시 골라 주세요.");
+
+        verifyNoInteractions(chatTurnRecorder, runRepository, outboxWriter);
+    }
+
+    @Test
+    void turn_sendsValidatedReferenceDocumentIdsInCommand() throws Exception {
+        when(documentService.canUseAsAgentReferences("ws_1", "user_1", List.of("doc_a", "doc_b")))
+                .thenReturn(true);
+
+        service.turn("ws_1", "user_1", referenceRequest(List.of("doc_a", "doc_b")));
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"reference_document_ids\":[\"doc_a\",\"doc_b\"]");
+    }
+
+    @Test
+    void turn_withoutReferencesSendsEmptyArrayAndSkipsLookup() throws Exception {
+        service.turn("ws_1", "user_1", referenceRequest(null));
+
+        ArgumentCaptor<AgentTurnService.AgentCommand> command =
+                ArgumentCaptor.forClass(AgentTurnService.AgentCommand.class);
+        verify(outboxWriter).enqueue(anyString(), org.mockito.ArgumentMatchers.eq("ai.agent.command"),
+                org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
+        assertThat(new ObjectMapper().writeValueAsString(command.getValue()))
+                .contains("\"reference_document_ids\":[]");
+        verify(documentService, org.mockito.Mockito.never())
+                .canUseAsAgentReferences(anyString(), anyString(), org.mockito.ArgumentMatchers.any());
+    }
+
+    private AgentTurnRequest referenceRequest(List<String> referenceDocumentIds) {
+        return new AgentTurnRequest("session_1", null, null, "참고해서 답해줘", "openai", "gpt-6-luna",
+                null, "auto", null, null, List.of(), List.of(), List.of(), null, null, null, null, null,
+                referenceDocumentIds);
     }
 
     private AgentTurnRequest request(String type, int startLine, int endLine) {

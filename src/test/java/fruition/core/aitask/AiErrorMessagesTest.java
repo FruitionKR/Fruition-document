@@ -20,6 +20,12 @@ class AiErrorMessagesTest {
     }
 
     @Test
+    void purgedDocumentCodesExplainPermanentDeletion() {
+        assertThat(AiErrorMessages.agent("document_purged")).contains("영구 삭제");
+        assertThat(AiErrorMessages.agent("rollback_document_purged")).contains("영구 삭제");
+    }
+
+    @Test
     void explicitEntryWinsOverPrefixRule() {
         // rollback_failed·rollback_child_failed는 개별 항목, rollback_other는 접두사 규칙으로 풀린다.
         assertThat(AiErrorMessages.agent("rollback_failed")).contains("되돌리지");

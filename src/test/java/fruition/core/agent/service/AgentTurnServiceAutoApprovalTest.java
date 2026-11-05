@@ -151,6 +151,30 @@ class AgentTurnServiceAutoApprovalTest {
         verify(workspaceAccessGuard).requireMember("ws_1", "user_1");
     }
 
+    /** 승인 대기로 오래 남아도 계획 단계 사용량이 보이게 plan-ready에서 수집한다. 자동 승인 여부와 무관하다. */
+    @Test
+    void planReadyCollectsPlanningCallsEvenWhenPlanStaysAwaitingApproval() {
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", RUN_ID)).thenReturn(awaiting);
+        when(autoApproval.decide("ws_1", "user_1", awaiting))
+                .thenReturn(new AgentAutoApprovalPolicy.Decision(false, "disabled", 0, null));
+
+        service.autoApprove("ws_1", "user_1", RUN_ID);
+
+        verify(usageCharges).collectAgentPlan(RUN_ID);
+    }
+
+    /** 화면 폴링은 승인 대기 중 반복되므로 수집 대기열에 넣지 않는다. */
+    @Test
+    void pollingAwaitingPlanDoesNotQueueCollection() {
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", RUN_ID)).thenReturn(awaiting);
+        when(autoApproval.decide("ws_1", "user_1", awaiting))
+                .thenReturn(new AgentAutoApprovalPolicy.Decision(false, "disabled", 0, null));
+
+        service.getRun("ws_1", "user_1", RUN_ID);
+
+        verify(usageCharges, never()).collectAgentPlan(anyString());
+    }
+
     /** 사용자가 직접 승인하면 승인 주체를 싣지 않는다(ai-svc 기본값 user). */
     @Test
     void manualApprovalDoesNotClaimAutoApproval() {

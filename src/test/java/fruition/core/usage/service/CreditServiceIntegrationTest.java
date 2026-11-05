@@ -476,9 +476,9 @@ class CreditServiceIntegrationTest {
         assertThat(credits(true).credits(user).reservedKrwMilli()).isEqualTo(500_000);
 
         // 진행 중에는 닫지 않고, 끝난 상태가 오면 닫아 정산 대기열에 넣는다.
-        charges.endAutonomousRunIfTerminal(runId, mapper.readTree("{\"status\":\"executing\"}"));
+        charges.endAutonomousRunIfTerminal(runId, "ws-1", user, mapper.readTree("{\"status\":\"executing\"}"));
         assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, runId)).isEqualTo("running");
-        charges.endAutonomousRunIfTerminal(runId, mapper.readTree("{\"status\":\"completed\"}"));
+        charges.endAutonomousRunIfTerminal(runId, "ws-1", user, mapper.readTree("{\"status\":\"completed\"}"));
         assertThat(jdbc.queryForObject("SELECT status FROM ai_task_runs WHERE id = ?", String.class, runId)).isEqualTo("completed");
         charge(runId, 120_000);
         credits(true).settle(runId);
@@ -505,7 +505,7 @@ class CreditServiceIntegrationTest {
         grant(1_000_000);
         var charges = charges(credits(true), "http://127.0.0.1:1/unused");
         charges.reserveAutonomousRun(runId, "ws-1", user);
-        charges.endAutonomousRun(runId);
+        charges.endAutonomousRun(runId, "ws-1", user);
         credits(true).settle(runId);
         charges.reserveAutonomousRun(runId, "ws-1", user);
         assertThat(credits(true).credits(user).reservedKrwMilli()).isZero();
@@ -536,7 +536,7 @@ class CreditServiceIntegrationTest {
         grant(600_000);
         charges.reserveAutonomousRun(runId, "ws-1", user);
         assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(500_000);
-        charges.endAutonomousRun(runId);
+        charges.endAutonomousRun(runId, "ws-1", user);
         credits.settle(runId);
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
         assertLedgerMatchesAccount();
@@ -558,7 +558,7 @@ class CreditServiceIntegrationTest {
         // 이어서 승인하면 실행이 다시 진행 중으로 갱신되고 새로 예약한다. 그 예약도 종료 정산이 푼다.
         charges.reserveAutonomousRun(runId, "ws-1", user);
         assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(500_000);
-        charges.endAutonomousRun(runId);
+        charges.endAutonomousRun(runId, "ws-1", user);
         credits.settle(runId);
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
         assertLedgerMatchesAccount();

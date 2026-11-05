@@ -5,13 +5,14 @@
 사용자용 Agent 실행·승인과 내부 Tool 실행 API다. Agent turn은 Kafka `ai.agent.command`,
 계획 조회·승인·거절·취소·수정은 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 16
+- API 수: 17
 
 ## API 목차
 
 | API | 목적 |
 |---|---|
 | [`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}`](#summary-get-api-workspaces-workspace-id-agent-runs-run-id) | 자율 AgentRun 계획과 실행 상태를 조회합니다. |
+| [`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`](#summary-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews) | 첨부 문서 수정 계획의 문서별 변경을 조회합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/approve`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-approve) | 현재 AgentRun 계획을 승인합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/cancel`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-cancel) | 현재 AgentRun을 취소합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/reject`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-reject) | 현재 AgentRun 계획을 거절합니다. |
@@ -44,7 +45,8 @@ AgentRun 계획은 기본적으로 사용자가 승인 화면에서 승인해야
 - **판단 시점·위치(서버)**: ai-svc worker가 계획을 승인 대기로 저장하면 `POST /internal/agent/runs/{run_id}/plan-ready`로 알리고,
   document-svc가 그 시점의 설정을 읽어 판단한다. 알림이 실패해도 `GET .../agent/runs/{run_id}` 조회 때 같은 판단을 다시 한다.
 - **조건**: 계획의 모든 작업이 켜진 분류에 속하고, AI 검토 경고(`warning`)나 기본 선택 제외(`suggested_selected=false`)가 없으며,
-  요청자가 모든 대상 문서·폴더와 옮길 위치를 편집할 수 있어야 한다. 하나라도 어긋나면 승인 대기로 남는다.
+  요청자가 모든 대상 문서·폴더를 편집할 수 있고, 다른 폴더로 옮기면 출발 폴더와 옮길 위치도 편집할 수 있어야 한다(같은 폴더 안 순서 변경은 대상만 본다,
+  [폴더에 넣기·꺼내기](documents/README.md#폴더에-넣기꺼내기)). 하나라도 어긋나면 승인 대기로 남는다.
 - **권한**: 자동 승인은 확인 단계만 건너뛴다. 실행 때 도구별 권한 검사(`/internal/agent/tools/execute/*`)는 그대로다.
 - **크레딧**: 사용자 승인과 같은 경로로 예약한다. 크레딧이 부족하거나 그 사이 계획이 바뀌었으면 자동 승인을 포기하고 승인 대기로 둔다.
 - **감사 기록**: ai-svc `agent_approvals.approved_by`에 `auto:user-setting`(사용자 직접 승인은 `user`)이 남고,
@@ -159,6 +161,123 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-runs-run-id)
+
+</details>
+
+<a id="summary-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews"></a>
+### `GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 첨부 문서 수정 계획의 문서별 변경을 조회합니다. |
+| 입력 | **Path** — `workspace_id`: `string`, `run_id`: `string` |
+| 출력 | `200` 성공 — `AgentRunEditPreviewsResponse` |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다.<br>요청자의 run만 볼 수 있다(ai-svc가 `user_id`로 가른다). |
+| 주요 오류 | `401` 인증 실패<br>`404` 워크스페이스 멤버가 아니거나, run이 없거나 다른 사용자의 run, ai-svc가 이 API를 아직 제공하지 않음<br>`503` ai-svc 오류·깨진 응답 |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews"></a>
+### `GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews` 상세
+
+#### 1. Method + Path
+
+`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`
+
+#### 2. 목적
+
+첨부 문서 수정 계획의 문서별 변경을 조회합니다. ai-svc `GET /agent/runs/{run_id}/edit-previews`를 호출하고, 문서마다 지금 읽을 수 있는지 다시 확인해 읽을 수 없거나 삭제된 문서를 뺀 뒤, `display_name`을 현재 제목으로 덮어 돌려준다.
+
+#### 3. Auth 필요 여부
+
+- 필요
+- `Authorization: Bearer <access_token>`을 검증한다.
+
+#### 4. Request body
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| path | `workspace_id` | `string` | 예 | - |
+| path | `run_id` | `string` | 예 | - |
+
+- Body: 없음
+
+#### 5. Response body
+
+- HTTP `200`: OK
+- Content-Type: `*/*` (`AgentRunEditPreviewsResponse`)
+
+```json
+{
+  "items": [
+    {
+      "operation_id": "op_1",
+      "document_id": "doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83",
+      "display_name": "주간 회의록",
+      "base_version": 3,
+      "summary": "결론 문단을 고칩니다.",
+      "added_lines": 1,
+      "removed_lines": 1,
+      "hunks": [
+        {
+          "before_start": 10,
+          "after_start": 10,
+          "lines": [
+            { "type": "context", "text": "## 결론" },
+            { "type": "delete", "text": "다음 주에 정한다." },
+            { "type": "insert", "text": "이번 주에 정한다." }
+          ]
+        }
+      ]
+    }
+  ],
+  "expires_at": "2026-11-05T09:00:00Z"
+}
+```
+
+| 이름 | 타입 | 설명 |
+|---|---|---|
+| `items[].operation_id` | `string` | 계획의 작업 ID. 부분 승인의 `operation_ids`에 쓴다 |
+| `items[].display_name` | `string` | 문서의 현재 제목 |
+| `items[].base_version` | `integer` | 편집안의 기준 편집 revision |
+| `items[].hunks[].lines[].type` | `string` | `context`·`delete`·`insert` |
+| `expires_at` | `string` \| `null` | 편집안 만료 시각. 지나면 수락할 수 없다 |
+
+- 일부 문서가 빠져도 오류가 아니다. 왜 빠졌는지는 알려 주지 않는다. 보기 권한 문서는 빠지지 않는다(저장 때 편집 권한으로 막힌다).
+- 문서 내용이 담긴 응답이라 document-svc는 본문과 ai-svc의 오류 본문을 로그·오류 응답에 남기지 않는다.
+
+#### 6. Error response
+
+- HTTP `401`: 인증 실패
+- HTTP `404`: 워크스페이스 멤버가 아니거나, run이 없거나 다른 사용자의 run이다. ai-svc의 404를 그대로 돌려주므로 ai-svc 배포 전에도 404다
+- HTTP `503`: ai-svc 오류·깨진 응답
+
+#### 7. Pagination / filtering
+
+- 페이지네이션: 지원하지 않음
+- 필터링: 지원하지 않음
+
+#### 8. 권한 규칙
+
+- 인증된 사용자만 호출할 수 있다.
+- path의 `workspace_id`에 대한 활성 멤버십을 검증한다.
+- 문서마다 현재 읽기 권한을 확인한다.
+
+#### 9. 예시 요청/응답
+
+```bash
+curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent/runs/<value>/edit-previews" \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+#### 10. 구현 파일
+
+- 진입점: `src/main/java/fruition/core/agent/controller/AgentTurnController.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: getEditPreviews`)
+- 하위 호출: ai-svc `GET ${AGENT_RUN_ENDPOINT}/{runId}/edit-previews` (`PipelineAgentRunStatusRequester`, `X-Agent-Service-Token`)
+
+[↑ 요약으로 돌아가기](#summary-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews)
 
 </details>
 
@@ -554,7 +673,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 | 입력 | **Path** — `workspace_id`: `string`<br>**Body** — `AgentTurnRequest` |
 | 출력 | `202` Agent 실행이 대기열에 등록됨 — `AgentTurnResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`423` 다른 사용자가 문서를 편집 중 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 요청 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`402` 크레딧 부족(`app.billing.enforce`) — `ErrorResponse`<br>`423` 다른 사용자가 열린 문서를 편집 중(`DOCUMENT_EDIT_LOCKED`, `error.locked_document_name`에 제목) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -578,11 +697,12 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 모두 생략하며, 적용할 대상이 없어 AI는 답변·되물음만 낸다. 셋은 함께 있거나 함께 없어야 하고
 하나만 오면 `400`이다.
 
-작업 탭에서 보내는 턴은 `"mode": "task"`를 넣는다. 이때 AI는 위키 질문 답변(`chat_answer`)·대화
-답변(`conversation_reply`)을 고르지 않고 문서 편집·새 문서·폴더 정리·워크플로·Skill·되물음(`clarify`)
-중에서만 고른다. 위키 질문처럼 보이면 채팅 탭에서 질문하라는 `clarify`를 돌려준다. 열린 문서가 없어도
-받으므로 폴더 정리·폴더 Skill은 문서 없이 실행되고, 문서 편집이 필요한데 문서가 없으면 문서를 열어
-달라는 `clarify`가 나온다. `mode`를 생략하면 기존 동작이며, `task` 외의 값은 `400`이다.
+작업 탭에서 보내는 턴은 `"mode": "task"`를 넣는다. 첨부(`reference_document_ids`)가 없으면 AI는 위키 질문
+답변(`chat_answer`)·대화 답변(`conversation_reply`)을 고르지 않고 문서 편집·새 문서·폴더 정리·워크플로·Skill·
+되물음(`clarify`) 중에서만 고르며, 위키 질문처럼 보이면 채팅 탭에서 질문하라는 `clarify`를 돌려준다. 첨부가
+있으면 답변도 고를 수 있어 첨부 문서를 근거로 답한다. 열린 문서가 없어도 받으므로 폴더 정리·폴더 Skill은
+문서 없이 실행되고, 문서 편집이 필요한데 문서가 없으면 문서를 열어 달라는 `clarify`가 나온다. `mode`를
+생략하면 기존 동작이며, `task` 외의 값은 `400`이다.
 document-svc는 `mode`를 ai command의 `mode` 키로 그대로 전달한다(생략 시 키 자체를 싣지 않는다).
 
 작업 대상 폴더는 `folder_id`로 보낸다. 폴더 정리의 범위이자 새 문서를 둘 위치다. 생략하면 대상 폴더를
@@ -592,6 +712,21 @@ document-svc는 `mode`를 ai command의 `mode` 키로 그대로 전달한다(생
 document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 시 키 자체를 싣지 않는다), 턴 기록
 (`agent_apply_projections.folder_id`)에 남겨 턴 생성·조회 응답의 `folder_id`로 돌려준다.
 새 문서 초안(`markdown_create`)은 클라이언트가 이 `folder_id`로 문서를 만든다.
+
+보기 권한 문서를 연 채 보낸 요청은 편집 문맥(`documentId`) 없이 나가므로 그 문서를 `read_only_document_id`로 함께 보낸다.
+document-svc는 클라이언트 값을 믿지 않고, 이 워크스페이스의 삭제되지 않은 문서이고 요청 사용자가 읽을 수 있으면서 편집은 못 할 때만
+assistant 메시지(`chat_messages.read_only_document_id`)에 남겨 [메시지 조회](chat.md) 응답으로 돌려준다. 없는 문서, 다른 워크스페이스 문서, 삭제된 문서,
+편집 가능한 문서, 형식 오류(문자열이 아닌 값 포함), `documentId`와 함께 온 값은 오류 없이 무시하고 턴 응답도 같아 존재 여부가 드러나지 않는다.
+안내 표시에만 쓰고 권한 판단에 쓰지 않으며, ai command에 싣지 않는다.
+
+참고 문서를 붙이려면 `reference_document_ids`에 문서 ID를 최대 3개 보낸다. 문서를 열지 않은 턴에도, `documentId`와 함께도 보낼 수 있고 편집 권한은 요구하지 않는다.
+중복과 `documentId`와 같은 ID는 서버가 뺀 뒤 개수를 센다. 빈 문자열이나 중복 제거 뒤 3개 초과는 `400`이다.
+요청 사용자가 읽을 수 있는 이 워크스페이스의 삭제되지 않은 Markdown 문서(`document_role=EDITABLE`)만 받는다. 저장한 회의록, 채팅 내보내기 문서, 변환이 끝난 PDF 변환본, 보기 권한 문서는 통과한다.
+PDF 원본(`document_role=ORIGINAL`)과 변환 중이거나 첫 batch 전에 실패해 본문이 안내 문구뿐인 변환본은 거절한다.
+하나라도 어긋나면 조용히 빼지 않고 요청 전체를 `400 INVALID_REQUEST`("고른 문서 중 사용할 수 없는 문서가 있습니다. 다시 골라 주세요.")로 거절한다. 사유를 나누지 않아 존재 여부가 드러나지 않는다.
+document-svc는 검증한 ID를 ai command의 `reference_document_ids`로 전달하고(없으면 빈 배열) 본문은 싣지 않는다. AI는 [`POST /internal/agent/skill-authoring/references/read`](skills.md#detail-post-internal-agent-skill-authoring-references-read)로 본문을 읽는다. 채팅 메시지에는 저장하지 않는다.
+
+document-svc는 소유권을 확인할 때 읽은 세션 제목으로 ai command의 `session_title_needed`를 정한다. 제목이 비었거나 `새 채팅`이면 `true`, 그 밖에는 `false`이고, `false`면 AI가 제목을 만들지 않는다. 판단 기준은 `session_title` 결과를 저장하는 조건과 같다.
 
 열린 문서에서 저장·반영을 명시한 편집 요청은 `workspace_workflow` AgentRun으로 전환한다.
 이때 편집 대상 문서와 기준 버전을 계획에 고정하고,
@@ -622,6 +757,8 @@ document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 
 | body | `editorSnapshot` | `object` | 아니오 | 편집 시작 시점의 에디터 상태 |
 | body | `mode` | `string` | 아니오 | `task`(작업 탭 턴)만 허용. 생략하면 기존 동작 |
 | body | `folder_id` | `string(uuid)` | 아니오 | 작업 대상 폴더(폴더 정리 범위·새 문서 위치). 생략하면 루트·워크스페이스 전체 |
+| body | `read_only_document_id` | `string` | 아니오 | 보기 권한 문서를 연 채 보낸 요청의 그 문서. 서버가 확인해 맞을 때만 메시지에 남기고 틀린 값은 무시한다(`400` 없음). AI로 보내지 않는다 |
+| body | `reference_document_ids` | `string[]` | 아니오 | 참고할 문서(최대 3개). 읽을 수 있는 이 워크스페이스의 Markdown 문서만 받고, 하나라도 어긋나면 요청 전체가 `400`이다. 중복과 `documentId`와 같은 ID는 서버가 뺀다 |
 | body | `allow_web_search` | `boolean` | 아니오 | Query와 웹 근거 기반 새 문서 생성에서 웹 검색을 허용할지. 편집·Skill 갈래에는 영향이 없다 |
 | body | `conversationContext.selected_pair_ids` | `string[]` | 아니오 | 맥락으로 쓸 문답 ID(최대 20개). 비우면 세션의 최근 완결 문답을 쓴다 |
 | body | `conversationContext.pendingSkillProposal` | `object` | 아니오 | 채팅에서 "게시"를 기다리는 Skill 제안. 필드는 snake_case(`scope_type`, `name`, `description`, `instructions_markdown`, `capabilities`, `allowed_tools`, `requires_source`)이고 ai command의 `conversation_context.pending_skill_proposal`로 그대로 옮긴다 |
@@ -709,7 +846,7 @@ document-svc는 이 값을 ai command의 `folder_id` 키로 전달하고(생략 
 | `400` | 잘못된 요청 | `ErrorResponse` |
 | `402` | 크레딧 부족(`app.billing.enforce`, `INSUFFICIENT_CREDIT`) | `ErrorResponse` |
 | `404` | 문서·대상 폴더(`folder_id`) 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
-| `423` | 다른 사용자가 문서를 편집 중 | `ErrorResponse` |
+| `423` | 다른 사용자가 열린 문서(`documentId`)를 편집 중(`DOCUMENT_EDIT_LOCKED`). 첨부 문서를 고치는 요청도 열린 문서가 잠기면 거절된다. `error.locked_document_name`에 잠긴 문서의 제목이 오며, 요청자가 읽을 수 없으면 키가 빠진다. 다른 API의 423에는 이 키가 없다 | `ErrorResponse` |
 
 ```json
 {
@@ -1413,7 +1550,17 @@ curl -X POST "$DOCUMENT/internal/agent/skill-execution/folder-sources/read" \
 
 - HTTP `401`: Agent 서비스 인증 토큰 누락 또는 불일치
 
-- 명세에 별도 오류 응답이 정의되어 있지 않다.
+`apply_document_edit`:
+
+| 상황 | 결과 |
+|---|---|
+| 기준 revision이 지났고 안 겹침 | `200`, 자동 병합(`merge.status=merged`) |
+| 겹치거나 기준 버전 스냅샷이 없음 | `409` `DOCUMENT_VERSION_CONFLICT`. 덮어쓰지 않는다(ADR 0032의 예외). 적용 표는 `consumed`, 감사 로그는 `conflict`로 남는다 |
+| 다른 사람이 편집 중 | `423` `DOCUMENT_EDIT_LOCKED`. 적용 표는 `ready`, 감사 로그는 만들지 않는다 |
+| 편집 권한 없음 | `403` |
+| 문서 없음·삭제됨 | `404` |
+| 변환 중 | `409` `DOCUMENT_ALREADY_PROCESSING` |
+| `chat_export` 문서 | `400` |
 
 #### 7. Pagination / filtering
 
@@ -1620,7 +1767,7 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 - 상태: `charged` 금액 확정. `unpriced` 단가·환율·정책이 없어 금액을 비워 두고 합계에서 뺀다(0원으로 넘기지 않음, 경고 로그). `needs_review` 0원이며 경고 로그를 남긴다. 대상은 `succeeded`·`cancelled`(스트림을 중간에 멈췄지만 usage가 남은 호출)·`failed`·`abandoned`(실패·중단했지만 공급사가 받은 사용량이 남은 호출, ADR-0027)가 아닌 호출(`unknown` 등)과, 청구 대상 상태지만 입력·출력 토큰·`audio_seconds`·`input_characters`를 모두 모르는 호출(공급사가 usage를 주지 않음, #98), 그리고 토큰 없이 글자 수만 있는 `cancelled`·`failed`·`abandoned` 합성 호출(글자 수는 요청 전에 적히므로 받은 사용량이 아님)이다. AI에서 아직 `started`인 호출은 청구 행을 만들지 않으며, 실행 단위 수집(`collectRun`)은 이를 만나면 정산하지 않고 실패로 처리해 수집 대기열 재시도(1·4·9…분 백오프)가 다시 가져온다. 그동안 크레딧 예약은 유지된다. ai가 1시간 넘게 `started`인 호출을 `abandoned`로 닫으므로 늦어도 약 1.5시간 안에 정산된다.
 - 같은 호출(AI 원장 `id` = `call_id` UNIQUE)은 여러 번 수집해도 한 행이다. `charged` 행은 다시 계산하지 않아 단가가 바뀌어도 이전 청구가 변하지 않는다. `unpriced`·`needs_review` 행은 다시 수집하거나 재계산 작업이 갱신한다.
 - 재계산(#99): 매시간(`app.usage-charge.recompute-interval-ms`, 기본 1시간) 최근 90일의 `succeeded`·`cancelled`·`failed`·`abandoned` 호출 중 `unpriced`·`needs_review` 행을 AI 원장을 다시 조회하지 않고 `usage_charges`에 저장된 사용량으로 같은 규칙에 따라 다시 계산한다. `charged` 행은 건드리지 않는다. 500행씩 `FOR UPDATE SKIP LOCKED`로 잠가 여러 Pod가 같은 행을 동시에 계산하지 않는다. 새로 `charged`가 된 행의 실행은 커밋 뒤 수집과 같은 크레딧 정산(`CreditService.settle`)으로 차감한다. V69 이전 행은 `requested_model`이 없어 응답 모델 단가로만 찾는다.
-- 수집: 비동기 실행은 결과 반영(`beginResult`)과 같은 트랜잭션에, PDF 변환은 완료(`AiCommandOutboxWriter.complete`)나 재시도 소진 실패와 같은 트랜잭션에, 동기 호출은 호출이 끝난 뒤(실패 포함) run_id를 `usage_collect_queue`에 넣는다. 실패한 동기 호출과 재시도를 다 쓴 변환은 `ai_task_runs.status`를 `failed`로 닫는다. worker가 `FOR UPDATE SKIP LOCKED`로 하나씩 선점해 AI `GET ${MODEL_USAGE_CALLS_ENDPOINT}?run_id=`(`X-Internal-Token`)로 가져온다. 실패하면 시도 횟수의 제곱(분)만큼 늦춰 최대 10번 재시도한다. 대사 작업이 하루 주기로 커서(`usage_reconcile_cursor`)부터 1시간 전까지를 하루치씩 `?finished_from=&finished_to=`로 다시 조회해 빠진 호출(늦게 커밋됨·취소된 실행·수집 포기)을 채운다. 대사 트랜잭션에는 청구 행 기록과 커서 갱신만 두고, 크레딧 정산은 커밋한 뒤 실행별로 한다. 값을 해석할 수 없는 호출 1건(시각 형식 오류 등)은 오류 로그를 남기고 건너뛴다.
+- 수집: 비동기 실행은 결과 반영(`beginResult`)과 같은 트랜잭션에, PDF 변환은 완료(`AiCommandOutboxWriter.complete`)나 재시도 소진 실패와 같은 트랜잭션에, 동기 호출은 호출이 끝난 뒤(실패 포함) run_id를 `usage_collect_queue`에 넣는다. AgentRun은 크레딧 정산 설정(`app.billing.enforce`)과 관계없이 계획이 승인 대기에 들어갈 때(ai-svc의 `plan-ready`)와 이 서비스가 끝난 상태를 볼 때 넣는다(아래 크레딧 절). 이미 대기 중인 AgentRun을 다시 넣으면 미룬 시각과 시도 횟수를 되돌리고, 수집 중에 다시 넣었으면 그 수집이 끝나도 행을 지우지 않아 다음 수집이 다시 가져온다. 실패한 동기 호출과 재시도를 다 쓴 변환은 `ai_task_runs.status`를 `failed`로 닫는다. worker가 `FOR UPDATE SKIP LOCKED`로 하나씩 선점해 AI `GET ${MODEL_USAGE_CALLS_ENDPOINT}?run_id=`(`X-Internal-Token`)로 가져온다. 실패하면 시도 횟수의 제곱(분)만큼 늦춰 최대 10번 재시도한다. 대사 작업이 하루 주기로 커서(`usage_reconcile_cursor`)부터 1시간 전까지를 하루치씩 `?finished_from=&finished_to=`로 다시 조회해 빠진 호출(늦게 커밋됨·취소된 실행·수집 포기)을 채운다. 대사 트랜잭션에는 청구 행 기록과 커서 갱신만 두고, 크레딧 정산은 커밋한 뒤 실행별로 한다. 값을 해석할 수 없는 호출 1건(시각 형식 오류 등)은 오류 로그를 남기고 건너뛴다.
 - 청구 사용자: 실행을 예약한 사용자(`ai_task_runs.user_id`)다. 실행 행이 없을 때만 AI 원장의 `user_id`를 쓰므로, AI가 사용자를 몰라 `unattributed`로 남긴 호출도 실행자에게 청구된다.
 - 동기 AI 호출의 run_id: 실행 ID가 없는 회의록 초안·녹음 파일 전사·음성 전사·실시간 전사는 호출마다 `ai_task_runs`에 실행(`kind:uuid`)을 등록하고, ai-svc 계약대로 **`X-Request-Id` 헤더**로 run_id를 보낸다. `workspace_id`·`user_id`는 기존처럼 본문 또는 query로 보낸다. run_id를 본문·query에 넣으면 ai-svc가 버리거나(`unattributed`로 기록) 정의되지 않은 필드로 보고 422로 거부한다. Skill은 기존 run_id를 쓴다.
 - 회의록 초안(`POST /meeting-notes/preview`) 요청 본문에는 워크스페이스에 설정된 AI 모델(`WorkspaceAiModelClient.get(workspaceId)`)의 `provider`·`model` 문자열을 항상 넣는다. ai-svc는 둘이 없으면 422로 거부한다.
@@ -1647,7 +1794,7 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 - 사전 승인: AI 요청 전에 계정 행을 `FOR UPDATE`로 잠그고 가용 잔액(잔액 − 진행 중인 예약)을 확인한 뒤 `reserve`로 기록한다. 예약 금액은 kind별 예상 상한(`app.billing.estimate.<kind>`, 없으면 `app.billing.default-estimate-krw-milli`)이되 enforce에서는 가용 잔액을 넘지 않는다(아래). 비동기 작업은 `AiCommandOutboxWriter.begin`·`reserve`(outbox 저장과 같은 트랜잭션), 동기 호출(Skill·회의록 초안·녹음 파일 전사·음성 전사)은 `AiTaskCancellationService.register`, 실시간 전사는 연결 시작에서 예약한다. 같은 실행은 한 번만 예약한다. 사용자가 없는 시스템 정리 command(`document_deleted`)는 `user_id`가 없어 예약 경로에 들어오지 않는다. 사용자 없는 AI 요청이 예약 경로에 오면 enforce에서는 예약하지 않고 오류로 거절한다(enforce가 꺼져 있으면 예전처럼 건너뛴다).
 - `app.billing.enforce`(기본 false, 환경변수 `BILLING_ENFORCE`)가 true일 때만 거절한다(ADR-0029). 가용 잔액이 그 kind의 **최저 비용**보다 작으면 AI 요청 전에 `402 INSUFFICIENT_CREDIT`("크레딧이 부족해 작업을 시작하지 않았습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.")로 거절하고 작업 등록도 롤백한다. 통과하면 `min(예상 상한, 가용 잔액)`을 예약한다. 가용 잔액이 0이거나 음수이면(마이너스 잔액 포함) 항상 거절이다. 최저 비용은 `app.billing.minimum.<kind>`(milli-KRW)이고 설정이 없으면 그 kind 예상 상한의 10%(최소 1)다. 비동기 회의록 초안은 `failed`/`INSUFFICIENT_CREDIT`, 녹음 파일 전사는 실패 사유(같은 문구), 실시간 전사는 `insufficient_credit` 오류 후 close `1008`로 알린다. false면 거절하지 않고 상한 전체를 예약·정산만 기록한다(실사용자 환경에서만 true로 켠다).
 - 거절 대상 진입점: Query(`query/runs`·동기 query), Agent 턴, Agent 계획 수정(`revise`)·승인(`approve`), 문서 ingest(수동 재처리·변환 뒤 자동 ingest), 변환(`convert`), lint, `restore_*`, Skill 작성·게시·수정, 회의록 초안, 회의 녹음 파일 전사, 음성 전사, 실시간 전사 시작·구간 갱신.
-- Agent 계획 수정·승인(`revise`·`approve`): path의 `run_id`는 ai-svc가 턴 처리 뒤 새로 만든 AgentRun id(uuid)이며 처음 요청의 turn id(`agent_…`)와 다르다. enforce에서 전달 전에 이 id를 `agent_run` 실행으로 `ai_task_runs`에 등록하고(`app.billing.estimate.agent_run`) 처음 요청과 같은 규칙으로 가용 잔액을 확인해 예약한다. 이미 등록된 AgentRun은 구간 갱신(`renew`)과 같은 규칙으로 예약을 바꾼다. 전달 전에 먼저 AgentRun을 조회해 호출자의 것인지 확인한다(404면 등록하지 않아 남의 id를 선점하지 못한다). 이미 끝난 상태면 예약하지 않고 전달해 ai-svc가 거절하게 한다. 부족하면 ai-svc에 전달하지 않고 `402 INSUFFICIENT_CREDIT`(처음이든 이어 가는 호출이든 "크레딧이 부족해 중단했습니다. …")로 응답한다. ai-svc가 전달을 거절(409·404·503)하면 이번 시도의 예약만 푼다(키 `release:{run_id}:abort:{n}`). 실행은 닫지 않고 `running`으로 두어 다음 승인·수정이 구간 갱신으로 가용 잔액을 다시 확인하며, 종료 해제 키 `release:{run_id}`는 진짜 종료 정산용으로 남는다. 같은 AgentRun에 동시 요청이 겹쳐 한쪽이 실패하면 그 순간 열린 예약을 함께 풀 수 있다(다음 시도가 다시 확인). 승인 대기가 `app.billing.stale-reservation-hours`를 넘겨 정리 작업이 예약을 풀었더라도, 이어 가는 승인·수정이 실행의 `updated_at`을 갱신해 다시 진행 중으로 만들고 새로 예약하며 그 예약은 종료 정산이 푼다(정산의 해제 키가 이미 쓰였으면 `release:{run_id}:late:{n}`). 종료 신호는 이 서비스가 AgentRun 상태를 돌려줄 때(`GET runs/{run_id}`, `approve`·`revise`·`reject`·`cancel` 응답)의 상태(`completed`·`partial_failed`·`failed`·`conflicted`·`rejected`·`cancelled`·`rollback_failed`)뿐이며, 그때 실행을 닫아 수집·정산 대기열에 넣는다. 사용자가 상태를 더 조회하지 않으면 종료를 알 수 없어 하루 단위 대사와 `app.billing.stale-reservation-hours`(기본 48시간) 정리가 정산한다. AgentRun의 사용량은 ai-svc 원장에 AgentRun id를 run_id로 남는다(agent_worker). 처음 계획 생성 호출은 승인·수정 전이라 이 예약에 포함되지 않고 대사가 차감한다. enforce가 꺼져 있으면 등록·예약을 하지 않는다.
+- Agent 계획 수정·승인(`revise`·`approve`): path의 `run_id`는 ai-svc가 턴 처리 뒤 새로 만든 AgentRun id(uuid)이며 처음 요청의 turn id(`agent_…`)와 다르다. enforce에서 전달 전에 이 id를 `agent_run` 실행으로 `ai_task_runs`에 등록하고(`app.billing.estimate.agent_run`) 처음 요청과 같은 규칙으로 가용 잔액을 확인해 예약한다. 이미 등록된 AgentRun은 구간 갱신(`renew`)과 같은 규칙으로 예약을 바꾼다. 전달 전에 먼저 AgentRun을 조회해 호출자의 것인지 확인한다(404면 등록하지 않아 남의 id를 선점하지 못한다). 이미 끝난 상태면 예약하지 않고 전달해 ai-svc가 거절하게 한다. 부족하면 ai-svc에 전달하지 않고 `402 INSUFFICIENT_CREDIT`(처음이든 이어 가는 호출이든 "크레딧이 부족해 중단했습니다. …")로 응답한다. ai-svc가 전달을 거절(409·404·503)하면 이번 시도의 예약만 푼다(키 `release:{run_id}:abort:{n}`). 실행은 닫지 않고 `running`으로 두어 다음 승인·수정이 구간 갱신으로 가용 잔액을 다시 확인하며, 종료 해제 키 `release:{run_id}`는 진짜 종료 정산용으로 남는다. 같은 AgentRun에 동시 요청이 겹쳐 한쪽이 실패하면 그 순간 열린 예약을 함께 풀 수 있다(다음 시도가 다시 확인). 승인 대기가 `app.billing.stale-reservation-hours`를 넘겨 정리 작업이 예약을 풀었더라도, 이어 가는 승인·수정이 실행의 `updated_at`을 갱신해 다시 진행 중으로 만들고 새로 예약하며 그 예약은 종료 정산이 푼다(정산의 해제 키가 이미 쓰였으면 `release:{run_id}:late:{n}`). 종료 신호는 이 서비스가 AgentRun 상태를 돌려줄 때(`GET runs/{run_id}`, `approve`·`revise`·`reject`·`cancel` 응답)의 상태(`completed`·`partial_failed`·`failed`·`conflicted`·`rejected`·`cancelled`·`rollback_failed`)뿐이며, 그때 실행을 닫아 수집·정산 대기열에 넣는다. 예약한 적 없는 실행(enforce 꺼짐, 승인 없이 끝난 계획)은 닫힌 `agent_run` 행을 새로 만들어 같은 일을 하며, 사용 한도를 보거나 예약하지 않는다. 닫힌 실행은 다시 넣지 않는다. 사용자가 상태를 더 조회하지 않으면 종료를 알 수 없어 하루 단위 대사(늦으면 약 25시간)와 `app.billing.stale-reservation-hours`(기본 48시간) 정리가 정산한다. AgentRun의 사용량은 ai-svc 원장에 AgentRun id를 run_id로 남고 계획·실행 호출이 같은 id를 쓴다(agent_worker). 계획 호출은 승인·수정 전이라 이 예약에 포함되지 않으며, `plan-ready`에서 실행을 등록하지 않고 수집해 쓴 만큼만 차감한다(그 뒤 승인의 등록·한도 확인·예약은 그대로이고, 차감한 만큼 가용 잔액이 줄어든 상태로 확인한다). 수정 뒤 나온 계획은 실행이 진행 중이라 차감만 하고 예약은 둔다. `plan-ready`는 승인 대기에 들어갈 때만 오므로 되묻기(`clarification_required`)나 계획 실패의 호출은 종료 신호나 대사가 가져온다. 자동 승인으로 실행이 바로 이어져 수집이 진행 중 호출을 만나면 끝난 호출만 먼저 기록하고 재시도 대기에 들어가며, 종료 신호가 그 대기를 당긴다. enforce가 꺼져 있으면 승인 때 등록·예약을 하지 않지만 수집과 차감은 위와 같다(대사가 늦게 하던 차감이 앞당겨질 뿐 금액은 같다).
 - 변환(PDF) 뒤 자동 ingest: 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 푼다(변환 상한이 ingest의 가용 잔액을 줄이지 않게 한다). 자동 ingest가 크레딧 부족으로 거절되면 변환은 성공으로 두고 재시도하지 않으며 해당 문서를 `failed`로 하고 오류 메시지를 `INSUFFICIENT_CREDIT` 문구("크레딧이 부족해 작업을 시작하지 않았습니다. …")로 남긴다.
 - post_ingest(ingest 뒤 ai-svc가 `ai.maintenance.command`로 따로 돌리는 품질 평가): 성공한 ingest 결과(`ai.task.event` `ingest`)를 받으면 그 run의 사용 금액 수집·정산을 `app.billing.post-ingest-hold-seconds`(기본 900초) 뒤로 미뤄 ingest 예약이 post_ingest가 끝날 때까지 남는다. post_ingest 종료 이벤트(`ai.task.event` `post_ingest`, `request` 없음)가 오면 그 command의 호출을 바로 수집·차감하고, 이벤트 최상위의 `ingest_run_id`가 가리키는 같은 사용자·워크스페이스의 ingest 정산을 앞당긴다. 이벤트가 오지 않거나 `ingest_run_id`가 없는 이전 ai-svc 이벤트면 보류 시간이 상한이다. ingest 결과 이벤트의 최상위 불리언 `post_ingest_dispatched`가 `false`(ai가 post_ingest command를 발행하지 않음)면 기다릴 결과가 없어 보류 없이 바로 정산한다. `true`이거나 필드가 없는 이전 ai-svc 이벤트면 성공한 ingest를 보류한다(필드 없음은 배포 순서 때문에 예전 동작을 유지하는 기본값이다). post_ingest 종료 이벤트가 ingest 결과보다 먼저 오면 `ai_task_result_receipts`에 `post_ingest_done:{ingest_run_id}`를 남겨 두고, 뒤늦게 온 ingest 결과는 보류하지 않고 바로 정산한다. 보류는 enforce가 켜져 있을 때만 하며 꺼져 있으면 ingest 결과를 받는 즉시 예전처럼 정산한다. post_ingest 호출은 별도 예약 없이 실제 사용 금액으로 차감한다.
 - 정산: 사용 금액 수집(위 절)이 실행의 호출을 가져오면 그 실행의 청구 합계를 `charge`로 차감하고 남은 예약을 `release`한다. 실행이 아직 진행 중(`running`·`cancel_requested`·`rolling_back`)이면 차감만 하고 예약은 둔다. 차감 키는 `charge:{run_id}:{user_id}:{누적 청구액}`, 해제 키는 `release:{run_id}`라 같은 실행을 여러 번 정산해도 같은 금액은 한 번만 반영되고, 대사가 늦게 채운 호출은 늘어난 만큼만 더 차감한다. 취소된 실행도 취소 확정 시 수집 대기열에 넣어 정산한다. `needs_review` 호출은 현재 0원이다. 재계산으로 나중에 `charged`가 된 호출도 같은 정산 경로로 늘어난 만큼 차감한다.

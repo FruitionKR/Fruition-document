@@ -14,6 +14,7 @@
 - **서버 한 곳에서 자동 병합한다.** `DocumentService.saveContentInTransaction`이 `PostgresDocumentEditStore.save`에 병합 resolver를 넘긴다. store는 문서 행 잠금 아래에서 현재 상태를 읽고, revision이 다르면 resolver가 정한 본문을 현재 revision 다음 revision으로 저장한다. 사용자 저장·이미지 포함 저장·Agent 적용(`apply_operation_id`)·Agent 도구 적용·회의록 덧붙이기가 모두 이 경로를 탄다.
 - **줄 단위 3-way merge(diff3).** 기준 본은 `base_revision`의 버전 스냅샷, 상대 본은 서버 현재 본, 내 본은 요청 본이다. 두 쪽 diff(java-diff-utils, 선형 공간 Myers)를 기준 본 위치로 맞춰, 같은 줄을 건드리거나 같은 위치에 끼워 넣은 변경을 겹침으로 본다. 바로 이웃한 줄을 각각 바꾼 것은 겹치지 않는다. 겹쳐도 두 쪽 결과가 같으면 합친다.
 - **겹치면 last-writer-wins.** 요청 본(나중에 저장한 쪽)을 그대로 저장한다. 덮어쓴 서버 본은 저장 경로가 버전 이력에 남기므로(직전 revision 스냅샷) 응답의 `merge.overwritten_version`으로 알려 주고, 버전 복원 API로 되살린다. 부분 병합(겹친 구간만 내 본)은 어느 쪽도 쓰지 않은 본문을 만들어 택하지 않았다.
+- **예외: Agent 도구 적용(`apply_document_edit`)은 겹치면 409다.** 첨부 문서 수정처럼 사용자가 보고 있지 않은 문서에는 덮어쓴 것을 알아챌 사람이 없다. 겹치거나 기준 스냅샷이 없으면 저장하지 않고 작업을 충돌로 돌려보낸다. 안 겹치면 병합은 같다.
 - **기준 스냅샷이 없으면 last-writer-wins.** `base_revision`이 현재보다 크면 병합 근거가 없어 409를 유지한다.
 - **응답.** 기존 200 응답에 `merge: {status, base_version, server_version, overwritten_version}`을 더한다. `status`는 `none`/`merged`/`overwritten`이다. `merged`·`overwritten`이면 `markdown`에 저장된 최종 본문을 담는다. `none`이면 `status`만 오고 `markdown`은 생략해 기존 클라이언트와 같다. 같은 `revision_write_id` 재전송은 요청 본 해시로 멱등을 판정하므로 처음 결과(병합본이면 `merged`와 그 본문)를 돌려준다.
 - **버전 메타.** 병합·덮어쓰기로 만든 버전에 `merge_status`(`merged`/`overwritten`)를 남긴다. `source`는 기존 규칙(`user`/`agent`/`meeting_notes`/`restore`) 그대로다.

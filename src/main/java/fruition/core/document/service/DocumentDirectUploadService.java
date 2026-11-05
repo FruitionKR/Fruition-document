@@ -31,11 +31,14 @@ public class DocumentDirectUploadService {
     private final DocumentService documents;
     private final UploadLimitService limits;
     private final ImportSessionStore importSessions;
+    private final DocumentAccessPolicy accessPolicy;
 
     public DocumentDirectUploadService(MinioClient storage, MultipartStorage multipart, StorageProperties properties,
             WorkspaceAccessGuard access, DocumentService documents, UploadLimitService limits,
-            ImportSessionStore importSessions, @Value("${app.jwt.secret}") String secret) throws Exception {
+            ImportSessionStore importSessions, DocumentAccessPolicy accessPolicy,
+            @Value("${app.jwt.secret}") String secret) throws Exception {
         this.storage = storage;
+        this.accessPolicy = accessPolicy;
         this.limits = limits;
         this.importSessions = importSessions;
         this.properties = properties;
@@ -64,6 +67,8 @@ public class DocumentDirectUploadService {
             throws Exception {
         access.requireMember(workspaceId, userId);
         var session = importSessions.resolve(workspaceId, userId, importId);
+        // 큰 파일을 다 올린 뒤에 거절하지 않도록 미리 본다. 폴더 확인과 최종 판정은 확정 때 일반 업로드 경로가 한다.
+        accessPolicy.requirePlacement(workspaceId, request.folder_id(), userId);
         String filename = request.filename();
         if (filename == null || filename.length() > 255 || !filename.toLowerCase(Locale.ROOT).endsWith(".pdf")
                 || filename.contains("/") || filename.contains("\\")
