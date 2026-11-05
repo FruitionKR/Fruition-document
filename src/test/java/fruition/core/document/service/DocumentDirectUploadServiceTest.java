@@ -24,6 +24,7 @@ class DocumentDirectUploadServiceTest {
     MultipartStorage multipart = mock(MultipartStorage.class);
     WorkspaceAccessGuard access = mock(WorkspaceAccessGuard.class);
     DocumentService documents = mock(DocumentService.class);
+    DocumentAccessPolicy accessPolicy = mock(DocumentAccessPolicy.class);
     fruition.core.imports.ImportSessionStore importSessions = mock(fruition.core.imports.ImportSessionStore.class);
     static final java.util.UUID IMPORT_ID = java.util.UUID.fromString("11111111-2222-3333-4444-555555555555");
     static final long MB = 1024L * 1024;
@@ -43,7 +44,7 @@ class DocumentDirectUploadServiceTest {
         return service(new UploadLimitService(mock(JdbcTemplate.class), true, maxPdfBytes, 5L * 1024 * MB));
     }
     DocumentDirectUploadService service(UploadLimitService limits) throws Exception {
-        return new DocumentDirectUploadService(storage, multipart, props, access, documents, limits, importSessions, SECRET);
+        return new DocumentDirectUploadService(storage, multipart, props, access, documents, limits, importSessions, accessPolicy, SECRET);
     }
     DocumentDirectUploadService.StartResponse start(long size) throws Exception {
         return uploads.start("ws_test", "user_test", new DocumentDirectUploadService.StartRequest("large.pdf", size, null));
@@ -86,6 +87,15 @@ class DocumentDirectUploadServiceTest {
         assertThatThrownBy(() -> service(limits).start("ws_test", "user_test",
                 new DocumentDirectUploadService.StartRequest("a.pdf", 5, null)))
                 .isInstanceOf(UploadLimitException.class).hasMessage("full");
+        verify(multipart, never()).start(anyString(), anyString());
+    }
+    @Test void placementIsCheckedBeforeStartingMultipart() throws Exception {
+        java.util.UUID folder = java.util.UUID.randomUUID();
+        doThrow(new fruition.core.document.exception.DocumentWriteForbiddenException("이 폴더에 넣거나 꺼낼 권한이 없습니다."))
+                .when(accessPolicy).requirePlacement("ws_test", folder, "user_test");
+        assertThatThrownBy(() -> uploads.start("ws_test", "user_test",
+                new DocumentDirectUploadService.StartRequest("a.pdf", 5, folder)))
+                .isInstanceOf(fruition.core.document.exception.DocumentWriteForbiddenException.class);
         verify(multipart, never()).start(anyString(), anyString());
     }
     @Test void assembledObjectOverCurrentCapIsRejectedEvenWithOlderTicket() throws Exception {

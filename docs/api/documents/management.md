@@ -4,6 +4,8 @@
 
 스킬 참고 문서(`origin=skill_reference`)는 이 이름 공간 밖에 있다. 참고 문서끼리만 워크스페이스 단위로 이름을 비교하며, 업로드는 같은 방식으로 번호를 붙이고 생성·이름 변경·복구 충돌은 `409 DUPLICATE_NAME`이다. 참고 문서는 Markdown만 받고 폴더에 둘 수 없다. 문서 트리·폴더 하위 목록·이름 검색·기본 목록·위키 편입에서 빠지고, `GET /documents?origin=skill_reference`로만 조회한다. 이동(`position`)은 `404`, 편입(`ingest`)은 `400`으로 거절한다. 상세 조회·본문 편집·이름 변경·삭제·복구는 일반 문서와 같고, 휴지통도 같이 쓴다. 스킬 author 요청의 `reference_document_ids`에는 일반 문서와 참고 문서를 모두 넣을 수 있다.
 
+문서 복구의 원위치 복귀는 [폴더 넣기 규칙](README.md#폴더에-넣기꺼내기)의 예외다. 삭제 뒤 폴더가 보기로 바뀌어도 문서 소유자의 복구는 원래 폴더로 돌아간다. 최상위로 보내면 삭제·복구가 꺼내기 우회가 되기 때문이다. 다른 폴더를 지정해 복구할 수는 없다.
+
 [서비스 문서](../../README.md) / [document-svc](../README.md) / [Documents](README.md)
 
 문서 목록·생성·업로드·조회와 기본 관리 API다.
@@ -188,7 +190,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Query** — `folder_id`(선택): `string`, `origin`(선택): `skill_reference`<br>**Body** — `file` |
 | 출력 | `201` 업로드 성공 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 파일 없음, 허용하지 않는 origin, 참고 문서에 폴더 지정 등 잘못된 요청 — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse`<br>`415` 지원하지 않는 확장자, 올바르지 않은 PDF 내용, 스킬 참고 문서로 올린 PDF — `ErrorResponse`<br>`500` 서버 내부 오류 — `ErrorResponse` |
+| 주요 오류 | `400` 파일 없음, 허용하지 않는 origin, 참고 문서에 폴더 지정 등 잘못된 요청 — `ErrorResponse`<br>`403` 대상 폴더를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse`<br>`415` 지원하지 않는 확장자, 올바르지 않은 PDF 내용, 스킬 참고 문서로 올린 PDF — `ErrorResponse`<br>`500` 서버 내부 오류 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -251,6 +253,7 @@ PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 파일 없음 또는 잘못된 요청. 허용하지 않는 origin, 참고 문서에 `folder_id` 지정은 `INVALID_DOCUMENT_ORIGIN` | `ErrorResponse` |
+| `403` | 대상 폴더를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") | `ErrorResponse` |
 | `404` | 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 | `ErrorResponse` |
 | `415` | 지원하지 않는 확장자, 올바르지 않은 PDF 내용, 스킬 참고 문서로 올린 PDF | `ErrorResponse` (`UNSUPPORTED_FILE_TYPE`) |
@@ -326,7 +329,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `X-Fruition-Import-Id`(선택): `string` — 가져오기 세션([Imports](../imports.md)). ticket에 묶이고 확정에도 같은 값이 필요하다<br>**Body** — `StartRequest` |
 | 출력 | `200` 티켓 발급 — `StartResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` PDF 파일명이 올바르지 않음 — `ErrorResponse`<br>`400` 크기가 0 이하 — `ErrorResponse`<br>`400 IMPORT_INVALID` `X-Fruition-Import-Id`가 열린 내 가져오기 세션이 아님 — `ErrorResponse`<br>`413` 100MB 초과(`FILE_TOO_LARGE`) 또는 내 저장 공간 5GB 초과(`STORAGE_QUOTA_EXCEEDED`) — `ErrorResponse` |
+| 주요 오류 | `400` PDF 파일명이 올바르지 않음 — `ErrorResponse`<br>`400` 크기가 0 이하 — `ErrorResponse`<br>`400 IMPORT_INVALID` `X-Fruition-Import-Id`가 열린 내 가져오기 세션이 아님 — `ErrorResponse`<br>`403` 대상 폴더를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다."). 파일을 올리기 전에 거절한다 — `ErrorResponse`<br>`413` 100MB 초과(`FILE_TOO_LARGE`) 또는 내 저장 공간 5GB 초과(`STORAGE_QUOTA_EXCEEDED`) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -383,6 +386,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 올바른 PDF 파일명이 아님 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `403` | 대상 폴더를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다."). 파일을 올리기 전에 거절한다 | `ErrorResponse` |
 | `404` | 워크스페이스를 찾을 수 없음(멤버가 아님) | `ErrorResponse` |
 | `400` | 크기가 0 이하 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
 | `413` | 100MB 초과 | `ErrorResponse` (`FILE_TOO_LARGE`) |
@@ -570,7 +574,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`(필수): `string`, `X-Fruition-Import-Id`(선택): `string` — 시작 때 ticket에 묶은 세션과 같아야 한다. 그 세션 문서(`origin=notion_import`)로 확정하고 항목 1개를 센다(자동 편입 없음)<br>**Body** — `CompleteRequest` |
 | 출력 | `201` 확정 성공 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>티켓의 사용자·워크스페이스가 요청과 같아야 하고, 활성 멤버십을 다시 검증한다. |
-| 주요 오류 | `400` 티켓 오류, 조각 크기·순서 불일치, 파일 정보 불일치 — `ErrorResponse`<br>`400 IMPORT_INVALID` 가져오기 헤더가 ticket의 세션과 다르거나 세션이 닫힘 — `ErrorResponse`<br>`403` 다른 사용자의 업로드 — `ErrorResponse`<br>`409` 전송되지 않은 조각이 있음 또는 Idempotency-Key 충돌 — `ErrorResponse`<br>`415` PDF 내용이 올바르지 않음 — `ErrorResponse` |
+| 주요 오류 | `400` 티켓 오류, 조각 크기·순서 불일치, 파일 정보 불일치 — `ErrorResponse`<br>`400 IMPORT_INVALID` 가져오기 헤더가 ticket의 세션과 다르거나 세션이 닫힘 — `ErrorResponse`<br>`403` 대상 폴더를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다."). 시작 뒤 권한이 회수된 경우 — `ErrorResponse`<br>`403` 다른 사용자의 업로드 — `ErrorResponse`<br>`409` 전송되지 않은 조각이 있음 또는 Idempotency-Key 충돌 — `ErrorResponse`<br>`415` PDF 내용이 올바르지 않음 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -631,6 +635,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 티켓 오류, 조각 크기·순서 불일치, 업로드한 파일 정보 불일치 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
+| `403` | 대상 폴더를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다."). 시작 뒤 권한이 회수된 경우 | `ErrorResponse` |
 | `403` | 다른 사용자의 업로드를 사용할 수 없음 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
 | `409` | 전송되지 않은 조각이 있음 | `ErrorResponse` (`DOCUMENT_UPLOAD_REJECTED`) |
 | `409` | Idempotency-Key 충돌 | `ErrorResponse` |
@@ -803,7 +808,7 @@ HTTP/1.1 204 No Content
 | 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`, `X-Fruition-Import-Id`(선택): `string`<br>**Body** — `MarkdownDocumentCreateRequest` |
 | 출력 | `201` 생성 성공 또는 멱등 재요청 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 본문, Idempotency-Key 또는 origin, 열린 가져오기 세션이 아님(`IMPORT_INVALID`) — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 또는 같은 이름 — `ErrorResponse`<br>`413` Markdown 5MB 초과 또는 내 저장 공간 5GB 초과(`STORAGE_QUOTA_EXCEEDED`) — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 본문, Idempotency-Key 또는 origin, 열린 가져오기 세션이 아님(`IMPORT_INVALID`) — `ErrorResponse`<br>`403` 대상 폴더를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 또는 같은 이름 — `ErrorResponse`<br>`413` Markdown 5MB 초과 또는 내 저장 공간 5GB 초과(`STORAGE_QUOTA_EXCEEDED`) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -877,6 +882,7 @@ HTTP/1.1 204 No Content
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 본문 또는 Idempotency-Key. 허용하지 않는 origin, 참고 문서에 `folder_id` 지정은 `INVALID_DOCUMENT_ORIGIN`. 열린 가져오기 세션이 아니면 `IMPORT_INVALID` | `ErrorResponse` |
+| `403` | 대상 폴더를 편집할 수 없음(`DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") | `ErrorResponse` |
 | `404` | 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 또는 같은 이름(`DUPLICATE_NAME`) | `ErrorResponse` |
 | `413` | Markdown 5MB 초과, 또는 내 저장 공간(5GB) 초과(`STORAGE_QUOTA_EXCEEDED`) | `ErrorResponse` |
@@ -1086,7 +1092,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string` |
 | 출력 | `201` 복제 성공 또는 멱등 재요청 — `DocumentDuplicateResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 편집 문서가 아님 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 원본이 있는 폴더를 편집할 수 없음(문서 소유자 예외 없음, `DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") — `ErrorResponse`<br>`403` 편집 문서가 아님 — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` Idempotency-Key 충돌 — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1141,6 +1147,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 Idempotency-Key | `ErrorResponse` |
+| `403` | 원본이 있는 폴더를 편집할 수 없음(문서 소유자 예외 없음, `DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다.") | `ErrorResponse` |
 | `403` | 편집 문서가 아님 | `ErrorResponse` |
 | `404` | 문서 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | Idempotency-Key 충돌 | `ErrorResponse` |
@@ -1213,7 +1220,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `DocumentPositionRequest` |
 | 출력 | `200` 이동 성공 또는 멱등 재요청 — `DocumentPositionResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 잘못된 위치 또는 version, 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) — `ErrorResponse`<br>`404` 문서, 대상 폴더 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) — `ErrorResponse` |
+| 주요 오류 | `400` 잘못된 위치 또는 version, 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) — `ErrorResponse`<br>`403` 다른 폴더로 옮기는데 출발 또는 대상 폴더를 편집할 수 없음(문서 소유자 예외 없음, `DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다."), 또는 문서를 편집할 수 없음("이 문서를 편집할 권한이 없습니다.") — `ErrorResponse`<br>`404` 문서, 대상 폴더 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>
@@ -1271,6 +1278,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | HTTP 상태 | 설명 | 응답 스키마 |
 |---|---|---|
 | `400` | 잘못된 위치 또는 version, 또는 INVALID_IDEMPOTENCY_KEY(멱등 키 누락/유효하지 않음) | `ErrorResponse` |
+| `403` | 다른 폴더로 옮기는데 출발 또는 대상 폴더를 편집할 수 없음(문서 소유자 예외 없음, `DOCUMENT_WRITE_FORBIDDEN`, 메시지 "이 폴더에 넣거나 꺼낼 권한이 없습니다."), 또는 문서를 편집할 수 없음("이 문서를 편집할 권한이 없습니다.") | `ErrorResponse` |
 | `404` | 문서, 대상 폴더 또는 워크스페이스를 찾을 수 없음 | `ErrorResponse` |
 | `409` | version 충돌, IDEMPOTENCY_CONFLICT(동일 키에 다른 payload 사용) 또는 IDEMPOTENCY_IN_PROGRESS(활성 lease 재사용) | `ErrorResponse` |
 

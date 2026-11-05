@@ -28,7 +28,7 @@ class DocumentMultipartStorageIntegrationTest {
             var documents = mock(DocumentService.class);
             var service = new DocumentDirectUploadService(storage, multipart, props, mock(WorkspaceAccessGuard.class), documents,
                     mock(fruition.core.upload.UploadLimitService.class), mock(fruition.core.imports.ImportSessionStore.class),
-                    "test-only-direct-upload-secret");
+                    mock(DocumentAccessPolicy.class), "test-only-direct-upload-secret");
             UUID folderId = UUID.randomUUID();
             long size = 65L * 1024 * 1024;
             var start = service.start("ws_test", "user_test", new DocumentDirectUploadService.StartRequest("large.pdf", size, folderId));
