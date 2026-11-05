@@ -1,5 +1,9 @@
 # Backend 변경 기록
 
+## 2026-11-06
+
+- `POST .../ai/tasks/{id}/cancel`이 이미 끝난(`completed`·`failed`) Agent turn을 `409`로 거절한다. `POST .../agent/turn/{id}/cancel`과 같은 조건이다. 되돌리면 완료된 답변이 `pending`으로 돌아가 세션이 잠겼다. 다른 종류의 작업은 그대로다.
+
 ## 2026-11-04
 
 - 문서 영구 삭제가 채팅 인용의 원문을 지운다. 그 문서를 가리키는 `chat_message_references.quote`를 빈 문자열로 비우고 `ai_task_changes`의 같은 행 기록도 맞춘다(V104~V106, 응답의 `references[].text`가 `""`). 여러 문서를 걸친 인용은 원문을 나눌 수 없어 함께 비우고, 살아 있는 대표 문서는 남긴다. 이전에 지운 문서의 인용은 정리 작업이 찾아 지운다. 인용 위치와 답변 본문은 그대로다.
