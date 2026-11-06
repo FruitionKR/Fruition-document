@@ -1271,7 +1271,7 @@ class AgentTurnServiceTest {
 
         assertThat(response.status()).isEqualTo("failed");
         assertThat(response.error()).isEqualTo("agent_turn_failed");
-        assertThat(response.errorMessage()).isEqualTo("Agent 처리 중 오류가 발생했습니다.");
+        assertThat(response.errorMessage()).isEqualTo("요청을 처리하다 예상하지 못한 문제가 생겨 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.");
         assertThat(response.result()).isNull();
     }
 
