@@ -1648,6 +1648,58 @@ paths:
       summary: 문서 업로드
       tags:
       - Documents
+  /api/workspaces/{workspace_id}/documents/convert-markdown:
+    post:
+      description: "선택한 PDF를 문서마다 단건 변환과 같은 경로로 변환 요청합니다. 한 문서가 거절돼도 나머지는 진행하고, 결과를 accepted와 failed로 나눠 돌려줍니다."
+      operationId: convertMarkdownBatch
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - description: 요청 멱등 키. 같은 키로 재시도하면 접수된 문서는 다시 변환하지 않는다
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentBatchConvertRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DocumentBatchConvertResponse"
+          description: 요청 처리 완료. 문서별 결과는 accepted·failed로 구분하며 모두 거절돼도 202다
+        "400":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: document_ids가 비었거나 20개를 넘음(INVALID_REQUEST) 또는 잘못된 Idempotency-Key
+        "403":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스 멤버가 아님
+        "404":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: 워크스페이스를 찾을 수 없음
+      summary: 여러 PDF Markdown 변환
+      tags:
+      - Documents
   /api/workspaces/{workspace_id}/documents/markdown:
     post:
       description: 표시 이름과 전체 Markdown 본문으로 즉시 편집 가능한 문서를 생성합니다. 다른 업로드처럼 저장 용량(5GB) 한도를 적용합니다. X-Fruition-Import-Id가 있으면 그 가져오기 세션의 문서로 만들고 자동 편입하지 않습니다.
@@ -6898,6 +6950,59 @@ components:
         content_path:
           type: string
           description: Markdown 본문에서 이 이미지를 가리키는 경로
+    DocumentBatchConvertAccepted:
+      type: object
+      properties:
+        document:
+          $ref: "#/components/schemas/DocumentUploadResponse"
+          description: 변환 결과를 담을 placeholder 문서
+        source_document_id:
+          type: string
+          description: 요청한 PDF 원본 문서 ID
+          example: doc_abc12345
+    DocumentBatchConvertFailed:
+      type: object
+      properties:
+        code:
+          type: string
+          description: 단건 변환 API와 같은 오류 코드. 분류되지 않은 오류는 CONVERT_REQUEST_FAILED다.
+          example: INVALID_DOCUMENT_CONVERT_REQUEST
+        document_id:
+          type: string
+          description: 요청한 문서 ID
+          example: doc_abc12345
+        message:
+          type: string
+          description: 사용자에게 그대로 보여도 되는 한국어 문구
+          example: PDF 원본 문서만 Markdown으로 변환할 수 있습니다.
+    DocumentBatchConvertRequest:
+      type: object
+      description: 여러 PDF의 Markdown 변환 요청.
+      properties:
+        document_ids:
+          type: array
+          description: 변환할 PDF 원본 문서 ID. 1~20개이며 중복은 한 번만 처리한다.
+          items:
+            type: string
+            minLength: 1
+          maxItems: 20
+          minItems: 0
+      required:
+      - document_ids
+    DocumentBatchConvertResponse:
+      type: object
+      description: 여러 PDF의 Markdown 변환 요청 결과. 문서마다 따로 처리해 일부만 실패할 수 있다.
+      properties:
+        accepted:
+          type: array
+          description: 변환을 접수한 문서
+          items:
+            $ref: "#/components/schemas/DocumentBatchConvertAccepted"
+        failed:
+          type: array
+          description: 변환을 접수하지 못한 문서
+          items:
+            $ref: "#/components/schemas/DocumentBatchConvertFailed"
     DocumentBlockResponse:
       type: object
       properties:

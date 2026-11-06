@@ -19,6 +19,7 @@
 | [`POST /api/workspaces/{workspace_id}/ai-operation-logs/{operation_id}/restore`](#summary-post-api-workspaces-workspace-id-ai-operation-logs-operation-id-restore) | 복구 대상에 따라 처리 방식이 다릅니다. 문서 편집 복구는 즉시 완료되어 200을 반환하고, Wiki 복구는 queued 상태로 등록되어 202를 반환합니다. 미리보기와 같은 계산을 다시 하고 Wiki에 반영합니다. 받치는 기여가 남지 않은 페이지는 삭제합니다. Source는 마지막 남은 ingest의 본문으로 복원하고, Concept는 과거 버전 유무와 관계없이 남은 활성 기여를 llmPipeline에 전달해 재작성합니다. 재작성이 있으면 status가 rebuilding으로 돌아오며 결과는 로그 상세로 확인합니다. ingest 되돌리기는 Wiki만 되돌리고 원문 문서는 건드리지 않습니다. |
 | [`GET /api/workspaces/{workspace_id}/ai-operation-logs/{operation_id}/restore-preview`](#summary-get-api-workspaces-workspace-id-ai-operation-logs-operation-id-restore-preview) | 이 작업을 되돌리면 무엇이 삭제·복원·재작성되는지 계산합니다. 지목한 작업과 그 이후 같은 문서의 작업을 전부 걷어내며, 그 과정에서 만들어진 페이지는 삭제됩니다. 문서 편집 복구는 canonical 편집 revision을 확인하며, 응답의 preview_token은 복구 실행에 그대로 전달해야 합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/{document_id}/convert-markdown`](#summary-post-api-workspaces-workspace-id-documents-document-id-convert-markdown) | PDF 원본 문서를 Markdown 문서로 변환합니다. 변환 결과를 담을 편집 가능 placeholder 문서를 즉시 만들어 반환하고, 실제 변환은 백그라운드에서 진행됩니다. |
+| [`POST /api/workspaces/{workspace_id}/documents/convert-markdown`](#summary-post-api-workspaces-workspace-id-documents-convert-markdown) | 선택한 PDF를 문서마다 단건 변환과 같은 경로로 변환 요청하고 결과를 문서별로 돌려줍니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/{document_id}/ingest`](#summary-post-api-workspaces-workspace-id-documents-document-id-ingest) | Markdown 문서를 Wiki 파이프라인에 넣습니다. 일반 문서는 최신 편집본을 원본으로 승격하고, 채팅 문서는 저장된 문답과 출처 블록을 그대로 사용합니다. |
 
 ## 한눈에 보기
@@ -1091,6 +1092,55 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-document-id-convert-markdown)
+
+</details>
+
+<a id="summary-post-api-workspaces-workspace-id-documents-convert-markdown"></a>
+### `POST /api/workspaces/{workspace_id}/documents/convert-markdown`
+
+| 항목 | 내용 |
+|---|---|
+| 목적 | 선택한 PDF를 문서마다 단건 변환과 같은 경로로 변환 요청하고 결과를 문서별로 돌려줍니다. 한 문서가 거절돼도 나머지는 진행합니다. |
+| 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Body** — `document_ids`: `string[]` (1~20개) |
+| 출력 | `202` 문서별 결과 — `DocumentBatchConvertResponse` (`accepted`, `failed`). 모두 거절돼도 `202`입니다. |
+| 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다.<br>문서별 권한·크레딧은 단건 변환과 같다. |
+| 주요 오류 | `400` `document_ids`가 비었거나 20개 초과(`INVALID_REQUEST`), 잘못된 Idempotency-Key — `ErrorResponse`<br>`403` 워크스페이스 멤버가 아님 — `ErrorResponse`<br>`404` 워크스페이스를 찾을 수 없음 — `ErrorResponse` |
+
+<details>
+<summary>상세 계약 보기</summary>
+
+<a id="detail-post-api-workspaces-workspace-id-documents-convert-markdown"></a>
+### `POST /api/workspaces/{workspace_id}/documents/convert-markdown` 상세
+
+요청:
+
+```json
+{ "document_ids": ["doc_a", "doc_b"] }
+```
+
+`202` 응답:
+
+```json
+{
+  "accepted": [
+    { "source_document_id": "doc_a", "document": { "id": "doc_placeholder", "status": "processing" } }
+  ],
+  "failed": [
+    { "document_id": "doc_b", "code": "INVALID_DOCUMENT_CONVERT_REQUEST", "message": "PDF 원본 문서만 Markdown으로 변환할 수 있습니다." }
+  ]
+}
+```
+
+- `document`는 [단건 변환](#summary-post-api-workspaces-workspace-id-documents-document-id-convert-markdown)과 같은 `DocumentUploadResponse`다. 변환 진행·실패 처리도 단건과 같다.
+- 중복 ID는 한 번만 처리한다. 20개를 넘게 선택하면 클라이언트가 나눠서 부른다.
+- `failed[].code`: `DOCUMENT_NOT_FOUND`, `INVALID_DOCUMENT_CONVERT_REQUEST`, `WORKSPACE_PERMISSION_REQUIRED`, `INSUFFICIENT_CREDIT`, `AI_USAGE_LIMIT_EXCEEDED`, `IDEMPOTENCY_IN_PROGRESS`, `CONVERT_REQUEST_FAILED`(분류되지 않은 오류).
+- 멱등: `Idempotency-Key`와 문서 ID로 문서별 키를 만든다. 같은 키로 재시도하면 접수된 문서는 저장된 응답을 돌려주고 새 변환을 만들지 않으며, 거절된 문서만 다시 시도한다. 새 선택마다 새 키를 쓴다.
+- 이미 변환한 PDF도 단건처럼 다시 변환한다(문서마다 크레딧 예약). 화면에서 `can_convert`로 대상을 거를 수 있지만, 변환 이력은 `can_convert`에 반영되지 않는다.
+- 진입점: `src/main/java/fruition/core/document/controller/DocumentController.java`
+- 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: convertMarkdownBatch`)
+- 배선 상태: 백엔드만 구현, 프론트 미배선
+
+[↑ 요약으로 돌아가기](#summary-post-api-workspaces-workspace-id-documents-convert-markdown)
 
 </details>
 

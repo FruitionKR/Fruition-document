@@ -44,6 +44,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -627,6 +628,46 @@ class DocumentControllerTest {
                 .andExpect(jsonPath("$.document_role").value("EDITABLE"));
 
         verify(documentService).convertToMarkdown(WORKSPACE_ID, USER_ID, "doc_pdf", "convert-key");
+    }
+
+    @Test
+    void convertMarkdownBatch_returns202WithPerDocumentResults() throws Exception {
+        when(documentService.convertAllToMarkdown(WORKSPACE_ID, USER_ID, java.util.List.of("doc_pdf", "doc_md"), "batch-key"))
+                .thenReturn(new fruition.core.document.dto.DocumentBatchConvertResponse(
+                        java.util.List.of(new fruition.core.document.dto.DocumentBatchConvertResponse.Accepted("doc_pdf",
+                                new DocumentUploadResponse("doc_placeholder", "보고서.md", "text/markdown", 15,
+                                        DocumentStatus.processing, null, Instant.now(), true, 1,
+                                        DocumentRole.EDITABLE, null))),
+                        java.util.List.of(new fruition.core.document.dto.DocumentBatchConvertResponse.Failed("doc_md",
+                                "INVALID_DOCUMENT_CONVERT_REQUEST", "PDF 원본 문서만 Markdown으로 변환할 수 있습니다."))));
+
+        mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/documents/convert-markdown")
+                        .header("Authorization", bearerToken())
+                        .header("Idempotency-Key", "batch-key")
+                        .contentType("application/json")
+                        .content("""
+                                {"document_ids":["doc_pdf","doc_md"]}
+                                """))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.accepted[0].source_document_id").value("doc_pdf"))
+                .andExpect(jsonPath("$.accepted[0].document.id").value("doc_placeholder"))
+                .andExpect(jsonPath("$.failed[0].document_id").value("doc_md"))
+                .andExpect(jsonPath("$.failed[0].code").value("INVALID_DOCUMENT_CONVERT_REQUEST"));
+    }
+
+    @Test
+    void convertMarkdownBatch_emptyOrTooManyIds_returns400() throws Exception {
+        String tooMany = java.util.stream.IntStream.range(0, 21).mapToObj(i -> "\"doc_" + i + "\"")
+                .collect(java.util.stream.Collectors.joining(","));
+        for (String ids : java.util.List.of("", tooMany)) {
+            mockMvc.perform(post("/api/workspaces/" + WORKSPACE_ID + "/documents/convert-markdown")
+                            .header("Authorization", bearerToken())
+                            .header("Idempotency-Key", "batch-key")
+                            .contentType("application/json")
+                            .content("{\"document_ids\":[" + ids + "]}"))
+                    .andExpect(status().isBadRequest());
+        }
+        verifyNoInteractions(documentService);
     }
 
     @Test

@@ -363,6 +363,66 @@ class DocumentServiceConvertTest {
     }
 
     @Test
+    @DisplayName("일괄 변환은 거절된 문서가 있어도 나머지를 접수하고 문서별로 결과를 나눈다")
+    void convertAllToMarkdown_partialFailure_splitsResults() {
+        stubOwnedWorkspace();
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(sourcePdf()));
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_md", WORKSPACE_ID))
+                .thenReturn(Optional.of(new Document("doc_md", WORKSPACE_ID, USER_ID, "노트.md",
+                        "text/markdown", 10L, null, null)));
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull("doc_unknown", WORKSPACE_ID))
+                .thenReturn(Optional.empty());
+
+        // 거절된 문서가 앞에 있어도 뒤 문서를 접수하고, 중복 ID는 한 번만 처리한다.
+        var response = documentService.convertAllToMarkdown(WORKSPACE_ID, USER_ID,
+                java.util.List.of("doc_md", "doc_unknown", SOURCE_DOCUMENT_ID, SOURCE_DOCUMENT_ID), "batch-key");
+
+        assertThat(response.accepted()).singleElement().satisfies(accepted -> {
+            assertThat(accepted.sourceDocumentId()).isEqualTo(SOURCE_DOCUMENT_ID);
+            assertThat(accepted.document().status()).isEqualTo(DocumentStatus.processing);
+        });
+        assertThat(response.failed()).extracting(f -> f.documentId() + ":" + f.code()).containsExactly(
+                "doc_md:INVALID_DOCUMENT_CONVERT_REQUEST", "doc_unknown:DOCUMENT_NOT_FOUND");
+        verify(documentRepository, times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("일괄 변환의 멱등 키는 요청 키와 문서로 정해져 재시도하면 같은 키를 쓴다")
+    void convertAllToMarkdown_retry_reusesPerDocumentKey() {
+        stubOwnedWorkspace();
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(sourcePdf()));
+
+        for (int attempt = 0; attempt < 2; attempt++) {
+            documentService.convertAllToMarkdown(WORKSPACE_ID, USER_ID,
+                    java.util.List.of(SOURCE_DOCUMENT_ID), "batch-key");
+        }
+
+        ArgumentCaptor<String> keys = ArgumentCaptor.forClass(String.class);
+        verify(idempotencyService, times(2)).execute(eq(USER_ID), anyString(), keys.capture(), anyString(),
+                eq(DocumentUploadResponse.class), eq(201), any(), any(), any());
+        assertThat(keys.getAllValues().get(0)).startsWith("batch:").isEqualTo(keys.getAllValues().get(1));
+    }
+
+    @Test
+    @DisplayName("일괄 변환은 분류되지 않은 예외를 일반 문구로 바꿔 내부 메시지를 내보내지 않는다")
+    void convertAllToMarkdown_unexpectedFailure_hidesInternalMessage() {
+        stubOwnedWorkspace();
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenThrow(new IllegalStateException("db password leaked"));
+
+        var response = documentService.convertAllToMarkdown(WORKSPACE_ID, USER_ID,
+                java.util.List.of(SOURCE_DOCUMENT_ID), "batch-key");
+
+        assertThat(response.accepted()).isEmpty();
+        assertThat(response.failed()).singleElement().satisfies(failed -> {
+            assertThat(failed.code()).isEqualTo("CONVERT_REQUEST_FAILED");
+            assertThat(failed.message()).doesNotContain("password");
+        });
+    }
+
+    @Test
     @DisplayName("같은 Idempotency-Key 재요청은 저장된 응답을 재생하고 새 문서를 만들지 않는다")
     void convertToMarkdown_idempotentReplay_returnsStoredResponse() throws Exception {
         stubOwnedWorkspace();

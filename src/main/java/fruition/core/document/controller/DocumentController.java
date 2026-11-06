@@ -3,6 +3,8 @@ package fruition.core.document.controller;
 import fruition.shared.util.ErrorResponse;
 import fruition.core.document.service.DocumentService;
 import fruition.core.document.service.DocumentExportService;
+import fruition.core.document.dto.DocumentBatchConvertRequest;
+import fruition.core.document.dto.DocumentBatchConvertResponse;
 import fruition.core.document.dto.DocumentBlocksResponse;
 import fruition.core.document.dto.DocumentContentSaveResponse;
 import fruition.core.document.dto.DocumentContentDiffResponse;
@@ -486,6 +488,30 @@ public class DocumentController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(documentService.convertToMarkdown(workspaceId, userId, documentId, idempotencyKey));
+    }
+
+    @Operation(
+        summary = "여러 PDF Markdown 변환",
+        description = "선택한 PDF를 문서마다 단건 변환과 같은 경로로 변환 요청합니다. 한 문서가 거절돼도 나머지는 진행하고, 결과를 accepted와 failed로 나눠 돌려줍니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "202", description = "요청 처리 완료. 문서별 결과는 accepted·failed로 구분하며 모두 거절돼도 202다",
+            content = @Content(schema = @Schema(implementation = DocumentBatchConvertResponse.class))),
+        @ApiResponse(responseCode = "400", description = "document_ids가 비었거나 20개를 넘음(INVALID_REQUEST) 또는 잘못된 Idempotency-Key",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "워크스페이스 멤버가 아님",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "404", description = "워크스페이스를 찾을 수 없음",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PostMapping(path = "/convert-markdown", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<DocumentBatchConvertResponse> convertMarkdownBatch(
+            @PathVariable("workspace_id") String workspaceId,
+            @AuthenticationPrincipal String userId,
+            @Valid @RequestBody DocumentBatchConvertRequest request,
+            @Parameter(description = "요청 멱등 키. 같은 키로 재시도하면 접수된 문서는 다시 변환하지 않는다", required = true)
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(documentService.convertAllToMarkdown(workspaceId, userId, request.documentIds(), idempotencyKey));
     }
 
     @Operation(

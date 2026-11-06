@@ -49,7 +49,12 @@ import fruition.core.document.dto.DocumentOriginalResult;
 import fruition.core.document.dto.DocumentRenameRequest;
 import fruition.core.document.dto.DocumentRenameResponse;
 import fruition.core.document.dto.InternalPipelineDocumentResponse;
+import fruition.core.document.dto.DocumentBatchConvertResponse;
 import fruition.core.document.dto.DocumentUploadResponse;
+import fruition.core.document.exception.InvalidDocumentConvertRequestException;
+import fruition.core.authz.WorkspacePermissionRequiredException;
+import fruition.core.usage.limit.AiUsageLimitExceededException;
+import fruition.core.usage.service.CreditService;
 import fruition.core.document.dto.DocumentTrashResponse;
 import fruition.core.document.dto.DocumentBlockResponse;
 import fruition.core.document.dto.DocumentBlocksResponse;
@@ -101,6 +106,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays; import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
@@ -1344,6 +1350,53 @@ public class DocumentService {
                     registerStoredSourceCleanup(storedKey);
                     return startConvertPlaceholder(workspaceId, userId, documentId, source, content, prepared);
                 }));
+    }
+
+    /**
+     * 여러 PDF의 변환을 문서마다 {@link #convertToMarkdown}으로 요청한다. 권한·크레딧·재변환 규칙이 단건과 같고, 한 문서의
+     * 거절이 다른 문서를 막지 않는다. 멱등 키는 요청 키와 문서 ID로 문서마다 만들어, 같은 키로 재시도하면 접수된 문서는 저장된
+     * 응답을 돌려주고 거절된 문서만 다시 시도한다.
+     */
+    public DocumentBatchConvertResponse convertAllToMarkdown(
+            String workspaceId,
+            String userId,
+            List<String> documentIds,
+            String idempotencyKey
+    ) {
+        verifyWorkspaceOwnership(workspaceId, userId);
+        validateIdempotencyKey(idempotencyKey);
+        List<DocumentBatchConvertResponse.Accepted> accepted = new ArrayList<>();
+        List<DocumentBatchConvertResponse.Failed> failed = new ArrayList<>();
+        for (String documentId : documentIds.stream().distinct().toList()) {
+            String documentKey = "batch:" + requestHash(idempotencyKey, documentId);
+            try {
+                accepted.add(new DocumentBatchConvertResponse.Accepted(documentId,
+                        convertToMarkdown(workspaceId, userId, documentId, documentKey)));
+            } catch (RuntimeException e) {
+                failed.add(convertFailure(workspaceId, documentId, e));
+            }
+        }
+        return new DocumentBatchConvertResponse(accepted, failed);
+    }
+
+    /** 단건 변환이 던지는 예외를 CoreExceptionHandler·BaseExceptionHandler와 같은 코드로 옮긴다. */
+    private DocumentBatchConvertResponse.Failed convertFailure(String workspaceId, String documentId, RuntimeException e) {
+        String code = switch (e) {
+            case DocumentNotFoundException ignored -> "DOCUMENT_NOT_FOUND";
+            case InvalidDocumentConvertRequestException ignored -> "INVALID_DOCUMENT_CONVERT_REQUEST";
+            case WorkspacePermissionRequiredException ignored -> "WORKSPACE_PERMISSION_REQUIRED";
+            case CreditService.InsufficientCreditException ignored -> "INSUFFICIENT_CREDIT";
+            case AiUsageLimitExceededException ignored -> "AI_USAGE_LIMIT_EXCEEDED";
+            case IdempotencyInProgressException ignored -> "IDEMPOTENCY_IN_PROGRESS";
+            default -> "CONVERT_REQUEST_FAILED";
+        };
+        if ("CONVERT_REQUEST_FAILED".equals(code)) {
+            log.error("[문서 일괄 변환] 요청 실패 workspaceId={} documentId={}", workspaceId, documentId, e);
+            return new DocumentBatchConvertResponse.Failed(documentId, code, "변환을 요청하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+        }
+        log.info("[문서 일괄 변환] 요청 거절 workspaceId={} documentId={} code={}", workspaceId, documentId, code);
+        String message = e instanceof DocumentNotFoundException ? "문서를 찾을 수 없습니다." : e.getMessage();
+        return new DocumentBatchConvertResponse.Failed(documentId, code, message);
     }
 
     private record ConvertPrepared(String placeholderId, Prefetched<String> sourceKey,
