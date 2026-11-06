@@ -2,6 +2,7 @@
 
 ## 2026-11-06
 
+- 정리 작업(`scrubOrphans`)이 이미 없는 문서의 `ai_task_changes` 행을 지운다. 끝난 실행의 `documents`, `document_content_versions`, `document_edit_states`, `document_edit_writes` 기록이 대상이다. 영구 삭제 기능 전에 지운 문서의 본문이 남아 있던 행이다. 진행 중 실행, 살아 있는 문서, 휴지통 문서, 다른 표의 기록은 건드리지 않는다. 스키마와 API는 그대로다.
 - 사용량 수집 대기열의 재선점 유실을 고쳤다. 수집 중 다시 넣은 요청을 다른 Pod가 곧바로 선점하면 시도 횟수가 처음 값과 같아져 처음 worker가 행을 지웠고, 다른 Pod의 수집이 실패하면 조회 뒤에 끝난 호출이 대사 때까지 청구되지 않았다. 선점 시각까지 대조한다. API·스키마 변경은 없다.
 - 보기 권한 문서를 연 채 `이 문서 고쳐 줘`라고 했을 때 첨부가 수정될 수 있던 문제의 document 쪽이다. 서버가 확인한 `read_only_document_id`를 agent command에 싣는다(그 밖의 턴은 키가 없다). 구 AI는 키를 무시하고, 새 AI가 구 document-svc를 받으면 기존 동작이라 배포 순서는 상관없다.
 - 문서 영구 삭제의 빈틈을 메운다. `source_refs`에만 그 문서가 있는 근거도 본문을 비운다(`agent_apply_projections.result`, 변경 기록, 질의 receipt). 대표 문서는 살아 있고 `source_refs`의 다른 문서만 이 기능 전에 지워진 인용은 정리 작업이 원문을 비운다(V107, `CONCURRENTLY`). 다른 문서의 근거와 살아 있는 문서만 가리키는 인용은 그대로다.
