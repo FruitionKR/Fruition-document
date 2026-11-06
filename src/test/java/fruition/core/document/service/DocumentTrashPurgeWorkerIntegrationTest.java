@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -366,6 +367,121 @@ class DocumentTrashPurgeWorkerIntegrationTest {
                     content_hash, created_at)
                 VALUES (?, 1, 1, ?, 'wiki/key', 'hash', now()) ON CONFLICT DO NOTHING
                 """, pageId, BODY);
+    }
+
+    /** 이 기능 전에 영구 삭제한 문서의 기록. scrub은 그 문서를 다시 보지 않으므로 문서가 없는 행을 찾아 지운다. */
+    @Test
+    void orphanSweepDeletesDocumentChangesOfFinishedRunsWhoseDocumentIsGone() {
+        String missing = "doc_" + UUID.randomUUID();
+        List<String> finished = new ArrayList<>();
+        for (String status : List.of("completed", "failed", "cancelled", "rollback_failed")) {
+            String run = insertRun(status, "agent", "{}");
+            insertDocumentChanges(run, missing);
+            finished.add(run);
+        }
+
+        sweepOrphans();
+
+        for (String run : finished) {
+            assertThat(changeCount(run)).as(run).isZero();
+        }
+    }
+
+    @Test
+    void orphanSweepKeepsChangesItMustNotTouch() {
+        String missing = "doc_" + UUID.randomUUID();
+        // 취소·복구가 지금 읽는 기록이다.
+        List<String> active = new ArrayList<>();
+        for (String status : List.of("running", "cancel_requested", "rolling_back")) {
+            String run = insertRun(status, "agent", "{}");
+            insertDocumentChanges(run, missing);
+            active.add(run);
+        }
+        // 살아 있는 문서와 복구할 수 있는 휴지통 문서는 되돌릴 수 있어야 한다.
+        String live = insertDocument(null, null);
+        String trashed = insertDocument(null, now.minus(Duration.ofDays(1)));
+        String withDocuments = insertRun("completed", "agent", "{}");
+        insertDocumentChanges(withDocuments, live);
+        insertDocumentChanges(withDocuments, trashed);
+        // 문서를 가리키지 않는 표의 id는 문서 id가 아니고, 문서 id가 없는 행은 없는 문서로 판정하지 않는다.
+        String others = insertRun("completed", "agent", "{}");
+        insertChange(others, "chat_messages", "{\"id\":\"%s\"}".formatted(missing));
+        insertChange(others, "document_asset_references", "{\"document_id\":\"%s\",\"asset_id\":1}".formatted(missing));
+        insertChange(others, "document_edit_states", "{\"other\":\"key\"}");
+        insertChange(others, "documents", "{\"other\":\"key\"}");
+
+        sweepOrphans();
+
+        active.forEach(run -> assertThat(changeCount(run)).as(run).isEqualTo(4));
+        assertThat(changeCount(withDocuments)).isEqualTo(8);
+        assertThat(changeCount(others)).isEqualTo(4);
+    }
+
+    @Test
+    void orphanSweepOfDocumentChangesKeepsItsBatchSizeAndCanRunAgain() {
+        String run = insertRun("completed", "agent", "{}");
+        insertDocumentChanges(run, "doc_" + UUID.randomUUID());
+
+        transactionTemplate.executeWithoutResult(status -> scrubber.scrubOrphans(1));
+        assertThat(changeCount(run)).isGreaterThanOrEqualTo(3);
+
+        sweepOrphans();
+        assertThat(changeCount(run)).isZero();
+        sweepOrphans();
+        assertThat(changeCount(run)).isZero();
+    }
+
+    /** 남은 기록이 복구 순서를 막지 않는다. 지운 뒤 같은 run의 다른 변경은 되돌릴 수 있다. */
+    @Test
+    void cancellingARunStillUndoesItsOtherChangesAfterTheSweep() {
+        String run = insertRun("running", "agent", "{}");
+        String session = "session_" + UUID.randomUUID();
+        jdbc.update("INSERT INTO chat_sessions(id, workspace_id, user_id, created_at, title) VALUES (?, ?, ?, now(), '처음')",
+                session, workspace, user);
+        transactionTemplate.executeWithoutResult(status -> {
+            jdbc.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, run);
+            jdbc.update("UPDATE chat_sessions SET title = 'AI' WHERE id = ?", session);
+        });
+        insertChange(run, "document_edit_states", "{\"document_id\":\"doc_%s\"}".formatted(UUID.randomUUID()));
+        jdbc.update("UPDATE ai_task_runs SET status = 'completed' WHERE id = ?", run);
+
+        sweepOrphans();
+
+        jdbc.update("UPDATE ai_task_runs SET status = 'rolling_back' WHERE id = ?", run);
+        jdbc.queryForList("SELECT id FROM ai_task_changes WHERE run_id = ? ORDER BY id DESC", Long.class, run)
+                .forEach(change -> jdbc.queryForObject("SELECT undo_ai_task_change(?, ?)", Object.class, run, change));
+        assertThat(jdbc.queryForObject("SELECT title FROM chat_sessions WHERE id = ?", String.class, session)).isEqualTo("처음");
+    }
+
+    @Test
+    void orphanSweepOfDocumentChangesReadsTheDocumentChangeIndex() {
+        String plan = transactionTemplate.execute(status -> {
+            jdbc.execute("SET LOCAL enable_seqscan = off");
+            return String.join("\n", jdbc.queryForList("""
+                    EXPLAIN SELECT id FROM ai_task_changes
+                    WHERE table_name IN ('documents', 'document_content_versions', 'document_edit_states', 'document_edit_writes')
+                      AND (CASE table_name WHEN 'documents' THEN row_key->>'id' ELSE row_key->>'document_id' END) IS NOT NULL
+                    """, String.class));
+        });
+        assertThat(plan).contains("idx_ai_task_changes_document");
+    }
+
+    private void sweepOrphans() {
+        Integer batch;
+        do {
+            batch = transactionTemplate.execute(status -> scrubber.scrubOrphans(100));
+        } while (batch != null && batch >= 100);
+    }
+
+    private void insertDocumentChanges(String run, String documentId) {
+        insertChange(run, "documents", "{\"id\":\"%s\"}".formatted(documentId));
+        insertChange(run, "document_edit_states", "{\"document_id\":\"%s\"}".formatted(documentId));
+        insertChange(run, "document_content_versions", "{\"document_id\":\"%s\",\"version\":1}".formatted(documentId));
+        insertChange(run, "document_edit_writes", "{\"document_id\":\"%s\",\"revision_write_id\":\"w\"}".formatted(documentId));
+    }
+
+    private int changeCount(String run) {
+        return jdbc.queryForObject("SELECT count(*) FROM ai_task_changes WHERE run_id = ?", Integer.class, run);
     }
 
     private String versionMarkdown(String pageId) {
