@@ -278,7 +278,7 @@ class AgentTurnControllerTest {
                         .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"session_id":"session_1","message":"정리해줘","mode":"wiki"}
+                                {"session_id":"session_1","message":"정리해줘","mode":"chat"}
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
