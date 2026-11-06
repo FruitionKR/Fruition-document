@@ -1,6 +1,5 @@
 package fruition.core.aitask.service;
 
-import fruition.core.agent.dto.AgentTurnRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.aitask.AiErrorMessages;
 import fruition.core.chat.domain.ChatSession;
@@ -510,14 +509,9 @@ public class AiTaskResultApplier {
         if (projection == null
                 || !Objects.equals(textOrNull(request, "workspace_id"), projection.workspaceId())
                 || !Objects.equals(textOrNull(request, "user_id"), projection.userId())
-                || !Objects.equals(textOrNull(request, "apply_operation_id"), projection.applyOperationId())) {
-            return "agent_result_request_mismatch";
-        }
-        // 채팅 탭의 문서 질문은 열린 문서를 근거로만 보내고 적용 표에는 남기지 않는다.
-        boolean isChatQuestion = AgentTurnRequest.CHAT_MODE.equals(textOrNull(request, "mode"));
-        String documentId = isChatQuestion ? null : textOrNull(request, "document_id");
-        Long baseVersion = isChatQuestion ? null : longOrNull(request, "base_version");
-        if (!Objects.equals(documentId, projection.documentId()) || !Objects.equals(baseVersion, projection.baseVersion())) {
+                || !Objects.equals(textOrNull(request, "document_id"), projection.documentId())
+                || !Objects.equals(textOrNull(request, "apply_operation_id"), projection.applyOperationId())
+                || !Objects.equals(longOrNull(request, "base_version"), projection.baseVersion())) {
             return "agent_result_request_mismatch";
         }
         return null;
