@@ -50,6 +50,8 @@ public class DocumentCopyScrubber {
     /** V99 부분 인덱스의 표현식과 같아야 인덱스를 탄다. */
     private static final String CHANGE_DOCUMENT_ID =
             "(CASE table_name WHEN 'documents' THEN row_key->>'id' ELSE row_key->>'document_id' END)";
+    private static final String CHANGE_DOCUMENT_ID_OF_C =
+            "(CASE c.table_name WHEN 'documents' THEN c.row_key->>'id' ELSE c.row_key->>'document_id' END)";
     private static final String DOCUMENT_CHANGE_TABLES =
             "table_name IN ('documents', 'document_content_versions', 'document_edit_states', 'document_edit_writes')";
     /** agent receipt는 재전달 판정(키)에만 쓰고 event_payload는 읽지 않는다. 질의 receipt는 재전달이 읽어 근거만 비운다. */
@@ -232,7 +234,23 @@ public class DocumentCopyScrubber {
                       AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = p.document_id)
                     LIMIT :limit FOR UPDATE OF c SKIP LOCKED)
                 """, params);
-        return commands + projections + receipts + changes + scrubOrphanCitations(limit);
+        return commands + projections + receipts + changes + scrubOrphanDocumentChanges(limit) + scrubOrphanCitations(limit);
+    }
+
+    /**
+     * 이 기능 전에 영구 삭제한 문서의 변경 기록. {@link #scrub}과 같은 표를 같은 이유로 지운다. 되돌리기는 값을 그대로 쓰므로 비우지 않고, 문서가 없으면 어차피 되돌릴 수 없다.
+     * 끝난 실행만 본다. 실행 행까지 잠가, 겹친 취소가 시작되면 이번에는 건너뛰고 취소가 시작된 뒤에는 대상에서 빠진다. 문서가 있는지만 보므로 휴지통 문서는 남는다.
+     * 지울 행이 없어도 문서 기록(V99 인덱스)을 한 번 훑는다. 없는 행을 찾는 조건이라 인덱스로 더 줄일 수 없고, 하루 한 번 도는 작업이다.
+     */
+    private int scrubOrphanDocumentChanges(int limit) {
+        return jdbc.update("""
+                DELETE FROM ai_task_changes WHERE id IN (
+                    SELECT c.id FROM ai_task_changes c JOIN ai_task_runs t ON t.id = c.run_id
+                    WHERE c.%s AND %s IS NOT NULL AND t.%s
+                      AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = %s)
+                    LIMIT :limit FOR UPDATE OF c SKIP LOCKED FOR SHARE OF t SKIP LOCKED)
+                """.formatted(DOCUMENT_CHANGE_TABLES, CHANGE_DOCUMENT_ID_OF_C, FINISHED_RUN, CHANGE_DOCUMENT_ID_OF_C),
+                new MapSqlParameterSource("limit", limit));
     }
 
     /** 이 기능 전에 영구 삭제한 문서의 인용. 찾아 둔 id로만 고쳐 묶음 크기를 지킨다. */
