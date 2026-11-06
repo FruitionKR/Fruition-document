@@ -122,7 +122,7 @@ public class AgentTurnService {
         // 문서를 열지 않은 턴은 적용할 대상이 없어 편집 전제 검사를 하지 않는다.
         // AI는 이 경우 chat_answer·conversation_reply·clarify·reject만 낼 수 있다.
         // 작업 탭 턴(mode=task)은 문서 없이 폴더 정리·워크플로를 낼 수 있고, 문서 편집이면 AI가 되묻는다.
-        // 작업 탭은 답하지 않고, 채팅 탭의 문서 질문(mode=chat)은 답만 한다.
+        // 답변은 첨부(reference_document_ids)가 있는 작업 탭 턴에서만 나온다.
         if (request.hasDocumentContext()) {
             DocumentDetailResponse document = documentService.findById(workspaceId, userId, request.documentId());
             if (!isMarkdown(document)) {
@@ -130,10 +130,7 @@ public class AgentTurnService {
             }
             // 다른 사용자가 편집 중이면 pipeline 호출 전에 423으로 거절한다.
             // 첨부 수정도 열린 문서 잠금으로 막히므로 어느 문서 때문인지 응답에 담는다.
-            // 채팅 탭의 질문은 문서를 바꾸지 않으므로 다른 사람이 편집 중이어도 받는다.
-            if (!request.asksFromChatTab()) {
-                editLockService.requireWritableNamingDocument(workspaceId, userId, request.documentId());
-            }
+            editLockService.requireWritableNamingDocument(workspaceId, userId, request.documentId());
             // 오래된 snapshot(baseVersion)이어도 거절하지 않는다. 적용 저장이 baseVersion 스냅샷 기준으로
             // 그 사이 변경과 자동 병합한다(ADR 0032).
             validateTarget(request.editorSnapshot());
@@ -190,11 +187,9 @@ public class AgentTurnService {
         outboxWriter.begin(runId, workspaceId, userId, "agent");
         // 편집안을 적용할 때 되돌려받을 표. source=agent 문자열 대신 이 값으로 AI 작업 여부를 가린다.
         // 적용할 문서가 없으면 표도 만들지 않는다.
-        // 채팅 탭의 질문은 적용할 결과가 없다. 표도 문서도 남기지 않아 이 run으로는 적용 경로가 성립하지 않는다.
-        boolean appliesToDocument = request.hasDocumentContext() && !request.asksFromChatTab();
-        String applyOperationId = appliesToDocument ? applyOperationStore.newOperationId() : null;
-        runRepository.create(runId, workspaceId, userId, appliesToDocument ? request.documentId() : null,
-                appliesToDocument ? request.baseVersion() : null, applyOperationId, folderId);
+        String applyOperationId = request.hasDocumentContext() ? applyOperationStore.newOperationId() : null;
+        runRepository.create(runId, workspaceId, userId, request.documentId(),
+                request.baseVersion(), applyOperationId, folderId);
         // 질의와 같이 sessionId를 key로 쓴다. 두 갈래가 같은 세션에 쌓이고 세션 단위 누적 요약을
         // 함께 갱신하므로, 한 세션의 턴은 같은 파티션에서 보낸 순서대로 처리돼야 한다.
         outboxWriter.enqueue(runId, commandTopic, request.sessionId(),
@@ -214,14 +209,13 @@ public class AgentTurnService {
                         folderId == null ? null : folderId.toString(),
                         request.referenceDocumentIds(), sessionTitleNeeded, readOnlyDocumentId));
         if (analytics != null) {
-            analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt,
-                    request.asksFromChatTab() ? "chat" : "task");
+            analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt, "task");
             if ("explicit".equals(request.skillMode()))
                 analytics.explicitSkillRun(runId, request.skillId(), userId, workspaceId, requestedAt);
         }
         return new AgentTurnResponse(
-                appliesToDocument ? request.documentId() : null,
-                appliesToDocument ? request.baseVersion() : null,
+                request.documentId(),
+                request.baseVersion(),
                 runId,
                 applyOperationId,
                 "queued",
