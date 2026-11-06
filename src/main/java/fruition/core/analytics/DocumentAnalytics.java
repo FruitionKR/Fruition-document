@@ -172,7 +172,7 @@ public class DocumentAnalytics {
     }
     /** Terminal AI task failure. Query failures use query_failed; cancellation is not a failure. */
     public void taskFailed(String task, String kind, String stage, String error, String action) {
-        if ("cancelled".equals(error)) return;
+        if (AnalyticsSchema.isCancellation(error)) return;
         recorder.safely(() -> insertTaskFailed(task, kind, stage, error, action));
     }
     public void applyConflicted(String applyOperation) {
@@ -186,7 +186,9 @@ public class DocumentAnalytics {
         Instant at = Instant.now();
         var p = props("task_id",task,"task_kind",kind,"stage",stage,"failure_reason",AnalyticsSchema.failureReason(error),
                 "duration_sec",seconds(instant(row.get("created_at")),at));
+        if (AnalyticsSchema.isCode(error)) p.put("error_code",error);
         if (action == null && "sync_call".equals(kind)) action = (String)row.get("kind");
+        if (action == null && "agent_turn".equals(kind)) action = AnalyticsSchema.agentActionFor(error);
         if (action != null && !action.isBlank()) p.put("action",AnalyticsSchema.AGENT_ACTIONS.contains(action) ? action : "unknown");
         if (row.get("document_id") != null) p.put("document_id",row.get("document_id"));
         recorder.insert("ai_task_failed",kind+":"+task,(String)row.get("user_id"),(String)row.get("workspace_id"),at,p);

@@ -425,7 +425,8 @@ class AnalyticsIntegrationTest {
     }
     @Test void agentFailuresRecordOneTaskFailedWithStageAndSafeAction() throws Exception {
         String failed=id("agent-failed"),invalid=id("agent-invalid"),unsupported=id("agent-unsupported"),cancelled=id("agent-cancelled");
-        for (String run : List.of(failed,invalid,unsupported,cancelled)) seedAgent(run,null);
+        String aiCancelled=id("agent-ai-cancelled"),contract=id("agent-contract");
+        for (String run : List.of(failed,invalid,unsupported,cancelled,aiCancelled,contract)) seedAgent(run,null);
         var invalidResult=agentResult(invalid,"succeeded");invalidResult.putObject("request");invalidResult.putObject("payload").put("action","markdown_create");
         var unsupportedResult=agentResult(unsupported,"succeeded");unsupportedResult.putObject("request");unsupportedResult.putObject("payload").put("action","private-action");
         tx.executeWithoutResult(t->{
@@ -434,7 +435,14 @@ class AnalyticsIntegrationTest {
             applier.applyAgent(invalidResult);
             applier.applyAgent(unsupportedResult);
             applier.applyAgent(agentResult(cancelled,"cancelled"));
+            applier.applyAgent(agentResult(aiCancelled,"failed").put("error","agent_turn_cancelled"));
+            applier.applyAgent(agentResult(contract,"failed").put("error","markdown_create_output_contract_failed"));
         });
+        assertThat(count("ai_task_failed","agent_turn:"+aiCancelled)).isZero();
+        JsonNode contractFailure=event("ai_task_failed","agent_turn:"+contract).path("properties");
+        assertThat(contractFailure.path("failure_reason").asText()).isEqualTo("validation");
+        assertThat(contractFailure.path("error_code").asText()).isEqualTo("markdown_create_output_contract_failed");
+        assertThat(contractFailure.path("action").asText()).isEqualTo("markdown_create");
         JsonNode result=event("ai_task_failed","agent_turn:"+failed).path("properties");
         assertThat(count("ai_task_failed","agent_turn:"+failed)).isEqualTo(1);
         assertThat(result.path("task_kind").asText()).isEqualTo("agent_turn");

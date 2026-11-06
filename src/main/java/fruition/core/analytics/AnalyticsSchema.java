@@ -27,7 +27,7 @@ public final class AnalyticsSchema {
         entry("query_answered", "$session_id cited_document_first_ingested_at"),
         entry("query_failed", "$session_id"),
         entry("ai_operation_rolled_back", "document_id failure_reason"),
-        entry("ai_task_failed", "action document_id"),
+        entry("ai_task_failed", "action document_id error_code"),
         entry("meeting_notes_completed", "failure_reason"));
     /** Agent result actions and sync_call run kinds; anything else is reported as unknown. */
     static final Set<String> AGENT_ACTIONS = Set.of("markdown_create", "markdown_edit", "folder_organize", "workspace_workflow",
@@ -52,6 +52,7 @@ public final class AnalyticsSchema {
         enumValue(properties, "task_kind", Set.of("agent_turn", "edit_apply", "transcription", "sync_call"));
         enumValue(properties, "stage", Set.of("result", "validation", "apply"));
         enumValue(properties, "action", AGENT_ACTIONS);
+        if (properties.containsKey("error_code") && !isCode(properties.get("error_code"))) throw new IllegalArgumentException("Invalid analytics error code");
         if ("wiki_ingest_completed".equals(event)) {
             requireWhen(properties, "status", "succeeded", "operation_id");
             requireWhen(properties, "source", "chat", "export_id");
@@ -69,6 +70,22 @@ public final class AnalyticsSchema {
     private static void enumValue(Map<String,Object> properties, String key, Set<String> values) {
         if (properties.containsKey(key) && !values.contains(properties.get(key))) throw new IllegalArgumentException("Invalid analytics enum");
     }
+    /** A failure code (never a raw message) that is safe to send as-is so unmapped codes stay visible. */
+    static boolean isCode(Object value) {
+        return value instanceof String s && s.matches("[A-Za-z][A-Za-z0-9_]{0,63}");
+    }
+    /** AI reports a user-cancelled run as status=failed with these codes; they are not failures. */
+    public static boolean isCancellation(String code) {
+        return "cancelled".equals(code) || "agent_turn_cancelled".equals(code);
+    }
+    /** Agent action implied by an AI agent-turn failure code when the result carries no payload. */
+    static String agentActionFor(String code) {
+        return switch (code == null ? "" : code) {
+            case "markdown_create_output_contract_failed" -> "markdown_create";
+            case "markdown_output_contract_failed", "markdown_target_crosses_structure" -> "markdown_edit";
+            default -> null;
+        };
+    }
     public static String failureReason(String code) {
         if (code != null && code.startsWith("agent_result_")) return "validation";
         return switch (code == null ? "" : code) {
@@ -76,10 +93,14 @@ public final class AnalyticsSchema {
             case "deadline_exceeded", "MEETING_NOTES_TIMEOUT" -> "timeout";
             case "input_rejected", "MEETING_NOTES_INVALID", "MEETING_NOTES_INPUT_REJECTED",
                  "MEETING_TRANSCRIPT_EMPTY", "MEETING_TRANSCRIPT_TOO_LONG" -> "validation";
+            // AI agent turn (task_worker._agent_failure_code): model output or request broke the contract.
+            case "agent_turn_route_contract_failed", "markdown_create_output_contract_failed", "markdown_output_contract_failed",
+                 "markdown_target_crosses_structure", "invalid_agent_turn_request", "invalid_llm_selection",
+                 "SKILL_NOT_FOUND", "SKILL_DISABLED" -> "validation";
             case "MEETING_NOTES_UNAVAILABLE" -> "provider_error";
             case "MEETING_NOTES_FAILED" -> "internal_error";
             case "conflict" -> "conflict";
-            case "internal_error", "task_failed", "agent_turn_failed" -> "internal_error";
+            case "internal_error", "task_failed", "agent_turn_failed", "agent_turn_interrupted", "agent_not_configured" -> "internal_error";
             case "permission" -> "permission";
             case "storage_error" -> "storage_error";
             default -> "unknown";

@@ -24,6 +24,26 @@ class AnalyticsContractTest {
         assertThat(AnalyticsSchema.failureReason("provider_unavailable")).isEqualTo("provider_error");
         assertThat(AnalyticsSchema.failureReason("deadline_exceeded")).isEqualTo("timeout");
     }
+    @Test void aiAgentTurnCodesMapToReasonsAndCancellationIsNotFailure() {
+        // Fruition-ai task_worker._agent_failure_code
+        for (String code : List.of("agent_turn_route_contract_failed", "markdown_create_output_contract_failed", "markdown_output_contract_failed",
+                "markdown_target_crosses_structure", "invalid_agent_turn_request", "invalid_llm_selection", "SKILL_NOT_FOUND", "SKILL_DISABLED"))
+            assertThat(AnalyticsSchema.failureReason(code)).as(code).isEqualTo("validation");
+        for (String code : List.of("agent_turn_failed", "agent_turn_interrupted", "agent_not_configured"))
+            assertThat(AnalyticsSchema.failureReason(code)).as(code).isEqualTo("internal_error");
+        assertThat(AnalyticsSchema.isCancellation("agent_turn_cancelled")).isTrue();
+        assertThat(AnalyticsSchema.agentActionFor("markdown_create_output_contract_failed")).isEqualTo("markdown_create");
+        assertThat(AnalyticsSchema.agentActionFor("markdown_target_crosses_structure")).isEqualTo("markdown_edit");
+        assertThat(AnalyticsSchema.agentActionFor("agent_turn_failed")).isNull();
+    }
+    @Test void errorCodeAcceptsOnlyCodeShapedValues() {
+        var p=DocumentAnalytics.props("task_id","t","task_kind","agent_turn","stage","result","failure_reason","unknown","duration_sec",1.0,"error_code","new_ai_code");
+        AnalyticsSchema.validate("ai_task_failed",p);
+        for (String raw : List.of("private question text", "tool:http/500", "a".repeat(65))) {
+            var changed=new HashMap<>(p);changed.put("error_code",raw);
+            assertThatThrownBy(()->AnalyticsSchema.validate("ai_task_failed",changed)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
     @Test void editTypesMatchAiTargetAndOperationContract() throws Exception {
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         for (String target : List.of("whole_document", "selection", "current_section")) {
