@@ -55,3 +55,15 @@ API 계약을 의도적으로 바꾸면 `./gradlew test -DupdateOpenApiSnapshot=
 선불 크레딧(#79·#102)은 `BILLING_ENFORCE`(기본 false)가 true일 때만 가용 잔액이 kind별 최저 비용(`app.billing.minimum.<kind>`, 없으면 예상 상한의 10%)보다 작은 요청을 402로 거절하고 `min(상한, 가용 잔액)`을 예약한다. false면 상한 전체를 예약·정산만 기록한다. 실사용자 환경에서만 true로 켠다(켜기 전에 테스트 계정에 `scripts/sql/credit-grant-adjust.sql`로 `grant`를 지급한다). kind별 예상 상한은 `BILLING_ESTIMATE_<KIND>`(milli-KRW), 기본 `BILLING_DEFAULT_ESTIMATE_KRW_MILLI`. ingest 뒤 품질 평가(post_ingest) 동안 ingest 예약을 남기는 상한 시간은 `BILLING_POST_INGEST_HOLD_SECONDS`(기본 900). 수동 지급·조정은 `scripts/sql/credit-grant-adjust.sql`, 잔액 점검은 `scripts/sql/credit-balance-check.sql`.
 
 PG 결제 충전·환불(#80)은 PG를 정하기 전까지 `BILLING_PAYMENTS_ENABLED=false`(기본)로 둔다. 켤 때 `PG_CONFIRM_ENDPOINT`·`PG_PAYMENT_ENDPOINT`·`PG_CANCEL_ENDPOINT`·`PG_SECRET_KEY`·`PG_WEBHOOK_SECRET`을 주입하고 PG 관리 화면에 webhook 주소 `/internal/payments/webhook`을 등록한다. 상품표는 `app.billing.product.<code>.amount-krw`·`.credit-krw-milli`다(ADR-0026).
+
+## 멈춘 실행 닫기(일회성)
+
+일주일 넘게 `running`으로 멈춘 변환(`convert`)·Skill 작성(`skill_author`) 실행은 끝난 실행이 아니라 `scrubOrphans`가 그 변경 기록을 지우지 않는다. 다음 순서로 닫는다.
+
+```bash
+psql -X "$CORE_DB" -f scripts/sql/close-stuck-runs-preview.sql   # 종류별 건수만 본다. 바꾸지 않는다.
+psql -X "$CORE_DB" -v expected=<합계> -f scripts/sql/close-stuck-runs.sql
+```
+
+찾은 건수가 `expected`와 다르면 전체를 되돌린다. 닫은 실행은 `failed`, `error_code = 'stale_run_closed'`이며 사용량 수집 대기열에 들어가 예약이 풀린다. 선점, `ai_command_outbox`, `agent_apply_projections`, `document_convert_queue` 행이 있는 실행과 `agent`, `query`는 대상이 아니다. 변경 기록은 다음 휴지통 정리(`DocumentTrashPurgeWorker`, 기본 하루 주기)가 지운다.
+
