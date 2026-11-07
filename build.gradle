@@ -48,6 +48,9 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	// /actuator/prometheus 노출용 registry. 버전은 Spring Boot BOM이 관리한다.
 	implementation 'io.micrometer:micrometer-registry-prometheus'
+	// 서버 로그를 PostHog Logs로 보내는 OTLP 경로. 버전은 Spring Boot BOM이 관리한다.
+	implementation 'io.opentelemetry:opentelemetry-sdk'
+	implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 	// MarkdownDiffService: 선형 공간 Myers diff 구현(편집 거리와 무관하게 O(n+m) 메모리)
 	implementation 'io.github.java-diff-utils:java-diff-utils:4.15'
