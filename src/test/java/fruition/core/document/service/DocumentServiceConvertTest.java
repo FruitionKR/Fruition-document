@@ -1086,7 +1086,7 @@ class DocumentServiceConvertTest {
 
         documentService.applyPipelineResult("doc_placeholder", "run-2", "failed", "ValueError: secret detail");
 
-        assertThat(raw.getErrorMessage()).isEqualTo("위키 편입에 실패했습니다.");
+        assertThat(raw.getErrorMessage()).isEqualTo("위키 편입에 실패했습니다. 문서는 그대로 있으니 다시 시도해 주세요.");
     }
 
     private Document placeholderDocument() {

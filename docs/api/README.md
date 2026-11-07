@@ -31,8 +31,8 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 
 ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 로그에만 남긴다. 사용자에게 나가는 문구는
 `AiErrorMessages`(`fruition/core/aitask/AiErrorMessages.java`) 한 곳에서 코드를 한국어로 바꾼다.
-코드가 목록에 없으면 기능별 기본 문구(질의 "질의 처리 중 오류가 발생했습니다.", Agent "Agent 처리 중 오류가 발생했습니다.",
-위키 편입 "위키 편입에 실패했습니다.", 위키 정리 "위키 정리에 실패했습니다.", PDF 변환 "PDF 변환에 실패했습니다. …", 회의 녹음 전사 "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.")로 바꾸고 코드마다 한 번 WARN을 남긴다. 회의록 API(`MEETING_NOTES_*`)는 이 목록을 거치지 않고 코드를 그대로 준다.
+코드가 목록에 없으면 기능별 기본 문구(질의 "질의를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.", Agent "요청을 끝까지 처리하지 못했어요. 문서 내용을 확인한 뒤 다시 시도해 주세요.",
+위키 편입 "위키 편입에 실패했습니다. 문서는 그대로 있으니 다시 시도해 주세요.", 위키 정리 "위키 정리에 실패했습니다. 잠시 후 다시 시도해 주세요.", PDF 변환 "PDF 변환에 실패했습니다. …", 회의 녹음 전사 "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.")로 바꾸고 코드마다 한 번 WARN을 남긴다. 회의록 API(`MEETING_NOTES_*`)는 이 목록을 거치지 않고 코드를 그대로 준다.
 
 | 노출 위치 | 코드 | 문구 |
 |---|---|---|
@@ -45,23 +45,35 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 
 | 코드 | 문구 |
 |---|---|
-| `provider_rate_limited` | AI 서비스 요청이 많아 처리하지 못했습니다. 잠시 후 다시 시도해 주세요. |
-| `provider_unavailable` | AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요. |
-| `input_rejected` | 요청 내용을 처리할 수 없습니다. 입력을 확인해 주세요. |
-| `deadline_exceeded` | 처리 시간이 초과되어 중단했습니다. 다시 시도해 주세요. |
+| `provider_rate_limited` | AI 서비스 요청이 많아 처리하지 못했습니다. 잠시 후 다시 시도해 주세요. (Agent: 요청이 많거나 이용 한도에 걸려 문서를 바꾸지 않았어요. …) |
+| `provider_unavailable` | AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요. (Agent: 응답하지 않거나 일시적인 문제가 있어 문서를 바꾸지 않았어요. …) |
+| `input_rejected` | AI 서비스가 요청 내용이나 길이를 받아들이지 않아 처리하지 못했습니다. 내용을 줄이거나 고쳐서 다시 시도해 주세요. (Agent는 문서 상태를 함께 알림) |
+| `deadline_exceeded` | 처리 시간이 초과되어 중단했습니다. 내용을 줄이거나 잠시 후 다시 시도해 주세요. (Agent는 문서 상태를 함께 알림) |
 | `cancelled` | 처리가 취소되었습니다. |
 | `MEETING_RECORDING_*` / `MEETING_TRANSCRIPT_*` 등 | 회의 전사 전용 문구(`docs/api/meetings.md` 표) |
-| `internal_error`, `task_failed`, `agent_turn_failed` | 기능별 기본 문구 |
-| `interrupted_attempts_exhausted` | 처리가 여러 번 중단되어 완료하지 못했습니다. 다시 시도해 주세요. |
-| `rollback_failed`, `rollback_child_failed`, 그 밖의 `rollback_*`(개별 항목 우선, 없으면 접두사) | 변경을 되돌리지 못했습니다. 작업 기록을 확인해 주세요. |
-| `agent_turn_cancelled` / `agent_turn_interrupted` | Agent 작업이 취소되었습니다. / 중단되었습니다. 다시 시도해 주세요. |
-| `invalid_agent_turn_request` / `agent_not_configured` / `agent_turn_route_contract_failed` | Agent 요청이 올바르지 않습니다. / 사용할 수 없는 상태입니다. 관리자에게 문의해 주세요. / 처리 결과를 확정하지 못했습니다. 다시 시도해 주세요. |
+| `internal_error`, `task_failed` | 기능별 기본 문구 |
+| `agent_turn_failed` | 요청을 처리하다 예상하지 못한 문제가 생겨 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요. (Agent 외에는 기본 문구) |
+| `interrupted_attempts_exhausted` / `agent_turn_interrupted` | 서버 작업이 (여러 번) 중단되어 끝내지 못했다는 안내와 다시 시도 |
+| `markdown_edit_refused` | AI가 고친 내용 대신 처리할 수 없다는 답만 내놓아 문서를 바꾸지 않았어요. 요청을 더 구체적으로 적어 다시 시도해 주세요. |
+| `markdown_edit_evaluation_rejected` | 만든 편집안이 요청에 맞는지 확인하는 검사를 통과하지 못해 문서를 바꾸지 않았어요. 바꿀 내용과 범위를 더 구체적으로 적어 다시 시도해 주세요. |
+| `markdown_edit_evaluation_invalid` | 편집안을 검사한 결과를 확인하지 못해 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요. |
+| `markdown_edit_response_invalid` | AI 응답이 잘렸거나 형식이 맞지 않아 문서를 바꾸지 않았어요. 고칠 범위를 줄이거나 잠시 후 다시 시도해 주세요. |
+| `markdown_output_contract_failed` | 만든 편집안이 문서 형식을 지키는지 확인하는 검사를 통과하지 못해 문서를 바꾸지 않았어요. 고칠 범위를 줄이거나 요청을 더 구체적으로 적어 다시 시도해 주세요. |
+| `markdown_target_crosses_structure` | 선택한 범위가 표·코드 블록·수식 같은 구조의 일부에만 걸쳐 있어 문서를 바꾸지 않았어요. 구조 전체가 들어가도록 범위를 다시 선택해 주세요. |
+| `markdown_create_evaluation_rejected` / `_evaluation_invalid` / `_response_invalid` / `_output_contract_failed` | 새 문서 초안 실패 원인별 문구. 모두 "새 문서를 만들지 않았어요."를 포함 |
+| 그 밖의 `markdown_create_*` / `markdown_*` | 새 문서 초안을 만들지 못해 새 문서를 만들지 않았어요. … / 편집안을 만들지 못해 문서를 바꾸지 않았어요. 요청을 더 구체적으로 적어 다시 시도해 주세요. |
+| `agent_turn_cancelled` | Agent 작업이 취소되었습니다. |
+| `invalid_agent_turn_request` / `agent_not_configured` / `agent_turn_route_contract_failed` | 요청 정보를 처리할 수 없어 … 열린 문서와 선택 범위를 확인 / 지금은 AI 작업 기능을 쓸 수 없는 상태라 … 관리자에게 문의 / 요청을 어떻게 처리할지 정하지 못해 … 더 구체적으로 |
 | `mutation_intent_required` | 어떤 변경을 원하시는지 조금 더 구체적으로 알려 주세요. (오류가 아니라 되묻는 문구) |
-| `ready_markdown_migration_unrecoverable` | 이전 편집안을 복구할 수 없어 적용하지 못했습니다. 다시 요청해 주세요. |
-| `markdown_*` | 편집안을 만들지 못했습니다. 다시 시도해 주세요. |
-| `REFERENCE_DOCUMENT_TOO_LARGE` / `dependency_failed` | 편집 대상 참조 문서가 30,000자를 넘어 처리할 수 없습니다. / 앞선 작업이 실패해 이 작업은 건너뛰었습니다. |
-| `SKILL_NOT_FOUND` / `SKILL_DISABLED` / `invalid_llm_selection` | 선택한 Skill을 찾을 수 없습니다. / 비활성화되어 있습니다. / 선택한 모델을 사용할 수 없습니다. 모델을 다시 선택해 주세요. |
-| `agent_result_*` | 결과 형식·요청 불일치·본문 누락 등 Agent 결과를 적용할 수 없는 사유별 문구 |
+| `ready_markdown_migration_unrecoverable` | 이전 편집안을 복구할 수 없어 문서를 바꾸지 않았어요. 같은 요청을 다시 보내 새 편집안을 받아 주세요. |
+| `REFERENCE_DOCUMENT_TOO_LARGE` / `dependency_failed` | 편집할 참조 문서가 30,000자를 넘어 문서를 바꾸지 않았어요. … / 앞선 작업이 실패해 이 작업은 건너뛰었습니다. … |
+| `SKILL_NOT_FOUND` / `SKILL_DISABLED` / `invalid_llm_selection` | 선택한 Skill을 찾을 수 없어 … / 꺼져 있어 … / 선택한 모델을 지금 쓸 수 없어 … (모두 문서를 바꾸지 않았다는 안내와 다음 행동 포함) |
+| `agent_result_*` | 결과 형식·요청 불일치·본문 누락 등 Agent 결과를 적용할 수 없는 사유별 문구(문서를 바꾸지 않았다는 안내 포함). 목록에 없으면 접두사 기본 문구 |
+| `plan_out_of_scope` | 선택한 폴더 밖으로 옮기거나 선택한 폴더 자체를 바꾸는 작업만 있어 정리 계획을 만들지 못했어요. 규칙을 조정해 다시 시도해 주세요. |
+| `tool_http_403` / `_404` / `_409` / `_unavailable`, 그 밖의 `tool_http_*` | 계획 항목 실패 사유별 문구(권한·대상 없음·내용 변경·연결 실패), 목록에 없으면 접두사 기본 문구 |
+| `rollback_failed` / `rollback_child_failed` / `rollback_conflict` / `rollback_database_error` | 되돌리지 못한 사유와 "작업 기록에서 문서 상태를 확인해 주세요." |
+| `rollback_retry_pending` | 변경을 되돌리는 작업을 자동으로 다시 시도하고 있어요. 잠시 기다려 주세요. |
+| 그 밖의 `rollback_*`(`code:operation_id` 포함) | 변경을 되돌리는 중 문제가 생겨 일부가 남아 있을 수 있어요. 작업 기록에서 문서 상태를 확인해 주세요. |
 | `PIPELINE_UNAVAILABLE` / `PIPELINE_TIMEOUT` / `INSUFFICIENT_CREDIT` | AI 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요. / 질의 대기 시간이 지나 취소를 요청했습니다. / 크레딧이 부족해 작업을 시작하지 않았습니다. 크레딧을 충전한 뒤 다시 시도해 주세요. |
 
 ## 공통 오류: `402 INSUFFICIENT_CREDIT`
