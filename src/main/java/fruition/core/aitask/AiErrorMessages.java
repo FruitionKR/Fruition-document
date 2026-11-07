@@ -26,10 +26,11 @@ public final class AiErrorMessages {
     /** {@code AI_USAGE_LIMIT_EXCEEDED}: 사용자별 AI 사용 한도에 걸려 비동기 작업을 시작하지 않았을 때. 요청 거절은 한도별 문구로 429를 낸다. */
     public static final String AI_USAGE_LIMIT_EXCEEDED = "AI 사용 한도에 도달해 작업을 시작하지 않았습니다. 잠시 후 또는 내일 다시 시도해 주세요.";
 
-    private static final String QUERY_DEFAULT = "질의 처리 중 오류가 발생했습니다.";
-    private static final String AGENT_DEFAULT = "Agent 처리 중 오류가 발생했습니다.";
-    private static final String INGEST_DEFAULT = "위키 편입에 실패했습니다.";
-    private static final String LINT_DEFAULT = "위키 정리에 실패했습니다.";
+    private static final String QUERY_DEFAULT = "질의를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+    /** 어떤 run의 코드인지 모를 때 쓴다. 문서가 바뀌었는지 단정할 수 없어 상태를 말하지 않는다. */
+    private static final String AGENT_DEFAULT = "요청을 끝까지 처리하지 못했어요. 문서 내용을 확인한 뒤 다시 시도해 주세요.";
+    private static final String INGEST_DEFAULT = "위키 편입에 실패했습니다. 문서는 그대로 있으니 다시 시도해 주세요.";
+    private static final String LINT_DEFAULT = "위키 정리에 실패했습니다. 잠시 후 다시 시도해 주세요.";
     private static final String CONVERT_PREFIX = "PDF 변환에 실패했습니다. ";
     private static final String CONVERT_DEFAULT = "변환 중 오류가 발생했습니다.";
     private static final String TRANSCRIPTION_DEFAULT = "녹음 파일을 글로 옮기지 못했습니다. 다시 올려 주세요.";
@@ -47,36 +48,69 @@ public final class AiErrorMessages {
             "MEETING_TRANSCRIPT_TOO_LONG", "대화 내용이 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요.",
             "deadline_exceeded", "글로 옮기는 시간이 너무 오래 걸려 중단했습니다. 녹음을 나눠 올려 주세요.");
 
+    /**
+     * Agent turn에서만 공통 문구 대신 쓰는 문구. 실패한 turn은 편집안을 내놓기 전에 끝나므로 문서 상태를 함께 알린다.
+     * 다른 기능(질의·위키·변환·전사)에는 "문서를 바꾸지 않았어요"가 맞지 않아 공통 문구에 넣지 않는다.
+     */
+    private static final Map<String, String> AGENT_OVERRIDES = Map.of(
+            "provider_rate_limited", "AI 서비스 요청이 많거나 이용 한도에 걸려 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.",
+            "provider_unavailable", "AI 서비스가 응답하지 않거나 일시적인 문제가 있어 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.",
+            "input_rejected", "AI 서비스가 요청 내용이나 길이를 받아들이지 않아 문서를 바꾸지 않았어요. 범위를 줄이거나 요청을 고쳐 다시 시도해 주세요.",
+            "deadline_exceeded", "처리 시간이 너무 오래 걸려 중단했고 문서를 바꾸지 않았어요. 범위를 줄이거나 잠시 후 다시 시도해 주세요.",
+            "interrupted_attempts_exhausted", "서버 작업이 여러 번 중단되어 요청을 끝내지 못했고 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.",
+            "agent_turn_failed", "요청을 처리하다 예상하지 못한 문제가 생겨 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.");
+
     private static final Map<String, String> MESSAGES = Map.ofEntries(
             // ai 공통 코드
             Map.entry("provider_rate_limited", "AI 서비스 요청이 많아 처리하지 못했습니다. 잠시 후 다시 시도해 주세요."),
             Map.entry("provider_unavailable", "AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요."),
-            Map.entry("input_rejected", "요청 내용을 처리할 수 없습니다. 입력을 확인해 주세요."),
-            Map.entry("deadline_exceeded", "처리 시간이 초과되어 중단했습니다. 다시 시도해 주세요."),
+            Map.entry("input_rejected", "AI 서비스가 요청 내용이나 길이를 받아들이지 않아 처리하지 못했습니다. 내용을 줄이거나 고쳐서 다시 시도해 주세요."),
+            Map.entry("deadline_exceeded", "처리 시간이 초과되어 중단했습니다. 내용을 줄이거나 잠시 후 다시 시도해 주세요."),
             Map.entry("cancelled", "처리가 취소되었습니다."),
-            Map.entry("interrupted_attempts_exhausted", "처리가 여러 번 중단되어 완료하지 못했습니다. 다시 시도해 주세요."),
-            Map.entry("dependency_failed", "앞선 작업이 실패해 이 작업은 건너뛰었습니다."),
-            Map.entry("rollback_child_failed", "변경을 되돌리지 못했습니다. 작업 기록을 확인해 주세요."),
-            // Agent
+            Map.entry("interrupted_attempts_exhausted", "서버 작업이 여러 번 중단되어 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."),
+            Map.entry("dependency_failed", "앞선 작업이 실패해 이 작업은 건너뛰었습니다. 앞선 작업의 결과를 확인한 뒤 다시 요청해 주세요."),
+            // Agent: 편집안·새 문서 초안을 만들지 못한 원인
+            Map.entry("markdown_edit_refused", "AI가 고친 내용 대신 처리할 수 없다는 답만 내놓아 문서를 바꾸지 않았어요. 요청을 더 구체적으로 적어 다시 시도해 주세요."),
+            Map.entry("markdown_edit_evaluation_rejected", "만든 편집안이 요청에 맞는지 확인하는 검사를 통과하지 못해 문서를 바꾸지 않았어요. 바꿀 내용과 범위를 더 구체적으로 적어 다시 시도해 주세요."),
+            Map.entry("markdown_edit_evaluation_invalid", "편집안을 검사한 결과를 확인하지 못해 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요."),
+            Map.entry("markdown_edit_response_invalid", "AI 응답이 잘렸거나 형식이 맞지 않아 문서를 바꾸지 않았어요. 고칠 범위를 줄이거나 잠시 후 다시 시도해 주세요."),
+            Map.entry("markdown_output_contract_failed", "만든 편집안이 문서 형식을 지키는지 확인하는 검사를 통과하지 못해 문서를 바꾸지 않았어요. 고칠 범위를 줄이거나 요청을 더 구체적으로 적어 다시 시도해 주세요."),
+            Map.entry("markdown_target_crosses_structure", "선택한 범위가 표·코드 블록·수식 같은 구조의 일부에만 걸쳐 있어 문서를 바꾸지 않았어요. 구조 전체가 들어가도록 범위를 다시 선택해 주세요."),
+            Map.entry("markdown_create_evaluation_rejected", "만든 초안이 Skill 지침을 지키는지 확인하는 검사를 통과하지 못해 새 문서를 만들지 않았어요. 요청을 더 구체적으로 적거나 Skill 지침을 확인한 뒤 다시 시도해 주세요."),
+            Map.entry("markdown_create_evaluation_invalid", "새 문서 초안을 검사한 결과를 확인하지 못해 새 문서를 만들지 않았어요. 잠시 후 다시 시도해 주세요."),
+            Map.entry("markdown_create_response_invalid", "AI 응답이 잘렸거나 형식이 맞지 않아 새 문서를 만들지 않았어요. 요청 범위를 줄이거나 잠시 후 다시 시도해 주세요."),
+            Map.entry("markdown_create_output_contract_failed", "만든 초안의 제목이나 본문이 비어 있거나 형식이 맞지 않아 새 문서를 만들지 않았어요. 요청을 더 구체적으로 적어 다시 시도해 주세요."),
+            // Agent: 요청·실행
             Map.entry("agent_turn_cancelled", "Agent 작업이 취소되었습니다."),
-            Map.entry("agent_turn_interrupted", "Agent 작업이 중단되었습니다. 다시 시도해 주세요."),
-            Map.entry("invalid_agent_turn_request", "Agent 요청이 올바르지 않습니다."),
-            Map.entry("agent_not_configured", "Agent를 사용할 수 없는 상태입니다. 관리자에게 문의해 주세요."),
-            Map.entry("agent_turn_route_contract_failed", "Agent 처리 결과를 확정하지 못했습니다. 다시 시도해 주세요."),
-            Map.entry("SKILL_NOT_FOUND", "선택한 Skill을 찾을 수 없습니다."),
-            Map.entry("SKILL_DISABLED", "선택한 Skill이 비활성화되어 있습니다."),
-            Map.entry("REFERENCE_DOCUMENT_TOO_LARGE", "편집 대상 참조 문서가 30,000자를 넘어 처리할 수 없습니다."),
-            Map.entry("invalid_llm_selection", "선택한 모델을 사용할 수 없습니다. 모델을 다시 선택해 주세요."),
-            Map.entry("agent_result_invalid_request", "Agent 결과의 요청 정보가 올바르지 않습니다."),
-            Map.entry("agent_result_invalid_payload", "Agent 결과 형식이 올바르지 않습니다."),
-            Map.entry("agent_result_unsupported_action", "지원하지 않는 Agent 처리 결과입니다."),
-            Map.entry("agent_result_missing_canonical_markdown", "편집안 본문이 비어 있어 적용할 수 없습니다."),
-            Map.entry("agent_result_request_mismatch", "요청과 결과가 달라 적용할 수 없습니다."),
-            Map.entry("rollback_failed", "변경을 되돌리지 못했습니다. 작업 기록을 확인해 주세요."),
-            Map.entry("rollback_document_purged", "영구 삭제된 문서의 변경은 되돌릴 수 없습니다. 나머지 변경은 되돌렸습니다."),
-            Map.entry("document_purged", "영구 삭제된 문서라 실행하지 않았습니다."),
+            Map.entry("agent_turn_interrupted", "서버 작업이 중단되어 요청을 끝내지 못했고 문서를 바꾸지 않았어요. 다시 시도해 주세요."),
+            Map.entry("invalid_agent_turn_request", "요청 정보를 처리할 수 없어 문서를 바꾸지 않았어요. 열린 문서와 선택 범위를 확인한 뒤 다시 보내 주세요."),
+            Map.entry("agent_not_configured", "지금은 AI 작업 기능을 쓸 수 없는 상태라 문서를 바꾸지 않았어요. 다시 시도해도 같으니 관리자에게 문의해 주세요."),
+            Map.entry("agent_turn_route_contract_failed", "요청을 어떻게 처리할지 정하지 못해 문서를 바꾸지 않았어요. 요청을 더 구체적으로 적어 다시 시도해 주세요."),
+            Map.entry("SKILL_NOT_FOUND", "선택한 Skill을 찾을 수 없어 문서를 바꾸지 않았어요. Skill을 다시 선택해 주세요."),
+            Map.entry("SKILL_DISABLED", "선택한 Skill이 꺼져 있어 문서를 바꾸지 않았어요. Skill을 켜거나 다른 Skill을 선택해 주세요."),
+            Map.entry("REFERENCE_DOCUMENT_TOO_LARGE", "편집할 참조 문서가 30,000자를 넘어 문서를 바꾸지 않았어요. 문서를 나누거나 더 짧은 문서로 다시 시도해 주세요."),
+            Map.entry("invalid_llm_selection", "선택한 모델을 지금 쓸 수 없어 문서를 바꾸지 않았어요. 다른 모델을 선택해 다시 시도해 주세요."),
+            Map.entry("agent_result_invalid_request", "AI 결과에 요청 정보가 빠져 있어 문서를 바꾸지 않았어요. 다시 시도해 주세요."),
+            Map.entry("agent_result_invalid_payload", "AI 결과의 형식이 맞지 않아 문서를 바꾸지 않았어요. 다시 시도해 주세요."),
+            Map.entry("agent_result_unsupported_action", "AI가 지원하지 않는 처리 결과를 내놓아 문서를 바꾸지 않았어요. 요청을 고쳐 다시 시도해 주세요."),
+            Map.entry("agent_result_missing_canonical_markdown", "편집안 본문이 비어 있어 문서를 바꾸지 않았어요. 다시 시도해 주세요."),
+            Map.entry("agent_result_request_mismatch", "AI 결과가 요청한 문서와 맞지 않아 문서를 바꾸지 않았어요. 문서를 다시 열고 요청해 주세요."),
+            Map.entry("document_purged", "영구 삭제된 문서라 실행하지 않았습니다. 다른 문서를 골라 다시 요청해 주세요."),
             Map.entry("mutation_intent_required", "어떤 변경을 원하시는지 조금 더 구체적으로 알려 주세요."),
-            Map.entry("ready_markdown_migration_unrecoverable", "이전 편집안을 복구할 수 없어 적용하지 못했습니다. 다시 요청해 주세요."),
+            Map.entry("ready_markdown_migration_unrecoverable", "이전 편집안을 복구할 수 없어 문서를 바꾸지 않았어요. 같은 요청을 다시 보내 새 편집안을 받아 주세요."),
+            Map.entry("plan_out_of_scope", "선택한 폴더 밖으로 옮기거나 선택한 폴더 자체를 바꾸는 작업만 있어 정리 계획을 만들지 못했어요. 규칙을 조정해 다시 시도해 주세요."),
+            // Agent: 계획 실행의 항목별 실패(문서 도구 호출 응답)
+            Map.entry("tool_http_403", "이 문서를 바꿀 권한이 없어 이 작업을 실행하지 못했어요. 권한을 확인한 뒤 다시 요청해 주세요."),
+            Map.entry("tool_http_404", "대상을 찾을 수 없어 이 작업을 실행하지 못했어요. 삭제되었는지 확인한 뒤 다시 요청해 주세요."),
+            Map.entry("tool_http_409", "그 사이 내용이 바뀌어 이 작업을 적용하지 못했어요. 최신 내용을 확인한 뒤 다시 요청해 주세요."),
+            Map.entry("tool_http_unavailable", "문서 서비스에 연결하지 못해 이 작업을 실행하지 못했어요. 작업 결과를 확인한 뒤 다시 요청해 주세요."),
+            // 되돌리기
+            Map.entry("rollback_failed", "변경을 되돌리지 못했어요. 작업 기록에서 문서 상태를 확인해 주세요."),
+            Map.entry("rollback_child_failed", "함께 실행한 작업 중 일부를 되돌리지 못했어요. 작업 기록에서 문서 상태를 확인해 주세요."),
+            Map.entry("rollback_conflict", "그 사이 내용이 바뀌어 변경을 자동으로 되돌리지 못했어요. 작업 기록에서 문서 상태를 확인해 주세요."),
+            Map.entry("rollback_database_error", "저장소 문제로 변경을 되돌리지 못했어요. 작업 기록에서 문서 상태를 확인해 주세요."),
+            Map.entry("rollback_retry_pending", "변경을 되돌리는 작업을 자동으로 다시 시도하고 있어요. 잠시 기다려 주세요."),
+            Map.entry("rollback_document_purged", "영구 삭제된 문서의 변경은 되돌릴 수 없습니다. 나머지 변경은 되돌렸습니다."),
             // document 자체 코드
             Map.entry("PIPELINE_UNAVAILABLE", "AI 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요."),
             Map.entry("PIPELINE_TIMEOUT", "질의 대기 시간이 지나 취소를 요청했습니다."),
@@ -84,12 +118,15 @@ public final class AiErrorMessages {
             Map.entry("AI_USAGE_LIMIT_EXCEEDED", AI_USAGE_LIMIT_EXCEEDED));
 
     /**
-     * 접두사로 묶는 코드. 개별 항목(MESSAGES)을 먼저 보고, 없을 때만 이 목록을 위에서부터 본다.
-     * markdown_* 는 편집안 계약 위반 세부 사유라 한 문구로 보인다.
+     * 목록에 아직 없는 새 코드를 위한 접두사 기본 문구. 개별 항목(MESSAGES)을 먼저 보고, 없을 때만 이 목록을 위에서부터 본다.
+     * 더 긴 접두사를 먼저 둔다. rollback_*에는 "code:operation_id" 꼴 값도 온다.
      */
     private static final List<Map.Entry<String, String>> PREFIX_MESSAGES = List.of(
-            Map.entry("markdown_", "편집안을 만들지 못했습니다. 다시 시도해 주세요."),
-            Map.entry("rollback_", "변경을 되돌리지 못했습니다. 작업 기록을 확인해 주세요."));
+            Map.entry("markdown_create_", "새 문서 초안을 만들지 못해 새 문서를 만들지 않았어요. 요청을 더 구체적으로 적어 다시 시도해 주세요."),
+            Map.entry("markdown_", "편집안을 만들지 못해 문서를 바꾸지 않았어요. 요청을 더 구체적으로 적어 다시 시도해 주세요."),
+            Map.entry("agent_result_", "AI 결과를 적용할 수 없어 문서를 바꾸지 않았어요. 다시 시도해 주세요."),
+            Map.entry("tool_http_", "문서 서비스가 요청을 처리하지 못해 이 작업을 실행하지 못했어요. 작업 결과를 확인한 뒤 다시 요청해 주세요."),
+            Map.entry("rollback_", "변경을 되돌리는 중 문제가 생겨 일부가 남아 있을 수 있어요. 작업 기록에서 문서 상태를 확인해 주세요."));
 
     /** 기능별 기본 문구가 곧 올바른 문구인 코드. 목록에 없다는 경고를 내지 않는다. */
     private static final Set<String> GENERIC_CODES =
@@ -105,7 +142,7 @@ public final class AiErrorMessages {
     }
 
     public static String agent(String code) {
-        return resolve(code, AGENT_DEFAULT);
+        return resolve(code, AGENT_DEFAULT, AGENT_OVERRIDES);
     }
 
     public static String ingest(String code) {

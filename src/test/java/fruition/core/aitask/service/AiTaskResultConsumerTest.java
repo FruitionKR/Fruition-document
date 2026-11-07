@@ -174,7 +174,7 @@ class AiTaskResultConsumerTest {
                 """);
 
         verify(queryEventBroker).fail("agent-1", "provider_unavailable",
-                "AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+                "AI 서비스가 응답하지 않거나 일시적인 문제가 있어 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.");
     }
 
     @Test
@@ -189,7 +189,7 @@ class AiTaskResultConsumerTest {
 
         // 내부 코드가 아니라 사용자에게 보일 문구가 나가야 한다.
         verify(queryEventBroker).fail("agent-1", "agent_result_invalid_payload",
-                "Agent 결과 형식이 올바르지 않습니다.");
+                "AI 결과의 형식이 맞지 않아 문서를 바꾸지 않았어요. 다시 시도해 주세요.");
         verify(queryEventBroker, never()).complete(anyString());
     }
 
