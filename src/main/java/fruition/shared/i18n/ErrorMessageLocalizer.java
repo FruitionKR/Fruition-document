@@ -1,5 +1,6 @@
 package fruition.shared.i18n;
 
+import fruition.shared.util.DuplicateResourceName;
 import fruition.shared.util.ErrorResponse;
 import org.springframework.context.MessageSource;
 import org.springframework.core.MethodParameter;
@@ -56,7 +57,10 @@ public class ErrorMessageLocalizer implements ResponseBodyAdvice<Object> {
                 : detail.details().stream()
                 .map(field -> new ErrorResponse.ErrorDetail.FieldError(field.field(), message("field.invalid", language)))
                 .toList();
-        return new ErrorResponse(withMessage(detail, message(detail.code(), language), details));
+        String duplicateName = "DUPLICATE_NAME".equals(detail.code())
+                ? DuplicateResourceName.englishMessage(detail.message()) : null;
+        return new ErrorResponse(withMessage(detail,
+                duplicateName != null ? duplicateName : message(detail.code(), language), details));
     }
 
     /** code의 문구. 키가 없으면 기본 문구다. 인자를 넘기지 않으므로 문구의 작은따옴표는 그대로 나간다. */

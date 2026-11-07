@@ -171,9 +171,9 @@ class FolderControllerTest {
                         .header("Accept-Language", "en-US,en;q=0.9"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
-                .andExpect(jsonPath("$.error.message").value("The request is invalid."))
+                .andExpect(jsonPath("$.error.message").value("The request is not valid."))
                 .andExpect(jsonPath("$.error.details[0].field").value("folder_id"))
-                .andExpect(jsonPath("$.error.details[0].reason").value("The value is invalid."));
+                .andExpect(jsonPath("$.error.details[0].reason").value("The value is not in a valid format."));
     }
 
     @Test

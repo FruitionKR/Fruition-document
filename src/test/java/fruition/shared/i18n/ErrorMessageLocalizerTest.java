@@ -58,7 +58,16 @@ class ErrorMessageLocalizerTest {
 
         assertThat(localized.error().message()).isEqualTo("The request could not be processed.");
         assertThat(localized.error().details()).containsExactly(
-                new ErrorResponse.ErrorDetail.FieldError("name", "The value is invalid."));
+                new ErrorResponse.ErrorDetail.FieldError("name", "The value is not in a valid format."));
+    }
+
+    @Test
+    void englishDuplicateNameKeepsWhichNameCollidedLikeAccessService() {
+        ErrorResponse localized = localizer.localize(ErrorResponse.of("DUPLICATE_NAME",
+                "같은 워크스페이스에 같은 폴더명이 이미 있습니다. 다른 이름을 사용해 주세요."), ResponseLanguage.EN);
+
+        assertThat(localized.error().message())
+                .isEqualTo("A folder with the same name already exists in this workspace. Please use a different name.");
     }
 
     @Test

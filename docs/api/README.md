@@ -31,7 +31,7 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 
 모든 `/api/**` 요청은 `Accept-Language`로 화면 언어를 보낸다. 지원 언어는 `ko`·`en`이고, 그 밖의 언어나 헤더가 없으면 `ko`다([ADR-0034](../adr/0034-response-language.md)).
 
-- 공통 오류 `ErrorResponse`: `code`는 언어와 상관없이 같다. `message`는 `en`이면 code별 영어 문구(`messages_en.properties`의 `error.<code>`, 없으면 기본 문구), `ko`면 지금처럼 상세 한국어 문구다. 검증 실패 `details[].reason`도 `en`이면 영어다. pipeline 응답을 그대로 중계하는 본문은 바꾸지 않는다.
+- 공통 오류 `ErrorResponse`: 응답 형식과 언어 규칙은 access-svc와 같다. `code`는 언어와 상관없이 같다. `message`는 `en`이면 code별 영어 문구(`messages_en.properties`의 `error.<code>`, 없으면 기본 문구), `ko`면 지금처럼 상세 한국어 문구다. 검증 실패 `details[].reason`도 `en`이면 영어다. pipeline 응답을 그대로 중계하는 본문은 바꾸지 않는다.
 - 저장된 실패 문구(문서 `error_message`, 채팅 말풍선 `error_message`, 회의 전사 `error`): 함께 저장한 `error_code`가 있으면 요청 언어로 다시 만든다. 코드 없이 저장된 이전 실패는 저장된 한국어 문구 그대로이며, 화면은 `error_code`가 있으면 코드로 번역할 수 있다. 새로 저장하는 실패에는 코드를 항상 남긴다.
 - 응답 때 만드는 AI 실패 문구(Agent 턴 `error_message`, 질의 run `error`, Wiki 정리 `error`)는 요청 언어다. Agent·질의 SSE 실패 문구는 요청 때 command에 담은 언어다.
 - AI command: 질의(`ai.query.command`)·Agent(`ai.agent.command`)·회의록(`kind: meeting_notes`) command에 요청 시점 언어를 `response_language`(`"ko"`|`"en"`)로 담는다. AI는 답변·계획 카드·안내·회의록 문구를 이 언어로 쓴다. 위키 편입은 언어를 넘기지 않아 위키 페이지는 원문 언어를 따른다.
