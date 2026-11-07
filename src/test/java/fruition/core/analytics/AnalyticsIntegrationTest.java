@@ -558,10 +558,10 @@ class AnalyticsIntegrationTest {
                 applier.applyAgent(invalid);
                 status.setRollbackOnly();
             });
-            assertThat(capture.messages()).noneMatch(m -> m.startsWith("[AI 작업 결과 처리 실패]"));
+            assertThat(capture.messages()).noneMatch(m -> m.startsWith("[Agent 요청 결과 처리 실패]"));
             tx.executeWithoutResult(status -> applier.applyAgent(invalid));
             tx.executeWithoutResult(status -> applier.applyAgent(invalid));
-            assertThat(capture.messages().stream().filter(m -> m.startsWith("[AI 작업 결과 처리 실패]"))).hasSize(1);
+            assertThat(capture.messages().stream().filter(m -> m.startsWith("[Agent 요청 결과 처리 실패]"))).hasSize(1);
             assertThat(capture.messages()).anyMatch(m -> m.contains("stage=validation")
                     && m.contains("errorCode=agent_result_missing_canonical_markdown")
                     && m.contains("validationField=canonical_markdown"));

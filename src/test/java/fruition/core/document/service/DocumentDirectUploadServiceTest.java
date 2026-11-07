@@ -98,6 +98,18 @@ class DocumentDirectUploadServiceTest {
                 .isInstanceOf(fruition.core.document.exception.DocumentWriteForbiddenException.class);
         verify(multipart, never()).start(anyString(), anyString());
     }
+    @Test void missingPartsAreLoggedAsRejectionNotStorageFailure() throws Exception {
+        var ticket = new DocumentDirectUploadService.CompleteRequest(start(10 * MB).ticket());
+        when(storage.statObject(any())).thenThrow(new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.CONFLICT, "전송되지 않은 조각이 있습니다."));
+        try (var capture = new fruition.shared.logging.LogCapture(DocumentDirectUploadService.class)) {
+            assertThatThrownBy(() -> uploads.complete("ws_test", "user_test", "key", ticket));
+            assertThat(capture.events()).anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN
+                    && e.getFormattedMessage().contains("errorCode=UPLOAD_PARTS_INCOMPLETE"));
+            assertThat(capture.messages()).noneMatch(m -> m.contains("STORAGE_ASSEMBLE_FAILED"));
+        }
+    }
+
     @Test void assembledObjectOverCurrentCapIsRejectedEvenWithOlderTicket() throws Exception {
         // 한도를 낮추기 전에 발급된 ticket(150MB)으로 확정하면 조립된 실제 크기로 거절한다.
         var ticket = new DocumentDirectUploadService.CompleteRequest(service(200 * MB).start("ws_test", "user_test",

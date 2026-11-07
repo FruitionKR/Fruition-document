@@ -56,7 +56,12 @@ class AiTaskRollbackIntegrationTest {
                 new fruition.core.aitask.repository.PipelineTaskCancellationClient.TaskStatus(id, "rolling_back", null));
         assertThatThrownBy(() -> cancellation.cancel(id, workspace, "other"))
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        var capture = new fruition.shared.logging.LogCapture(AiTaskCancellationService.class);
         assertThat(cancellation.cancel(id, workspace, "user").get("status")).isEqualTo("rolling_back");
+        // 취소 접수·전달은 취소 완료가 아니다.
+        assertThat(capture.messages()).anyMatch(m -> m.startsWith("[AI 실행 취소 요청 접수] operation=ai_task_cancel stage=accepted"))
+                .anyMatch(m -> m.startsWith("[AI 실행 취소 전달 완료] stage=forwarded"))
+                .noneMatch(m -> m.startsWith("[AI 실행 취소 완료]"));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_sessions WHERE id = ?", Integer.class, id)).isEqualTo(1);
         org.mockito.Mockito.doAnswer(invocation -> {
             for (long change : cancellation.changes(id, workspace, "user")) cancellation.undo(id, workspace, "user", change);
@@ -69,6 +74,10 @@ class AiTaskRollbackIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_sessions WHERE id = ?", Integer.class, id)).isZero();
         assertThat(redis.opsForList().range("query:events:" + id, 0, -1)).allSatisfy(event -> assertThat(event).contains("query.cancelled"));
         assertThat(cancellation.cancel(id, workspace, "user").get("status")).isEqualTo("cancelled");
+        // 실제 최종 상태를 저장한 뒤 한 번만 완료로 남고, 이미 취소된 작업의 재요청은 새 취소가 아니다.
+        assertThat(capture.messages().stream().filter(m -> m.startsWith("[AI 실행 취소 완료]"))).hasSize(1);
+        assertThat(capture.messages()).anyMatch(m -> m.startsWith("[AI 실행 취소 중복 요청] operation=ai_task_cancel stage=duplicate_ignored"));
+        capture.close();
         // 질의 취소는 위키를 바꾸지 않는다.
         assertThat(jdbc.queryForObject("SELECT count(*) FROM wiki_workspace_versions WHERE workspace_id = ?",
                 Integer.class, workspace)).isZero();

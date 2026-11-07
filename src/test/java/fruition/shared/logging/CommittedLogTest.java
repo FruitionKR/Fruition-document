@@ -42,6 +42,20 @@ class CommittedLogTest {
         assertThat(CommittedLog.reason("agent_result_missing_canonical_markdown")).contains("문서 본문이 없습니다");
         assertThat(CommittedLog.reason("private-provider-secret")).doesNotContain("private-provider-secret");
     }
+    @Test void upstreamStringsBecomeStableCodesOnlyWhenRegistered() {
+        assertThat(CommittedLog.stableCode("provider_unavailable")).isEqualTo("provider_unavailable");
+        assertThat(CommittedLog.stableCode("some_new_upstream_code")).isEqualTo("UNCLASSIFIED");
+        assertThat(CommittedLog.stableCode("provider failed: private text")).isEqualTo("UNCLASSIFIED");
+        assertThat(CommittedLog.reason("some_new_upstream_code")).contains("분류되지 않았습니다");
+    }
+    @Test void expectedFailuresAreWarnAndOthersAreError() {
+        try (var capture = new LogCapture(CommittedLogTest.class)) {
+            CommittedLog.failure(log, "input_rejected", "[실패] a");
+            CommittedLog.failure(log, "provider_unavailable", "[실패] b");
+            CommittedLog.failure(log, "some private provider text", "[실패] c");
+            assertThat(capture.events()).extracting(e -> e.getLevel().toString()).containsExactly("WARN", "ERROR", "ERROR");
+        }
+    }
     private static final class LocalTransactions extends AbstractPlatformTransactionManager {
         @Override protected Object doGetTransaction() { return new Object(); }
         @Override protected void doBegin(Object t, TransactionDefinition d) {}

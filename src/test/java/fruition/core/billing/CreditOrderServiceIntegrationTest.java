@@ -133,11 +133,16 @@ class CreditOrderServiceIntegrationTest {
         var order = orders.create(user, "CREDIT_10000");
         assertThat(order.amountKrw()).isEqualTo(10_000);
 
+        var paymentLog = new fruition.shared.logging.LogCapture(CreditOrderService.class);
         orders.confirm(user, order.orderId(), "pay-1", 10_000);
         var again = orders.confirm(user, order.orderId(), "pay-1", 10_000);
         String webhook = doneEvent("evt-" + UUID.randomUUID(), order.orderId(), 10_000);
         orders.webhook(webhook, sign(webhook));
         orders.webhook(webhook, sign(webhook));
+        // 확인 재시도·중복 알림이 와도 지급과 승인 완료 로그는 한 번이다.
+        assertThat(paymentLog.messages().stream().filter(m -> m.startsWith("[결제 승인 완료]")))
+                .singleElement().asString().contains("orderId=" + order.orderId(), "source=confirm");
+        paymentLog.close();
         String other = doneEvent("evt-" + UUID.randomUUID(), order.orderId(), 10_000);
         orders.webhook(other, sign(other));
 
