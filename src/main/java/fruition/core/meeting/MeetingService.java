@@ -1,5 +1,7 @@
 package fruition.core.meeting;
 
+import fruition.core.aitask.AiErrorMessages;
+import fruition.shared.i18n.ResponseLanguage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.authz.WorkspaceAccessGuard;
@@ -175,8 +177,9 @@ public class MeetingService {
                 && segments.stream().noneMatch(segment -> segment.text() == null)
                 && streams.stream().allMatch(stream -> "finished".equals(stream.endReason()));
         return new MeetingResponse(meeting.id(), meeting.displayName(), meeting.documentId(), meeting.source(),
-                meeting.status(), live, meeting.recordingKey() != null, meeting.error(), complete, streams, segments,
-                meeting.createdAt());
+                meeting.status(), live, meeting.recordingKey() != null,
+                AiErrorMessages.localizeStored(meeting.errorCode(), meeting.error(), ResponseLanguage.current()),
+                meeting.errorCode(), complete, streams, segments, meeting.createdAt());
     }
 
     private String write(Ticket ticket) {

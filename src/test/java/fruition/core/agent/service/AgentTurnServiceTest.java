@@ -108,6 +108,7 @@ class AgentTurnServiceTest {
                 org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
         assertThat(command.getValue().provider()).isEqualTo("openai");
         assertThat(command.getValue().model()).isEqualTo("gpt-6-luna");
+        assertThat(command.getValue().responseLanguage()).isEqualTo("ko");
         assertThat(command.getValue().skillMode()).isEqualTo("auto");
         assertThat(command.getValue().skillId()).isNull();
         assertThat(command.getValue().conversationContext().pendingSkillProposal().scopeType()).isEqualTo("personal");

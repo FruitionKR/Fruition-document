@@ -1,5 +1,6 @@
 package fruition.core.query.service;
 
+import fruition.shared.i18n.ResponseLanguage;
 import fruition.core.query.domain.QueryRun;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import fruition.core.chat.service.ChatSessionService;
@@ -79,7 +80,8 @@ public class QueryRunService {
                 new QueryCommand(run.requestId(), "query", workspaceId, userId, sessionId,
                         question, provider, model, webSearchEnabled,
                         sessionState.contextSummary(),
-                        messageContext.recentMessages(), messageContext, sessionState.titleNeeded()));
+                        messageContext.recentMessages(), messageContext, sessionState.titleNeeded(),
+                        ResponseLanguage.current().code()));
         if (analytics != null) analytics.queryStarted(run.requestId(), userId, workspaceId, sessionId, messageContext.createdAt(), "chat");
         log.info("[질의 command 등록 완료] requestId={}", run.requestId());
         return run;
@@ -122,6 +124,8 @@ public class QueryRunService {
             @JsonProperty("recent_messages") java.util.List<QueryService.RecentMessage> recentMessages,
             @JsonProperty("message_context") QueryService.QueryMessageContext messageContext,
             /** false면 사용자가 제목을 정한 세션이라 AI가 제목을 만들지 않는다. */
-            @JsonProperty("session_title_needed") boolean sessionTitleNeeded
+            @JsonProperty("session_title_needed") boolean sessionTitleNeeded,
+            /** 요청자 화면 언어("ko"|"en"). AI가 답변 언어로 쓴다. */
+            @JsonProperty("response_language") String responseLanguage
     ) {}
 }

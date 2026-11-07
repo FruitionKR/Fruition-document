@@ -77,7 +77,33 @@ class QueryRunServiceTest {
                 .contains("\"provider\":\"openai\"", "\"model\":\"gpt-6-luna\"",
                         "\"recent_messages\":[{\"role\":\"user\",\"content\":\"이전 질문\"},"
                                 + "{\"role\":\"assistant\",\"content\":\"이전 답변\"}]",
-                        "\"allow_web_search\":false");
+                        "\"allow_web_search\":false",
+                        // 요청 밖(헤더 없음)은 한국어다.
+                        "\"response_language\":\"ko\"");
+    }
+
+    @Test
+    void start_sendsRequesterResponseLanguage() {
+        QueryRun pending = QueryRun.pending("query_abc123", "ws_abc123", "session_abc123",
+                "질문", Instant.parse("2026-06-20T10:00:00Z"));
+        when(queryRunStore.create("ws_abc123", "session_abc123", "openai", "gpt-6-luna", "질문"))
+                .thenReturn(pending);
+        when(queryService.prepareMessages("session_abc123", "질문", "query_abc123",
+                "openai", "gpt-6-luna"))
+                .thenReturn(new QueryService.QueryMessageContext(
+                        "pair_abc123", "chat_user_abc123", "chat_assistant_abc123", pending.createdAt(), List.of()));
+        org.springframework.context.i18n.LocaleContextHolder.setLocale(java.util.Locale.ENGLISH);
+        try {
+            service.start("ws_abc123", "user_abc123", "session_abc123", "질문");
+        } finally {
+            org.springframework.context.i18n.LocaleContextHolder.resetLocaleContext();
+        }
+
+        ArgumentCaptor<QueryRunService.QueryCommand> command =
+                ArgumentCaptor.forClass(QueryRunService.QueryCommand.class);
+        verify(outboxWriter).enqueue(eq("query_abc123"), eq("ai.query.command"),
+                eq("session_abc123"), command.capture());
+        assertThat(command.getValue().responseLanguage()).isEqualTo("en");
     }
 
     /** 세션에 쌓인 요약을 함께 보내야 pipeline이 이번 턴 요약을 앞 내용에 이어 쓴다. */

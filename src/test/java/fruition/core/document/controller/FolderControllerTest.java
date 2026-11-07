@@ -164,6 +164,27 @@ class FolderControllerTest {
                 .andExpect(jsonPath("$.error.details[0].reason").value("값의 형식이 올바르지 않습니다."));
     }
 
+    @Test
+    void errorMessageFollowsEnglishAcceptLanguageButKeepsCode() throws Exception {
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/folders/not-a-uuid/children")
+                        .header("Authorization", bearer())
+                        .header("Accept-Language", "en-US,en;q=0.9"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.error.message").value("The request is invalid."))
+                .andExpect(jsonPath("$.error.details[0].field").value("folder_id"))
+                .andExpect(jsonPath("$.error.details[0].reason").value("The value is invalid."));
+    }
+
+    @Test
+    void unsupportedAcceptLanguageFallsBackToKorean() throws Exception {
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/folders/not-a-uuid/children")
+                        .header("Authorization", bearer())
+                        .header("Accept-Language", "fr-FR"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value("요청 형식이 올바르지 않습니다."));
+    }
+
     private String bearer() {
         return "Bearer " + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com");
     }

@@ -21,11 +21,11 @@ public class MeetingRepository {
     public record Meeting(String id, String workspaceId, String createdBy, String displayName,
                           String documentId, String source, String status, Instant createdAt,
                           String recordingKey, String recordingContentType, Long recordingBytes, String error,
-                          String transcriptionRunId) {
+                          String transcriptionRunId, String errorCode) {
 
         public Meeting(String id, String workspaceId, String createdBy, String displayName,
                        String documentId, String source, String status, Instant createdAt) {
-            this(id, workspaceId, createdBy, displayName, documentId, source, status, createdAt, null, null, null, null, null);
+            this(id, workspaceId, createdBy, displayName, documentId, source, status, createdAt, null, null, null, null, null, null);
         }
     }
 
@@ -207,12 +207,12 @@ public class MeetingRepository {
         return true;
     }
 
-    /** @return 이 run의 전사 중이던 회의를 실패로 바꿨으면 true */
-    public boolean failTranscription(String id, String runId, String error) {
+    /** @return 이 run의 전사 중이던 회의를 실패로 바꿨으면 true. 코드는 응답 때 요청 언어로 문구를 다시 만드는 데 쓴다. */
+    public boolean failTranscription(String id, String runId, String errorCode, String error) {
         return jdbc.update("""
-                UPDATE meetings SET status = 'failed', error = ?, updated_at = now()
+                UPDATE meetings SET status = 'failed', error = ?, error_code = ?, updated_at = now()
                 WHERE id = ? AND status = 'transcribing' AND transcription_run_id = ?
-                """, error, id, runId) == 1;
+                """, error, errorCode, id, runId) == 1;
     }
 
     /**
@@ -232,6 +232,7 @@ public class MeetingRepository {
                 rs.getString("display_name"), rs.getString("document_id"), rs.getString("source"),
                 rs.getString("status"), rs.getTimestamp("created_at").toInstant(),
                 rs.getString("recording_key"), rs.getString("recording_content_type"),
-                rs.wasNull() ? null : bytes, rs.getString("error"), rs.getString("transcription_run_id"));
+                rs.wasNull() ? null : bytes, rs.getString("error"), rs.getString("transcription_run_id"),
+                rs.getString("error_code"));
     }
 }

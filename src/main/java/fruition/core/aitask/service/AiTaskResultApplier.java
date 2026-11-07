@@ -358,7 +358,7 @@ public class AiTaskResultApplier {
                         payload.path("action").asText(null), agentMessageContent(payload), clarifyReason(event));
                 recordAgentChatEvidence(assistantMessageId, payload);
             } else {
-                chatTurnRecorder.markFailed(assistantMessageId, AiErrorMessages.agent(errorCode));
+                chatTurnRecorder.markFailed(assistantMessageId, errorCode, AiErrorMessages.agent(errorCode));
             }
         } catch (RuntimeException e) {
             log.warn("[Agent 채팅 기록 실패] runId={} assistantMessageId={} errorType={}",

@@ -135,11 +135,12 @@ public class ChatTurnRecorder {
         chatMessageRepository.save(assistantMessage);
     }
 
+    /** 실패 코드를 함께 남긴다. 응답은 요청 언어에 맞춰 코드로 문구를 다시 만든다. */
     @Transactional
-    public void markFailed(String assistantMessageId, String errorMessage) {
+    public void markFailed(String assistantMessageId, String errorCode, String errorMessage) {
         ChatMessage assistantMessage = chatMessageRepository.findById(assistantMessageId)
                 .orElseThrow(() -> new IllegalStateException("처리 중인 assistant 메시지를 찾을 수 없습니다: " + assistantMessageId));
-        assistantMessage.fail(errorMessage);
+        assistantMessage.fail(errorCode, errorMessage);
         chatMessageRepository.save(assistantMessage);
     }
 }
