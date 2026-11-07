@@ -25,15 +25,19 @@ public class SkillService {
     }
 
     public JsonNode author(String workspaceId, String userId, SkillAuthoringRequest request, String runId) {
-        requireMember(workspaceId, userId);
-        requireAuthorForScope(workspaceId, userId, request.scopeType());
-        return requester.author(workspaceId, userId, request, workspaceAiModelClient.get(workspaceId), runId);
+        return SkillOperationLog.track("skill_author", "스킬 초안 작성", null, runId, workspaceId, userId, () -> {
+            requireMember(workspaceId, userId);
+            requireAuthorForScope(workspaceId, userId, request.scopeType());
+            return requester.author(workspaceId, userId, request, workspaceAiModelClient.get(workspaceId), runId);
+        });
     }
 
     public JsonNode publish(String workspaceId, String userId, SkillPublishRequest request, String runId) {
-        requireMember(workspaceId, userId);
-        requireAuthorForScope(workspaceId, userId, request.scopeType());
-        return requester.publish(workspaceId, userId, request, workspaceAiModelClient.get(workspaceId), runId);
+        return SkillOperationLog.track("skill_publish", "스킬 생성", null, runId, workspaceId, userId, () -> {
+            requireMember(workspaceId, userId);
+            requireAuthorForScope(workspaceId, userId, request.scopeType());
+            return requester.publish(workspaceId, userId, request, workspaceAiModelClient.get(workspaceId), runId);
+        });
     }
 
     public JsonNode list(String workspaceId, String userId) {
@@ -47,21 +51,29 @@ public class SkillService {
     }
 
     public JsonNode update(String workspaceId, String userId, String skillId, SkillUpdateRequest request, String runId) {
-        requireMember(workspaceId, userId);
-        requireAuthorForExisting(workspaceId, userId, skillId);
-        return requester.update(workspaceId, userId, skillId, request, workspaceAiModelClient.get(workspaceId), runId);
+        return SkillOperationLog.track("skill_update", "스킬 수정", skillId, runId, workspaceId, userId, () -> {
+            requireMember(workspaceId, userId);
+            requireAuthorForExisting(workspaceId, userId, skillId);
+            return requester.update(workspaceId, userId, skillId, request, workspaceAiModelClient.get(workspaceId), runId);
+        });
     }
 
     public JsonNode setEnabled(String workspaceId, String userId, String skillId, boolean enabled) {
-        requireMember(workspaceId, userId);
-        requireAuthorForExisting(workspaceId, userId, skillId);
-        return requester.setEnabled(workspaceId, userId, skillId, enabled);
+        return SkillOperationLog.track(enabled ? "skill_enable" : "skill_disable", enabled ? "스킬 활성화" : "스킬 비활성화",
+                skillId, null, workspaceId, userId, () -> {
+            requireMember(workspaceId, userId);
+            requireAuthorForExisting(workspaceId, userId, skillId);
+            return requester.setEnabled(workspaceId, userId, skillId, enabled);
+        });
     }
 
     public void delete(String workspaceId, String userId, String skillId) {
-        requireMember(workspaceId, userId);
-        requireAuthorForExisting(workspaceId, userId, skillId);
-        requester.delete(workspaceId, userId, skillId);
+        SkillOperationLog.track("skill_delete", "스킬 삭제", skillId, null, workspaceId, userId, () -> {
+            requireMember(workspaceId, userId);
+            requireAuthorForExisting(workspaceId, userId, skillId);
+            requester.delete(workspaceId, userId, skillId);
+            return null;
+        });
     }
 
     /** 개인 스킬이 아닌 모든 범위(범위 누락 포함)는 skill.author가 필요하다(fail-closed). */

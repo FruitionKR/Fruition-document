@@ -209,7 +209,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                 .orTimeout(15, TimeUnit.SECONDS)
                 .whenComplete((upstream, error) -> {
                     if (error != null) {
-                        log.warn("[회의 실시간 전사 연결 실패] meetingId={}", ticket.meetingId(), error);
+                        log.warn("[회의 실시간 전사 연결 실패] operation=meeting_live stage=connect meetingId={} runId={} 원인=AI 전사 서비스에 연결하지 못했습니다.", ticket.meetingId(), live.runId, error);
                         fail(live, "transcription_failed", "글로 옮기기를 시작하지 못했습니다. 다시 연결해 주세요.",
                                 CloseStatus.SERVER_ERROR);
                     } else if (live.closing.get()) {
@@ -292,7 +292,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         } catch (CreditService.InsufficientCreditException e) {
             fail(live, "insufficient_credit", e.getMessage(), CloseStatus.POLICY_VIOLATION);
         } catch (RuntimeException e) {
-            log.warn("[회의 실시간 전사 구간 정산 실패] meetingId={} runId={} error={}", live.ticket.meetingId(), live.runId,
+            log.warn("[회의 실시간 전사 구간 정산 실패] operation=meeting_live stage=billing meetingId={} runId={} error={}", live.ticket.meetingId(), live.runId,
                     e.toString());
         }
     }
@@ -335,7 +335,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         try {
             return !"NONE".equals(accessGuard.getRole(live.ticket.workspaceId(), live.ticket.userId()));
         } catch (RuntimeException e) {
-            log.warn("[회의 실시간 전사 멤버십 확인 실패] meetingId={} error={}", live.ticket.meetingId(), e.toString());
+            log.warn("[회의 실시간 전사 멤버십 확인 실패] operation=meeting_live stage=permission meetingId={} error={}", live.ticket.meetingId(), e.toString());
             return false;
         }
     }
@@ -375,7 +375,7 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                 try {
                     handle(live, objectMapper.readTree(raw));
                 } catch (Exception e) {
-                    log.warn("[회의 전사 저장 실패] meetingId={}", live.ticket.meetingId(), e);
+                    log.warn("[회의 전사 저장 실패] operation=meeting_live stage=db_save errorCode=transcript_save_failed meetingId={}", live.ticket.meetingId(), e);
                     fail(live, "transcript_save_failed", "대화 내용을 저장하지 못했습니다. 다시 연결해 주세요.",
                             CloseStatus.SERVER_ERROR);
                 }
@@ -407,6 +407,8 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         switch (event.path("type").asText()) {
             case "ready" -> {
                 live.ready = true;
+                log.info("[회의 실시간 전사 시작] operation=meeting_live stage=started meetingId={} runId={} workspaceId={} userId={}",
+                        meetingId, live.runId, live.ticket.workspaceId(), live.ticket.userId());
                 send(live, message("ready").put("sample_rate", event.path("sample_rate").asInt(24000))
                         .put("stream_order", live.stream.order()));
             }
@@ -450,6 +452,8 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
                     return;
                 }
                 repository.endStream(live.stream.id(), "finished");
+                log.info("[회의 실시간 전사 종료] operation=meeting_live stage=completed meetingId={} runId={} workspaceId={} userId={} segmentCount={} 설명=확정 문장을 모두 저장했습니다.",
+                        meetingId, live.runId, live.ticket.workspaceId(), live.ticket.userId(), expected);
                 send(live, message("finished").put("segment_count", expected));
                 live.closing.set(true);
                 live.browser.close(CloseStatus.NORMAL);
@@ -465,9 +469,12 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         if (!live.closing.compareAndSet(false, true)) {
             return;
         }
-        log.warn("[회의 실시간 전사 실패] meetingId={} runId={} workspaceId={} userId={} errorCode={} closeCode={} 원인={}",
-                live.ticket.meetingId(), live.runId, live.ticket.workspaceId(), live.ticket.userId(),
-                CommittedLog.code(code), status.getCode(), CommittedLog.reason(code));
+        String template = "[회의 실시간 전사 실패] operation=meeting_live stage=stream meetingId={} runId={} workspaceId={} userId={} errorCode={} closeCode={} retryable={} 원인={}";
+        Object[] fields = {live.ticket.meetingId(), live.runId, live.ticket.workspaceId(), live.ticket.userId(),
+                CommittedLog.code(code), status.getCode(), CloseStatus.SERVER_ERROR.equals(status), CommittedLog.reason(code)};
+        // 저장 실패·확정 문장 불일치는 서버 데이터 문제다. 나머지는 거부이거나 새 연결로 이어 갈 수 있는 중단이다.
+        if (Set.of("transcript_save_failed", "transcript_incomplete", "segment_conflict").contains(code)) log.error(template, fields);
+        else log.warn(template, fields);
         if (live.stream != null) {
             repository.endStream(live.stream.id(), "failed");
         }

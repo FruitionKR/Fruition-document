@@ -94,7 +94,12 @@ public class MeetingTranscriptionService {
         // 반영 여부와 무관하게 닫는다. 이미 닫힌 run이면 아무것도 하지 않는다.
         if (error == null && applied) outbox.complete(runId);
         else outbox.fail(runId);
-        if (error != null) log.warn("[회의 전사 실패 반영] meetingId={} code={}", meetingId, error);
+        if (error == null && applied) {
+            fruition.shared.logging.CommittedLog.info(log, "[회의 전사 완료] operation=meeting_transcription stage=completed meetingId={} runId={}", meetingId, runId);
+        } else if (error != null && applied) {
+            fruition.shared.logging.CommittedLog.failure(log, error, "[회의 전사 실패 확정] operation=meeting_transcription stage=result meetingId={} runId={} errorCode={} upstreamCode={} 원인={}",
+                    meetingId, runId, fruition.shared.logging.CommittedLog.stableCode(error), fruition.shared.logging.CommittedLog.code(error), fruition.shared.logging.CommittedLog.reason(error));
+        }
         if (error != null && applied && analytics != null)
             analytics.taskFailed(runId, "transcription", "result", error, null);
     }
@@ -110,6 +115,8 @@ public class MeetingTranscriptionService {
                 || !repository.failTranscription(meetingId, runId, "글로 옮기기를 취소했습니다. 녹음을 다시 올려 주세요.")) {
             throw new MeetingException(HttpStatus.CONFLICT, "MEETING_NOT_TRANSCRIBING", "글로 옮기는 중인 회의가 아닙니다.");
         }
+        log.info("[회의 전사 취소 접수] operation=meeting_transcription stage=cancel_accepted meetingId={} runId={} workspaceId={} userId={} 설명=취소 완료는 같은 runId의 AI 실행 취소 완료 로그로 확인합니다.",
+                meetingId, runId, workspaceId, userId);
         cancellation.cancel(runId, workspaceId, userId);
         return meetingService.get(workspaceId, userId, meetingId);
     }

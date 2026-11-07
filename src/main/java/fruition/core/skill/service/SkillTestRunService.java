@@ -46,6 +46,11 @@ public class SkillTestRunService {
     }
 
     public JsonNode testRun(String workspaceId, String userId, SkillTestRunRequest request, String runId) {
+        return SkillOperationLog.track("skill_test_run", "스킬 테스트 실행", null, runId, workspaceId, userId,
+                () -> runTest(workspaceId, userId, request, runId));
+    }
+
+    private JsonNode runTest(String workspaceId, String userId, SkillTestRunRequest request, String runId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         var document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(request.documentId(), workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(request.documentId()));

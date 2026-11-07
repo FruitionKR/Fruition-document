@@ -57,7 +57,7 @@ public class AiTaskResultConsumer {
             event = java.util.Objects.requireNonNull(objectMapper.readTree(raw), "AI result is empty");
         } catch (Exception failure) {
             // Never include the raw result: it may contain document or chat content.
-            failures.error("invalid-result", "[AI task 결과 JSON 해석 실패] errorType="
+            failures.error("invalid-result", "[AI task 결과 JSON 해석 실패] operation=ai_result_consume stage=parse errorCode=AI_RESULT_INVALID_JSON errorType="
                     + failure.getClass().getSimpleName(), null);
             throw failure;
         }
@@ -152,7 +152,7 @@ public class AiTaskResultConsumer {
             }
         } catch (Exception e) {
             failed = true;
-            failures.error(failureKey, "[AI task 결과 소비 실패] kind=" + kind + " flowId=" + flowId, e);
+            failures.error(failureKey, "[AI task 결과 소비 실패] operation=ai_result_consume stage=consume errorCode=AI_RESULT_CONSUME_FAILED retryable=true kind=" + kind + " flowId=" + flowId + " 원인=결과를 반영하지 못해 트랜잭션을 롤백했고 같은 이벤트를 다시 처리합니다.", e);
             throw e;
         } finally {
             long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;

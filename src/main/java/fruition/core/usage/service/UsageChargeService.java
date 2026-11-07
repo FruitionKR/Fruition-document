@@ -172,6 +172,7 @@ public class UsageChargeService {
                     """, runId, workspaceId, userId, AUTONOMOUS_KIND,
                     autonomousCommand(runId, workspaceId, userId).toString()) == 1) {
                 enqueueNow(runId);
+                CommittedLog.info(log, "[Agent 실행 종료 확인] operation=agent_run stage=terminal_observed runId={} workspaceId={} userId={} 설명=AI가 실행을 끝낸 상태를 확인하고 정산을 등록했습니다.", runId, workspaceId, userId);
             }
         });
     }
@@ -264,8 +265,8 @@ public class UsageChargeService {
         transaction.executeWithoutResult(status -> {
             boolean closed = jdbc.update("UPDATE ai_task_runs SET status = 'failed', updated_at = now() WHERE id = ? AND status = 'running'", runId) == 1;
             if (closed && failure != null && !"cancelled".equals(failure) && !"agent_turn_cancelled".equals(failure)) {
-                CommittedLog.warn(log, "[동기 AI 호출 실패 확정] runId={} stage=result errorCode={} 원인={}",
-                        runId, CommittedLog.code(failure), CommittedLog.reason(failure));
+                CommittedLog.failure(log, failure, "[동기 AI 호출 실패 확정] operation=ai_sync_call stage=result runId={} errorCode={} upstreamCode={} 원인={}",
+                        runId, CommittedLog.stableCode(failure), CommittedLog.code(failure), CommittedLog.reason(failure));
             }
             if (closed && failure != null && analytics != null) analytics.taskFailed(runId, "sync_call", "result", failure, null);
         });

@@ -355,18 +355,20 @@ public class DocumentService {
 
             // 멱등 재요청은 execute가 저장된 응답을 돌려준다. 원본 저장은 실행 트랜잭션을 열기 전에 한다.
             AtomicReference<String> storedKey = new AtomicReference<>();
-            return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope,
+            long startedAt = System.nanoTime();
+            return deleteStoredOnFailure("document_upload", storedKey, () -> idempotencyService.execute(userId, endpointScope,
                     idempotencyKey, requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
                     () -> {
                         documentAccessPolicy.requirePlacement(workspaceId, folderId, userId);
                         return storeUploadOriginal(workspaceId, userId, file, mimeType, storedKey);
                     },
                     documentId -> {
-                        registerStoredSourceCleanup(storedKey);
+                        registerStoredSourceCleanup("document_upload", storedKey);
                         return storeUpload(workspaceId, userId, folderId, file, skillReference, uploadFilename,
-                                mimeType, markdownContent, contentHash, documentId, storedKey.get(), accounting);
+                                mimeType, markdownContent, contentHash, documentId, storedKey.get(), accounting, startedAt);
                     }));
         } catch (Exception e) {
+            if (isUploadRejection(e)) logUploadRejected(workspaceId, userId, e);
             // storeUpload가 이미 감싼 실패는 그대로 올린다.
             if (e instanceof DocumentUploadException || isUploadRejection(e)) {
                 throw (RuntimeException) e;
@@ -381,6 +383,7 @@ public class DocumentService {
      */
     private String storeUploadOriginal(String workspaceId, String userId, MultipartFile file, String mimeType,
                                        AtomicReference<String> storedKey) {
+        String documentId = null;
         try {
             // 새 업로드는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
             if (uploadLimits != null) {
@@ -389,9 +392,9 @@ public class DocumentService {
             log.info("[문서 업로드 요청] workspaceId={} userId={} filename={} contentType={} size={}",
                     workspaceId, userId, file.getOriginalFilename(), file.getContentType(), file.getSize());
 
-            String documentId = newDocumentId();
+            documentId = newDocumentId();
             String objectPath = "sources/documents/" + documentId + "/original";
-            log.info("[문서 원본 저장 시작] documentId={} bucket={} objectPath={} mimeType={} byteSize={}",
+            log.debug("[문서 원본 저장 시작] documentId={} bucket={} objectPath={} mimeType={} byteSize={}",
                     documentId, storageProps.getBucket(), objectPath, mimeType, file.getSize());
 
             if (file instanceof StoredOriginal stored) {
@@ -407,12 +410,15 @@ public class DocumentService {
                 );
             }
             storedKey.set(objectPath);
-            log.info("[문서 원본 저장 완료] documentId={} objectPath={}", documentId, objectPath);
+            log.debug("[문서 원본 저장 완료] documentId={} workspaceId={} userId={} objectPath={}",
+                    documentId, workspaceId, userId, objectPath);
             return documentId;
         } catch (Exception e) {
             if (isUploadRejection(e)) {
                 throw (RuntimeException) e;
             }
+            log.error("[문서 업로드 실패] operation=document_upload stage=storage errorCode=STORAGE_WRITE_FAILED retryable=true documentId={} workspaceId={} userId={} errorType={} 원인=원본 파일을 S3에 저장하지 못했습니다. 문서는 등록되지 않았습니다.",
+                    documentId, workspaceId, userId, e.getClass().getSimpleName());
             throw new DocumentUploadException("파일 저장 중 오류가 발생했습니다.", e);
         }
     }
@@ -429,7 +435,8 @@ public class DocumentService {
             String contentHash,
             String documentId,
             String objectPath,
-            UploadAccounting accounting
+            UploadAccounting accounting,
+            long startedAt
     ) {
         boolean markdownUpload = markdownContent != null;
         try {
@@ -484,11 +491,12 @@ public class DocumentService {
                 autoIngestAfterCommit(workspaceId, userId, documentId,
                         markdownContent.contentHash(), markdownContent.bytes().length);
             }
-            CommittedLog.info(log, "[문서 DB 저장 완료] documentId={} workspaceId={} userId={} filename={} status={} sourceUri={}",
+            CommittedLog.debug(log, "[문서 DB 저장 완료] documentId={} workspaceId={} userId={} filename={} status={} sourceUri={}",
                     document.getId(), document.getWorkspaceId(), document.getUserId(),
                     document.getFilename(), document.getStatus(), document.getSourceUri());
-            CommittedLog.info(log, "[문서 업로드 완료] documentId={} workspaceId={} userId={} status={} 설명=원본 파일 저장과 문서 등록이 완료됐습니다.",
-                    document.getId(), document.getWorkspaceId(), document.getUserId(), document.getStatus());
+            CommittedLog.info(log, "[문서 업로드 완료] operation=document_upload stage=completed documentId={} workspaceId={} userId={} status={} origin={} size={} elapsedMs={} 설명=원본 파일 저장과 문서 등록이 완료됐습니다.",
+                    document.getId(), document.getWorkspaceId(), document.getUserId(), document.getStatus(), document.getOrigin(),
+                    file.getSize(), (System.nanoTime() - startedAt) / 1_000_000);
 
             return response;
         } catch (Exception e) {
@@ -498,6 +506,33 @@ public class DocumentService {
             // 미리 저장한 원본은 호출자(deleteStoredOnFailure)와 롤백 정리가 지운다.
             throw new DocumentUploadException("파일 저장 중 오류가 발생했습니다.", e);
         }
+    }
+
+    /** 사용자 입력·권한·한도로 거절한 업로드. 공통 예외 로그에 없는 단계와 안정적인 코드를 남긴다. */
+    private static void logUploadRejected(String workspaceId, String userId, Exception e) {
+        String code = switch (e) {
+            case UnsupportedDocumentFileException ignored when INVALID_PDF_MESSAGE.equals(e.getMessage()) -> "INVALID_PDF";
+            case UnsupportedDocumentFileException ignored -> "UNSUPPORTED_DOCUMENT_FILE";
+            case InvalidDocumentFilenameException ignored -> "INVALID_DOCUMENT_FILENAME";
+            case InvalidDocumentOriginException ignored -> "INVALID_DOCUMENT_ORIGIN";
+            case InvalidMarkdownContentException ignored -> "INVALID_MARKDOWN_CONTENT";
+            case MarkdownContentTooLargeException ignored -> "MARKDOWN_CONTENT_TOO_LARGE";
+            case DocumentWriteForbiddenException ignored -> "DOCUMENT_WRITE_FORBIDDEN";
+            case InvalidIdempotencyKeyException ignored -> "INVALID_IDEMPOTENCY_KEY";
+            case IdempotencyConflictException ignored -> "IDEMPOTENCY_KEY_CONFLICT";
+            case IdempotencyInProgressException ignored -> "IDEMPOTENCY_IN_PROGRESS";
+            case fruition.core.imports.DocumentImportException ignored -> "IMPORT_INVALID";
+            case fruition.core.upload.UploadLimitException limit -> limit.getCode();
+            default -> "UPLOAD_REJECTED";
+        };
+        String stage = switch (code) {
+            case "DOCUMENT_WRITE_FORBIDDEN" -> "permission";
+            case "FILE_TOO_LARGE", "TOO_MANY_FILES", "STORAGE_QUOTA_EXCEEDED" -> "limit";
+            case "INVALID_IDEMPOTENCY_KEY", "IDEMPOTENCY_KEY_CONFLICT", "IDEMPOTENCY_IN_PROGRESS" -> "idempotency";
+            default -> "validation";
+        };
+        log.warn("[문서 업로드 거부] operation=document_upload stage={} errorCode={} retryable={} workspaceId={} userId={} 원인={}",
+                stage, code, "IDEMPOTENCY_IN_PROGRESS".equals(code), workspaceId, userId, CommittedLog.reason(code));
     }
 
     /** 업로드 거절(4xx)로 그대로 올리는 예외. 나머지는 DocumentUploadException으로 감싼다. */
@@ -660,7 +695,7 @@ public class DocumentService {
                 : accounting.importSession() != null ? Document.NOTION_IMPORT_ORIGIN : "direct";
         // 멱등 재요청은 execute가 저장된 응답을 돌려준다. 한도 사전 확인과 원본 저장은 실행 트랜잭션을 열기 전에 한다.
         AtomicReference<String> storedKey = new AtomicReference<>();
-        return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope, idempotencyKey,
+        return deleteStoredOnFailure("document_create", storedKey, () -> idempotencyService.execute(userId, endpointScope, idempotencyKey,
                 requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id, () -> {
                     documentAccessPolicy.requirePlacement(workspaceId, request.folderId(), userId);
                     // 새 문서는 원본을 저장하기 전에 잠금 없이 한도를 미리 본다.
@@ -671,7 +706,7 @@ public class DocumentService {
                     storedKey.set(putMarkdownSource(documentId, content.bytes()));
                     return documentId;
                 }, documentId -> {
-                    registerStoredSourceCleanup(storedKey);
+                    registerStoredSourceCleanup("document_create", storedKey);
                     DocumentUploadResponse created = createMarkdownDocument(workspaceId, userId, documentId,
                             storedKey.get(), filename.filename(), content, origin, request.folderId(), aiOrigin, true,
                             accounting);
@@ -681,6 +716,8 @@ public class DocumentService {
                                 .filter(document -> Document.AGENT_ORIGIN.equals(document.getAiOrigin()))
                                 .ifPresent(document -> analytics.aiDocumentCreated(agentRun, document));
                     }
+                    CommittedLog.info(log, "[문서 생성 완료] operation=document_create stage=completed documentId={} workspaceId={} userId={} origin={} runId={} 설명=원본 저장과 문서 등록이 완료됐습니다.",
+                            created.id(), workspaceId, userId, origin, agentRun);
                     return created;
                 }));
     }
@@ -757,6 +794,8 @@ public class DocumentService {
 
         DocumentDuplicateResponse response = toDuplicateResponse(duplicate);
         saveIdempotencyRecord(userId, endpointScope, idempotencyKey, requestHash, response);
+        CommittedLog.info(log, "[문서 복제 완료] operation=document_duplicate stage=completed documentId={} sourceDocumentId={} workspaceId={} userId={}",
+                duplicateId, documentId, workspaceId, userId);
         return response;
     }
 
@@ -835,10 +874,12 @@ public class DocumentService {
         throw new UnsupportedDocumentFileException("PDF, Markdown 또는 txt 파일만 업로드할 수 있습니다.");
     }
 
+    private static final String INVALID_PDF_MESSAGE = "PDF 파일 내용이 올바르지 않습니다.";
+
     private void requirePdfSignature(MultipartFile file) throws IOException {
         try (InputStream stream = file.getInputStream()) {
             if (!Arrays.equals(stream.readNBytes(PDF_SIGNATURE.length), PDF_SIGNATURE)) {
-                throw new UnsupportedDocumentFileException("PDF 파일 내용이 올바르지 않습니다.");
+                throw new UnsupportedDocumentFileException(INVALID_PDF_MESSAGE);
             }
         }
     }
@@ -1052,6 +1093,8 @@ public class DocumentService {
         try {
             RetryingObjectPut.put(minioClient, storageProps.getBucket(), objectPath, bytes, "text/markdown");
         } catch (Exception e) {
+            log.error("[문서 원본 저장 실패] operation=document_source_store stage=storage errorCode=STORAGE_WRITE_FAILED retryable=true documentId={} errorType={} 원인=Markdown 원본을 S3에 저장하지 못했습니다.",
+                    documentId, e.getClass().getSimpleName());
             throw new DocumentUploadException("문서 원본 저장 중 오류가 발생했습니다.", e);
         }
         return objectPath;
@@ -1063,13 +1106,46 @@ public class DocumentService {
      * 실행이 최종 커밋됐으면 그 정리가 키를 비우므로, 커밋 뒤에 난 예외로는 원본을 지우지 않는다.
      * 두 정리가 겹쳐도 없는 객체 삭제라 무해하다.
      */
-    private <T> T deleteStoredOnFailure(AtomicReference<String> storedKey, java.util.function.Supplier<T> work) {
+    private <T> T deleteStoredOnFailure(String operation, AtomicReference<String> storedKey, java.util.function.Supplier<T> work) {
         try {
             return work.get();
         } catch (RuntimeException e) {
-            if (storedKey.get() != null) deleteMinioObject(storedKey.get());
+            String stored = storedKey.get();
+            if (stored != null) {
+                boolean cleaned = stored.startsWith(CLEANED_SOURCE);
+                String key = cleaned ? stored.substring(CLEANED_SOURCE.length()) : stored;
+                // 크레딧·권한 같은 거절도 여기를 지난다. 저장·DB 장애일 때만 등록 실패로 남긴다.
+                if (e instanceof DocumentUploadException || e instanceof org.springframework.dao.DataAccessException
+                        || e instanceof org.springframework.transaction.TransactionException) {
+                    log.error("[문서 등록 실패] operation={} stage=db_register errorCode=DOCUMENT_REGISTER_FAILED retryable=true partial=true documentId={} errorType={} 원인=원본은 저장했지만 문서 DB 등록 또는 커밋에 실패해 트랜잭션을 롤백했습니다.",
+                            operation, documentIdOf(key), e.getClass().getSimpleName());
+                }
+                if (!cleaned) {
+                    storedKey.set(CLEANED_SOURCE + key);
+                    cleanupStoredSource(operation, key, "request_failed");
+                }
+            }
             throw e;
         }
+    }
+
+    /** storedKey 표시: 롤백 정리가 이미 지웠다. 실패 처리가 같은 원본을 다시 지우거나 정리 로그를 두 번 남기지 않게 한다. */
+    private static final String CLEANED_SOURCE = "cleaned:";
+
+    private void cleanupStoredSource(String operation, String key, String trigger) {
+        if (deleteMinioObject(key)) {
+            log.info("[문서 원본 정리 완료] operation={} stage=cleanup trigger={} documentId={} 설명=등록하지 못한 원본 파일을 지웠습니다.",
+                    operation, trigger, documentIdOf(key));
+        } else {
+            log.error("[문서 원본 정리 실패] operation={} stage=cleanup trigger={} errorCode=STORAGE_CLEANUP_FAILED retryable=false documentId={} objectPath={} 원인=등록하지 못한 원본 파일이 저장소에 남았습니다. 수동 확인이 필요합니다.",
+                    operation, trigger, documentIdOf(key), key);
+        }
+    }
+
+    /** sources/documents/{documentId}/original 형식의 키에서 문서 ID를 꺼낸다. */
+    private static String documentIdOf(String key) {
+        String[] parts = key.split("/");
+        return parts.length > 2 ? parts[2] : "unknown";
     }
 
     /**
@@ -1095,7 +1171,7 @@ public class DocumentService {
      * 실행 트랜잭션(폴더를 지정해 바깥 트랜잭션에 합류했으면 그 트랜잭션)이 끝날 때, 커밋됐으면 {@code storedKey}를
      * 비워 {@link #deleteStoredOnFailure}가 지우지 않게 하고, 아니면 원본을 지운다. 실행 블록 첫머리에서 부른다.
      */
-    private void registerStoredSourceCleanup(AtomicReference<String> storedKey) {
+    private void registerStoredSourceCleanup(String operation, AtomicReference<String> storedKey) {
         String objectPath = storedKey.get();
         if (objectPath == null || !TransactionSynchronizationManager.isSynchronizationActive()) {
             return;
@@ -1105,8 +1181,8 @@ public class DocumentService {
             public void afterCompletion(int status) {
                 if (status == TransactionSynchronization.STATUS_COMMITTED) {
                     storedKey.compareAndSet(objectPath, null);
-                } else {
-                    deleteMinioObject(objectPath);
+                } else if (storedKey.compareAndSet(objectPath, CLEANED_SOURCE + objectPath)) {
+                    cleanupStoredSource(operation, objectPath, "transaction_rollback");
                 }
             }
         });
@@ -1346,7 +1422,7 @@ public class DocumentService {
         DocumentEditingRules.MarkdownContent content =
                 DocumentEditingRules.markdown(CONVERT_PLACEHOLDER_MARKDOWN);
         AtomicReference<String> storedKey = new AtomicReference<>();
-        return deleteStoredOnFailure(storedKey, () -> idempotencyService.execute(userId, endpointScope,
+        return deleteStoredOnFailure("document_convert", storedKey, () -> idempotencyService.execute(userId, endpointScope,
                 idempotencyKey, requestHash, DocumentUploadResponse.class, 201, DocumentUploadResponse::id,
                 () -> {
                     // 변환본은 원본과 같은 폴더에 새 문서로 들어간다.
@@ -1360,7 +1436,7 @@ public class DocumentService {
                             workspaceSettingsClient.describePdfFigures(workspaceId));
                 },
                 prepared -> {
-                    registerStoredSourceCleanup(storedKey);
+                    registerStoredSourceCleanup("document_convert", storedKey);
                     return startConvertPlaceholder(workspaceId, userId, documentId, source, content, prepared);
                 }));
     }
@@ -1409,8 +1485,8 @@ public class DocumentService {
         startConvert(placeholder, source, prepared.aiModel(), prepared.describeFigures());
 
         DocumentUploadResponse response = toUploadResponse(placeholder, true);
-        log.info("[문서 변환 요청 등록] workspaceId={} sourceDocumentId={} placeholderDocumentId={}",
-                workspaceId, documentId, placeholderId);
+        CommittedLog.info(log, "[문서 변환 요청 접수] operation=document_convert stage=accepted workspaceId={} userId={} sourceDocumentId={} documentId={} 설명=변환 작업을 등록했습니다. 변환 완료는 별도 로그로 남습니다.",
+                workspaceId, userId, documentId, placeholderId);
         return response;
     }
 
@@ -1489,7 +1565,7 @@ public class DocumentService {
                         outcome.placeholder().getWorkspaceId(), outcome.placeholder().getUserId(),
                         objectMapper.readTree(batch.command()));
             } catch (Exception e) {
-                log.warn("[문서 변환 batch 취소 실패] documentId={} startPage={} errorType={}",
+                log.warn("[문서 변환 batch 취소 실패] operation=document_convert stage=cancel_batch retryable=false documentId={} startPage={} errorType={} 원인=남은 변환 조각의 취소 요청을 전달하지 못했습니다. 변환은 이미 닫혔습니다.",
                         documentId, batch.startPage(), e.getClass().getSimpleName());
             }
         }
@@ -1532,7 +1608,7 @@ public class DocumentService {
         // 이후 batch를 시작 쪽으로 이어 붙이므로 쪽 범위가 발행한 범위와 맞지 않으면 병합할 수 없다.
         if (payload.path("page_start").asInt(-1) != startPage + 1 || total < 1 || pageEnd < startPage + 1
                 || pageEnd != Math.min(expectedEnd, total) || !expectedKey.equals(resultKey)) {
-            log.warn("[문서 변환 결과 거절] documentId={} startPage={} reason=invalid_result", documentId, startPage);
+            log.warn("[문서 변환 결과 거절] operation=document_convert stage=validation errorCode=CONVERT_RESULT_INVALID documentId={} startPage={} 원인=AI가 돌려준 쪽 범위나 결과 위치가 요청과 다릅니다.", documentId, startPage);
             return failConvert(queue, placeholder, "internal_error", startPage);
         }
         convertBatchStore.markReady(queue.getId(), startPage, pageEnd, resultKey);
@@ -1548,7 +1624,7 @@ public class DocumentService {
                 convertBatchStore.delete(queue.getId(), next.startPage());
             }
         } catch (DocumentConvertException e) {
-            log.warn("[문서 변환 병합 실패] documentId={} error={}", documentId, e.getMessage());
+            log.warn("[문서 변환 병합 실패] operation=document_convert stage=merge errorCode=CONVERT_MERGE_FAILED documentId={} errorType={} error={} 원인=변환 결과를 읽거나 문서에 이어 붙이지 못했습니다.", documentId, e.getClass().getSimpleName(), e.getMessage());
             return failConvert(queue, placeholder, "internal_error", -1);
         }
         if (queue.getCompletedPages() >= total) {
@@ -1563,7 +1639,8 @@ public class DocumentService {
             taskWriter.completeAndSettle(convertRunId);
             if (analytics != null) analytics.converted(placeholder, queue.getSourceDocumentId(), total, null);
             convertQueueRepository.delete(queue);
-            log.info("[문서 변환 완료] documentId={} totalPages={}", documentId, total);
+            CommittedLog.info(log, "[문서 변환 완료] operation=document_convert stage=completed documentId={} workspaceId={} userId={} totalPages={} 설명=변환 결과를 문서에 저장했습니다. 위키 편입은 별도 작업입니다.",
+                    documentId, placeholder.getWorkspaceId(), placeholder.getUserId(), total);
             logConversionReport(placeholder, total);
             return new ConvertOutcome(placeholder, true, List.of());
         }
@@ -1589,7 +1666,7 @@ public class DocumentService {
         if (report == null || report.fallbackPageCount() == 0) return;
         var restoration = report.restorationSummary();
         var figures = report.figureDescriptions();
-        log.warn("[문서 변환 원문 대체] documentId={} workspaceId={} totalPages={} brokenPages={} repairedPages={} "
+        log.warn("[문서 변환 원문 대체] operation=document_convert stage=partial partial=true documentId={} workspaceId={} totalPages={} brokenPages={} repairedPages={} "
                         + "fallbackPages={} reasons={} figuresRequested={} figuresDescribed={} figuresFailed={}",
                 placeholder.getId(), placeholder.getWorkspaceId(), totalPages, restoration.brokenPages(),
                 restoration.repairedPages(), report.fallbackPageCount(), report.fallbackReasonCounts(),
@@ -1621,7 +1698,8 @@ public class DocumentService {
         documentRepository.flush();
         taskWriter.failAndSettle("convert:" + placeholder.getId());
         if (analytics != null) analytics.converted(placeholder, queue.getSourceDocumentId(), 0, code == null ? "internal_error" : code);
-        log.warn("[문서 변환 실패 반영] documentId={} code={}", placeholder.getId(), code);
+        CommittedLog.failure(log, code, "[문서 변환 실패 확정] operation=document_convert stage=result errorCode={} upstreamCode={} retryable=false documentId={} workspaceId={} userId={} startPage={} 원인={}",
+                CommittedLog.stableCode(code), CommittedLog.code(code), placeholder.getId(), placeholder.getWorkspaceId(), placeholder.getUserId(), failedStartPage, CommittedLog.reason(code));
         return new ConvertOutcome(placeholder, false, toCancel);
     }
 
@@ -1691,7 +1769,7 @@ public class DocumentService {
                 pipelineCancellation.cancel(ConvertCommandOutbox.batchRunId(placeholder.getId(), batch.startPage()),
                         placeholder.getWorkspaceId(), placeholder.getUserId(), readCommand(batch.command()));
             } catch (RuntimeException e) {
-                log.warn("[문서 변환 batch 취소 실패] documentId={} startPage={} errorType={}",
+                log.warn("[문서 변환 batch 취소 실패] operation=document_convert stage=cancel_batch retryable=false documentId={} startPage={} errorType={} 원인=남은 변환 조각의 취소 요청을 전달하지 못했습니다. 변환은 이미 닫혔습니다.",
                         placeholder.getId(), batch.startPage(), e.getClass().getSimpleName());
             }
         });
@@ -1714,7 +1792,7 @@ public class DocumentService {
                     .ifPresent(doc -> doc.markProcessingFailed(code, AiErrorMessages.query(code), now));
             return null;
         });
-        log.warn("[변환 뒤 자동 ingest 거절] documentId={} reason={}", part.getId(), code);
+        log.warn("[변환 뒤 위키 편입 거절] operation=wiki_ingest stage=auto_rejected errorCode={} documentId={} 원인={}", code, part.getId(), CommittedLog.reason(code));
     }
 
     /**
@@ -1879,8 +1957,8 @@ public class DocumentService {
                 aiModel
         );
         if (analytics != null) analytics.ingestRequested(document, runId, operationId, requesterId, startedAt, trigger);
-        log.info("[문서 처리 command 등록 완료] documentId={} runId={} operationId={}",
-                documentId, runId, operationId);
+        CommittedLog.info(log, "[위키 편입 요청 접수] operation=wiki_ingest stage=accepted documentId={} runId={} operationId={} workspaceId={} userId={} trigger={}",
+                documentId, runId, operationId, document.getWorkspaceId(), requesterId, trigger);
         return runId;
     }
 
@@ -1895,10 +1973,15 @@ public class DocumentService {
         Instant now = Instant.now();
         if ("succeeded".equals(status)) {
             document.updateStatus(DocumentStatus.completed, null, now, null);
+            CommittedLog.info(log, "[위키 편입 완료] operation=wiki_ingest stage=completed documentId={} runId={} workspaceId={}",
+                    documentId, runId, document.getWorkspaceId());
         } else if ("failed".equals(status)) {
             document.markProcessingFailed(AiErrorMessages.ingest(error), now);
+            CommittedLog.failure(log, error, "[위키 편입 실패 확정] operation=wiki_ingest stage=result errorCode={} upstreamCode={} retryable=false documentId={} runId={} workspaceId={} 원인={}",
+                    CommittedLog.stableCode(error), CommittedLog.code(error), documentId, runId, document.getWorkspaceId(), CommittedLog.reason(error));
         }
     }
+
 
     private String contentHashPrefix(String contentHash) {
         if (contentHash == null) return null;
@@ -2277,6 +2360,8 @@ public class DocumentService {
                                 document.getDisplayName(),
                                 result.baseRevision(), result.revision(), result.baseMarkdown(),
                                 savedMarkdown, result.updatedAt());
+                        CommittedLog.info(log, "[AI 편집 문서 반영 완료] operation=agent_apply stage=document_saved applyOperationId={} documentId={} workspaceId={} userId={} fromVersion={} newVersion={}",
+                                applyOperationId, documentId, workspaceId, userId, result.baseRevision(), result.revision());
                     } else if (!contentVersionRepository.findById(
                             new DocumentContentVersionId(documentId, result.revision()))
                             .map(version -> applyOperationId.equals(version.getOperationId()))
@@ -2287,6 +2372,8 @@ public class DocumentService {
                 } else {
                     operationRecorder.completeDocumentEditNoChange(
                             applyOperationId, workspaceId, userId, documentId, result.updatedAt());
+                    CommittedLog.info(log, "[AI 편집 문서 반영 생략] operation=agent_apply stage=no_change applyOperationId={} documentId={} workspaceId={} userId={} 설명=편집안이 현재 본문과 같아 새 버전을 만들지 않았습니다.",
+                            applyOperationId, documentId, workspaceId, userId);
                 }
                 return null;
             });
@@ -2296,6 +2383,9 @@ public class DocumentService {
         if (result.changed()) {
             if (restoredFromVersion != null) {
                 contentVersionRepository.markRestoredFrom(documentId, result.revision(), restoredFromVersion);
+                // 같은 쓰기 ID의 재요청은 앞에서 돌아가므로 여기에는 처음 복원만 온다.
+                CommittedLog.info(log, "[문서 버전 복원 완료] operation=document_version_restore stage=completed documentId={} workspaceId={} userId={} fromVersion={} toVersion={} newVersion={}",
+                        documentId, workspaceId, userId, result.baseRevision(), restoredFromVersion, result.revision());
             }
             if (versionSource != null) {
                 contentVersionRepository.markSource(documentId, result.revision(), versionSource);
@@ -2556,6 +2646,8 @@ public class DocumentService {
             }
             operationRecorder.recordConflict(
                     applyOperationId, workspaceId, userId, documentId, Instant.now());
+            CommittedLog.warn(log, "[AI 편집 문서 반영 충돌] operation=agent_apply stage=conflict errorCode=AGENT_APPLY_CONFLICT retryable=false applyOperationId={} documentId={} workspaceId={} userId={} baseRevision={} 원인=편집안의 기준 버전 이후 문서가 바뀌어 자동으로 반영하지 못했습니다.",
+                    applyOperationId, documentId, workspaceId, userId, baseRevision);
             if (analytics != null) analytics.applyConflicted(applyOperationId);
             return null;
         });
@@ -2780,6 +2872,8 @@ public class DocumentService {
         if (document.getDocumentRole() == DocumentRole.EDITABLE) {
             ingestCommandOutbox.enqueueRename(documentId, workspaceId, filename.displayName());
         }
+        CommittedLog.info(log, "[문서 이름 변경 완료] operation=document_rename stage=completed documentId={} workspaceId={} userId={} newVersion={}",
+                documentId, workspaceId, userId, request.baseVersion() + 1);
         return new DocumentRenameResponse(
                 documentId,
                 filename.filename(),
@@ -2861,6 +2955,8 @@ public class DocumentService {
         );
         saveIdempotencyRecord(
                 userId, endpointScope, idempotencyKey, requestHash, response);
+        CommittedLog.info(log, "[문서 휴지통 이동 완료] operation=document_delete stage=completed documentId={} workspaceId={} userId={} newVersion={} 설명=문서를 휴지통으로 옮겼습니다. 영구 삭제는 보관 기간 뒤 별도로 처리됩니다.",
+                documentId, workspaceId, userId, request.baseVersion() + 1);
         return response;
     }
 
@@ -2962,6 +3058,8 @@ public class DocumentService {
         );
         saveIdempotencyRecord(
                 userId, endpointScope, idempotencyKey, requestHash, response);
+        CommittedLog.info(log, "[문서 복구 완료] operation=document_restore stage=completed documentId={} workspaceId={} userId={} newVersion={} folderId={}",
+                documentId, workspaceId, userId, request.baseVersion() + 1, targetFolderId);
         return response;
     }
 
@@ -2976,8 +3074,8 @@ public class DocumentService {
         }
     }
 
-    private void deleteMinioObject(String uri) {
-        if (uri == null || uri.isBlank()) return;
+    private boolean deleteMinioObject(String uri) {
+        if (uri == null || uri.isBlank()) return true;
         String objectKey = normalizeObjectKey(uri);
         try {
             minioClient.removeObject(
@@ -2986,8 +3084,10 @@ public class DocumentService {
                             .object(objectKey)
                             .build()
             );
+            return true;
         } catch (Exception e) {
             log.warn("[MinIO 오브젝트 삭제 실패] uri={} error={}", uri, e.getMessage());
+            return false;
         }
     }
 

@@ -47,7 +47,7 @@ public class DocumentPermissionService {
             throw new DocumentWriteForbiddenException("문서 소유자나 워크스페이스 OWNER만 권한을 바꿀 수 있습니다.");
         }
         write("document_id", documentId, workspaceId, userId, access);
-        log.info("[문서 권한 변경] workspaceId={} documentId={} userId={} access={}", workspaceId, documentId, userId, access);
+        log.info("[문서 권한 변경] operation=permission_change stage=completed workspaceId={} documentId={} userId={} access={}", workspaceId, documentId, userId, access);
         return new DocumentPermissionResponse(access);
     }
 
@@ -60,7 +60,7 @@ public class DocumentPermissionService {
             throw new DocumentWriteForbiddenException("워크스페이스 OWNER만 폴더 권한을 바꿀 수 있습니다.");
         }
         write("folder_id", folderId, workspaceId, userId, access);
-        log.info("[폴더 권한 변경] workspaceId={} folderId={} userId={} access={}", workspaceId, folderId, userId, access);
+        log.info("[폴더 권한 변경] operation=permission_change stage=completed workspaceId={} folderId={} userId={} access={}", workspaceId, folderId, userId, access);
         return new DocumentPermissionResponse(access);
     }
 

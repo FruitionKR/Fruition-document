@@ -142,7 +142,7 @@ public class SkillFolderSourceService {
         try {
             editStateInitializer.initializeIfNeeded(document);
         } catch (RuntimeException e) {
-            log.warn("폴더 원문 편집 상태 생성 실패 documentId={}", document.getId(), e);
+            log.warn("[스킬 폴더 원문 준비 실패] operation=skill_folder_source stage=edit_state documentId={} 원인=폴더 원문의 편집 상태를 만들지 못해 이 문서를 건너뜁니다.", document.getId(), e);
             return null;
         }
         return editStateRepository.findById(document.getId())

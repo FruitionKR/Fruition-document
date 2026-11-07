@@ -24,6 +24,7 @@ import java.util.*;
 /** 원본 PDF는 임시 객체에 직접 업로드한다. 확정 시 권한과 객체를 재검증한다. */
 @Service
 public class DocumentDirectUploadService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DocumentDirectUploadService.class);
     private final MinioClient storage;
     private final DirectMultipartUpload upload;
     private final StorageProperties properties;
@@ -85,6 +86,8 @@ public class DocumentDirectUploadService {
                 "application/pdf", request.size(), Map.of("filename", filename,
                         "folder", request.folder_id() == null ? "" : request.folder_id().toString(),
                         "import", session == null ? "" : session.id().toString()));
+        log.info("[PDF 직접 업로드 시작] operation=document_direct_upload stage=started workspaceId={} userId={} size={} partCount={} importId={} 설명=브라우저가 S3로 조각을 올립니다. 조각 전송은 서버가 관측하지 않습니다.",
+                workspaceId, userId, request.size(), started.partCount(), session == null ? null : session.id());
         return new StartResponse(started.ticket(), started.partSize(), started.partCount());
     }
 
@@ -114,6 +117,7 @@ public class DocumentDirectUploadService {
 
     public void abort(String workspaceId, String userId, CompleteRequest request) throws Exception {
         upload.abort(verify(workspaceId, userId, request.ticket()));
+        log.info("[PDF 직접 업로드 중단] operation=document_direct_upload stage=aborted workspaceId={} userId={}", workspaceId, userId);
     }
 
     public DocumentUploadResponse complete(String workspaceId, String userId, String idempotencyKey,
@@ -134,9 +138,23 @@ public class DocumentDirectUploadService {
             throw DocumentImportException.invalid();
         }
         String key = claims.get("key", String.class);
-        StatObjectResponse stat = upload.assemble(claims);
+        StatObjectResponse stat;
+        try {
+            stat = upload.assemble(claims);
+        } catch (ResponseStatusException e) {
+            String code = e.getStatusCode().value() == 409 ? "UPLOAD_PARTS_INCOMPLETE" : "UPLOAD_PARTS_INVALID";
+            log.warn("[PDF 직접 업로드 거부] operation=document_direct_upload stage=assemble errorCode={} retryable=true workspaceId={} userId={} 원인={}",
+                    code, workspaceId, userId, fruition.shared.logging.CommittedLog.reason(code));
+            throw e;
+        } catch (Exception e) {
+            log.error("[PDF 직접 업로드 실패] operation=document_direct_upload stage=assemble errorCode=STORAGE_ASSEMBLE_FAILED retryable=true workspaceId={} userId={} errorType={} 원인=S3에 올린 조각을 하나의 파일로 조립하지 못했습니다. 조각 누락과 저장소 장애는 최초 예외로 구분합니다.",
+                    workspaceId, userId, e.getClass().getSimpleName());
+            throw e;
+        }
         if (stat.size() != ((Number) claims.get("size")).longValue()
                 || !"application/pdf".equals(stat.contentType())) {
+            log.warn("[PDF 직접 업로드 거부] operation=document_direct_upload stage=validation errorCode=UPLOAD_METADATA_MISMATCH retryable=false workspaceId={} userId={} size={} 원인={}",
+                    workspaceId, userId, stat.size(), fruition.shared.logging.CommittedLog.reason("UPLOAD_METADATA_MISMATCH"));
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "업로드한 파일 정보가 일치하지 않습니다.");
         }
         // 한도를 낮추기 전에 발급된 ticket도 실제 크기로 막는다. 용량은 문서 등록 트랜잭션이 잠금 아래에서 확인한다.
@@ -147,11 +165,15 @@ public class DocumentDirectUploadService {
         MultipartFile file = new StoredPdf(storage, properties.getBucket(), key, filename, stat);
         try (InputStream input = file.getInputStream()) {
             if (!Arrays.equals(input.readNBytes(5), "%PDF-".getBytes(StandardCharsets.US_ASCII))) {
+                log.warn("[PDF 직접 업로드 거부] operation=document_direct_upload stage=validation errorCode=INVALID_PDF retryable=false workspaceId={} userId={} 원인={}",
+                        workspaceId, userId, fruition.shared.logging.CommittedLog.reason("INVALID_PDF"));
                 throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "PDF 파일 내용이 올바르지 않습니다.");
             }
         }
         // 기존 멱등성·폴더 권한·롤백 처리를 그대로 사용한다. 임시 객체는 재시도를 위해 lifecycle로 삭제한다.
         UUID folderId = folder.isEmpty() ? null : UUID.fromString(folder);
+        log.debug("[PDF 직접 업로드 조립 완료] workspaceId={} userId={} size={} 설명=문서 등록을 이어서 진행합니다. 최종 완료는 문서 업로드 완료 로그로 확인합니다.",
+                workspaceId, userId, stat.size());
         if (session != null) {
             return documents.uploadImported(workspaceId, userId, idempotencyKey, folderId, file, importId);
         }

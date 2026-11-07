@@ -19,6 +19,7 @@ import java.util.UUID;
 /** 회의 생성·조회와 실시간 받아쓰기 ticket 발급. 회의는 만든 사람만 볼 수 있다. */
 @Service
 public class MeetingService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MeetingService.class);
     static final Duration TICKET_TTL = Duration.ofSeconds(60);
     private static final String DEFAULT_NAME = "회의록";
     private static final int DEFAULT_PAGE_SIZE = 20;
@@ -71,6 +72,8 @@ public class MeetingService {
                             "mtg_" + UUID.randomUUID().toString().replace("-", ""), workspaceId, userId, name,
                             documentId, source, "live".equals(source) ? "open" : "awaiting_upload", Instant.now());
                     repository.insert(meeting);
+                    fruition.shared.logging.CommittedLog.info(log, "[회의 생성 완료] operation=meeting_create stage=completed meetingId={} workspaceId={} userId={} source={}",
+                            meeting.id(), workspaceId, userId, source);
                     return toResponse(meeting);
                 });
     }

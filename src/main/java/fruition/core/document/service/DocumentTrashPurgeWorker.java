@@ -78,7 +78,7 @@ public class DocumentTrashPurgeWorker {
             } catch (DataPurgeService.PurgeStorageException e) {
                 // ponytail: 같은 배치를 이번 실행에서 다시 잡으면 같은 실패가 반복되므로 다음 실행으로 미룬다.
                 // 특정 객체만 계속 실패하면 그 뒤 배치도 밀리니, 그런 일이 생기면 실패한 문서만 건너뛰게 바꾼다.
-                log.warn("[휴지통 원본 삭제 실패] 다음 실행에서 다시 시도합니다.", e);
+                log.warn("[휴지통 원본 삭제 실패] operation=document_trash_purge stage=storage errorCode=STORAGE_DELETE_FAILED retryable=true 원인=보관 기간이 지난 원본을 저장소에서 지우지 못했습니다. 다음 실행에서 다시 시도합니다.", e);
                 break;
             }
             documents += batch;
@@ -92,7 +92,7 @@ public class DocumentTrashPurgeWorker {
 
         int scrubbed = scrubFinishedOrphans();
         if (documents + folders + scrubbed > 0) {
-            log.info("[휴지통 영구 삭제] documents={} folders={} scrubbed_orphans={}", documents, folders, scrubbed);
+            log.info("[휴지통 영구 삭제 완료] operation=document_trash_purge stage=completed documents={} folders={} scrubbed_orphans={}", documents, folders, scrubbed);
         }
         return documents;
     }
@@ -107,7 +107,7 @@ public class DocumentTrashPurgeWorker {
                 scrubbed += batch;
             } while (batch >= BATCH_SIZE);
         } catch (DataAccessException e) {
-            log.warn("[영구 삭제 본문 정리 실패] 다음 실행에서 다시 시도합니다. type={}", e.getClass().getSimpleName());
+            log.warn("[영구 삭제 본문 정리 실패] operation=document_trash_purge stage=scrub retryable=true errorType={} 원인=복사본 본문을 정리하지 못했습니다. 다음 실행에서 다시 시도합니다.", e.getClass().getSimpleName());
         }
         return scrubbed;
     }

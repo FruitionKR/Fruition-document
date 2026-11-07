@@ -36,6 +36,7 @@ import java.util.List;
  */
 @Service
 public class OperationIngestService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OperationIngestService.class);
 
     private final OperationLogRepository operationLogRepository;
     private final WikiObjectReader objectReader;
@@ -80,6 +81,7 @@ public class OperationIngestService {
         verifyMatchesRegistration(operation, request);
 
         if (operation.getOperationType() == OperationType.restore) {
+            // 되돌리기의 최종 상태는 AiTaskResultApplier.applyRestore가 대상 작업 ID와 함께 남긴다.
             return acceptRebuild(operation, request, payloadHash);
         }
         if (operation.getOperationType() == OperationType.lint) {
@@ -93,7 +95,7 @@ public class OperationIngestService {
                                     operation.getWorkspaceId(), row.pageId(), row.operationId()),
                             row.linkedByOperationId()))
                     .toList();
-            return lintApplier.apply(operationId, request, loaded, ledger, payloadHash, Instant.now());
+            return logged(operation, lintApplier.apply(operationId, request, loaded, ledger, payloadHash, Instant.now()));
         }
 
         List<OperationApplier.LoadedPage> loaded = request.changedPages().stream()
@@ -105,7 +107,20 @@ public class OperationIngestService {
                         objectReader.contributionKey(operation.getWorkspaceId(), pageId, operation.getOperationId())))
                 .toList();
 
-        return applier.apply(operationId, request, loaded, deleted, payloadHash, Instant.now());
+        return logged(operation, applier.apply(operationId, request, loaded, deleted, payloadHash, Instant.now()));
+    }
+
+    /** 재전송은 위에서 기존 결과로 돌아가므로 여기에는 처음 확정한 결과만 온다. 호출 트랜잭션의 커밋 뒤에 남긴다. */
+    private OperationResultResponse logged(OperationLog operation, OperationResultResponse result) {
+        Object[] fields = {operation.getOperationType().logLabel(), operation.getOperationId(), operation.getOperationType(), result.status(),
+                result.recordedChanges(), operation.getWorkspaceId(), operation.getTargetDocumentId()};
+        // 편입 성공은 문서 상태까지 닫는 [위키 편입 완료] 한 줄로 충분하다.
+        if ("succeeded".equals(result.status()) && operation.getOperationType() != OperationType.ingest) {
+            fruition.shared.logging.CommittedLog.info(log, "[{} 페이지 기록 완료] operation=wiki_operation stage=completed operationId={} type={} status={} changedResources={} workspaceId={} documentId={}", fields);
+        } else if ("partially_succeeded".equals(result.status())) {
+            fruition.shared.logging.CommittedLog.warn(log, "[{} 페이지 일부 기록] operation=wiki_operation stage=partial partial=true operationId={} type={} status={} changedResources={} workspaceId={} documentId={} 원인=일부 페이지만 반영했습니다. 반영된 페이지는 작업 기록에 남았습니다.", fields);
+        }
+        return result;
     }
 
     private LintOperationApplier.LoadedPage loadLint(
