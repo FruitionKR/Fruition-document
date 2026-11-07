@@ -9,12 +9,15 @@ import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.StatObjectArgs;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
+import org.springframework.test.util.ReflectionTestUtils;
+import fruition.core.analytics.DocumentAnalytics;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
@@ -28,6 +31,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.AdditionalAnswers.delegatesTo;
 
 /**
  * 새 문서 원본 저장(MinIO)은 멱등 선점 뒤, 실행 트랜잭션을 열기 전에 한다. 저장이 느려도 그동안 DB 연결을 쥐지 않는다.
@@ -37,12 +42,29 @@ import static org.mockito.Mockito.doThrow;
 @Import(TestcontainersConfiguration.class)
 class SourceStoreOutsideTransactionIntegrationTest {
 
-    @Autowired DocumentService documentService;
+    @Autowired AutowireCapableBeanFactory beanFactory;
+    @Autowired MinioClient realMinioClient;
+    @Autowired DocumentRepository realDocumentRepository;
+    @Autowired DocumentAnalytics realAnalytics;
+    private DocumentService documentService;
+    private MinioClient minioClient;
+    private DocumentRepository documentRepository;
+    private DocumentAnalytics analytics;
     @Autowired StringRedisTemplate redis;
     @Autowired StorageProperties storage;
-    @MockitoSpyBean MinioClient minioClient;
-    @MockitoSpyBean DocumentRepository documentRepository;
-    @MockitoSpyBean fruition.core.analytics.DocumentAnalytics analytics;
+
+    @BeforeEach
+    void isolateFaultInjectionFromSpringProxiesAndBackgroundWorkers() {
+        // 등록하지 않은 서비스 인스턴스만 교체한다. DB·Redis·MinIO와 트랜잭션 경계는 실제 빈을 쓴다.
+        // 공유 Spring spy를 설정하면 AOP 호출이 stubbing 도중 개입하거나 작업자 호출에 설정이 섞인다.
+        documentService = beanFactory.createBean(DocumentService.class);
+        minioClient = mock(MinioClient.class, delegatesTo(realMinioClient));
+        documentRepository = mock(DocumentRepository.class, delegatesTo(realDocumentRepository));
+        analytics = mock(DocumentAnalytics.class, delegatesTo(realAnalytics));
+        ReflectionTestUtils.setField(documentService, "minioClient", minioClient);
+        ReflectionTestUtils.setField(documentService, "documentRepository", documentRepository);
+        ReflectionTestUtils.setField(documentService, "analytics", analytics);
+    }
 
     @Test
     void markdownCreateAndUploadStoreSourceOutsideTransaction() throws Exception {
@@ -92,7 +114,8 @@ class SourceStoreOutsideTransactionIntegrationTest {
                             throw new IllegalStateException("after commit");
                         }
                     });
-            return invocation.callRealMethod();
+            realAnalytics.uploaded(invocation.getArgument(0));
+            return null;
         }).when(analytics).uploaded(any(fruition.core.document.domain.Document.class));
 
         assertThatThrownBy(() -> documentService.createMarkdown(workspaceId, userId, "md-" + UUID.randomUUID(),
@@ -108,7 +131,7 @@ class SourceStoreOutsideTransactionIntegrationTest {
         doAnswer(invocation -> {
             inTransaction.add(TransactionSynchronizationManager.isActualTransactionActive());
             keys.add(invocation.<PutObjectArgs>getArgument(0).object());
-            return invocation.callRealMethod();
+            return realMinioClient.putObject(invocation.getArgument(0));
         }).when(minioClient).putObject(any(PutObjectArgs.class));
     }
 
