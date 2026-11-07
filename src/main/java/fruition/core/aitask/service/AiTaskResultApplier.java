@@ -2,6 +2,7 @@ package fruition.core.aitask.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.aitask.AiErrorMessages;
+import fruition.shared.i18n.ResponseLanguage;
 import fruition.core.chat.domain.ChatSession;
 import fruition.core.chat.service.ChatEvidenceRecorder;
 import fruition.core.chat.service.ChatTurnRecorder;
@@ -355,7 +356,8 @@ public class AiTaskResultApplier {
             if (errorCode == null) {
                 JsonNode payload = event.path("payload");
                 chatTurnRecorder.completeAgentTurn(assistantMessageId,
-                        payload.path("action").asText(null), agentMessageContent(payload), clarifyReason(event));
+                        payload.path("action").asText(null), agentMessageContent(payload, requestLanguage(event)),
+                        clarifyReason(event));
                 recordAgentChatEvidence(assistantMessageId, payload);
             } else {
                 chatTurnRecorder.markFailed(assistantMessageId, errorCode, AiErrorMessages.agent(errorCode));
@@ -412,6 +414,25 @@ public class AiTaskResultApplier {
             "workspace_workflow", "작업 계획을 만들었습니다. 미리보기에서 확인해 주세요.",
             "skill_authoring", "Skill 초안을 만들었습니다. 미리보기에서 확인해 주세요.",
             "skill_draft_proposal", "Skill 제안을 만들었습니다. 미리보기에서 확인해 주세요.");
+    private static final String DEFAULT_FALLBACK_MESSAGE = "요청을 처리했습니다.";
+
+    /** {@link #ACTION_FALLBACK_MESSAGE}의 영어 문구. 그 턴의 command가 response_language=en일 때만 쓴다. */
+    private static final Map<String, String> ACTION_FALLBACK_MESSAGE_EN = Map.of(
+            "markdown_create", "Created a document draft. Check it in the preview.",
+            "markdown_edit", "Created an edit proposal. Check it in the preview.",
+            "folder_organize", "Created a folder organization plan. Check it in the preview.",
+            "workspace_workflow", "Created a task plan. Check it in the preview.",
+            "skill_authoring", "Created a Skill draft. Check it in the preview.",
+            "skill_draft_proposal", "Created a Skill proposal. Check it in the preview.");
+    private static final String DEFAULT_FALLBACK_MESSAGE_EN = "Processed your request.";
+
+    /**
+     * 기본 말풍선 문구의 언어. 턴을 시작할 때 command에 담은 response_language를 쓰고, 없으면(구 command) 한국어다.
+     * 실패 문구는 ADR-0034대로 한국어로 저장하고 응답 때 error_code로 다시 만든다.
+     */
+    private static ResponseLanguage requestLanguage(JsonNode event) {
+        return ResponseLanguage.of(event.path("request").path("response_language").asText(null));
+    }
 
     /**
      * 말풍선에 보일 본문. chat_answer는 Query 답변이고 conversation_reply는 message에 담긴다.
@@ -419,7 +440,7 @@ public class AiTaskResultApplier {
      * <p>빈 문자열은 돌려주지 않는다. 빈 말풍선은 화면에서 아무것도 아니고,
      * 다음 턴의 대화 맥락에 실리면 pipeline이 요청 전체를 거부한다.
      */
-    private static String agentMessageContent(JsonNode payload) {
+    private static String agentMessageContent(JsonNode payload, ResponseLanguage language) {
         String answer = payload.path("chat").path("answer").asText(null);
         if (answer != null && !answer.isBlank()) {
             return answer;
@@ -428,8 +449,10 @@ public class AiTaskResultApplier {
         if (message != null && !message.isBlank()) {
             return message;
         }
-        return ACTION_FALLBACK_MESSAGE.getOrDefault(payload.path("action").asText(),
-                "요청을 처리했습니다.");
+        String action = payload.path("action").asText();
+        return language.isEnglish()
+                ? ACTION_FALLBACK_MESSAGE_EN.getOrDefault(action, DEFAULT_FALLBACK_MESSAGE_EN)
+                : ACTION_FALLBACK_MESSAGE.getOrDefault(action, DEFAULT_FALLBACK_MESSAGE);
     }
 
     private String expectedStoredMarkdown(JsonNode event, String documentId) {

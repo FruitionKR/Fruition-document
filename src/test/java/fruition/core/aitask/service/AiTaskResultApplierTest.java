@@ -252,6 +252,39 @@ class AiTaskResultApplierTest {
         assertThat(content.getValue()).isNotBlank();
     }
 
+    /** 기본 말풍선 문구는 그 턴 command의 response_language를 따른다. 값이 없으면(구 command) 한국어다. */
+    @Test
+    void agentFallbackChatMessageFollowsCommandResponseLanguage() throws Exception {
+        assertThat(fallbackChatMessage("folder_organize", ",\"response_language\":\"en\""))
+                .isEqualTo("Created a folder organization plan. Check it in the preview.");
+        assertThat(fallbackChatMessage("folder_organize", ""))
+                .isEqualTo("폴더 정리 계획을 만들었습니다. 미리보기에서 확인해 주세요.");
+        assertThat(fallbackChatMessage("folder_organize", ",\"response_language\":\"ko\""))
+                .isEqualTo("폴더 정리 계획을 만들었습니다. 미리보기에서 확인해 주세요.");
+    }
+
+    private String fallbackChatMessage(String action, String languageField) throws Exception {
+        String runId = "run-" + action + languageField.hashCode();
+        JsonNode event = objectMapper.readTree("""
+                {"event_id":"agent:%1$s:succeeded","run_id":"%1$s","kind":"agent",
+                 "status":"succeeded","request":{"workspace_id":"ws-1","user_id":"user-1",
+                 "document_id":"doc-1","base_version":1,"apply_operation_id":"op-1",
+                 "message_context":{"assistant_message_id":"chat_%1$s"}%2$s},
+                 "payload":{"action":"%3$s"}}
+                """.formatted(runId, languageField, action));
+        when(jdbcTemplate.update(any(String.class), eq("agent:" + runId + ":succeeded"), eq(runId), any()))
+                .thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(ResultSetExtractor.class), eq(runId)))
+                .thenReturn(new AiTaskResultApplier.AgentProjection("ws-1", "user-1", "doc-1", 1L, "op-1"));
+        when(jdbcTemplate.update(contains("SET status = 'ready'"), any(), any(), eq(runId))).thenReturn(1);
+
+        applier.applyAgent(event);
+
+        ArgumentCaptor<String> content = ArgumentCaptor.forClass(String.class);
+        verify(chatTurnRecorder).completeAgentTurn(eq("chat_" + runId), eq(action), content.capture(), eq(null));
+        return content.getValue();
+    }
+
     /**
      * AI가 질의로 판정한 턴은 답변과 함께 근거가 온다. 질의 경로와 같은 자리에 남기지 않으면
      * 새로고침한 뒤 근거가 사라져, 같은 답변이 어느 입구로 들어왔는지에 따라 달라 보인다.
