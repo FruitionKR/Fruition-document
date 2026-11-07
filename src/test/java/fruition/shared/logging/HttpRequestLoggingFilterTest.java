@@ -107,4 +107,53 @@ class HttpRequestLoggingFilterTest {
                 .isNotEqualTo("invalid request id");
         assertThat(MDC.get("requestId")).isNull();
     }
+
+    @Test
+    void routineSuccessIsDebugButFailuresAndNormalRequestsRemainVisible() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(HttpRequestLoggingFilter.class);
+        var previous = logger.getLevel(); logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        ListAppender<ILoggingEvent> output = new ListAppender<>(); output.start(); logger.addAppender(output);
+        try {
+            var request = new MockHttpServletRequest("GET", "/api/query/runs/run-1");
+            filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {});
+            assertThat(output.list).hasSize(2).allMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.DEBUG);
+            output.list.clear();
+            filter.doFilter(request, new MockHttpServletResponse(), (req, res) ->
+                    ((MockHttpServletResponse) res).setStatus(503));
+            assertThat(output.list).anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.INFO
+                    && e.getFormattedMessage().contains("status=503"));
+            output.list.clear();
+            filter.doFilter(new MockHttpServletRequest("POST", "/api/query/runs/run-1"),
+                    new MockHttpServletResponse(), (req, res) -> {});
+            assertThat(output.list).hasSize(2).allMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.INFO);
+        } finally { logger.detachAppender(output); logger.setLevel(previous); output.stop(); }
+    }
+
+    @Test
+    void escapingRoutineFailureIsVisibleAndMdcIsCleaned() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(HttpRequestLoggingFilter.class);
+        ListAppender<ILoggingEvent> output = new ListAppender<>(); output.start(); logger.addAppender(output);
+        try {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> filter.doFilter(
+                    new MockHttpServletRequest("GET", "/api/query/runs/run-1"),
+                    new MockHttpServletResponse(), (req, res) -> { throw new jakarta.servlet.ServletException("failed"); }))
+                    .isInstanceOf(jakarta.servlet.ServletException.class);
+            assertThat(output.list).anyMatch(e -> e.getFormattedMessage().contains("[HTTP 반복 조회 예외]"));
+            assertThat(MDC.get("requestId")).isNull();
+        } finally { logger.detachAppender(output); output.stop(); }
+    }
+
+    @Test
+    void slowRoutineSuccessRemainsVisible() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(HttpRequestLoggingFilter.class);
+        ListAppender<ILoggingEvent> output = new ListAppender<>(); output.start(); logger.addAppender(output);
+        try {
+            filter.doFilter(new MockHttpServletRequest("GET", "/api/query/runs/run-1"),
+                    new MockHttpServletResponse(), (req, res) -> {
+                        try { Thread.sleep(2050); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                    });
+            assertThat(output.list).anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.INFO
+                    && e.getFormattedMessage().startsWith("[HTTP 요청 완료]"));
+        } finally { logger.detachAppender(output); output.stop(); }
+    }
 }

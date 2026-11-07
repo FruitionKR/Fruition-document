@@ -291,4 +291,40 @@ class AiTaskResultConsumerTest {
 
         verifyNoInteractions(wikiVersions);
     }
+
+    @Test
+    void repeatedMalformedPayloadRemainsVisibleWithoutLeakingPayload() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(AiTaskResultConsumer.class);
+        var output = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        output.start(); logger.addAppender(output);
+        try {
+            for (int i = 0; i < 3; i++) {
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> consumer.consume("{private-document-content"))
+                        .isInstanceOf(Exception.class);
+            }
+            var failures = output.list.stream().filter(e -> e.getFormattedMessage().contains("[AI task 결과 JSON 해석 실패]")).toList();
+            assertThat(failures).hasSize(1);
+            assertThat(failures.getFirst().getFormattedMessage()).doesNotContain("private-document-content");
+            assertThat(failures.getFirst().getThrowableProxy()).isNull();
+        } finally { logger.detachAppender(output); output.stop(); }
+    }
+
+    @Test
+    void failedRecordIsRetriedButItsStackIsNotRepeatedAndSuccessReportsRecovery() throws Exception {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(AiTaskResultConsumer.class);
+        var output = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        output.start(); logger.addAppender(output);
+        String raw = "{\"kind\":\"query\",\"run_id\":\"run-repeat\",\"event_id\":\"result-1\"}";
+        when(applier.applyQuery(any())).thenThrow(new IllegalStateException("database unavailable"))
+                .thenThrow(new IllegalStateException("database unavailable")).thenReturn(null);
+        try {
+            for (int i = 0; i < 2; i++) {
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> consumer.consume(raw)).isInstanceOf(IllegalStateException.class);
+            }
+            consumer.consume(raw);
+            assertThat(output.list.stream().filter(e -> e.getFormattedMessage().startsWith("[AI task 결과 소비 실패]"))).hasSize(1);
+            assertThat(output.list).anyMatch(e -> e.getFormattedMessage().startsWith("[반복 오류 복구]"));
+            assertThat(MDC.get("flowId")).isNull();
+        } finally { logger.detachAppender(output); output.stop(); }
+    }
 }

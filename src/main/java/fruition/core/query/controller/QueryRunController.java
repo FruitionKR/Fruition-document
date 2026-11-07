@@ -74,7 +74,7 @@ public class QueryRunController {
                                                          @PathVariable String requestId,
                                                          @AuthenticationPrincipal String userId) {
         QueryRun run = requireOwnedRun(requestId, userId);
-        log.info("[질의 run 상태 조회] requestId={} status={}", requestId, run.status());
+        log.debug("[질의 run 상태 조회] requestId={} status={}", requestId, run.status());
         return ResponseEntity.ok(QueryRunStatusResponse.from(run));
     }
 

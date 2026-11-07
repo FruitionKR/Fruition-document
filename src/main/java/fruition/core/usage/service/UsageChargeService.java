@@ -324,7 +324,7 @@ public class UsageChargeService {
                 } else {
                     // 아직 끝나지 않은 호출을 기다리는 재시도는 정상 지연이다(답변 음성 정지 직후 등). 장애와 구분한다.
                     if (e instanceof IllegalStateException) {
-                        log.info("[사용 금액 수집 대기] runId={} attempts={} reason={}", runId, attempts, e.getMessage());
+                        log.debug("[사용 금액 수집 대기] runId={} attempts={} reason={}", runId, attempts, e.getMessage());
                     } else {
                         log.warn("[사용 금액 수집 실패] runId={} attempts={} error={}", runId, attempts, e.toString());
                     }

@@ -1,5 +1,6 @@
 package fruition.core.authz;
 
+import fruition.shared.logging.RepeatedFailureLogger;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -31,6 +32,7 @@ import java.util.List;
 public class WorkspaceAccessGuard {
 
     private static final Logger log = LoggerFactory.getLogger(WorkspaceAccessGuard.class);
+    private final RepeatedFailureLogger failures = new RepeatedFailureLogger(log);
 
     private static final String KEY_PREFIX = "authz:role:v2:";
     private static final Duration CACHE_TTL = Duration.ofSeconds(300);
@@ -119,10 +121,11 @@ public class WorkspaceAccessGuard {
         String cached;
         try {
             cached = redisTemplate.opsForValue().get(key);
+            failures.recovered("authz-redis-read");
         } catch (DataAccessException e) {
             // Redis는 캐시일 뿐이다. 장애면 miss로 보고 내부 API로 판정한다(내부 API도 실패하면 fail-closed).
-            log.warn("[authz] Redis 조회 실패 — 내부 API로 판정 workspace={} user={} cause={}",
-                    workspaceId, userId, e.toString());
+            failures.warn("authz-redis-read", "[authz] Redis 조회 실패 — 내부 API로 판정 workspace="
+                    + workspaceId + " user=" + userId, e);
             return fetchAccess(workspaceId, userId);
         }
         if (cached != null) {
@@ -140,8 +143,9 @@ public class WorkspaceAccessGuard {
                 workspaceId, userId, access.role(), access.permissions());
         try {
             redisTemplate.opsForValue().set(key, serialize(access), CACHE_TTL);
+            failures.recovered("authz-redis-write");
         } catch (DataAccessException e) {
-            log.warn("[authz] Redis 캐시 저장 실패 workspace={} user={} cause={}", workspaceId, userId, e.toString());
+            failures.warn("authz-redis-write", "[authz] Redis 캐시 저장 실패 workspace=" + workspaceId + " user=" + userId, e);
         }
         return access;
     }
@@ -182,11 +186,12 @@ public class WorkspaceAccessGuard {
             if (access == null) {
                 throw new WorkspaceNotFoundException(workspaceId);
             }
+            failures.recovered("authz-access-api");
             return access;
         } catch (RestClientException e) {
             // 내부 API 장애 시 열어주지 않는다(fail-closed).
-            log.warn("[authz] 내부 API 실패 — fail-closed workspace={} user={} cause={}",
-                    workspaceId, userId, e.toString());
+            failures.warn("authz-access-api", "[authz] 내부 API 실패 — fail-closed workspace="
+                    + workspaceId + " user=" + userId, e);
             throw new WorkspaceNotFoundException(workspaceId);
         }
     }
