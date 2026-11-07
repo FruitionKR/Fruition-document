@@ -19,4 +19,5 @@
 ## 결과
 - 헤더가 없거나 ko면 응답과 command 동작이 이전과 같다(command에 `response_language: "ko"`가 더해진다).
 - en 오류 문구는 code 단위라 한국어 상세 문구(예: 어느 필드가 왜 틀렸는지)보다 덜 구체적이다.
+- Agent 턴 결과에 답변·안내 문장이 없을 때 저장하는 기본 말풍선 문구(`AiTaskResultApplier`)는 턴 command의 `response_language`로 저장한다. 채팅 기록은 요청자 본인 세션이고 AI 답변도 그 언어로 저장되기 때문이다. 값이 없으면 한국어다. 실패 말풍선은 결정 4대로 한국어와 코드로 저장한다.
 - 남은 한국어 고정 문구: 회의 실시간 받아쓰기 WebSocket 오류 메시지, 앱 안 알림 본문, pipeline 응답을 그대로 중계하는 오류 본문, 회의록 초안 API(`MEETING_NOTES_*`)는 코드만 준다.
