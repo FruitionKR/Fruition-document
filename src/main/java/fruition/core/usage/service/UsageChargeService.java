@@ -1,5 +1,6 @@
 package fruition.core.usage.service;
 
+import fruition.shared.logging.CommittedLog;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
@@ -262,6 +263,10 @@ public class UsageChargeService {
     public void failRun(String runId, String failure) {
         transaction.executeWithoutResult(status -> {
             boolean closed = jdbc.update("UPDATE ai_task_runs SET status = 'failed', updated_at = now() WHERE id = ? AND status = 'running'", runId) == 1;
+            if (closed && failure != null && !"cancelled".equals(failure) && !"agent_turn_cancelled".equals(failure)) {
+                CommittedLog.warn(log, "[동기 AI 호출 실패 확정] runId={} stage=result errorCode={}",
+                        runId, CommittedLog.code(failure));
+            }
             if (closed && failure != null && analytics != null) analytics.taskFailed(runId, "sync_call", "result", failure, null);
         });
     }

@@ -2,6 +2,9 @@ package fruition.core.analytics;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.shared.logging.RepeatedFailureLogger;
+import fruition.shared.logging.CommittedLog;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -14,8 +17,8 @@ import java.util.*;
 /** SKIP LOCKED gives each relay a batch; payloads and occurrence times never change on retry. */
 @Component
 public class AnalyticsRelay {
-    private final RepeatedFailureLogger failures = new RepeatedFailureLogger(
-            org.slf4j.LoggerFactory.getLogger(AnalyticsRelay.class));
+    private static final Logger log = LoggerFactory.getLogger(AnalyticsRelay.class);
+    private final RepeatedFailureLogger failures = new RepeatedFailureLogger(log);
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactions;
     private final AnalyticsSettings settings;
@@ -36,6 +39,7 @@ public class AnalyticsRelay {
                     """);
                 if (rows.isEmpty()) return;
                 boolean success = false;
+                String deliveryFailure = "unknown";
                 try {
                     var batch = new ArrayList<Object>();
                     for (var row : rows) batch.add(mapper.readTree((String)row.get("payload")));
@@ -45,18 +49,29 @@ public class AnalyticsRelay {
                             .POST(HttpRequest.BodyPublishers.ofString(body)).build();
                     int code = client.send(request, HttpResponse.BodyHandlers.discarding()).statusCode();
                     success = code >= 200 && code < 300;
-                } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-                catch (Exception e) { /* Only aggregate counters, never bodies/credentials/errors. */ }
+                    deliveryFailure = "http_" + code;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt(); deliveryFailure = "interrupted";
+                } catch (Exception e) {
+                    // Only the exception class, never response bodies, tokens, SQL or provider text.
+                    deliveryFailure = e.getClass().getSimpleName();
+                }
+                if (success) failures.recovered("analytics-delivery");
+                else failures.warn("analytics-delivery", "[분석 이벤트 전송 실패] batchCount=" + rows.size()
+                        + " errorCode=" + deliveryFailure, null);
+                int deadCount = 0;
                 for (var row : rows) {
                     if (success) jdbc.update("UPDATE analytics_outbox SET sent_at = now() WHERE event_id = ?", row.get("event_id"));
                     else {
                         int attempt = ((Number)row.get("attempts")).intValue() + 1;
+                        if (attempt >= 12) deadCount++;
                         jdbc.update("""
                             UPDATE analytics_outbox SET attempts = ?, next_attempt_at = now() + (? * interval '1 second'),
                               dead_at = CASE WHEN ? >= 12 THEN now() ELSE NULL END WHERE event_id = ?
                             """, attempt, Math.min(3600, 5L << Math.min(attempt, 10)), attempt, row.get("event_id"));
                     }
                 }
+                if (deadCount > 0) CommittedLog.error(log, "[분석 이벤트 전송 포기] count={} attempts=12", deadCount);
             });
             failures.recovered("analytics-storage");
         } catch (RuntimeException e) {

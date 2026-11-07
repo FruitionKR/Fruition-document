@@ -1,5 +1,6 @@
 package fruition.core.aitask.service;
 
+import fruition.shared.logging.CommittedLog;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.aitask.repository.PipelineTaskCancellationClient;
@@ -18,6 +19,8 @@ import java.util.Map;
 
 @Service
 public class AiTaskCancellationService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiTaskCancellationService.class);
+    private final fruition.shared.logging.RepeatedFailureLogger failures = new fruition.shared.logging.RepeatedFailureLogger(log);
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final PipelineTaskCancellationClient pipeline;
@@ -224,7 +227,10 @@ public class AiTaskCancellationService {
                     : row.get("status").equals("cancel_requested")
                     ? pipeline.cancel(id, workspaceId, userId, command)
                     : pipeline.status(id, workspaceId, userId);
-            if (result == null) return;
+            if (result == null) {
+                failures.warn(id, "[AI 작업 취소 재시도 대기] runId=" + id + " errorCode=empty_status", null);
+                return;
+            }
             if (result.status().equals("rollback_failed")) {
                 fail(id, result.errorCode());
                 return;
@@ -252,11 +258,15 @@ public class AiTaskCancellationService {
                 if (converting) jdbc.update("DELETE FROM document_convert_queue WHERE document_id = ?", id.substring("convert:".length()));
                 // 취소 전까지 일어난 호출을 수집해 정산하고 남은 예약을 푼다(#78·#79).
                 jdbc.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", id);
+                CommittedLog.info(log, "[AI 작업 취소 완료] runId={} workspaceId={} userId={}", id, workspaceId, userId);
             });
+            failures.recovered(id);
         } catch (org.springframework.web.client.HttpClientErrorException.Conflict e) {
             fail(id, "rollback_conflict");
         } catch (Exception e) {
             // 연결 장애는 다음 주기에 재시도한다. 복구 확인 전 완료로 표시하지 않는다.
+            failures.warn(id, "[AI 작업 취소 재시도 대기] runId=" + id + " workspaceId=" + workspaceId
+                    + " userId=" + userId + " errorCode=rollback_retry_pending", e);
             jdbc.update("UPDATE ai_task_runs SET error_code = 'rollback_retry_pending', updated_at = now() "
                     + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back')", id);
         }
@@ -274,8 +284,10 @@ public class AiTaskCancellationService {
     }
 
     private void fail(String id, String code) {
-        jdbc.update("UPDATE ai_task_runs SET status = 'rollback_failed', error_code = ?, updated_at = now() "
-                + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back')", code, id);
+        if (jdbc.update("UPDATE ai_task_runs SET status = 'rollback_failed', error_code = ?, updated_at = now() "
+                + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back')", code, id) == 1) {
+            CommittedLog.warn(log, "[AI 작업 취소 복구 실패 확정] runId={} stage=rollback errorCode={}", id, CommittedLog.code(code));
+        }
     }
 
     public List<Long> changes(String id, String workspaceId, String userId) {

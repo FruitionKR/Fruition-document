@@ -547,4 +547,56 @@ class AnalyticsIntegrationTest {
         catch (Exception error) { throw new AssertionError(error); }
     }
 
+
+    @Test void agentValidationFailureLogFollowsCommitAndDoesNotRepeat() {
+        String run = id("log-agent"); seedAgent(run, null);
+        var invalid = agentResult(run, "succeeded");
+        invalid.putObject("request");
+        invalid.putObject("payload").put("action", "markdown_create");
+        try (var capture = new fruition.shared.logging.LogCapture(fruition.core.aitask.service.AiTaskResultApplier.class)) {
+            tx.executeWithoutResult(status -> {
+                applier.applyAgent(invalid);
+                status.setRollbackOnly();
+            });
+            assertThat(capture.messages()).noneMatch(m -> m.startsWith("[Agent 결과 처리 실패]"));
+            tx.executeWithoutResult(status -> applier.applyAgent(invalid));
+            tx.executeWithoutResult(status -> applier.applyAgent(invalid));
+            assertThat(capture.messages().stream().filter(m -> m.startsWith("[Agent 결과 처리 실패]"))).hasSize(1);
+            assertThat(capture.messages()).anyMatch(m -> m.contains("stage=validation")
+                    && m.contains("errorCode=agent_result_missing_canonical_markdown")
+                    && m.contains("validationField=canonical_markdown"));
+        }
+    }
+    @Test void syncFailureLogsOnceAndDoesNotLogUserStop() {
+        String failed = id("log-sync"), stopped = id("log-stop");
+        for (String run : List.of(failed, stopped))
+            jdbc.update("INSERT INTO ai_task_runs(id,workspace_id,user_id,kind,status,created_at) VALUES (?,'workspace','actor','speech_transcription','running',?)", run, Timestamp.from(AT));
+        try (var capture = new fruition.shared.logging.LogCapture(fruition.core.usage.service.UsageChargeService.class)) {
+            usageCharges.failRun(failed, "provider_unavailable");
+            usageCharges.failRun(failed, "internal_error");
+            usageCharges.failRun(stopped, null);
+            assertThat(capture.messages().stream().filter(m -> m.startsWith("[동기 AI 호출 실패 확정]"))).hasSize(1);
+            assertThat(capture.messages()).anyMatch(m -> m.contains("runId=" + failed) && m.contains("errorCode=provider_unavailable"));
+            assertThat(capture.messages()).noneMatch(m -> m.contains("runId=" + stopped));
+        }
+    }
+
+    @Test void analyticsDeliveryGiveUpLogsSafeReasonAfterStateCommit() throws Exception {
+        String key = id("relay-dead-log");
+        tx.executeWithoutResult(s -> upload(key));
+        var eventId = AnalyticsRecorder.eventId("document_uploaded", key);
+        jdbc.update("UPDATE analytics_outbox SET next_attempt_at=now()+interval '1 day' WHERE event_id<>?", eventId);
+        jdbc.update("UPDATE analytics_outbox SET attempts=11, next_attempt_at=now() WHERE event_id=?", eventId);
+        try (MockWebServer server = new MockWebServer();
+             var capture = new fruition.shared.logging.LogCapture(AnalyticsRelay.class)) {
+            server.start(); server.enqueue(new MockResponse().setResponseCode(503).setBody("private-provider-body"));
+            var relay = new AnalyticsRelay(jdbc, tx,
+                    new AnalyticsSettings(true, "phc_testPublicToken", server.url("/").toString(), "local", "test"), mapper);
+            relay.relay();
+            assertThat(jdbc.queryForObject("SELECT dead_at IS NOT NULL FROM analytics_outbox WHERE event_id=?", Boolean.class, eventId)).isTrue();
+            assertThat(capture.messages()).anyMatch(m -> m.contains("[분석 이벤트 전송 실패]") && m.contains("errorCode=http_503"));
+            assertThat(capture.messages()).anyMatch(m -> m.equals("[분석 이벤트 전송 포기] count=1 attempts=12"));
+            assertThat(capture.messages()).noneMatch(m -> m.contains("phc_testPublicToken") || m.contains("private-provider-body"));
+        }
+    }
 }

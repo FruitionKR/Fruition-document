@@ -1,5 +1,6 @@
 package fruition.core.meeting;
 
+import fruition.shared.logging.CommittedLog;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -224,6 +225,10 @@ public class MeetingNotesService {
                             "다른 회의록 생성 요청과 겹쳤습니다. 다시 시도해 주세요.")));  // 같은 요청 ID의 재시도·동시 재시도
         }
         int version = inserted.get();
+        if (failure != null) {
+            CommittedLog.warn(log, "[회의록 초안 요청 실패 확정] meetingId={} runId={} workspaceId={} userId={} version={} stage=request errorCode={}",
+                    meetingId, runId, workspaceId, userId, version, failure);
+        }
         return toResponse(notes.find(meetingId, version).orElseThrow());
     }
 
@@ -251,7 +256,17 @@ public class MeetingNotesService {
         } else {
             changed = notes.markReady(meetingId, version, json(stored(draft, snapshotSources(note.get().segmentSnapshot()))));
         }
-        if (changed && analytics != null) analytics.meetingNotesCompleted(runId, failure);
+        if (changed) {
+            if (failure == null) {
+                CommittedLog.info(log, "[회의록 초안 생성 완료] meetingId={} runId={} version={} stage=result",
+                        meetingId, runId, version);
+            } else {
+                CommittedLog.warn(log, "[회의록 초안 생성 실패] meetingId={} runId={} version={} stage={} errorCode={}",
+                        meetingId, runId, version,
+                        "MEETING_NOTES_INVALID".equals(failure) ? "validation" : "result", failure);
+            }
+            if (analytics != null) analytics.meetingNotesCompleted(runId, failure);
+        }
     }
 
     /** 스냅샷의 묶음 ID → 묶인 원래 구간 ID들. */
@@ -284,6 +299,8 @@ public class MeetingNotesService {
         transaction.executeWithoutResult(status -> notes.expireGenerating(workspaceId, Instant.now().minus(generationTimeout))
                 .forEach(runId -> {
                     aiCancellation.requestCancel(runId);
+                    CommittedLog.warn(log, "[회의록 초안 생성 시간 초과] runId={} stage=timeout errorCode=MEETING_NOTES_TIMEOUT timeoutMinutes={}",
+                            runId, generationTimeout.toMinutes());
                     if (analytics != null) analytics.meetingNotesCompleted(runId, "MEETING_NOTES_TIMEOUT");
                 }));
     }

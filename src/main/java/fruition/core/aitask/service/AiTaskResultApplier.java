@@ -1,5 +1,6 @@
 package fruition.core.aitask.service;
 
+import fruition.shared.logging.CommittedLog;
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.aitask.AiErrorMessages;
 import fruition.core.chat.domain.ChatSession;
@@ -324,6 +325,12 @@ public class AiTaskResultApplier {
         if (updated != 1) {
             throw new IllegalStateException("Agent 적용 projection을 갱신하지 못했습니다: " + runId);
         }
+        if (errorCode != null && !"cancelled".equals(errorCode) && !"agent_turn_cancelled".equals(errorCode)
+                && !"cancelled".equals(text(event, "status"))) {
+            CommittedLog.warn(log, "[Agent 결과 처리 실패] runId={} eventId={} stage={} errorCode={} validationField={}",
+                    runId, eventId, "succeeded".equals(text(event, "status")) ? "validation" : "result",
+                    CommittedLog.code(errorCode), agentValidationField(errorCode));
+        }
         recordAgentChatMessage(event, errorCode);
         if (analytics != null) {
             String action = event.path("payload").path("action").asText(null);
@@ -481,6 +488,17 @@ public class AiTaskResultApplier {
         return MARKDOWN_ACTIONS.contains(action)
                 || NON_MUTATING_ACTIONS.contains(action)
                 || AUTONOMOUS_ACTIONS.contains(action);
+    }
+
+    private static String agentValidationField(String code) {
+        return switch (code) {
+            case "agent_result_invalid_request" -> "request";
+            case "agent_result_invalid_payload" -> "payload";
+            case "agent_result_unsupported_action" -> "payload.action";
+            case "agent_result_missing_canonical_markdown" -> "canonical_markdown";
+            case "agent_result_request_mismatch" -> "request.identity";
+            default -> "none";
+        };
     }
 
     private int markAgentFailed(String runId, String errorCode) {

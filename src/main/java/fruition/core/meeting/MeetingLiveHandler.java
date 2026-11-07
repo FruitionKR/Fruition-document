@@ -1,5 +1,6 @@
 package fruition.core.meeting;
 
+import fruition.shared.logging.CommittedLog;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -464,6 +465,9 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         if (!live.closing.compareAndSet(false, true)) {
             return;
         }
+        log.warn("[회의 실시간 전사 실패] meetingId={} runId={} workspaceId={} userId={} errorCode={} closeCode={}",
+                live.ticket.meetingId(), live.runId, live.ticket.workspaceId(), live.ticket.userId(),
+                CommittedLog.code(code), status.getCode());
         if (live.stream != null) {
             repository.endStream(live.stream.id(), "failed");
         }
