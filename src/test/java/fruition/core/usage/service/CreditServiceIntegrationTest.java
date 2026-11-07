@@ -275,7 +275,7 @@ class CreditServiceIntegrationTest {
         grant(29_999);
         assertThatThrownBy(() -> credits.reserve("run-" + UUID.randomUUID(), user, "test_kind"))
                 .isInstanceOf(CreditService.InsufficientCreditException.class)
-                .hasMessageContaining("작업을 시작하지 않았습니다");
+                .hasMessageContaining("작업을 시작하지 못했어요");
         assertThat(credits.credits(user).entries()).extracting(CreditService.Entry::type).containsExactly("grant");
 
         // 최저 이상 상한 미만이면 통과하고 가용 잔액만큼만 예약한다. 같은 사용자의 다음 요청은 가용이 0이라 거절된다.
@@ -494,7 +494,7 @@ class CreditServiceIntegrationTest {
         assertThatThrownBy(() -> charges(credits(true), "http://127.0.0.1:1/unused")
                 .reserveAutonomousRun(runId, "ws-1", user))
                 .isInstanceOf(CreditService.InsufficientCreditException.class)
-                .hasMessageContaining("중단했습니다");
+                .hasMessageContaining("작업을 이어 가지 못했어요");
         assertThat(jdbc.queryForList("SELECT id FROM ai_task_runs WHERE id = ?", String.class, runId)).isEmpty();
 
         // enforce가 꺼져 있으면 등록도 예약도 하지 않는다.
@@ -529,7 +529,7 @@ class CreditServiceIntegrationTest {
                 user, "adj:" + UUID.randomUUID());
         jdbc.update("UPDATE credit_accounts SET balance = balance - 590000 WHERE user_id = ?", user);
         assertThatThrownBy(() -> charges.reserveAutonomousRun(runId, "ws-1", user))
-                .isInstanceOf(CreditService.InsufficientCreditException.class).hasMessageContaining("중단했습니다");
+                .isInstanceOf(CreditService.InsufficientCreditException.class).hasMessageContaining("작업을 이어 가지 못했어요");
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
 
         // 잔액이 있으면 다시 통과하고, 진짜 종료 정산이 해제한다(종료 해제 키는 아직 안 쓰였다).
