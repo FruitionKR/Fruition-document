@@ -1,5 +1,6 @@
 package fruition.core.document.service;
 
+import fruition.shared.logging.RepeatedFailureLogger;
 import fruition.core.document.domain.AiCommandOutbox;
 import fruition.core.document.repository.AiCommandOutboxRepository;
 import org.slf4j.Logger;
@@ -18,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 public class AiCommandOutboxPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(AiCommandOutboxPublisher.class);
+    private final RepeatedFailureLogger failures = new RepeatedFailureLogger(log);
     private static final long SEND_TIMEOUT_SECONDS = 10;
 
     private final AiCommandOutboxRepository repository;
@@ -36,8 +38,9 @@ public class AiCommandOutboxPublisher {
         try {
             // Kafka ACK 후 삭제가 커밋될 때까지 락을 유지해 다른 Pod의 경쟁 발행을 막는다.
             events = repository.lockPendingBatch();
+            failures.recovered("outbox-query");
         } catch (Exception e) {
-            log.warn("[AI command outbox 조회 실패] error={}", e.getMessage());
+            failures.warn("outbox-query", "[AI command outbox 조회 실패]", e);
             return;
         }
         for (AiCommandOutbox event : events) {
@@ -48,6 +51,7 @@ public class AiCommandOutboxPublisher {
                 var result = kafkaTemplate.send(event.getTopic(), event.getMessageKey(), event.getPayload())
                         .get(SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 repository.deleteById(event.getId());
+                failures.recovered(event.getRunId());
                 int partition = result != null ? result.getRecordMetadata().partition() : -1;
                 long offset = result != null ? result.getRecordMetadata().offset() : -1;
                 log.info("[AI command 발행 완료] topic={} messageKey={} runId={} partition={} offset={}",
@@ -56,9 +60,8 @@ public class AiCommandOutboxPublisher {
                 Thread.currentThread().interrupt();
                 return;
             } catch (Exception e) {
-                log.warn("[AI command 발행 실패] topic={} messageKey={} runId={} retryable=true errorType={} error={}",
-                        event.getTopic(), event.getMessageKey(), event.getRunId(),
-                        e.getClass().getSimpleName(), e.getMessage());
+                failures.warn(event.getRunId(), "[AI command 발행 실패] topic=" + event.getTopic()
+                        + " runId=" + event.getRunId() + " retryable=true", e);
                 return;
             } finally {
                 MDC.remove("flowId");

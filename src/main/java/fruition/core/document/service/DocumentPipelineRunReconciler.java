@@ -5,6 +5,7 @@ import fruition.core.document.domain.DocumentStatus;
 import fruition.core.document.repository.DocumentRepository;
 import fruition.core.document.repository.PipelineRunStatusRequester;
 import org.slf4j.Logger;
+import fruition.shared.logging.RepeatedFailureLogger;
 import fruition.shared.scheduling.SchedulerLease;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,6 +19,7 @@ import java.util.List;
 public class DocumentPipelineRunReconciler {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentPipelineRunReconciler.class);
+    private final RepeatedFailureLogger failures = new RepeatedFailureLogger(log);
 
     private final DocumentRepository documentRepository;
     private final PipelineRunStatusRequester requester;
@@ -73,9 +75,10 @@ public class DocumentPipelineRunReconciler {
                                 document.getId(), run.id(), run.status(), run.error());
                     }
                 });
+                failures.recovered(document.getPipelineRunId());
             } catch (RuntimeException e) {
-                log.warn("[pipeline run 조회 실패] documentId={} runId={} error={}",
-                        document.getId(), document.getPipelineRunId(), e.getMessage());
+                failures.warn(document.getPipelineRunId(), "[pipeline run 조회 실패] documentId="
+                        + document.getId() + " runId=" + document.getPipelineRunId(), e);
             }
         }
     }

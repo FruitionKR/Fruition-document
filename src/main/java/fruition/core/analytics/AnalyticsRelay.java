@@ -1,6 +1,7 @@
 package fruition.core.analytics;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import fruition.shared.logging.RepeatedFailureLogger;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -13,6 +14,8 @@ import java.util.*;
 /** SKIP LOCKED gives each relay a batch; payloads and occurrence times never change on retry. */
 @Component
 public class AnalyticsRelay {
+    private final RepeatedFailureLogger failures = new RepeatedFailureLogger(
+            org.slf4j.LoggerFactory.getLogger(AnalyticsRelay.class));
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactions;
     private final AnalyticsSettings settings;
@@ -55,8 +58,9 @@ public class AnalyticsRelay {
                     }
                 }
             });
+            failures.recovered("analytics-storage");
         } catch (RuntimeException e) {
-            org.slf4j.LoggerFactory.getLogger(getClass()).warn("analytics relay database failure: {}", e.getClass().getSimpleName());
+            failures.warn("analytics-storage", "analytics relay database failure: " + e.getClass().getSimpleName(), null);
         }
     }
 }

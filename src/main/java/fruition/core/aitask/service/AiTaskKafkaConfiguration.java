@@ -25,7 +25,9 @@ public class AiTaskKafkaConfiguration {
     }
 
     static DefaultErrorHandler resultErrorHandler(long intervalMillis) {
-        return new DefaultErrorHandler(
+        var handler = new DefaultErrorHandler(
                 new FixedBackOff(intervalMillis, FixedBackOff.UNLIMITED_ATTEMPTS));
+        handler.setLogLevel(org.springframework.kafka.KafkaException.Level.DEBUG);
+        return handler;
     }
 }

@@ -1,5 +1,6 @@
 package fruition.core.chat.service;
 
+import fruition.shared.logging.RepeatedFailureLogger;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.chat.domain.ChatPartialWiki;
@@ -40,6 +41,7 @@ import java.util.regex.Pattern;
 public class ChatWikiExportReconciler {
 
     private static final Logger log = LoggerFactory.getLogger(ChatWikiExportReconciler.class);
+    private final RepeatedFailureLogger failures = new RepeatedFailureLogger(log);
 
     /** export 블록 id의 {@code session_id:pair_id} provenance. group(1)=session_id, group(2)=pair_id. */
     private static final long INTERVAL_MS = 3000;
@@ -101,10 +103,11 @@ public class ChatWikiExportReconciler {
         for (Document document : documents) {
             try {
                 reconcileOne(document);
+                failures.recovered(document.getId());
             } catch (RuntimeException e) {
                 // 이 문서만 건너뛴다. reconciled_at을 남기지 않았으므로 다음 tick에 다시 시도한다.
                 // 예외를 마지막 인자로 넘겨 스택을 남긴다. DB 쓰기 실패까지 여기로 모이므로 메시지만으론 부족하다.
-                log.warn("[chat-wiki][reconcile] 건너뜀 document={}", document.getId(), e);
+                failures.warn(document.getId(), "[chat-wiki][reconcile] 건너뜀 document=" + document.getId(), e);
             }
         }
     }

@@ -1,5 +1,6 @@
 package fruition.core.document.service;
 
+import fruition.shared.logging.RepeatedFailureLogger;
 import fruition.shared.scheduling.SchedulerLease;
 import fruition.shared.util.StorageProperties;
 import io.minio.GetObjectArgs;
@@ -30,6 +31,7 @@ import java.util.Set;
 public class DocumentOriginalHashWorker {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentOriginalHashWorker.class);
+    private final RepeatedFailureLogger failures = new RepeatedFailureLogger(log);
     private static final int BATCH_SIZE = 5;
     private static final Set<String> MISSING = Set.of("NoSuchKey", "NoSuchObject", "NotFound");
 
@@ -79,18 +81,19 @@ public class DocumentOriginalHashWorker {
                 sha256 = sha256(document.sourceUri());
             } catch (ErrorResponseException e) {
                 if (!MISSING.contains(e.errorResponse().code())) {
-                    log.warn("[원본 해시 계산 실패, 다음 실행에서 다시 시도] documentId={}", document.id(), e);
+                    failures.warn(document.id(), "[원본 해시 계산 실패, 다음 실행에서 다시 시도] documentId=" + document.id(), e);
                     continue;
                 }
                 // 원본이 없으면 다시 시도해도 계산할 수 없다. 빈 문자열로 표시해 대기열에서 뺀다.
                 log.warn("[원본 해시 계산 불가] documentId={} reason=object_missing", document.id());
                 sha256 = "";
             } catch (Exception e) {
-                log.warn("[원본 해시 계산 실패, 다음 실행에서 다시 시도] documentId={}", document.id(), e);
+                failures.warn(document.id(), "[원본 해시 계산 실패, 다음 실행에서 다시 시도] documentId=" + document.id(), e);
                 continue;
             }
             filled += jdbc.update("UPDATE documents SET original_sha256 = ? WHERE id = ? AND original_sha256 IS NULL",
                     sha256, document.id());
+            if (!sha256.isEmpty()) failures.recovered(document.id());
         }
         return filled;
     }
