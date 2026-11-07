@@ -8,6 +8,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -32,12 +35,16 @@ class AiModelCatalogPriceIntegrationTest {
     private static final List<String> SPEECH_BILLED = Stream.concat(TRANSCRIPTION_BILLED.stream(),
             Stream.of("openai/gpt-realtime-2.1-mini")).toList();
 
+    /** 카탈로그 밖 판단 모델: Fruition-ai pipeline/app/core/jev_client.py의 JEV_MODEL과 함께 갱신한다. */
+    private static final List<String> DECISION_BILLED = List.of("typesafe/jev-1.13.0");
+
     @Autowired JdbcTemplate jdbc;
 
     @Test
     void everyCatalogModelHasAPriceEffectiveNow() {
         var missing = Stream.concat(new AiModelCatalog("openai,gemini,claude").enabledModels().stream()
-                                .map(model -> model.provider() + "/" + model.model()), SPEECH_BILLED.stream())
+                                .map(model -> model.provider() + "/" + model.model()),
+                        Stream.concat(SPEECH_BILLED.stream(), DECISION_BILLED.stream()))
                 .filter(key -> !UNPRICED.containsKey(key))
                 .filter(key -> jdbc.queryForObject("SELECT count(*) FROM ai_model_prices WHERE provider = ? AND model = ? "
                         + "AND effective_from <= now()", Long.class, key.split("/", 2)[0], key.split("/", 2)[1]) == 0)
@@ -56,5 +63,20 @@ class AiModelCatalogPriceIntegrationTest {
                 .toList();
 
         assertThat(missing).isEmpty();
+    }
+
+    /** 소급 시작 시각과 무료 출력/미사용 캐시를 확인해 초기 호출의 unpriced 재발을 막는다. */
+    @Test
+    void jevPriceCoversFirstProductionCall() {
+        var row = jdbc.queryForMap("SELECT * FROM ai_model_prices WHERE provider = 'typesafe' "
+                        + "AND model = 'jev-1.13.0' AND effective_from <= ? ORDER BY effective_from DESC LIMIT 1",
+                Timestamp.from(Instant.parse("2026-11-07T04:02:54Z")));
+        assertThat((BigDecimal) row.get("input_usd_per_mtok")).isEqualByComparingTo("0.042");
+        for (String column : List.of("output_usd_per_mtok", "cache_read_usd_per_mtok", "cache_write_usd_per_mtok")) {
+            assertThat((BigDecimal) row.get(column)).isEqualByComparingTo(BigDecimal.ZERO);
+        }
+        assertThat(row.get("audio_usd_per_minute")).isNull();
+        assertThat(row.get("tts_usd_per_mchar")).isNull();
+        assertThat(((Timestamp) row.get("effective_from")).toInstant()).isEqualTo(Instant.parse("2026-11-07T00:00:00Z"));
     }
 }
