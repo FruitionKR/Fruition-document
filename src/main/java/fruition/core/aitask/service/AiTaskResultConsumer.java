@@ -54,8 +54,7 @@ public class AiTaskResultConsumer {
     public void consume(String raw) throws Exception {
         JsonNode event;
         try {
-            event = objectMapper.readTree(raw);
-            if (event == null || !event.isObject()) throw new IllegalArgumentException("AI result must be an object");
+            event = java.util.Objects.requireNonNull(objectMapper.readTree(raw), "AI result is empty");
         } catch (Exception failure) {
             // Never include the raw result: it may contain document or chat content.
             failures.error("invalid-result", "[AI task 결과 JSON 해석 실패] errorType="
