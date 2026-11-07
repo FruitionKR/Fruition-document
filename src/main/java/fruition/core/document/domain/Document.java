@@ -129,6 +129,14 @@ public class Document {
     @Column(name = "conversion_report", columnDefinition = "jsonb")
     private ConversionReport conversionReport;
 
+    /**
+     * PDF 변환본을 변환이 끝나면 서버가 자동 편입하기로 했고 그 편입이 아직 시작되지 않았는지.
+     * 변환 요청 때 정하고, 변환이 끝나 편입을 등록하거나 건너뛰면 false가 된다.
+     * null은 이 값을 저장하기 전에 요청된 변환이거나 변환 문서가 아니라는 뜻이다.
+     */
+    @Column(name = "auto_ingest_scheduled")
+    private Boolean autoIngestScheduled;
+
     /** 이 문서를 만든 가져오기 세션(document_imports.id). 가져온 문서가 아니면 null. */
     @Column(name = "import_id")
     private UUID importId;
@@ -301,6 +309,26 @@ public class Document {
     /** 첫 batch가 병합되기 전에 변환이 실패해 본문이 placeholder 그대로 남은 문서. 실패 처리는 본문을 되돌리지 않는다. */
     public boolean isFailedConvertPlaceholder(String markdown) {
         return status == DocumentStatus.failed && CONVERT_PLACEHOLDER_MARKDOWN.equals(markdown);
+    }
+
+    /** 변환 요청 때 정한 "변환이 끝나면 자동 편입" 여부를 기록한다. */
+    public void scheduleAutoIngestOnConvert(boolean scheduled) {
+        this.autoIngestScheduled = scheduled;
+    }
+
+    /** 변환 뒤 자동 편입을 등록했거나 건너뛰었다. 판정 전에 요청된 변환(null)은 그대로 둔다. */
+    public void finishAutoIngestSchedule() {
+        if (this.autoIngestScheduled != null) {
+            this.autoIngestScheduled = false;
+        }
+    }
+
+    /** 변환 요청 때 저장한 판정. null이면 저장하기 전에 요청된 변환이라 변환이 끝나는 시점에 판정한다. */
+    public Boolean getAutoIngestScheduled() { return autoIngestScheduled; }
+
+    /** 변환이 끝나면 서버가 자동 편입할 예정이고 그 편입이 아직 시작되지 않았으면 true. 실패한 문서는 false다. */
+    public boolean isAutoIngestScheduled() {
+        return Boolean.TRUE.equals(autoIngestScheduled) && status != DocumentStatus.failed;
     }
 
     /** PDF → Markdown 변환 완료: 변환 본문 기준으로 크기·해시를 갱신하고 completed로 전환한다. */

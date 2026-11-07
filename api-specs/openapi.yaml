@@ -1610,7 +1610,7 @@ paths:
       tags:
       - Documents
     post:
-      description: "PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_on_upload가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다."
+      description: "PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_markdown_on_upload(새 워크스페이스 기본 켬)가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다."
       operationId: upload
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -7335,6 +7335,10 @@ components:
           - agent
           - meeting_notes
           - chat_export
+        auto_ingest_scheduled:
+          type: boolean
+          description: "PDF 변환으로 만든 문서이고, 변환을 요청할 때 워크스페이스 설정(auto_ingest_pdf_on_convert)과 요청자의 wiki.ingest로 판정한 결과 변환이 끝나면 서버가 자동으로 위키에 편입하기로 정해졌으며, 그 편입이 아직 시작되지 않았으면(변환 중이거나 변환 직후) true다. 그 밖에는 false다. 요청 뒤 설정이 바뀌어도 그 변환은 요청 때 판정을 따른다. 변환 도중 요청자의 wiki.ingest가 회수되면 편입하지 않고 변환이 끝날 때 false가 된다. 화면은 true면 편입 여부를 묻지 않는다."
+          example: false
         byte_size:
           type: integer
           format: int64
@@ -7867,6 +7871,10 @@ components:
         area:
           type: string
           description: 문서가 속한 영역
+        auto_ingest_scheduled:
+          type: boolean
+          description: "PDF 변환으로 만든 문서이고, 변환을 요청할 때 워크스페이스 설정(auto_ingest_pdf_on_convert)과 요청자의 wiki.ingest로 판정한 결과 변환이 끝나면 서버가 자동으로 위키에 편입하기로 정해졌으며, 그 편입이 아직 시작되지 않았으면(변환 중이거나 변환 직후) true다. 그 밖에는 false다. 요청 뒤 설정이 바뀌어도 그 변환은 요청 때 판정을 따른다. 변환 도중 요청자의 wiki.ingest가 회수되면 편입하지 않고 변환이 끝날 때 false가 된다. 화면은 true면 편입 여부를 묻지 않는다."
+          example: false
         byte_size:
           type: integer
           format: int64

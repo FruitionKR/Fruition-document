@@ -2,6 +2,10 @@
 
 ## 2026-11-07
 
+- 자동 편입 설정을 경로별로 따른다. Markdown·txt 업로드 직후 편입은 access `auto_ingest_markdown_on_upload`, PDF 변환 뒤 편입은 `auto_ingest_pdf_on_convert`를 보고, 새 필드가 없는 옛 access면 `auto_ingest_on_upload`로 대신한다. `wiki.ingest` 조건은 그대로다.
+- PDF 변환 뒤 편입의 설정 판정을 변환 요청 때로 옮기고 V109 `documents.auto_ingest_scheduled`에 남긴다. 문서 목록·트리·상세에 `auto_ingest_scheduled`를 추가했다(변환 중·직후 편입 예정이면 true, 편입 등록·건너뜀·실패 뒤 false). 권한은 변환이 끝날 때 다시 본다.
+- 검증: 전체 테스트 2067개(실패·오류·스킵 0), bootJar 통과.
+
 - 크레딧 부족 문구에서 제공하지 않는 충전 안내를 제거했다. Agent 시작 전 실패는 문서 미변경을 알리고, 진행 중 중단은 작업 기록 확인을 안내한다. 크레딧 차감·예약·한도 판단은 그대로다.
 
 - Jev `typesafe/jev-1.13.0` 입력 $0.042/100만 토큰·출력 무료 단가를 V108에 추가했다. 최초 호출 전인 당일 00:00 UTC부터 적용해 기존 미산정 호출을 자동 재계산한다. 공식 홈페이지 입력 가격과 복수 자료를 대조했고, 캐시 단가는 미사용 0으로 기록했다. 카탈로그 밖 판단 모델의 단가 가드 및 최초 호출 시각 검증을 추가했다. 단가·재계산·크레딧 통합 테스트 53개와 임시 PostgreSQL 16의 가격 스키마 V108 적용·재적용을 확인했다. `BILLING_ENFORCE=false`여도 정산 시 크레딧은 차감된다.
