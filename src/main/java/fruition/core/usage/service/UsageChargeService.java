@@ -264,8 +264,8 @@ public class UsageChargeService {
         transaction.executeWithoutResult(status -> {
             boolean closed = jdbc.update("UPDATE ai_task_runs SET status = 'failed', updated_at = now() WHERE id = ? AND status = 'running'", runId) == 1;
             if (closed && failure != null && !"cancelled".equals(failure) && !"agent_turn_cancelled".equals(failure)) {
-                CommittedLog.warn(log, "[동기 AI 호출 실패 확정] runId={} stage=result errorCode={}",
-                        runId, CommittedLog.code(failure));
+                CommittedLog.warn(log, "[동기 AI 호출 실패 확정] runId={} stage=result errorCode={} 원인={}",
+                        runId, CommittedLog.code(failure), CommittedLog.reason(failure));
             }
             if (closed && failure != null && analytics != null) analytics.taskFailed(runId, "sync_call", "result", failure, null);
         });

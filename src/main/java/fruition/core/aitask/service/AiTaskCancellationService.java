@@ -228,7 +228,7 @@ public class AiTaskCancellationService {
                     ? pipeline.cancel(id, workspaceId, userId, command)
                     : pipeline.status(id, workspaceId, userId);
             if (result == null) {
-                failures.warn(id, "[AI 작업 취소 재시도 대기] runId=" + id + " errorCode=empty_status", null);
+                failures.warn(id, "[AI 작업 취소 재시도 대기] runId=" + id + " errorCode=empty_status 원인=취소한 작업의 현재 상태 응답이 비어 있습니다.", null);
                 return;
             }
             if (result.status().equals("rollback_failed")) {
@@ -266,7 +266,7 @@ public class AiTaskCancellationService {
         } catch (Exception e) {
             // 연결 장애는 다음 주기에 재시도한다. 복구 확인 전 완료로 표시하지 않는다.
             failures.warn(id, "[AI 작업 취소 재시도 대기] runId=" + id + " workspaceId=" + workspaceId
-                    + " userId=" + userId + " errorCode=rollback_retry_pending", e);
+                    + " userId=" + userId + " errorCode=rollback_retry_pending 원인=취소·복구 처리 중 오류가 발생해 다음 주기에 다시 시도합니다.", e);
             jdbc.update("UPDATE ai_task_runs SET error_code = 'rollback_retry_pending', updated_at = now() "
                     + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back')", id);
         }
@@ -286,7 +286,8 @@ public class AiTaskCancellationService {
     private void fail(String id, String code) {
         if (jdbc.update("UPDATE ai_task_runs SET status = 'rollback_failed', error_code = ?, updated_at = now() "
                 + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back')", code, id) == 1) {
-            CommittedLog.warn(log, "[AI 작업 취소 복구 실패 확정] runId={} stage=rollback errorCode={}", id, CommittedLog.code(code));
+            CommittedLog.warn(log, "[AI 작업 취소 복구 실패 확정] runId={} stage=rollback errorCode={} 원인={}",
+                    id, CommittedLog.code(code), CommittedLog.reason(code));
         }
     }
 

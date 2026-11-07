@@ -226,8 +226,8 @@ public class MeetingNotesService {
         }
         int version = inserted.get();
         if (failure != null) {
-            CommittedLog.warn(log, "[회의록 초안 요청 실패 확정] meetingId={} runId={} workspaceId={} userId={} version={} stage=request errorCode={}",
-                    meetingId, runId, workspaceId, userId, version, failure);
+            CommittedLog.warn(log, "[회의록 초안 요청 실패 확정] meetingId={} runId={} workspaceId={} userId={} version={} stage=request errorCode={} 원인={}",
+                    meetingId, runId, workspaceId, userId, version, failure, CommittedLog.reason(failure));
         }
         return toResponse(notes.find(meetingId, version).orElseThrow());
     }
@@ -261,9 +261,9 @@ public class MeetingNotesService {
                 CommittedLog.info(log, "[회의록 초안 생성 완료] meetingId={} runId={} version={} stage=result",
                         meetingId, runId, version);
             } else {
-                CommittedLog.warn(log, "[회의록 초안 생성 실패] meetingId={} runId={} version={} stage={} errorCode={}",
+                CommittedLog.warn(log, "[회의록 초안 생성 실패] meetingId={} runId={} version={} stage={} errorCode={} 원인={}",
                         meetingId, runId, version,
-                        "MEETING_NOTES_INVALID".equals(failure) ? "validation" : "result", failure);
+                        "MEETING_NOTES_INVALID".equals(failure) ? "validation" : "result", failure, CommittedLog.reason(failure));
             }
             if (analytics != null) analytics.meetingNotesCompleted(runId, failure);
         }
@@ -299,7 +299,7 @@ public class MeetingNotesService {
         transaction.executeWithoutResult(status -> notes.expireGenerating(workspaceId, Instant.now().minus(generationTimeout))
                 .forEach(runId -> {
                     aiCancellation.requestCancel(runId);
-                    CommittedLog.warn(log, "[회의록 초안 생성 시간 초과] runId={} stage=timeout errorCode=MEETING_NOTES_TIMEOUT timeoutMinutes={}",
+                    CommittedLog.warn(log, "[회의록 초안 생성 시간 초과] runId={} stage=timeout errorCode=MEETING_NOTES_TIMEOUT timeoutMinutes={} 원인=정해진 시간 안에 회의록 초안 결과를 받지 못했습니다.",
                             runId, generationTimeout.toMinutes());
                     if (analytics != null) analytics.meetingNotesCompleted(runId, "MEETING_NOTES_TIMEOUT");
                 }));

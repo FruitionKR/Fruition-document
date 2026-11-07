@@ -558,10 +558,10 @@ class AnalyticsIntegrationTest {
                 applier.applyAgent(invalid);
                 status.setRollbackOnly();
             });
-            assertThat(capture.messages()).noneMatch(m -> m.startsWith("[Agent 결과 처리 실패]"));
+            assertThat(capture.messages()).noneMatch(m -> m.startsWith("[AI 작업 결과 처리 실패]"));
             tx.executeWithoutResult(status -> applier.applyAgent(invalid));
             tx.executeWithoutResult(status -> applier.applyAgent(invalid));
-            assertThat(capture.messages().stream().filter(m -> m.startsWith("[Agent 결과 처리 실패]"))).hasSize(1);
+            assertThat(capture.messages().stream().filter(m -> m.startsWith("[AI 작업 결과 처리 실패]"))).hasSize(1);
             assertThat(capture.messages()).anyMatch(m -> m.contains("stage=validation")
                     && m.contains("errorCode=agent_result_missing_canonical_markdown")
                     && m.contains("validationField=canonical_markdown"));
@@ -595,7 +595,7 @@ class AnalyticsIntegrationTest {
             relay.relay();
             assertThat(jdbc.queryForObject("SELECT dead_at IS NOT NULL FROM analytics_outbox WHERE event_id=?", Boolean.class, eventId)).isTrue();
             assertThat(capture.messages()).anyMatch(m -> m.contains("[분석 이벤트 전송 실패]") && m.contains("errorCode=http_503"));
-            assertThat(capture.messages()).anyMatch(m -> m.equals("[분석 이벤트 전송 포기] count=1 attempts=12"));
+            assertThat(capture.messages()).anyMatch(m -> m.contains("[분석 이벤트 전송 포기] count=1 attempts=12"));
             assertThat(capture.messages()).noneMatch(m -> m.contains("phc_testPublicToken") || m.contains("private-provider-body"));
         }
     }

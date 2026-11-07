@@ -465,9 +465,9 @@ public class MeetingLiveHandler extends AbstractWebSocketHandler {
         if (!live.closing.compareAndSet(false, true)) {
             return;
         }
-        log.warn("[회의 실시간 전사 실패] meetingId={} runId={} workspaceId={} userId={} errorCode={} closeCode={}",
+        log.warn("[회의 실시간 전사 실패] meetingId={} runId={} workspaceId={} userId={} errorCode={} closeCode={} 원인={}",
                 live.ticket.meetingId(), live.runId, live.ticket.workspaceId(), live.ticket.userId(),
-                CommittedLog.code(code), status.getCode());
+                CommittedLog.code(code), status.getCode(), CommittedLog.reason(code));
         if (live.stream != null) {
             repository.endStream(live.stream.id(), "failed");
         }

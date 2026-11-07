@@ -1,6 +1,7 @@
 package fruition.core.document.service;
 
 import fruition.core.aitask.AiErrorMessages;
+import fruition.shared.logging.CommittedLog;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -483,9 +484,11 @@ public class DocumentService {
                 autoIngestAfterCommit(workspaceId, userId, documentId,
                         markdownContent.contentHash(), markdownContent.bytes().length);
             }
-            log.info("[문서 DB 저장 완료] documentId={} workspaceId={} userId={} filename={} status={} sourceUri={}",
+            CommittedLog.info(log, "[문서 DB 저장 완료] documentId={} workspaceId={} userId={} filename={} status={} sourceUri={}",
                     document.getId(), document.getWorkspaceId(), document.getUserId(),
                     document.getFilename(), document.getStatus(), document.getSourceUri());
+            CommittedLog.info(log, "[문서 업로드 완료] documentId={} workspaceId={} userId={} status={} 설명=원본 파일 저장과 문서 등록이 완료됐습니다.",
+                    document.getId(), document.getWorkspaceId(), document.getUserId(), document.getStatus());
 
             return response;
         } catch (Exception e) {

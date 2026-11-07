@@ -327,9 +327,9 @@ public class AiTaskResultApplier {
         }
         if (errorCode != null && !"cancelled".equals(errorCode) && !"agent_turn_cancelled".equals(errorCode)
                 && !"cancelled".equals(text(event, "status"))) {
-            CommittedLog.warn(log, "[Agent 결과 처리 실패] runId={} eventId={} stage={} errorCode={} validationField={}",
+            CommittedLog.warn(log, "[AI 작업 결과 처리 실패] runId={} eventId={} stage={} errorCode={} validationField={} 원인={}",
                     runId, eventId, "succeeded".equals(text(event, "status")) ? "validation" : "result",
-                    CommittedLog.code(errorCode), agentValidationField(errorCode));
+                    CommittedLog.code(errorCode), agentValidationField(errorCode), CommittedLog.reason(errorCode));
         }
         recordAgentChatMessage(event, errorCode);
         if (analytics != null) {

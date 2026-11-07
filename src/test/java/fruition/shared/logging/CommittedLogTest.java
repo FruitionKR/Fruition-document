@@ -39,6 +39,8 @@ class CommittedLogTest {
         assertThat(CommittedLog.code("MEETING_NOTES_TIMEOUT")).isEqualTo("MEETING_NOTES_TIMEOUT");
         assertThat(CommittedLog.code("provider failed: private text")).isEqualTo("unknown");
         assertThat(CommittedLog.code(null)).isEqualTo("unknown");
+        assertThat(CommittedLog.reason("agent_result_missing_canonical_markdown")).contains("문서 본문이 없습니다");
+        assertThat(CommittedLog.reason("private-provider-secret")).doesNotContain("private-provider-secret");
     }
     private static final class LocalTransactions extends AbstractPlatformTransactionManager {
         @Override protected Object doGetTransaction() { return new Object(); }

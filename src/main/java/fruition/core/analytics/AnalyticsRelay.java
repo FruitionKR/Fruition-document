@@ -58,7 +58,7 @@ public class AnalyticsRelay {
                 }
                 if (success) failures.recovered("analytics-delivery");
                 else failures.warn("analytics-delivery", "[분석 이벤트 전송 실패] batchCount=" + rows.size()
-                        + " errorCode=" + deliveryFailure, null);
+                        + " errorCode=" + deliveryFailure + " 원인=분석 수집 서버에 이벤트를 정상 전송하지 못했습니다.", null);
                 int deadCount = 0;
                 for (var row : rows) {
                     if (success) jdbc.update("UPDATE analytics_outbox SET sent_at = now() WHERE event_id = ?", row.get("event_id"));
@@ -71,7 +71,7 @@ public class AnalyticsRelay {
                             """, attempt, Math.min(3600, 5L << Math.min(attempt, 10)), attempt, row.get("event_id"));
                     }
                 }
-                if (deadCount > 0) CommittedLog.error(log, "[분석 이벤트 전송 포기] count={} attempts=12", deadCount);
+                if (deadCount > 0) CommittedLog.error(log, "[분석 이벤트 전송 포기] count={} attempts=12 원인=최대 재시도 횟수에 도달해 자동 전송을 중단했습니다.", deadCount);
             });
             failures.recovered("analytics-storage");
         } catch (RuntimeException e) {
