@@ -26,6 +26,7 @@ import java.util.UUID;
 
 @Service
 public class WikiMaintenanceService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WikiMaintenanceService.class);
 
     private final WorkspaceAccessGuard workspaceAccessGuard;
     private final LintOperationStarter operationStarter;
@@ -79,6 +80,8 @@ public class WikiMaintenanceService {
                     new LintCommand(runId, "lint", workspaceId, userId, operationId,
                             materializePromotions, dryRun,
                             aiModel.provider(), aiModel.model()));
+            fruition.shared.logging.CommittedLog.info(log, "[위키 점검 요청 접수] operation=wiki_lint stage=accepted runId={} operationId={} workspaceId={} userId={} dryRun={}",
+                    runId, operationId, workspaceId, userId, dryRun);
             return objectMapper.valueToTree(new LintRunResponse(runId, operationId, "queued"));
         });
     }

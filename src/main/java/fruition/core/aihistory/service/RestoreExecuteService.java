@@ -13,6 +13,7 @@ import fruition.core.aihistory.exception.RestorePreviewStaleException;
 import fruition.core.document.exception.DocumentVersionConflictException;
 import fruition.core.document.repository.AiCommandOutboxWriter;
 import fruition.core.wiki.domain.WikiPageContribution;
+import fruition.shared.logging.CommittedLog;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.CannotSerializeTransactionException;
 import org.springframework.dao.DeadlockLoserDataAccessException;
@@ -40,6 +41,7 @@ import java.util.Set;
  */
 @Service
 public class RestoreExecuteService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RestoreExecuteService.class);
 
     private static final int MAX_DOCUMENT_RESTORE_ATTEMPTS = 3;
 
@@ -88,7 +90,35 @@ public class RestoreExecuteService {
     @Transactional
     public RestoreExecuteResponse execute(String workspaceId, String userId,
                                           String operationId, String previewToken) {
-        OperationLog target = previewService.loadOperation(workspaceId, userId, operationId);
+        // 대상을 읽기 전에 거절되면 종류를 알 수 없어 "작업"으로 남긴다.
+        OperationType targetType = null;
+        try {
+            OperationLog target = previewService.loadOperation(workspaceId, userId, operationId);
+            targetType = target.getOperationType();
+            log.debug("[{} 되돌리기 요청] operation=operation_restore stage=requested rollback=user_requested targetType={} targetOperationId={} workspaceId={} userId={}",
+                    targetType.logLabel(), targetType, operationId, workspaceId, userId);
+            return executeRequested(target, workspaceId, userId, operationId, previewToken);
+        } catch (RestorePreviewStaleException e) {
+            log.warn("[{} 되돌리기 거부] operation=operation_restore stage=validation errorCode=RESTORE_PREVIEW_STALE retryable=false targetType={} targetOperationId={} workspaceId={} userId={} 원인=미리보기 이후 대상이 바뀌었거나 후속 수정이 있어 되돌리지 않았습니다.",
+                    label(targetType), targetType, operationId, workspaceId, userId);
+            throw e;
+        } catch (InvalidRestoreRequestException e) {
+            log.warn("[{} 되돌리기 거부] operation=operation_restore stage=validation errorCode=RESTORE_REQUEST_REJECTED retryable=false targetType={} targetOperationId={} workspaceId={} userId={} 원인=중복 요청이거나 되돌릴 수 없는 작업입니다. 같은 requestId의 공통 예외 로그에서 세부 사유를 확인합니다.",
+                    label(targetType), targetType, operationId, workspaceId, userId);
+            throw e;
+        } catch (RuntimeException e) {
+            log.warn("[{} 되돌리기 중단] operation=operation_restore stage=apply errorCode=UNCLASSIFIED targetType={} targetOperationId={} workspaceId={} userId={} errorType={} 원인=권한·잠금 거부 또는 처리 오류로 끝나지 못했습니다. 같은 requestId의 공통 예외 로그로 구분합니다.",
+                    label(targetType), targetType, operationId, workspaceId, userId, e.getClass().getSimpleName());
+            throw e;
+        }
+    }
+
+    private static String label(OperationType type) {
+        return type == null ? "작업" : type.logLabel();
+    }
+
+    private RestoreExecuteResponse executeRequested(OperationLog target, String workspaceId, String userId,
+                                                    String operationId, String previewToken) {
         // 인가·대상 유형을 확인한 뒤 claim을 먼저 본다. 이후 상태가 바뀌어도 재실행은 중복이다.
         String restoreTokenHash = tokenHash(previewToken);
         if (lifecycle.isClaimed(target.getOperationId(), restoreTokenHash)) {
@@ -130,6 +160,8 @@ public class RestoreExecuteService {
                         "같은 미리보기 토큰으로 복구가 이미 접수되었습니다."));
         outboxWriter.enqueue(runId, commandTopic, workspaceId,
                 restoreCommand(runId, restore, target, excluded, plan, sourcePage, expected));
+        CommittedLog.info(log, "[{} 되돌리기 접수] operation=operation_restore stage=accepted rollback=user_requested targetType={} targetOperationId={} restoreOperationId={} runId={} workspaceId={} userId={} 설명=위키 재조립 작업을 등록했습니다. 완료는 결과 수신 뒤 별도로 남습니다.",
+                target.getOperationType().logLabel(), target.getOperationType(), operationId, restore.getOperationId(), runId, workspaceId, userId);
         return RestoreExecuteResponse.queued(runId, restore.getOperationId(), operationId, plan);
     }
 
@@ -154,6 +186,8 @@ public class RestoreExecuteService {
                                 "같은 미리보기 토큰으로 복구가 이미 접수되었습니다."));
                 long newVersion = documentApplier.apply(restore, plan);
                 lifecycle.finishDocument(restore.getOperationId(), plan.toVersion(), newVersion, now);
+                CommittedLog.info(log, "[AI 편집 되돌리기 완료] operation=operation_restore stage=completed rollback=user_requested targetType=document_edit targetOperationId={} restoreOperationId={} documentId={} workspaceId={} userId={} fromVersion={} toVersion={} newVersion={}",
+                        target.getOperationId(), restore.getOperationId(), plan.documentId(), target.getWorkspaceId(), userId, plan.fromVersion(), plan.toVersion(), newVersion);
 
                 return RestoreExecuteResponse.forDocument(
                         restore.getOperationId(), target.getOperationId());
@@ -168,9 +202,16 @@ public class RestoreExecuteService {
             try {
                 return operation.get();
             } catch (RuntimeException exception) {
-                if (attempt >= MAX_DOCUMENT_RESTORE_ATTEMPTS || !isTransientDocumentRestoreFailure(exception)) {
+                if (!isTransientDocumentRestoreFailure(exception)) {
                     throw exception;
                 }
+                if (attempt >= MAX_DOCUMENT_RESTORE_ATTEMPTS) {
+                    log.error("[AI 편집 되돌리기 재시도 소진] operation=operation_restore stage=apply errorCode=RESTORE_RETRY_EXHAUSTED retryable=false targetType=document_edit attempt={} errorType={} 원인=DB 충돌이 반복돼 문서를 되돌리지 못했습니다. 트랜잭션은 롤백됐습니다.",
+                            attempt, exception.getClass().getSimpleName());
+                    throw exception;
+                }
+                log.warn("[AI 편집 되돌리기 재시도 대기] operation=operation_restore stage=apply retryable=true targetType=document_edit attempt={} errorType={} 원인=일시적인 DB 충돌로 트랜잭션을 롤백하고 다시 시도합니다.",
+                        attempt, exception.getClass().getSimpleName());
             }
         }
     }

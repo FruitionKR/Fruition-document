@@ -160,7 +160,7 @@ public class DataPurgeService {
             return deleted;
         });
         int objects = keys.size() + locked.size();
-        log.info("[데이터 파기] scope={} id={} objects={} rows={}", scope, id, objects, rows);
+        log.info("[데이터 파기 완료] operation=data_purge stage=completed scope={} resourceId={} objects={} rows={}", scope, id, objects, rows);
         return new PurgeResult(rows, objects);
     }
 

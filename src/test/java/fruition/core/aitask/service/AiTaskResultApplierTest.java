@@ -662,7 +662,13 @@ class AiTaskResultApplierTest {
         doThrow(new RestorePreviewStaleException()).when(restoreApplier)
                 .apply(eq(operation), any(), any(), any(), any());
 
-        assertThatCode(() -> applier.applyRestore(restoreEvent())).doesNotThrowAnyException();
+        try (var capture = new fruition.shared.logging.LogCapture(AiTaskResultApplier.class)) {
+            assertThatCode(() -> applier.applyRestore(restoreEvent())).doesNotThrowAnyException();
+            org.assertj.core.api.Assertions.assertThat(capture.messages())
+                    .anyMatch(m -> m.startsWith("[위키 편입 되돌리기 충돌 확정]") && m.contains("targetType=ingest")
+                            && m.contains("errorCode=RESTORE_CONFLICT") && m.contains("restoreOperationId=restore-op"))
+                    .noneMatch(m -> m.contains("되돌리기 완료]"));
+        }
 
         verify(operation).complete(eq(OperationStatus.conflict),
                 eq("복구 대상이 변경되었습니다. 미리보기를 다시 확인해 주세요."),

@@ -143,9 +143,14 @@ public class AgentTurnService {
                 workspaceId, userId, request.skillDraftSources());
         requireUsableReferences(workspaceId, userId, request.referenceDocumentIds());
         String readOnlyDocumentId = confirmedReadOnlyDocumentId(workspaceId, userId, request);
-        return transaction.execute(status ->
+        AgentTurnResponse queued = transaction.execute(status ->
                 queueTurn(workspaceId, userId, request, folderId, selectedModel, skillDraftSources, readOnlyDocumentId,
                         sessionTitleNeeded));
+        log.info("[{} 접수] operation={} stage=accepted runId={} applyOperationId={} workspaceId={} userId={} sessionId={} documentId={} skillMode={} skillId={} provider={} 설명=실행 명령을 등록했습니다. 결과는 별도 로그로 남습니다.",
+                "explicit".equals(request.skillMode()) ? "스킬 실행" : "Agent 요청",
+                "explicit".equals(request.skillMode()) ? "skill_run" : "agent_turn", queued.requestId(), queued.applyOperationId(),
+                workspaceId, userId, request.sessionId(), request.documentId(), request.skillMode(), request.skillId(), selectedModel.provider());
+        return queued;
     }
 
     /** 조용히 빼면 근거 없이 답하게 되므로 하나라도 어긋나면 거절한다. 사유를 나누지 않아 존재 여부가 응답으로 새지 않는다. */
@@ -374,11 +379,11 @@ public class AgentTurnService {
             rerun(workspaceId, userId, runId, APPROVABLE, current -> () -> statusRequester.approveAutomatically(
                     workspaceId, userId, runId, decision.planVersion(), decision.operationHash(),
                     AgentAutoApprovalPolicy.AUTO_APPROVED_BY));
-            log.info("Agent 계획 자동 승인: run_id={} user_id={} plan_version={}",
+            log.info("[Agent 실행 자동 승인 전달] operation=agent_run stage=approve_forwarded runId={} userId={} version={} 설명=승인을 AI에 전달했습니다. 실행 완료가 아닙니다.",
                     runId, userId, decision.planVersion());
         } catch (RuntimeException e) {
             // 크레딧 부족·동시 승인(계획 변경)·ai-svc 오류. 자동 승인만 포기하고 사용자가 직접 승인하게 둔다.
-            log.warn("Agent 계획 자동 승인 실패(수동 승인으로 남김): run_id={} type={} message={}",
+            log.warn("[Agent 실행 자동 승인 실패] operation=agent_run stage=auto_approve retryable=true runId={} errorType={} message={} 원인=크레딧 부족·계획 변경·AI 오류 중 하나로 자동 승인하지 못해 수동 승인으로 남겼습니다.",
                     runId, e.getClass().getSimpleName(), e.getMessage());
         }
         // 승인 응답은 계획을 싣지 않으므로 화면에 보일 최신 run을 다시 읽는다.
@@ -389,13 +394,15 @@ public class AgentTurnService {
                             AgentRunApproveRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         // 고른 작업은 예약하기 전에 검사한다. 잘못된 선택이면 크레딧을 건드리지 않고 400으로 끝난다.
-        return rerun(workspaceId, userId, runId, APPROVABLE, current -> {
+        JsonNode approved = rerun(workspaceId, userId, runId, APPROVABLE, current -> {
             List<String> operationIds = selectedOperationIds(current, request.operationIds());
             return () -> operationIds == null
                     ? statusRequester.approve(workspaceId, userId, runId, request.planVersion(), request.operationHash())
                     : statusRequester.approve(workspaceId, userId, runId, request.planVersion(),
                     request.operationHash(), operationIds);
         });
+        logForwarded("[Agent 실행 승인 전달]", "approve_forwarded", runId, workspaceId, userId, approved);
+        return approved;
     }
 
     /**
@@ -435,7 +442,9 @@ public class AgentTurnService {
 
     public JsonNode reject(String workspaceId, String userId, String runId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return closeIfTerminal(workspaceId, userId, runId, statusRequester.reject(workspaceId, userId, runId));
+        JsonNode rejected = closeIfTerminal(workspaceId, userId, runId, statusRequester.reject(workspaceId, userId, runId));
+        logForwarded("[Agent 실행 거절 전달]", "reject_forwarded", runId, workspaceId, userId, rejected);
+        return rejected;
     }
 
     public JsonNode cancel(String workspaceId, String userId, String runId) {
@@ -443,14 +452,24 @@ public class AgentTurnService {
         if (cancellation.findStatus(runId, workspaceId, userId).isPresent()) {
             return mapper.valueToTree(cancellation.cancel(runId, workspaceId, userId));
         }
-        return closeIfTerminal(workspaceId, userId, runId, statusRequester.cancel(workspaceId, userId, runId));
+        JsonNode cancelled = closeIfTerminal(workspaceId, userId, runId, statusRequester.cancel(workspaceId, userId, runId));
+        logForwarded("[Agent 실행 취소 전달]", "cancel_forwarded", runId, workspaceId, userId, cancelled);
+        return cancelled;
     }
 
     public JsonNode revise(String workspaceId, String userId, String runId,
                            AgentRunReviseRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        return rerun(workspaceId, userId, runId, REVISABLE,
+        JsonNode revised = rerun(workspaceId, userId, runId, REVISABLE,
                 current -> () -> statusRequester.revise(workspaceId, userId, runId, request.instruction()));
+        logForwarded("[Agent 실행 수정 전달]", "revise_forwarded", runId, workspaceId, userId, revised);
+        return revised;
+    }
+
+    /** 전달 응답은 AI가 받았다는 뜻이다. runStatus가 끝난 상태일 때만 그 실행이 끝난 것이다. */
+    private static void logForwarded(String title, String stage, String runId, String workspaceId, String userId, JsonNode run) {
+        log.info("{} operation=agent_run stage={} runId={} workspaceId={} userId={} runStatus={}",
+                title, stage, runId, workspaceId, userId, run == null ? null : run.path("status").asText(null));
     }
 
     /** ai-svc가 승인을 받는 run 상태({@code approve_and_enqueue}). */
@@ -486,14 +505,14 @@ public class AgentTurnService {
     /** 재조회는 종료 정산을 시작하는 데만 사용한다. 상태가 그대로여도 미처리라는 증거는 아니다. */
     private void reconcileFailedForward(String workspaceId, String userId, String runId, RuntimeException failure) {
         if (failure instanceof fruition.core.agent.exception.PipelineAgentNoResponseException) {
-            log.warn("[Agent 전달 응답 없음] runId={} 예약 유지", runId);
+            log.warn("[Agent 전달 응답 없음] operation=agent_run stage=forward retryable=true runId={} 원인=AI 응답을 받지 못해 처리 여부를 알 수 없습니다. 크레딧 예약을 유지합니다.", runId);
             return;
         }
         try {
             closeIfTerminal(workspaceId, userId, runId, statusRequester.getAutonomousRun(workspaceId, userId, runId));
         } catch (RuntimeException unknown) {
             // 정산 확인 실패가 원래 전달 오류를 덮어쓰지 않도록 한다.
-            log.warn("[Agent 전달 결과 확인 실패] runId={} 예약 유지 error={}", runId, unknown.toString());
+            log.warn("[Agent 전달 결과 확인 실패] operation=agent_run stage=forward retryable=true runId={} errorType={} error={} 원인=전달 실패 뒤 실행 상태를 다시 확인하지 못했습니다. 크레딧 예약을 유지합니다.", runId, unknown.getClass().getSimpleName(), unknown.toString());
         }
     }
 

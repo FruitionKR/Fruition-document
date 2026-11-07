@@ -45,6 +45,29 @@ class SkillServiceTest {
     }
 
     @Test
+    void delete_logsRequestAndCompletionWithIds() {
+        when(requester.get("ws_1", "user_1", "skill_1")).thenReturn(skillOf("personal"));
+        try (var capture = new fruition.shared.logging.LogCapture(SkillOperationLog.class)) {
+            service.delete("ws_1", "user_1", "skill_1");
+            org.assertj.core.api.Assertions.assertThat(capture.messages())
+                    .anyMatch(m -> m.startsWith("[스킬 삭제 완료] operation=skill_delete stage=completed skillId=skill_1"));
+        }
+    }
+
+    @Test
+    void rejectedDelete_logsStableCodeAndNoCompletion() {
+        when(requester.get("ws_1", "user_1", "skill_1")).thenReturn(skillOf("personal"));
+        doThrow(new fruition.core.skill.exception.PipelineSkillException("거절", 409, "raw ai body secret", "SKILL_REQUEST_REJECTED"))
+                .when(requester).delete("ws_1", "user_1", "skill_1");
+        try (var capture = new fruition.shared.logging.LogCapture(SkillOperationLog.class)) {
+            assertThatThrownBy(() -> service.delete("ws_1", "user_1", "skill_1"));
+            org.assertj.core.api.Assertions.assertThat(capture.messages())
+                    .anyMatch(m -> m.startsWith("[스킬 삭제 거부] operation=skill_delete stage=pipeline errorCode=SKILL_REQUEST_REJECTED"))
+                    .noneMatch(m -> m.contains("[스킬 삭제 완료]") || m.contains("secret"));
+        }
+    }
+
+    @Test
     void delete_requiresMembershipBeforeForwarding() {
         when(requester.get("ws_1", "user_1", "skill_1")).thenReturn(skillOf("personal"));
         service.delete("ws_1", "user_1", "skill_1");

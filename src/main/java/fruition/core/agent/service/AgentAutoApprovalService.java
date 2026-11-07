@@ -13,6 +13,7 @@ import java.util.UUID;
 /** 사용자의 자동 승인 설정을 읽고 쓰며, 지금 설정과 대상 권한으로 계획을 자동 승인할지 판단한다. */
 @Service
 public class AgentAutoApprovalService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgentAutoApprovalService.class);
 
     private final AgentAutoApprovalSettingsRepository settingsRepository;
     private final WorkspaceAccessGuard workspaceAccessGuard;
@@ -38,6 +39,8 @@ public class AgentAutoApprovalService {
     public AgentAutoApprovalSettings update(String workspaceId, String userId, AgentAutoApprovalSettings settings) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         settingsRepository.save(userId, settings);
+        log.info("[Agent 자동 승인 설정 변경] operation=agent_auto_approval_update stage=completed workspaceId={} userId={} contentEdit={} organize={}",
+                workspaceId, userId, settings.contentEdit(), settings.organize());
         return settingsRepository.find(userId);
     }
 

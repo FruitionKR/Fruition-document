@@ -137,7 +137,9 @@ class DocumentPurgeCitationsIntegrationTest {
         // 이 기능 전의 영구 삭제: 인용은 대표 문서만 FK로 걸려 있어 그대로 남았다.
         jdbc.update("DELETE FROM documents WHERE id = ?", purged);
 
-        assertThat(scrubber.scrubOrphans(100)).isPositive();
+        // 같은 DB를 쓰는 다른 테스트 컨텍스트의 영구 삭제 스케줄러가 시작하면서 먼저 정리할 수 있다.
+        // 반환 건수는 그 경쟁에 따라 0일 수 있으므로, 정리 결과는 아래 행 상태로 확인한다.
+        scrubber.scrubOrphans(100);
 
         assertThat(quote(mixed)).isEmpty();
         assertThat(jdbc.queryForObject("SELECT document_id FROM chat_message_references WHERE id = ?", String.class, mixed)).isEqualTo(kept);

@@ -188,10 +188,15 @@ class DocumentConvertFailureIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT reserved FROM credit_accounts WHERE user_id=?",
                 Long.class, conversion.user())).isPositive();
 
+        var capture = new fruition.shared.logging.LogCapture(DocumentService.class);
         service.applyConvertBatch(failure(conversion));
         String firstPayload = jdbc.queryForObject("SELECT payload::text FROM analytics_outbox WHERE event_id=?",
                 String.class, AnalyticsRecorder.eventId("pdf_convert_completed", conversion.run()));
         service.applyConvertBatch(failure(conversion));
+        // 중복 실패 이벤트는 최종 실패를 다시 확정하지 않는다.
+        assertThat(capture.messages().stream().filter(m -> m.startsWith("[문서 변환 실패 확정]")))
+                .singleElement().asString().contains("operation=document_convert", "documentId=" + conversion.document(), "원인=");
+        capture.close();
 
         assertThat(jdbc.queryForObject("SELECT status FROM documents WHERE id=?", String.class, conversion.document()))
                 .isEqualTo("failed");

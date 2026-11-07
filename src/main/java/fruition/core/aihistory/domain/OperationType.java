@@ -16,5 +16,16 @@ public enum OperationType {
     /** 특정 작업의 기여를 걷어내는 복구. */
     restore,
     /** 사람이 Wiki 페이지 본문을 직접 고친 작업. 동기 처리이며 수동 기여 하나를 만든다. */
-    wiki_edit
+    wiki_edit;
+
+    /** 로그 제목에 쓰는 이름. 어떤 작업인지 제목만 보고 구분하게 한다. */
+    public String logLabel() {
+        return switch (this) {
+            case document_edit -> "AI 편집";
+            case ingest -> "위키 편입";
+            case lint -> "위키 점검";
+            case restore -> "되돌리기";
+            case wiki_edit -> "위키 직접 편집";
+        };
+    }
 }

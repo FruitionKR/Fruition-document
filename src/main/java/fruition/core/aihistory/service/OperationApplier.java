@@ -122,8 +122,13 @@ public class OperationApplier {
         if (status == OperationStatus.succeeded) {
             return request.summary();
         }
-        log.warn("[AI 작업 실패 확정] operationId={} type={} status={} reason={}",
-                operation.getOperationId(), operation.getOperationType(), status, request.summary());
+        if (status == OperationStatus.failed) {
+            fruition.shared.logging.CommittedLog.warn(log, "[{} 페이지 기록 실패] operation=wiki_operation stage=result errorCode=WIKI_OPERATION_FAILED retryable=false operationId={} type={} status={} workspaceId={} documentId={} reason={} 원인=AI가 작업 실패를 알렸고 바뀐 페이지가 없습니다.",
+                    operation.getOperationType().logLabel(), operation.getOperationId(), operation.getOperationType(), status, operation.getWorkspaceId(), operation.getTargetDocumentId(), request.summary());
+        } else {
+            // 원문은 콘솔에만 둔다. operation 필드가 없어 PostHog로 나가지 않는다.
+            log.info("[위키 페이지 일부 기록 사유] operationId={} reason={}", operation.getOperationId(), request.summary());
+        }
         return OperationFailureSummary.of(operation.getOperationType(), status);
     }
 

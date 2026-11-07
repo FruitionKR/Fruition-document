@@ -69,6 +69,39 @@ class RestoreExecuteServiceTest {
     }
 
     @Test
+    void staleRestore_isRejectedWithCodeAndNeverClaimsCompletion() {
+        when(previewService.loadOperation(WORKSPACE, USER, TARGET)).thenThrow(new RestorePreviewStaleException());
+        try (var capture = new fruition.shared.logging.LogCapture(RestoreExecuteService.class)) {
+            assertThatThrownBy(() -> service.execute(WORKSPACE, USER, TARGET, TOKEN)).isInstanceOf(RestorePreviewStaleException.class);
+            assertThat(capture.messages()).anyMatch(m -> m.contains("[작업 되돌리기 거부]") && m.contains("errorCode=RESTORE_PREVIEW_STALE")
+                    && m.contains("targetOperationId=" + TARGET) && m.contains("원인="));
+            assertThat(capture.messages()).noneMatch(m -> m.contains("되돌리기 완료]") || m.contains("되돌리기 접수]"));
+        }
+    }
+
+    @Test
+    void wikiRestore_isLoggedAsAcceptedNotCompleted() {
+        PageRestorePlan page = PageRestorePlan.restore("wp_S_A", 2L, "op_a1", 1);
+        WikiPageContribution contribution = new WikiPageContribution("wp_S_A", "op_a1", "doc_A", 1, "wiki/a.md", T);
+        OperationLog target = target(OperationType.ingest);
+        OperationLog restore = OperationLog.applying("op_restore", WORKSPACE, USER, "doc_A", TARGET, "{}", T);
+        when(previewService.loadOperation(WORKSPACE, USER, TARGET)).thenReturn(target);
+        when(scopeResolver.resolve(target)).thenReturn(Set.of("op_a2"));
+        when(previewService.loadContributions(Set.of("op_a2"))).thenReturn(Map.of("wp_S_A", List.of(contribution)));
+        RestorePlan plan = new RestorePlan(List.of(page));
+        when(planner.plan(any(), any(), any())).thenReturn(plan);
+        when(tokenSigner.matches(TOKEN, TARGET, Map.of("wp_S_A", List.of(contribution)))).thenReturn(true);
+        when(validator.requireApplicable(target, plan)).thenReturn(page);
+        when(lifecycle.startQueued(eq(target), eq(USER), anyString(), anyString(), any())).thenReturn(Optional.of(restore));
+        try (var capture = new fruition.shared.logging.LogCapture(RestoreExecuteService.class)) {
+            service.execute(WORKSPACE, USER, TARGET, TOKEN);
+            assertThat(capture.messages()).anyMatch(m -> m.contains("[위키 편입 되돌리기 접수]") && m.contains("targetType=ingest") && m.contains("targetOperationId=" + TARGET)
+                    && m.contains("restoreOperationId=op_restore"));
+            assertThat(capture.messages()).noneMatch(m -> m.contains("되돌리기 완료]"));
+        }
+    }
+
+    @Test
     void wikiRestore_storesApprovedManifestAndQueuesCommand() {
         PageRestorePlan page = PageRestorePlan.restore("wp_S_A", 2L, "op_a1", 1);
         WikiPageContribution contribution =

@@ -81,7 +81,7 @@ public class QueryRunService {
                         sessionState.contextSummary(),
                         messageContext.recentMessages(), messageContext, sessionState.titleNeeded()));
         if (analytics != null) analytics.queryStarted(run.requestId(), userId, workspaceId, sessionId, messageContext.createdAt(), "chat");
-        log.info("[질의 command 등록 완료] requestId={}", run.requestId());
+        fruition.shared.logging.CommittedLog.info(log, "[질의 접수] operation=query stage=accepted runId={} workspaceId={} userId={} sessionId={} 설명=질의 명령을 등록했습니다. 답변 저장은 별도로 남습니다.", run.requestId(), workspaceId, userId, sessionId);
         return run;
     }
 

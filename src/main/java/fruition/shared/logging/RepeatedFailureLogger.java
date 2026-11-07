@@ -51,7 +51,7 @@ public final class RepeatedFailureLogger {
     }
     public synchronized void recovered(String key) {
         State state = states.remove(key);
-        if (state != null) logger.info("[반복 오류 복구] failureKey={} totalCount={} suppressedCount={} elapsedMs={}",
+        if (state != null) logger.info("[반복 오류 복구] operation=repeated_failure stage=recovered failureKey={} totalCount={} suppressedCount={} elapsedMs={}",
                 key, state.total, state.suppressed, millis.getAsLong() - state.firstSeen);
     }
     private static final class State {

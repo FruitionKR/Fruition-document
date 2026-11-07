@@ -196,7 +196,13 @@ class MeetingNotesIntegrationTest {
         generated(meetingId, "k1");
         generate(meetingId, "k2", false).andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.status").value("generating"));
-        fail(meetingId, 2, "pipeline_error: private-provider-detail");
+        try (var capture = new fruition.shared.logging.LogCapture(MeetingNotesService.class)) {
+            fail(meetingId, 2, "pipeline_error: private-provider-detail");
+            fail(meetingId, 2, "pipeline_error: private-provider-detail");
+            assertThat(capture.messages().stream().filter(m -> m.startsWith("[회의록 초안 생성 실패]"))).hasSize(1);
+            assertThat(capture.messages()).anyMatch(m -> m.contains("stage=result errorCode=MEETING_NOTES_FAILED"));
+            assertThat(capture.messages()).noneMatch(m -> m.contains("private-provider-detail"));
+        }
 
         // 생성 실패는 HTTP 오류가 아니라 그 버전의 failed 상태로 알린다(원문 오류는 노출하지 않는다).
         JsonNode failed = awaitStatus(meetingId, "failed");
@@ -495,7 +501,11 @@ class MeetingNotesIntegrationTest {
         generate(meetingId, "k1", false).andExpect(status().isAccepted());
         jdbc.update("UPDATE meeting_notes SET updated_at = now() - interval '31 minutes' WHERE meeting_id = ?", meetingId);
 
-        assertThat(awaitStatus(meetingId, "failed").path("error_code").asText()).isEqualTo("MEETING_NOTES_TIMEOUT");
+        try (var capture = new fruition.shared.logging.LogCapture(MeetingNotesService.class)) {
+            assertThat(awaitStatus(meetingId, "failed").path("error_code").asText()).isEqualTo("MEETING_NOTES_TIMEOUT");
+            awaitStatus(meetingId, "failed");
+            assertThat(capture.messages().stream().filter(m -> m.startsWith("[회의록 초안 생성 시간 초과]"))).hasSize(1);
+        }
         assertCancellationRequested(runId(meetingId, 1));
     }
 
@@ -729,4 +739,17 @@ class MeetingNotesIntegrationTest {
                 .isIn("cancel_requested", "rolling_back", "cancelled");
     }
 
+
+    @Test void malformedDraftProducesOneValidationFailureLog() throws Exception {
+        String meetingId = meetingWithTranscript(null, "finished");
+        grant(); generate(meetingId, "invalid-result-log", false).andExpect(status().isAccepted());
+        String run = runId(meetingId, 1);
+        try (var capture = new fruition.shared.logging.LogCapture(MeetingNotesService.class)) {
+            notesService.applyResult(run, true, objectMapper.createObjectNode(), null);
+            notesService.applyResult(run, true, objectMapper.createObjectNode(), null);
+            assertThat(capture.messages().stream().filter(m -> m.startsWith("[회의록 초안 생성 실패]"))).hasSize(1);
+            assertThat(capture.messages()).anyMatch(m -> m.contains("runId=" + run)
+                    && m.contains("stage=validation errorCode=MEETING_NOTES_INVALID"));
+        }
+    }
 }

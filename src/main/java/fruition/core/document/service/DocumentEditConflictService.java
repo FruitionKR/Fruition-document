@@ -92,7 +92,7 @@ public class DocumentEditConflictService {
         String resolution = DocumentContentSaveResponse.Merge.STATUS_MERGED.equals(saved.merge().status())
                 ? "merged" : "conflict";
         Instant now = Instant.now();
-        jdbc.update("""
+        int inserted = jdbc.update("""
                 INSERT INTO document_edit_conflicts(
                     id, workspace_id, document_id, base_revision, markdown, content_hash, author_user_id,
                     client_conflict_id, status, resolution, resolved_by, resolved_revision, resolved_at
@@ -101,8 +101,11 @@ public class DocumentEditConflictService {
                 """, UUID.randomUUID(), workspaceId, documentId, request.baseRevision(), content.markdown(),
                 content.contentHash(), userId, request.clientConflictId(), resolution, userId,
                 saved.currentVersion(), Timestamp.from(now));
-        log.info("[편집 충돌 등록 → 자동 병합] workspaceId={} documentId={} userId={} baseRevision={} merge={} revision={}",
-                workspaceId, documentId, userId, request.baseRevision(), saved.merge().status(), saved.currentVersion());
+        // 같은 클라이언트 충돌 ID가 동시에 들어오면 한쪽만 기록된다.
+        if (inserted == 1) {
+            fruition.shared.logging.CommittedLog.info(log, "[편집 충돌 자동 병합] operation=edit_conflict stage=merged documentId={} workspaceId={} userId={} baseRevision={} mergeStatus={} revision={}",
+                    documentId, workspaceId, userId, request.baseRevision(), saved.merge().status(), saved.currentVersion());
+        }
         return findByClientConflictId(documentId, request.clientConflictId());
     }
 
@@ -175,8 +178,8 @@ public class DocumentEditConflictService {
                 SET status = 'resolved', resolution = ?, resolved_by = ?, resolved_revision = ?, resolved_at = ?
                 WHERE id = ?
                 """, request.choice(), userId, resolvedRevision, Timestamp.from(Instant.now()), conflictId);
-        log.info("[편집 충돌 해결] workspaceId={} conflictId={} userId={} choice={} revision={}",
-                workspaceId, conflictId, userId, request.choice(), resolvedRevision);
+        fruition.shared.logging.CommittedLog.info(log, "[편집 충돌 해결] operation=edit_conflict stage=resolved conflictId={} documentId={} workspaceId={} userId={} choice={} revision={}",
+                conflictId, conflict.documentId(), workspaceId, userId, request.choice(), resolvedRevision);
         notificationService.notifyUser(workspaceId, conflict.authorUserId(), NotificationService.TYPE_EDIT_CONFLICT_RESOLVED,
                 Map.of("conflict_id", conflictId, "document_id", conflict.documentId(),
                         "choice", request.choice(), "resolved_by", userId));

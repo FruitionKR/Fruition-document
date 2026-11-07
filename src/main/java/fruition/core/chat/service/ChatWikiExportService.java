@@ -92,7 +92,7 @@ public class ChatWikiExportService {
 
         String contentHash = stableContentHash(session, selected);
 
-        log.info("[chat-wiki][export] session={} 전송 메시지={}건", sessionId, selected.size());
+        log.debug("[chat-wiki][export] session={} 전송 메시지={}건", sessionId, selected.size());
 
         DocumentService.ExportDocumentResult result = documentService.createChatExportDocument(
                 workspaceId, userId, titleOf(source, session), source.markdown(), contentHash,
@@ -104,7 +104,8 @@ public class ChatWikiExportService {
         if (exportLinks != null) exportLinks.save(exportId, result.documentId(), userId, sessionId, mode);
         if (analytics != null) analytics.exported(exportId.toString(), result.documentId(), sessionId,
                 source.blocks().size(), mode, status, userId, workspaceId);
-        log.info("[chat-wiki][export] 등록 session={} document={} status={}", sessionId, result.documentId(), status);
+        fruition.shared.logging.CommittedLog.info(log, "[채팅 위키 내보내기 완료] operation=chat_wiki_export stage=completed sessionId={} documentId={} exportId={} workspaceId={} userId={} mode={} messageCount={} status={}",
+                sessionId, result.documentId(), exportId, workspaceId, userId, mode, selected.size(), status);
         return new ChatWikiExportResponse(result.documentId(), status, exportId);
     }
 

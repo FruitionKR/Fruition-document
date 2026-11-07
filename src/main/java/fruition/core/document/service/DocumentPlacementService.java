@@ -17,6 +17,7 @@ import java.util.UUID;
 /** 문서를 폴더 사이·최상위로 이동하고 형제 마지막에 배치한다(TASK-H003). */
 @Service
 public class DocumentPlacementService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DocumentPlacementService.class);
 
     private final WorkspaceAccessGuard workspaceAccessGuard;
     private final DocumentRepository documentRepository;
@@ -61,6 +62,7 @@ public class DocumentPlacementService {
                     }
                     documentAccessPolicy.requireMove(workspaceId, target.getFolderId(), targetFolderId, userId);
                     documentAccessPolicy.requireEdit(target, userId);
+                    UUID fromFolderId = target.getFolderId();
                     long sortOrder = siblingReorderer.placeDocument(
                             workspaceId, targetFolderId, documentId, request.position());
                     int updated = documentRepository.moveIfVersionMatches(
@@ -68,6 +70,11 @@ public class DocumentPlacementService {
                             sortOrder, Instant.now());
                     if (updated == 0) {
                         throw new HierarchyVersionConflictException("문서가 이미 변경되어 이동할 수 없습니다.");
+                    }
+                    // 같은 폴더 안의 순서 변경은 자주 일어나 남기지 않는다.
+                    if (!java.util.Objects.equals(fromFolderId, targetFolderId)) {
+                        fruition.shared.logging.CommittedLog.info(log, "[문서 이동 완료] operation=document_move stage=completed documentId={} workspaceId={} userId={} fromFolderId={} toFolderId={}",
+                                documentId, workspaceId, userId, fromFolderId, targetFolderId);
                     }
                     Document moved = documentRepository
                             .findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
