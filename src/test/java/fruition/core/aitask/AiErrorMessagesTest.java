@@ -180,4 +180,14 @@ class AiErrorMessagesTest {
     void creditCodeKeepsItsText() {
         assertThat(AiErrorMessages.ingest("INSUFFICIENT_CREDIT")).isEqualTo(AiErrorMessages.INSUFFICIENT_CREDIT);
     }
+    @Test
+    void creditMessagesDoNotOfferUnavailableRechargeOrClaimStoppedWorkWasUnchanged() {
+        assertThat(AiErrorMessages.agent("INSUFFICIENT_CREDIT"))
+                .contains("크레딧이 부족해", DOCUMENT_UNCHANGED).doesNotContain("충전");
+        assertThat(AiErrorMessages.INSUFFICIENT_CREDIT)
+                .contains("작업을 시작하지 못했어요").doesNotContain("충전", DOCUMENT_UNCHANGED);
+        assertThat(AiErrorMessages.INSUFFICIENT_CREDIT_STOPPED)
+                .contains("문서 상태를 확인").doesNotContain("충전", DOCUMENT_UNCHANGED);
+    }
+
 }

@@ -20,9 +20,9 @@ public final class AiErrorMessages {
     private static final Logger log = LoggerFactory.getLogger(AiErrorMessages.class);
 
     /** {@code INSUFFICIENT_CREDIT}: 크레딧이 모자라 작업을 시작하지 않았을 때(402 거절·비동기 작업 실패). */
-    public static final String INSUFFICIENT_CREDIT = "크레딧이 부족해 작업을 시작하지 않았습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.";
+    public static final String INSUFFICIENT_CREDIT = "크레딧이 부족해 작업을 시작하지 못했어요.";
     /** {@code INSUFFICIENT_CREDIT}: 진행 중이던 작업을 이어 가지 못할 때(구간 갱신·Agent 계획 수정·승인). */
-    public static final String INSUFFICIENT_CREDIT_STOPPED = "크레딧이 부족해 중단했습니다. 크레딧을 충전한 뒤 다시 시도해 주세요.";
+    public static final String INSUFFICIENT_CREDIT_STOPPED = "크레딧이 부족해 작업을 이어 가지 못했어요. 작업 기록에서 문서 상태를 확인해 주세요.";
     /** {@code AI_USAGE_LIMIT_EXCEEDED}: 사용자별 AI 사용 한도에 걸려 비동기 작업을 시작하지 않았을 때. 요청 거절은 한도별 문구로 429를 낸다. */
     public static final String AI_USAGE_LIMIT_EXCEEDED = "AI 사용 한도에 도달해 작업을 시작하지 않았습니다. 잠시 후 또는 내일 다시 시도해 주세요.";
 
@@ -53,6 +53,7 @@ public final class AiErrorMessages {
      * 다른 기능(질의·위키·변환·전사)에는 "문서를 바꾸지 않았어요"가 맞지 않아 공통 문구에 넣지 않는다.
      */
     private static final Map<String, String> AGENT_OVERRIDES = Map.of(
+            "INSUFFICIENT_CREDIT", "크레딧이 부족해 작업을 시작하지 못했고 문서를 바꾸지 않았어요.",
             "provider_rate_limited", "AI 서비스 요청이 많거나 이용 한도에 걸려 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.",
             "provider_unavailable", "AI 서비스가 응답하지 않거나 일시적인 문제가 있어 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.",
             "input_rejected", "AI 서비스가 요청 내용이나 길이를 받아들이지 않아 문서를 바꾸지 않았어요. 범위를 줄이거나 요청을 고쳐 다시 시도해 주세요.",

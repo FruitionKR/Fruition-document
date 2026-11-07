@@ -62,7 +62,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 실제 HTTP 서버에 붙어 스트림을 줄 단위로 읽는다.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "app.speech.synthesis-read-timeout-seconds=1")
+        properties = {"app.speech.synthesis-read-timeout-seconds=1",
+                "test.isolated-database=speech_synthesis"})
 @Import(TestcontainersConfiguration.class)
 class SpeechSynthesisIntegrationTest {
 
@@ -148,6 +149,8 @@ class SpeechSynthesisIntegrationTest {
     @Autowired StorageProperties storage;
     @Autowired javax.sql.DataSource dataSource;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired fruition.core.usage.service.UsageChargeService usageCharges;
+    @Autowired org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor scheduling;
 
     final HttpClient http = HttpClient.newHttpClient();
     String userId;
@@ -157,6 +160,9 @@ class SpeechSynthesisIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        // 이 클래스는 생산자(enqueue)를 검증한다. 수집기가 먼저 행을 소비하는 시간 경쟁을 없앤다.
+        // 별도 DB로 다른 캐시된 테스트 컨텍스트의 수집기와도 대기열을 공유하지 않는다.
+        scheduling.postProcessBeforeDestruction(usageCharges, "usageChargeService");
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;
