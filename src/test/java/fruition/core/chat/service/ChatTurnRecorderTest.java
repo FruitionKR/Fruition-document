@@ -96,10 +96,11 @@ class ChatTurnRecorderTest {
                 "chat_assistant_abc123", session, "pair_abc123", "assistant", "", "pending", Instant.now(), null);
         when(chatMessageRepository.findById("chat_assistant_abc123")).thenReturn(Optional.of(assistant));
 
-        recorder.markFailed("chat_assistant_abc123", "pipeline 실패");
+        recorder.markFailed("chat_assistant_abc123", "provider_unavailable", "pipeline 실패");
 
         assertThat(assistant.getStatus()).isEqualTo("failed");
         assertThat(assistant.getErrorMessage()).isEqualTo("pipeline 실패");
+        assertThat(assistant.getErrorCode()).isEqualTo("provider_unavailable");
         verify(chatMessageRepository).save(assistant);
     }
 
@@ -111,7 +112,7 @@ class ChatTurnRecorderTest {
                 "chat_assistant_abc123", session, "pair_abc123", "assistant", "", "pending", Instant.now(), null);
         when(chatMessageRepository.findById("chat_assistant_abc123")).thenReturn(Optional.of(assistant));
 
-        recorder.markFailed("chat_assistant_abc123", "오".repeat(400));
+        recorder.markFailed("chat_assistant_abc123", "internal_error", "오".repeat(400));
 
         assertThat(assistant.getErrorMessage()).hasSize(255);
     }
@@ -144,7 +145,7 @@ class ChatTurnRecorderTest {
                         String.class, Instant.class)
                 .getAnnotation(Transactional.class);
         Transactional failTransaction = ChatTurnRecorder.class
-                .getMethod("markFailed", String.class, String.class)
+                .getMethod("markFailed", String.class, String.class, String.class)
                 .getAnnotation(Transactional.class);
 
         assertThat(createTransaction.propagation()).isEqualTo(Propagation.REQUIRED);

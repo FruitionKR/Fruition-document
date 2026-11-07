@@ -15,7 +15,11 @@ public record MeetingResponse(
         @Schema(allowableValues = {"open", "awaiting_upload", "transcribing", "failed"}) String status,
         @JsonProperty("live_connected") @Schema(description = "지금 실시간 받아쓰기 연결이 있는지") boolean liveConnected,
         @JsonProperty("has_recording") @Schema(description = "녹음 원본이 있는지") boolean hasRecording,
-        @Schema(description = "녹음 파일 전사 실패 사유. 없으면 null") String error,
+        @Schema(description = "녹음 파일 전사 실패 사유. 없으면 null. error_code가 있으면 Accept-Language(ko·en, 그 밖은 ko)에 맞춘 문구이고, "
+                + "코드 없이 저장된 이전 실패는 저장된 한국어 문구 그대로다.") String error,
+        @JsonProperty("error_code")
+        @Schema(description = "녹음 파일 전사 실패 코드(예: MEETING_RECORDING_TOO_LONG, transcription_cancelled). 없거나 이전 실패면 null",
+                example = "MEETING_RECORDING_TOO_LONG") String errorCode,
         @JsonProperty("transcript_complete")
         @Schema(description = "확정 전 구간이 없고 모든 연결이 정상 종료됐는지. false면 일부 전사만 있다.")
         boolean transcriptComplete,

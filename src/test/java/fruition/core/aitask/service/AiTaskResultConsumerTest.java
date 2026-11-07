@@ -178,6 +178,20 @@ class AiTaskResultConsumerTest {
     }
 
     @Test
+    void agentFailureSseMessageFollowsTheLanguageStoredInTheCommand() throws Exception {
+        when(applier.applyAgent(any())).thenReturn(
+                new AiTaskResultApplier.AgentApplyResult(true, "provider_unavailable"));
+
+        consumer.consume("""
+                {"event_id":"agent:agent-1:failed","kind":"agent","run_id":"agent-1",
+                 "status":"failed","error":"provider_unavailable","request":{"response_language":"en"}}
+                """);
+
+        verify(queryEventBroker).fail("agent-1", "provider_unavailable",
+                "The AI service didn't respond or had a temporary problem, so the document wasn't changed. Please try again in a moment.");
+    }
+
+    @Test
     void internallyRejectedAgentSuccessFailsTheSseStream() throws Exception {
         when(applier.applyAgent(any())).thenReturn(
                 new AiTaskResultApplier.AgentApplyResult(true, "agent_result_invalid_payload"));

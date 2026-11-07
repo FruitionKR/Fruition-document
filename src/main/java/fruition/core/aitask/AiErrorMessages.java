@@ -1,5 +1,6 @@
 package fruition.core.aitask;
 
+import fruition.shared.i18n.ResponseLanguage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -9,7 +10,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * AI 실패 코드를 사용자에게 보일 한국어 문구로 바꾸는 유일한 목록이다.
+ * AI 실패 코드를 사용자에게 보일 문구로 바꾸는 유일한 목록이다. 영어 문구는 {@link AiErrorMessagesEn}에 같은 키로 둔다.
  *
  * <p>ai는 실패 원인을 코드로만 보내고 예외 원문은 자기 로그에만 남긴다. 화면·SSE·저장 컬럼에
  * 나가는 문구는 모두 여기를 거친다. 목록에 없는 코드는 기능별 기본 문구로 바꾸고 코드마다
@@ -39,6 +40,9 @@ public final class AiErrorMessages {
     private static final Map<String, String> CONVERT_OVERRIDES = Map.of(
             "input_rejected", "암호가 걸렸거나 손상되어 변환할 수 없는 PDF입니다.");
 
+    /** 사용자가 녹음 파일 전사를 취소했을 때 회의에 남기는 코드. AI 코드가 아니라 document가 정한다. */
+    public static final String TRANSCRIPTION_CANCELLED = "transcription_cancelled";
+
     /** 회의 전사에서만 공통 문구 대신 쓰거나 더하는 문구. */
     private static final Map<String, String> TRANSCRIPTION_OVERRIDES = Map.of(
             "MEETING_RECORDING_TOO_LONG", "녹음이 3시간을 넘어 글로 옮길 수 없습니다. 나눠서 올려 주세요.",
@@ -46,7 +50,8 @@ public final class AiErrorMessages {
             "input_rejected", "지원하지 않거나 인식할 수 없는 녹음 파일입니다.",
             "MEETING_TRANSCRIPT_EMPTY", "인식된 음성이 없습니다.",
             "MEETING_TRANSCRIPT_TOO_LONG", "대화 내용이 회의록 생성 한도(100,000자)를 넘었습니다. 녹음을 나눠 올려 주세요.",
-            "deadline_exceeded", "글로 옮기는 시간이 너무 오래 걸려 중단했습니다. 녹음을 나눠 올려 주세요.");
+            "deadline_exceeded", "글로 옮기는 시간이 너무 오래 걸려 중단했습니다. 녹음을 나눠 올려 주세요.",
+            TRANSCRIPTION_CANCELLED, "글로 옮기기를 취소했습니다. 녹음을 다시 올려 주세요.");
 
     /**
      * Agent turn에서만 공통 문구 대신 쓰는 문구. 실패한 turn은 편집안을 내놓기 전에 끝나므로 문서 상태를 함께 알린다.
@@ -139,28 +144,96 @@ public final class AiErrorMessages {
     }
 
     public static String query(String code) {
-        return resolve(code, QUERY_DEFAULT);
+        return query(code, ResponseLanguage.KO);
+    }
+
+    public static String query(String code, ResponseLanguage language) {
+        return language.isEnglish()
+                ? resolve(code, AiErrorMessagesEn.QUERY_DEFAULT, Map.of(), AiErrorMessagesEn.MESSAGES, AiErrorMessagesEn.PREFIX_MESSAGES)
+                : resolve(code, QUERY_DEFAULT);
     }
 
     public static String agent(String code) {
-        return resolve(code, AGENT_DEFAULT, AGENT_OVERRIDES);
+        return agent(code, ResponseLanguage.KO);
+    }
+
+    public static String agent(String code, ResponseLanguage language) {
+        return language.isEnglish()
+                ? resolve(code, AiErrorMessagesEn.AGENT_DEFAULT, AiErrorMessagesEn.AGENT_OVERRIDES, AiErrorMessagesEn.MESSAGES, AiErrorMessagesEn.PREFIX_MESSAGES)
+                : resolve(code, AGENT_DEFAULT, AGENT_OVERRIDES);
     }
 
     public static String ingest(String code) {
-        return resolve(code, INGEST_DEFAULT);
+        return ingest(code, ResponseLanguage.KO);
+    }
+
+    public static String ingest(String code, ResponseLanguage language) {
+        return language.isEnglish()
+                ? resolve(code, AiErrorMessagesEn.INGEST_DEFAULT, Map.of(), AiErrorMessagesEn.MESSAGES, AiErrorMessagesEn.PREFIX_MESSAGES)
+                : resolve(code, INGEST_DEFAULT);
     }
 
     public static String lint(String code) {
-        return resolve(code, LINT_DEFAULT);
+        return lint(code, ResponseLanguage.KO);
     }
 
-    /** 변환 실패 문구. 항상 "PDF 변환에 실패했습니다."로 시작한다. */
+    public static String lint(String code, ResponseLanguage language) {
+        return language.isEnglish()
+                ? resolve(code, AiErrorMessagesEn.LINT_DEFAULT, Map.of(), AiErrorMessagesEn.MESSAGES, AiErrorMessagesEn.PREFIX_MESSAGES)
+                : resolve(code, LINT_DEFAULT);
+    }
+
+    /** 변환 실패 문구. 항상 "PDF 변환에 실패했습니다."(영어는 "PDF conversion failed.")로 시작한다. */
     public static String convert(String code) {
-        return CONVERT_PREFIX + resolve(code, CONVERT_DEFAULT, CONVERT_OVERRIDES);
+        return convert(code, ResponseLanguage.KO);
+    }
+
+    public static String convert(String code, ResponseLanguage language) {
+        return language.isEnglish()
+                ? AiErrorMessagesEn.CONVERT_PREFIX + resolve(code, AiErrorMessagesEn.CONVERT_DEFAULT,
+                        AiErrorMessagesEn.CONVERT_OVERRIDES, AiErrorMessagesEn.MESSAGES, AiErrorMessagesEn.PREFIX_MESSAGES)
+                : CONVERT_PREFIX + resolve(code, CONVERT_DEFAULT, CONVERT_OVERRIDES);
     }
 
     public static String transcription(String code) {
-        return resolve(code, TRANSCRIPTION_DEFAULT, TRANSCRIPTION_OVERRIDES);
+        return transcription(code, ResponseLanguage.KO);
+    }
+
+    public static String transcription(String code, ResponseLanguage language) {
+        return language.isEnglish()
+                ? resolve(code, AiErrorMessagesEn.TRANSCRIPTION_DEFAULT, AiErrorMessagesEn.TRANSCRIPTION_OVERRIDES,
+                        AiErrorMessagesEn.MESSAGES, AiErrorMessagesEn.PREFIX_MESSAGES)
+                : resolve(code, TRANSCRIPTION_DEFAULT, TRANSCRIPTION_OVERRIDES);
+    }
+
+    /** 코드가 붙은 공통 문구({@code INSUFFICIENT_CREDIT} 등)를 언어별로 돌려준다. 목록에 없으면 null이다. */
+    public static String message(String code, ResponseLanguage language) {
+        return code == null ? null : (language.isEnglish() ? AiErrorMessagesEn.MESSAGES : MESSAGES).get(code);
+    }
+
+    /**
+     * 저장된 실패 문구를 요청 언어로 다시 만든다. 한국어 요청이거나 코드가 없는(이전에 저장된) 행은 저장된 문구 그대로다.
+     *
+     * <p>저장 문구는 기능별 한국어 문구 중 하나이므로, 같은 코드로 그 문구를 만든 기능을 찾아 그 기능의 영어 문구를 쓴다.
+     * 어느 기능과도 맞지 않으면(취소 안내처럼 직접 쓴 문구) 코드의 공통 영어 문구, 그것도 없으면 저장 문구다.
+     */
+    public static String localizeStored(String code, String storedMessage, ResponseLanguage language) {
+        if (!language.isEnglish() || code == null || code.isBlank()) {
+            return storedMessage;
+        }
+        List<java.util.function.BiFunction<String, ResponseLanguage, String>> features = List.of(
+                AiErrorMessages::agent, AiErrorMessages::query, AiErrorMessages::ingest,
+                AiErrorMessages::lint, AiErrorMessages::convert, AiErrorMessages::transcription);
+        for (var feature : features) {
+            String korean = feature.apply(code, ResponseLanguage.KO);
+            // 채팅 말풍선은 varchar(255)라 잘려 저장됐을 수 있다.
+            if (korean.equals(storedMessage) || storedMessage != null && !storedMessage.isEmpty()
+                    && korean.length() > storedMessage.length() && korean.startsWith(storedMessage)) {
+                return feature.apply(code, ResponseLanguage.EN);
+            }
+        }
+        String common = message(code, language);
+        return common != null ? common : storedMessage;
     }
 
     private static String resolve(String code, String fallback) {
@@ -168,6 +241,11 @@ public final class AiErrorMessages {
     }
 
     private static String resolve(String code, String fallback, Map<String, String> overrides) {
+        return resolve(code, fallback, overrides, MESSAGES, PREFIX_MESSAGES);
+    }
+
+    private static String resolve(String code, String fallback, Map<String, String> overrides,
+                                  Map<String, String> messages, List<Map.Entry<String, String>> prefixMessages) {
         String override = code == null ? null : overrides.get(code);
         if (override != null) {
             return override;
@@ -175,11 +253,11 @@ public final class AiErrorMessages {
         if (code == null || code.isBlank() || GENERIC_CODES.contains(code)) {
             return fallback;
         }
-        String message = MESSAGES.get(code);
+        String message = messages.get(code);
         if (message != null) {
             return message;
         }
-        for (var prefix : PREFIX_MESSAGES) {
+        for (var prefix : prefixMessages) {
             if (code.startsWith(prefix.getKey())) {
                 return prefix.getValue();
             }

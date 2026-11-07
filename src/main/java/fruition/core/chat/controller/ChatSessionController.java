@@ -1,5 +1,7 @@
 package fruition.core.chat.controller;
 
+import fruition.core.aitask.AiErrorMessages;
+import fruition.shared.i18n.ResponseLanguage;
 import fruition.core.chat.domain.ChatMessageReference;
 import fruition.core.chat.domain.ChatPartialWiki;
 import fruition.core.chat.dto.ChatMessageRelatedPageResponse;
@@ -164,6 +166,7 @@ public class ChatSessionController {
                         ChatPartialWiki::getPairId,
                         Collectors.mapping(ChatPartialWiki::getWikiPageId, Collectors.toList())));
 
+        ResponseLanguage language = ResponseLanguage.current();
         List<ChatMessageResponse> responses = messages.stream()
                 .map(m -> {
                     var refs = refsByMessageId.getOrDefault(m.getId(), List.of()).stream()
@@ -178,7 +181,8 @@ public class ChatSessionController {
                     var relatedPages = relatedPagesByMessageId.getOrDefault(m.getId(), List.of());
                     var partialWikiPageIds = partialPagesByPairId.getOrDefault(m.getPairId(), List.of());
                     return new ChatMessageResponse(m.getId(), m.getPairId(), m.getRole(), m.getContent(), m.getStatus(), m.getCreatedAt(),
-                            relatedPages, refs, partialWikiPageIds, m.getErrorMessage(),
+                            relatedPages, refs, partialWikiPageIds,
+                            AiErrorMessages.localizeStored(m.getErrorCode(), m.getErrorMessage(), language), m.getErrorCode(),
                             m.getAiProvider(), m.getAiModel(), m.getWebSearchEnabled(),
                             m.getRunId(), m.getAction(), m.getClarifyReason(), m.getReadOnlyDocumentId(), m.getProgress());
                 })

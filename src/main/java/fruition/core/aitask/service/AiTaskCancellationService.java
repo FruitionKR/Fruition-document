@@ -148,7 +148,7 @@ public class AiTaskCancellationService {
      */
     private void cancelPendingAgentMessage(String id) {
         jdbc.update("""
-                UPDATE chat_messages m SET status = 'cancelled', error_message = ?
+                UPDATE chat_messages m SET status = 'cancelled', error_message = ?, error_code = 'agent_turn_cancelled'
                 WHERE m.run_id = ? AND m.role = 'assistant' AND m.status = 'pending'
                   AND EXISTS (SELECT 1 FROM ai_task_runs r WHERE r.id = m.run_id AND r.kind = 'agent')
                   AND NOT EXISTS (SELECT 1 FROM ai_task_changes c WHERE c.run_id = m.run_id

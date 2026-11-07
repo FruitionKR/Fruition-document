@@ -1,5 +1,6 @@
 package fruition.core.document.service;
 
+import fruition.shared.i18n.ResponseLanguage;
 import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -1615,7 +1616,7 @@ public class DocumentService {
         var toCancel = convertBatchStore.findDispatched(queue.getId()).stream()
                 .filter(batch -> batch.startPage() != failedStartPage).toList();
         if (placeholder.getPipelineRunId() == null || placeholder.getPipelineRunId().startsWith("convert:")) {
-            placeholder.markProcessingFailed(AiErrorMessages.convert(code), Instant.now());
+            placeholder.markProcessingFailed(failureCode(code), AiErrorMessages.convert(code), Instant.now());
         }
         placeholder.finishAutoIngestSchedule();
         // 실패 상태로 닫힌 작업의 변경은 DB journal guard가 거절한다. 지연된 JPA 문서 UPDATE와
@@ -1943,8 +1944,13 @@ public class DocumentService {
         if ("succeeded".equals(status)) {
             document.updateStatus(DocumentStatus.completed, null, now, null);
         } else if ("failed".equals(status)) {
-            document.markProcessingFailed(AiErrorMessages.ingest(error), now);
+            document.markProcessingFailed(failureCode(error), AiErrorMessages.ingest(error), now);
         }
+    }
+
+    /** 저장하는 실패에는 코드가 빠지지 않게 한다. AI가 코드를 주지 않은 실패는 기본 문구와 같은 internal_error다. */
+    private static String failureCode(String code) {
+        return code == null || code.isBlank() ? "internal_error" : code;
     }
 
     private String contentHashPrefix(String contentHash) {
@@ -2081,7 +2087,7 @@ public class DocumentService {
                 doc.getExtractedTextUri(),
                 doc.getUploadedAt(),
                 doc.getProcessedAt(),
-                doc.getErrorMessage(),
+                AiErrorMessages.localizeStored(doc.getErrorCode(), doc.getErrorMessage(), ResponseLanguage.current()),
                 doc.getErrorCode(),
                 wikiPages,
                 doc.getPipelineRunId(),

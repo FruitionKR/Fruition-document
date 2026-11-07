@@ -512,7 +512,7 @@ class AiTaskResultApplierTest {
 
         assertThat(result.error()).isEqualTo("agent_result_unsupported_action");
         // 말풍선에는 코드 대신 문장이 남아야 한다.
-        verify(chatTurnRecorder).markFailed("chat_assistant_1", "AI가 지원하지 않는 처리 결과를 내놓아 문서를 바꾸지 않았어요. 요청을 고쳐 다시 시도해 주세요.");
+        verify(chatTurnRecorder).markFailed("chat_assistant_1", "agent_result_unsupported_action", "AI가 지원하지 않는 처리 결과를 내놓아 문서를 바꾸지 않았어요. 요청을 고쳐 다시 시도해 주세요.");
         verify(chatTurnRecorder, never()).completeAgentTurn(anyString(), any(), any(), any());
     }
 
@@ -573,7 +573,7 @@ class AiTaskResultApplierTest {
 
         applier.applyAgent(event);
 
-        verify(chatTurnRecorder).markFailed("chat_assistant_4",
+        verify(chatTurnRecorder).markFailed("chat_assistant_4", "provider_unavailable",
                 "AI 서비스가 응답하지 않거나 일시적인 문제가 있어 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.");
     }
 

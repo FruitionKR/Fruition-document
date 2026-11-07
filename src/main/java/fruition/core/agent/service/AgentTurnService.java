@@ -1,5 +1,6 @@
 package fruition.core.agent.service;
 
+import fruition.shared.i18n.ResponseLanguage;
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.agent.dto.AgentRunEditPreviewsResponse;
 import fruition.core.agent.dto.AgentTurnRequest;
@@ -207,7 +208,8 @@ public class AgentTurnService {
                         CommandEditorSnapshot.from(request.editorSnapshot()),
                         request.mode(),
                         folderId == null ? null : folderId.toString(),
-                        request.referenceDocumentIds(), sessionTitleNeeded, readOnlyDocumentId));
+                        request.referenceDocumentIds(), sessionTitleNeeded, readOnlyDocumentId,
+                        ResponseLanguage.current().code()));
         if (analytics != null) {
             analytics.queryStarted(runId, userId, workspaceId, request.sessionId(), requestedAt, "task");
             if ("explicit".equals(request.skillMode()))
@@ -617,7 +619,9 @@ public class AgentTurnService {
             // 서버가 확인한 보기 전용 문서. AI가 "이 문서"를 첨부로 오해해 고치지 않게 한다. 그 밖의 턴은 command 모양을 바꾸지 않도록 키를 싣지 않는다.
             @com.fasterxml.jackson.annotation.JsonProperty("read_only_document_id")
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-            String readOnlyDocumentId
+            String readOnlyDocumentId,
+            // 요청자 화면 언어("ko"|"en"). AI가 답변·안내 문구의 언어로 쓴다. 승인형 run은 AI가 이 값을 run에 저장한다.
+            @com.fasterxml.jackson.annotation.JsonProperty("response_language") String responseLanguage
     ) {}
 
     record CanonicalSkillDraftSource(

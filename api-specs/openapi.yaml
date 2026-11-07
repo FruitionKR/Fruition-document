@@ -6538,7 +6538,7 @@ components:
           example: provider_unavailable
         error_message:
           type: string
-          description: 실패 코드에 대응하는 사용자용 한국어 문구. 성공이면 null이다.
+          description: "실패 코드에 대응하는 사용자용 문구. Accept-Language가 en이면 영어, 그 밖은 한국어다. 성공이면 null이다."
         folder_id:
           type: string
           format: uuid
@@ -6805,9 +6805,13 @@ components:
           format: date-time
           description: 생성 시각(ISO-8601 UTC)
           example: 2026-08-13T04:25:24.371948Z
+        error_code:
+          type: string
+          description: "실패 코드(예: provider_unavailable, agent_turn_cancelled). 성공했거나 코드 없이 저장된 이전 실패는 키가 빠진다. 화면은 문구 대신 이 값으로 갈래를 정한다."
+          example: provider_unavailable
         error_message:
           type: string
-          description: 실패했을 때의 사유. 성공이면 키가 빠진다.
+          description: "실패했을 때의 사유. 성공이면 키가 빠진다. error_code가 있으면 Accept-Language(ko·en, 그 밖은 ko)에 맞춘 문구이고, 코드 없이 저장된 이전 실패는 저장된 한국어 문구 그대로다."
         id:
           type: string
           description: 메시지 ID
@@ -8454,7 +8458,7 @@ components:
           example: 회의록
         message:
           type: string
-          description: 사용자에게 그대로 보여도 되는 한국어 문구
+          description: "사용자에게 그대로 보여도 되는 문구. Accept-Language가 en이면 code별 영어 문구, 그 밖의 언어·헤더 없음이면 한국어다."
           example: 요청 형식이 올바르지 않습니다.
         reset_at:
           type: string
@@ -8514,7 +8518,7 @@ components:
           example: email
         reason:
           type: string
-          description: 그 필드의 위반 사유
+          description: 그 필드의 위반 사유. Accept-Language가 en이면 영어 문구다.
           example: email은 필수입니다.
     FigureDescriptions:
       type: object
@@ -9164,7 +9168,11 @@ components:
           description: 회의록 저장 대상 문서. 없으면 새 문서로 저장한다.
         error:
           type: string
-          description: 녹음 파일 전사 실패 사유. 없으면 null
+          description: "녹음 파일 전사 실패 사유. 없으면 null. error_code가 있으면 Accept-Language(ko·en, 그 밖은 ko)에 맞춘 문구이고, 코드 없이 저장된 이전 실패는 저장된 한국어 문구 그대로다."
+        error_code:
+          type: string
+          description: "녹음 파일 전사 실패 코드(예: MEETING_RECORDING_TOO_LONG, transcription_cancelled). 없거나 이전 실패면 null"
+          example: MEETING_RECORDING_TOO_LONG
         has_recording:
           type: boolean
           description: 녹음 원본이 있는지
@@ -9712,7 +9720,7 @@ components:
       properties:
         error:
           type: string
-          description: 실패 사유(사용자에게 보여줄 한국어 문구). 성공이면 키가 빠진다.
+          description: "실패 사유(사용자에게 보여줄 문구, Accept-Language가 en이면 영어·그 밖은 한국어). 성공이면 키가 빠진다."
         error_code:
           type: string
           description: 실패 코드. 성공이면 키가 빠진다.

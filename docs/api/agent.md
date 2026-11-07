@@ -822,7 +822,7 @@ document-svc는 소유권을 확인할 때 읽은 세션 제목으로 ai command
 - HTTP `202`: Agent 실행이 대기열에 등록됨
 - Content-Type: `*/*` (`AgentTurnResponse`)
 
-- **실패 표시:** `error`는 실패 코드(예: `provider_unavailable`)이며 사용자에게 그대로 보여주면 안 된다. 클라이언트는 `error_message`(한국어 문구)를 표시해야 한다. 코드와 문구 목록은 [API 목차](README.md#ai-실패-코드와-사용자-문구)를 따른다.
+- **실패 표시:** `error`는 실패 코드(예: `provider_unavailable`)이며 사용자에게 그대로 보여주면 안 된다. 클라이언트는 `error_message`(요청 `Accept-Language`에 맞춘 문구, en이 아니면 한국어)를 표시해야 한다. 코드와 문구 목록은 [API 목차](README.md#ai-실패-코드와-사용자-문구)를 따른다.
 
 ```json
 {
@@ -955,7 +955,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/agent
 - HTTP `200`: 결과 조회 성공
 - Content-Type: `*/*` (`AgentTurnResponse`)
 
-- **실패 표시:** `error`는 실패 코드(예: `provider_unavailable`)이며 사용자에게 그대로 보여주면 안 된다. 클라이언트는 `error_message`(한국어 문구)를 표시해야 한다. 코드와 문구 목록은 [API 목차](README.md#ai-실패-코드와-사용자-문구)를 따른다.
+- **실패 표시:** `error`는 실패 코드(예: `provider_unavailable`)이며 사용자에게 그대로 보여주면 안 된다. 클라이언트는 `error_message`(요청 `Accept-Language`에 맞춘 문구, en이 아니면 한국어)를 표시해야 한다. 코드와 문구 목록은 [API 목차](README.md#ai-실패-코드와-사용자-문구)를 따른다.
 
 ```json
 {
