@@ -84,4 +84,27 @@ class DocumentItemAssemblerTest {
         document.markProcessingFailed("파이프라인 실패", java.time.Instant.now());
         assertThat(document.getErrorCode()).isNull();
     }
+
+    @Test
+    @DisplayName("변환 요청 때 자동 편입하기로 정한 문서만 예정이고, 편입을 시작하거나 실패하면 예정이 아니다")
+    void autoIngestScheduled_followsStoredDecisionUntilFinished() {
+        Document legacy = markdownDocument(null);
+        assertThat(legacy.isAutoIngestScheduled()).isFalse();
+
+        Document scheduled = markdownDocument(null);
+        scheduled.scheduleAutoIngestOnConvert(true);
+        assertThat(scheduled.isAutoIngestScheduled()).isTrue();
+        scheduled.finishAutoIngestSchedule();
+        assertThat(scheduled.isAutoIngestScheduled()).isFalse();
+
+        Document failed = markdownDocument(null);
+        failed.scheduleAutoIngestOnConvert(true);
+        failed.markProcessingFailed("PDF 변환에 실패했습니다", java.time.Instant.now());
+        assertThat(failed.isAutoIngestScheduled()).isFalse();
+
+        // 판정 전에 요청된 변환(null)은 끝나도 그대로 null이라 끝나는 시점에 판정할 수 있다.
+        Document unknown = markdownDocument(null);
+        unknown.finishAutoIngestSchedule();
+        assertThat(unknown.getAutoIngestScheduled()).isNull();
+    }
 }

@@ -1354,7 +1354,11 @@ public class DocumentService {
                     return new ConvertPrepared(placeholderId, stored,
                             Prefetched.of(() -> workspaceAiModelClient.get(workspaceId)),
                             // 조회 실패는 꺼진 것으로 돌려받는다. 외부 AI 전송은 명시적으로 켠 워크스페이스만 한다.
-                            workspaceSettingsClient.describePdfFigures(workspaceId));
+                            workspaceSettingsClient.describePdfFigures(workspaceId),
+                            // 변환이 끝나면 자동 편입할지는 요청 때 정해 문서에 남긴다. 도중에 설정이 바뀌어도 이 변환은 따른다.
+                            // 가져온 PDF의 변환본은 자동 편입하지 않고 가져오기 편입으로 고른다.
+                            source.getImportId() == null
+                                    && autoIngestAllowed(workspaceId, userId, AutoIngestPath.PDF_CONVERT));
                 },
                 prepared -> {
                     registerStoredSourceCleanup(storedKey);
@@ -1364,7 +1368,7 @@ public class DocumentService {
 
     private record ConvertPrepared(String placeholderId, Prefetched<String> sourceKey,
                                    Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel,
-                                   boolean describeFigures) {}
+                                   boolean describeFigures, boolean autoIngest) {}
 
     private DocumentUploadResponse startConvertPlaceholder(String workspaceId, String userId, String documentId,
                                                            Document source,
@@ -1400,6 +1404,7 @@ public class DocumentService {
         if (source.getImportId() != null) {
             placeholder.markImported(source.getImportId());
         }
+        placeholder.scheduleAutoIngestOnConvert(prepared.autoIngest());
         documentRepository.save(placeholder);
         editStateRepository.save(new DocumentEditState(
                 placeholderId, content.markdown(), content.contentHash(), 1));
@@ -1612,6 +1617,7 @@ public class DocumentService {
         if (placeholder.getPipelineRunId() == null || placeholder.getPipelineRunId().startsWith("convert:")) {
             placeholder.markProcessingFailed(AiErrorMessages.convert(code), Instant.now());
         }
+        placeholder.finishAutoIngestSchedule();
         // 실패 상태로 닫힌 작업의 변경은 DB journal guard가 거절한다. 지연된 JPA 문서 UPDATE와
         // queue 삭제를 running 상태에서 먼저 flush하고, 같은 트랜잭션 안에서 실행과 예약을 닫는다.
         convertQueueRepository.delete(queue);
@@ -1624,10 +1630,13 @@ public class DocumentService {
 
     /** 변환 문서를 AI 큐로 보낸다. 이전 버전에서 생성한 파트도 호환 처리한다. */
     private void ingestConvertedParts(Document placeholder) {
-        // 설정·권한은 변환을 요청한 사용자 기준이며, 변환이 끝나는 시점에 판정한다(트랜잭션 밖).
+        // 설정은 변환 요청 때 정해 문서에 남긴 값을 따른다. 권한은 변환을 요청한 사용자 기준으로 끝나는 시점에 다시 보고
+        // (트랜잭션 밖), 도중에 회수됐으면 편입하지 않는다. 값을 남기기 전에 요청된 변환(null)은 지금 설정으로 판정한다.
         // 가져온 PDF의 변환본(import_id 있음)은 자동 편입하지 않는다. 변환 결과는 그대로 저장한다.
-        boolean autoIngest = placeholder.getImportId() == null
-                && autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId());
+        Boolean scheduled = placeholder.getAutoIngestScheduled();
+        boolean autoIngest = placeholder.getImportId() == null && (scheduled == null
+                ? autoIngestAllowed(placeholder.getWorkspaceId(), placeholder.getUserId(), AutoIngestPath.PDF_CONVERT)
+                : scheduled && ingestPermitted(placeholder.getWorkspaceId(), placeholder.getUserId()));
         // 모델 설정(access) 조회도 문서 행 잠금·트랜잭션 밖에서 한 번 한다. 실패는 편입 등록 자리에서 던진다.
         Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel = autoIngest
                 ? Prefetched.of(() -> workspaceAiModelClient.get(placeholder.getWorkspaceId())) : null;
@@ -1644,6 +1653,8 @@ public class DocumentService {
                     var content = postgresDocumentEditStore.findState(doc.getId()).orElseThrow();
                     recordContentVersion(doc.getId(), content.getRevision(), content.getMarkdown(),
                             content.getContentHash(), doc.getUserId(), Instant.now());
+                    // 편입을 등록하든 건너뛰든 여기서 예정이 끝난다. 화면은 이 값이 false가 되면 편입 여부를 묻는다.
+                    doc.finishAutoIngestSchedule();
                     if (autoIngest && (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:"))) {
                         doc.reopenForReingest(content.getContentHash(), content.getMarkdown().getBytes(StandardCharsets.UTF_8).length);
                         enqueueIngest(doc, doc.getUserId(), "auto", aiModel);
@@ -1656,6 +1667,11 @@ public class DocumentService {
             } catch (fruition.core.usage.limit.AiUsageLimitExceededException e) {
                 // 사용자별 AI 사용 한도도 같은 방식으로 남긴다. 예외를 올리면 변환 결과 이벤트가 다시 처리된다.
                 markAutoIngestRejected(part, "AI_USAGE_LIMIT_EXCEEDED");
+            } catch (RuntimeException e) {
+                // 편입 등록이 실패해 트랜잭션이 롤백돼도 변환은 이미 끝났고 이 편입은 다시 시도되지 않는다.
+                // 예정 표시만 남으면 화면이 편입 여부를 영영 묻지 않으므로 따로 지운다.
+                finishAutoIngestSchedule(part);
+                throw e;
             }
         }
     }
@@ -1708,7 +1724,10 @@ public class DocumentService {
         transactionTemplate.execute(status -> {
             documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
                     .filter(value -> value.getDeletedAt() == null)
-                    .ifPresent(doc -> doc.markProcessingFailed(code, AiErrorMessages.query(code), now));
+                    .ifPresent(doc -> {
+                        doc.finishAutoIngestSchedule();
+                        doc.markProcessingFailed(code, AiErrorMessages.query(code), now);
+                    });
             return null;
         });
         log.warn("[변환 뒤 자동 ingest 거절] documentId={} reason={}", part.getId(), code);
@@ -1783,18 +1802,49 @@ public class DocumentService {
                 .replace(OVERSIZED_CONVERTED_IMAGE, "");
     }
 
+    /** 자동 편입 경로. 경로마다 워크스페이스 설정이 따로 있다. */
+    private enum AutoIngestPath { MARKDOWN_UPLOAD, PDF_CONVERT }
+
     /**
-     * 업로드·변환 뒤 자동 편입 여부. 워크스페이스 설정이 켜져 있고 요청자에게 wiki.ingest 권한이 있을 때만 true다.
+     * 업로드·변환 뒤 자동 편입 여부. 경로별 워크스페이스 설정(Markdown 업로드: auto_ingest_markdown_on_upload,
+     * PDF 변환: auto_ingest_pdf_on_convert)이 켜져 있고 요청자에게 wiki.ingest 권한이 있을 때만 true다.
      * 판정에 실패하면 업로드·변환을 막지 않고 편입하지 않는다.
      */
-    private boolean autoIngestAllowed(String workspaceId, String requesterId) {
+    private boolean autoIngestAllowed(String workspaceId, String requesterId, AutoIngestPath path) {
         try {
-            return workspaceSettingsClient.autoIngestOnUpload(workspaceId)
+            boolean enabled = path == AutoIngestPath.MARKDOWN_UPLOAD
+                    ? workspaceSettingsClient.autoIngestMarkdownOnUpload(workspaceId)
+                    : workspaceSettingsClient.autoIngestPdfOnConvert(workspaceId);
+            return enabled
                     && workspaceAccessGuard.hasPermission(workspaceId, requesterId, WorkspacePermissions.WIKI_INGEST);
         } catch (RuntimeException e) {
-            log.warn("[자동 편입] 판정 실패 — 편입하지 않음 workspaceId={} userId={} cause={}",
+            log.warn("[자동 편입] 판정 실패 — 편입하지 않음 workspaceId={} userId={} path={} cause={}",
+                    workspaceId, requesterId, path, e.toString());
+            return false;
+        }
+    }
+
+    /** 변환 요청 때 자동 편입하기로 정한 변환이 끝났을 때 요청자에게 아직 wiki.ingest가 있는지. 실패하면 편입하지 않는다. */
+    private boolean ingestPermitted(String workspaceId, String requesterId) {
+        try {
+            return workspaceAccessGuard.hasPermission(workspaceId, requesterId, WorkspacePermissions.WIKI_INGEST);
+        } catch (RuntimeException e) {
+            log.warn("[자동 편입] 권한 판정 실패 — 편입하지 않음 workspaceId={} userId={} cause={}",
                     workspaceId, requesterId, e.toString());
             return false;
+        }
+    }
+
+    /** 편입 등록이 실패한 변환본의 자동 편입 예정 표시를 지운다. 실패해도 원래 예외를 가리지 않는다. */
+    private void finishAutoIngestSchedule(Document part) {
+        try {
+            transactionTemplate.execute(status -> {
+                documentRepository.findByIdAndWorkspaceIdForUpdate(part.getId(), part.getWorkspaceId())
+                        .ifPresent(Document::finishAutoIngestSchedule);
+                return null;
+            });
+        } catch (RuntimeException e) {
+            log.warn("[자동 편입] 예정 표시 정리 실패 documentId={} cause={}", part.getId(), e.toString());
         }
     }
 
@@ -1806,7 +1856,7 @@ public class DocumentService {
                                        String contentHash, long byteSize) {
         Runnable autoIngest = () -> {
             try {
-                if (!autoIngestAllowed(workspaceId, userId)) return;
+                if (!autoIngestAllowed(workspaceId, userId, AutoIngestPath.MARKDOWN_UPLOAD)) return;
                 // 모델 설정(access) 조회도 트랜잭션 밖에서 한다. 실패는 편입 등록 자리에서 던진다.
                 Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel =
                         Prefetched.of(() -> workspaceAiModelClient.get(workspaceId));
@@ -2056,7 +2106,8 @@ public class DocumentService {
                 doc.getAiOrigin(),
                 documentItemAssembler.lastAiChanges(List.of(documentId)).get(documentId),
                 DocumentItemAssembler.restorationSummaryOf(doc),
-                DocumentItemAssembler.figureDescriptionsOf(doc)
+                DocumentItemAssembler.figureDescriptionsOf(doc),
+                doc.isAutoIngestScheduled()
         );
     }
 

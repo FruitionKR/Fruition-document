@@ -113,7 +113,8 @@ public class DocumentItemAssembler {
                 doc.getAiOrigin(),
                 lastAiChange,
                 restorationSummaryOf(doc),
-                figureDescriptionsOf(doc));
+                figureDescriptionsOf(doc),
+                doc.isAutoIngestScheduled());
     }
 
     static ConversionReport.RestorationSummary restorationSummaryOf(Document doc) {

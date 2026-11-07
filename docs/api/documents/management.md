@@ -17,7 +17,7 @@
 | API | 목적 |
 |---|---|
 | [`GET /api/workspaces/{workspace_id}/documents`](#summary-get-api-workspaces-workspace-id-documents) | 활성 문서의 호환용 평면 목록을 반환하며 파일명 검색을 지원합니다. |
-| [`POST /api/workspaces/{workspace_id}/documents`](#summary-post-api-workspaces-workspace-id-documents) | PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_on_upload가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다. |
+| [`POST /api/workspaces/{workspace_id}/documents`](#summary-post-api-workspaces-workspace-id-documents) | PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_markdown_on_upload(새 워크스페이스 기본 켬)가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/uploads`](#summary-post-api-workspaces-workspace-id-documents-uploads) | 대용량 PDF를 객체 저장소에 직접 올리기 위한 업로드 티켓과 조각 크기를 발급합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/uploads/parts`](#summary-post-api-workspaces-workspace-id-documents-uploads-parts) | 업로드 티켓으로 조각 번호 범위에 대한 15분짜리 presigned PUT 주소를 발급합니다. |
 | [`POST /api/workspaces/{workspace_id}/documents/uploads/complete`](#summary-post-api-workspaces-workspace-id-documents-uploads-complete) | 조각 업로드를 조립해 PDF를 검증하고 문서로 확정합니다. |
@@ -111,6 +111,12 @@
   (직접 만든 노트·복제본, `content_hash` 없음)도 `true`다. "편입 후 수정됨"과 "아직 편입 안 됨"은 `pipeline_run_id` 유무로
   구분한다(`convert:` run은 변환이라 편입이 아니다). 편집 가능 문서만 `true`가 될 수 있고, 처리 중(`processing`)이면 `false`다.
 - `ai_origin`·`last_ai_change`: 문서가 AI 결과물인지 나타낸다. [AI 출처 표시](README.md#ai-출처-표시)
+- `auto_ingest_scheduled`: PDF 변환으로 만든 문서이고, 변환을 요청할 때 워크스페이스 설정 `auto_ingest_pdf_on_convert`와
+  요청자의 `wiki.ingest`로 판정한 결과 변환이 끝나면 서버가 자동 편입하기로 정해졌으며, 그 편입이 아직 시작되지 않았으면
+  (변환 중이거나 변환 직후) `true`다. 그 밖에는 `false`다. 요청 뒤 설정이 바뀌어도 그 변환은 요청 때 판정을 따른다.
+  변환 도중 요청자의 `wiki.ingest`가 회수되면 편입하지 않고 변환이 끝날 때 `false`가 된다. 변환이 실패하거나 편입이
+  크레딧·한도로 거절돼도 `false`다. 화면은 `true`면 "편입할까요?"를 묻지 않는다.
+  [PDF Markdown 변환](../ai.md#detail-post-api-workspaces-workspace-id-documents-document-id-convert-markdown)
 - `can_edit`·`can_delete`·`can_convert`: 현재 사용자가 편집·삭제·PDF Markdown 변환을 할 수 있는지. [공동 편집 권한](README.md#공동-편집-권한)
   권한 설정과 사용자의 역할·`document.convert` 권한은 요청마다 한 번만 읽는다(문서마다 조회하지 않음).
 
@@ -186,7 +192,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 | 항목 | 내용 |
 |---|---|
-| 목적 | PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_on_upload가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다. |
+| 목적 | PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_markdown_on_upload(새 워크스페이스 기본 켬)가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다. |
 | 입력 | **Path** — `workspace_id`: `string`<br>**Header** — `Idempotency-Key`: `string`<br>**Query** — `folder_id`(선택): `string`, `origin`(선택): `skill_reference`<br>**Body** — `file` |
 | 출력 | `201` 업로드 성공 — `DocumentUploadResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
@@ -204,7 +210,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docume
 
 #### 2. 목적
 
-PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_on_upload가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다.
+PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_markdown_on_upload(새 워크스페이스 기본 켬)가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다.
 
 #### 3. Auth 필요 여부
 
@@ -1015,6 +1021,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 ```
 
 - `ai_origin`·`last_ai_change`: 목록과 같다. [AI 출처 표시](README.md#ai-출처-표시)
+- `auto_ingest_scheduled`: 목록과 같다.
 - `can_edit`·`can_delete`·`can_convert`: 목록과 같다. [공동 편집 권한](README.md#공동-편집-권한)
 
 #### 6. Error response
