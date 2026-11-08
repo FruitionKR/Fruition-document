@@ -11,7 +11,7 @@ leaving it blank keeps the four read tools available but makes proposal invocati
 The transport is the stateless servlet transport from the official Java SDK 2.1.0. It does not issue or
 accept MCP session IDs. Every HTTP request verifies an RS256 MCP-audience token, reads at most 4 MiB after
 decompression to select the required `read`, `write_propose` (`propose_document_edit`, `propose_plan`,
-`propose_pdf_conversion`) or
+`propose_pdf_conversion`, `propose_skill_definition`) or
 `wiki_write` (six wiki tools) scope, and calls Access's current
 `POST /internal/mcp/grants/{grant_id}/authorize` contract before SDK protocol parsing. A missing Origin is
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
@@ -19,10 +19,10 @@ Forwarding headers are ignored; the servlet request itself must already represen
 
 ## 공개 카탈로그 (`mcp-tools.v3`)
 
-`McpToolCatalog.tools()`는 2026-11-09부터 다음 18개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
+`McpToolCatalog.tools()`는 2026-11-09부터 다음 19개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
 `find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
-(`start_ingest`, `resume_ingest`, `get_window`, `submit_window`, `finalize_ingest`, `submit_lint_changes`), Skill 읽기 2개
-(`list_skills`, `get_skill`, `read` scope, 계약은 [mcp-skills.md](mcp-skills.md)), 회의 읽기 2개(`list_meetings`,
+(`start_ingest`, `resume_ingest`, `get_window`, `submit_window`, `finalize_ingest`, `submit_lint_changes`), Skill 3개
+(`list_skills`, `get_skill` `read`, `propose_skill_definition` `write_propose`, 계약은 [mcp-skills.md](mcp-skills.md)), 회의 읽기 2개(`list_meetings`,
 `get_meeting_transcript`, `read` scope, 아래 절), PDF 2개(`get_pdf_source` `read`, `propose_pdf_conversion`
 `write_propose`, 계약은 [mcp-pdf.md](mcp-pdf.md)). 다른 MCP 도구 bean(`McpSkillTools`, `McpMeetingTools`, `McpPdfTools`)은
 `tools()`와 `invoke(identity, tool, args)`만 제공하고, 카탈로그가 같은 wrapper로 감싼다. 별도 enable

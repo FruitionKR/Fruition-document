@@ -122,7 +122,9 @@ class McpSecurityFilterTest {
         verify(access).authorize(token, Set.of("wiki_write"));
     }
 
-    @Test void pdfConversionProposalPreflightsWriteProposeScope() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"propose_pdf_conversion", "propose_skill_definition"})
+    void externalResultProposalsPreflightWriteProposeScope(String toolName) throws Exception {
         var verifier = mock(McpTokenVerifier.class); var access = mock(McpAccessClient.class);
         var token = new McpTokenVerifier.Token("user", "workspace", "https://client.example/client.json",
                 "grant", 1, Set.of("read"));
@@ -134,8 +136,8 @@ class McpSecurityFilterTest {
         request.addHeader("Authorization", "Bearer token");
         request.setSecure(true); request.setServerName("mcp.example"); request.setServerPort(443);
         request.setContent("""
-                {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"propose_pdf_conversion","arguments":{}}}
-                """.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"%s","arguments":{}}}
+                """.formatted(toolName).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         var response = new MockHttpServletResponse();
 
         filter.doFilter(request, response, (r, s) -> { throw new AssertionError(); });

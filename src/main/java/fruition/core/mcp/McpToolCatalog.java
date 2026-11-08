@@ -55,7 +55,7 @@ public class McpToolCatalog {
         this.audit = audit; this.mapper = mapper; this.properties = properties;
     }
 
-    /** 읽기 4개 + 제안 8개 + Skill 읽기 2개 + 회의 읽기 2개 + PDF 2개. 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
+    /** 읽기 4개 + 제안 8개 + Skill 3개(읽기 2·정의 제안 1) + 회의 읽기 2개 + PDF 2개. 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
     public List<io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification> tools() {
         var tools = new java.util.ArrayList<>(List.of(
                 spec(tool("search_wiki", "Search published workspace wiki pages", searchSchema()),
@@ -102,6 +102,7 @@ public class McpToolCatalog {
             if (McpPdfTools.PROPOSE_PDF_CONVERSION.equals(tool))
                 targets = List.of(argument(request.arguments(), "source_document_id"));
             if (McpMeetingTools.TRANSCRIPT.equals(tool)) targets = List.of(McpMeetingTools.meetingId(request.arguments()));
+            if (McpSkillTools.PROPOSE.equals(tool)) targets = skillDefinitionTargets(request.arguments());
             if (McpSkillTools.GET.equals(tool)) targets = List.of(McpSkillTools.skillId(request.arguments()));
             if (WIKI_TOOLS.contains(tool)) targets = wikiTargets(request.arguments());
             Object result = handler.call(id, request.arguments());
@@ -473,6 +474,11 @@ public class McpToolCatalog {
         Object value = args.get("page_id");
         if (!(value instanceof String id) || !McpWikiPageClient.validPageId(id)) throw new IllegalArgumentException();
         return id;
+    }
+    /** Skill 정의 제안의 감사 대상. 수정이면 definition.skill_id, 새로 만들면 없다. */
+    private static List<String> skillDefinitionTargets(Map<String,Object> args) {
+        if (args == null || !(args.get("definition") instanceof Map<?,?> definition)) throw new IllegalArgumentException();
+        return definition.get("skill_id") instanceof String skillId ? List.of(skillId) : List.of();
     }
     /** 감사 대상용 문자열 인자. 형식 검증은 도구가 하고, 감사 로그는 안전한 형식만 남긴다. */
     private static String argument(Map<String,Object> args, String key) {

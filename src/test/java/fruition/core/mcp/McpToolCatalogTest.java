@@ -237,11 +237,12 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), new McpSkillTools(skills), mock(McpMeetingTools.class), mock(McpPdfTools.class),
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), new McpSkillTools(skills, mock(McpDocumentProposalService.class), new ObjectMapper()), mock(McpMeetingTools.class), mock(McpPdfTools.class),
                 audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var tools = catalog.tools();
-        assertThat(tools).extracting(spec -> spec.tool().name()).hasSize(14).endsWith("list_skills", "get_skill");
+        assertThat(tools).extracting(spec -> spec.tool().name()).hasSize(15).endsWith("list_skills", "get_skill", "propose_skill_definition");
         assertThat(tools.subList(12, 14)).allSatisfy(spec -> assertThat(spec.tool().annotations().readOnlyHint()).isTrue());
+        assertThat(tools.get(14).tool().annotations().readOnlyHint()).isFalse();
         var id = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
                 Set.of("read"), "MEMBER", Set.of());
         var context = McpTransportContext.create(Map.of(McpSecurityFilter.IDENTITY, id));
