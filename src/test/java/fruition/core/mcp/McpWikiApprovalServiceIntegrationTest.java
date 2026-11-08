@@ -82,13 +82,14 @@ class McpWikiApprovalServiceIntegrationTest {
         when(access.authorizeWikiOperationBoundary(any(), anyLong(), anyString())).thenReturn(identity);
         service = new McpWikiApprovalService(jdbc, new TransactionTemplate(manager), mapper, access, sources, ai,
                 mock(McpWikiStateGateway.class), mock(WorkspaceAccessGuard.class), credits,
-                new McpWikiOperationRegistrar(operations),
+                new McpWikiOperationRegistrar(operations), "ai.maintenance.command",
                 "KRW", "", "", "", "", "", "3", "apply", "fixed 3 KRW per apply", "i9-test-v1");
         service.registerDraft(identity, task, preview);
     }
 
     @AfterEach
     void clean() {
+        jdbc.update("DELETE FROM ai_command_outbox WHERE run_id IN (SELECT 'mcp-index:'||event_id FROM mcp_wiki_publication_inbox WHERE draft_id=?::uuid)", draft);
         jdbc.update("DELETE FROM mcp_wiki_publication_inbox WHERE draft_id=?::uuid", draft);
         jdbc.update("DELETE FROM mcp_wiki_drafts WHERE draft_id=?::uuid", draft);
         jdbc.update("DELETE FROM ai_operation_logs WHERE user_id=?", user);
@@ -135,6 +136,13 @@ class McpWikiApprovalServiceIntegrationTest {
 
         assertThat(jdbc.queryForObject("SELECT count(*) FROM mcp_wiki_publication_inbox WHERE approval_id=?::uuid",
                 Integer.class, approvalId)).isOne();
+        assertThat(jdbc.queryForList("SELECT topic,message_key,payload FROM ai_command_outbox WHERE run_id=?",
+                "mcp-index:" + event.eventId())).singleElement().satisfies(row -> {
+            assertThat(row).containsEntry("topic", "ai.maintenance.command").containsEntry("message_key", workspace);
+            assertThat(mapper.readTree((String) row.get("payload")).path("kind").asText()).isEqualTo("mcp_publication_index");
+        });
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE id=?", Integer.class,
+                "mcp-index:" + event.eventId())).isZero();
         assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(7_000);
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
         assertThat(jdbc.queryForObject("SELECT charged_minor FROM mcp_wiki_drafts WHERE draft_id=?::uuid",
@@ -154,11 +162,33 @@ class McpWikiApprovalServiceIntegrationTest {
 
         assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(10_000);
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_command_outbox WHERE run_id=?", Integer.class,
+                "mcp-index:" + event.eventId())).isZero();
         assertThatThrownBy(() -> service.acceptPublication(new McpWikiApprovalService.PublicationEvent(
                 event.eventId(), event.eventType(), event.approvalId(), event.operationId(), event.draftId(),
                 event.workspaceId(), event.userId(), event.grantId(), event.clientId(), event.kind(),
                 "PUBLISHED", true, event.publishedReferenceHash(), event.committedAt())))
                 .hasMessageContaining("MCP_WIKI_PUBLICATION_CONFLICT");
+    }
+
+    @Test
+    void indexWakeCommitsAndRollsBackWithPublicationInbox() {
+        credits.post(user, "grant", 10_000, "i9-wake:" + user, "test");
+        reserveDirectly();
+        var event = event(approvalId(), operationId(), "PUBLISHED", true);
+        String wake = "SELECT count(*) FROM ai_command_outbox WHERE run_id=?";
+
+        new TransactionTemplate(manager).executeWithoutResult(tx -> {
+            service.acceptPublication(event);
+            tx.setRollbackOnly();
+        });
+        assertThat(jdbc.queryForObject(wake, Integer.class, "mcp-index:" + event.eventId())).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM mcp_wiki_publication_inbox WHERE event_id=?::uuid",
+                Integer.class, event.eventId())).isZero();
+
+        service.acceptPublication(event);
+        service.acceptPublication(event);
+        assertThat(jdbc.queryForObject(wake, Integer.class, "mcp-index:" + event.eventId())).isOne();
     }
 
     @Test

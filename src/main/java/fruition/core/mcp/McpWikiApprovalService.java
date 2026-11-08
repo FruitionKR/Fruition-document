@@ -60,11 +60,13 @@ public class McpWikiApprovalService {
     private final CreditService credits;
     private final McpWikiOperationRegistrar operations;
     private final PriceConfig prices;
+    private final String maintenanceTopic;
 
     public McpWikiApprovalService(JdbcTemplate jdbc, TransactionTemplate transaction, ObjectMapper mapper,
                                   McpAccessClient access, McpWikiSourceService sources, McpWikiDraftClient ai,
                                   McpWikiStateGateway wiki, WorkspaceAccessGuard webAccess, CreditService credits,
                                   McpWikiOperationRegistrar operations,
+                                  @Value("${app.maintenance.command-topic}") String maintenanceTopic,
                                   @Value("${app.mcp.wiki.currency:}") String currency,
                                   @Value("${app.mcp.wiki.ingest.unit-price-minor:}") String ingestUnitPrice,
                                   @Value("${app.mcp.wiki.ingest.unit-size:}") String ingestUnitSize,
@@ -77,7 +79,7 @@ public class McpWikiApprovalService {
                                   @Value("${app.mcp.wiki.lint.price-version:}") String lintVersion) {
         this.jdbc = jdbc; this.transaction = transaction; this.mapper = mapper; this.access = access;
         this.sources = sources; this.ai = ai; this.wiki = wiki; this.webAccess = webAccess; this.credits = credits;
-        this.operations = operations;
+        this.operations = operations; this.maintenanceTopic = maintenanceTopic;
         this.prices = new PriceConfig(currency, ingestUnitPrice, ingestUnitSize, ingestUnit, ingestFormula,
                 ingestVersion, lintFixedPrice, lintUnit, lintFormula, lintVersion);
     }
@@ -231,6 +233,16 @@ public class McpWikiApprovalService {
                     VALUES (?::uuid,?::uuid,?,?::uuid,?,?,?,?,?::timestamptz)
                     """, event.eventId(), event.approvalId(), event.operationId(), event.draftId(), canonical,
                     event.outcome(), event.changed(), event.publishedReferenceHash(), event.committedAt());
+            if (event.changed()) {
+                // 발행은 AI DB에 직접 커밋돼 Kafka 신호가 없다. 0대로 줄어든 maintenance worker를 깨워 새 페이지를 임베딩하게 한다.
+                // 같은 트랜잭션의 AI command outbox에 넣어 inbox 중복이면 쌓지 않고 롤백되면 함께 사라진다.
+                // 과금 실행이 아니라 ai_task_runs는 만들지 않는다(AiCommandOutboxWriter.enqueueJoined와 같은 저장).
+                String runId = "mcp-index:" + event.eventId();
+                jdbc.update("INSERT INTO ai_command_outbox(id,run_id,topic,message_key,payload,created_at) "
+                                + "VALUES (gen_random_uuid()::text,?,?,?,?,now())", runId, maintenanceTopic,
+                        event.workspaceId(), mapper.valueToTree(linked("kind", "mcp_publication_index", "run_id", runId,
+                                "workspace_id", event.workspaceId())).toString());
+            }
             long chargeMinor = event.changed() ? draft.quote().maximumMinor() : 0;
             credits.settleMcpApproval(draft.approvalId(), draft.userId(), Math.multiplyExact(chargeMinor, 1000L), true);
             jdbc.update("UPDATE mcp_wiki_drafts SET publication_status=?,changed=?,published_reference_hash=?,"
