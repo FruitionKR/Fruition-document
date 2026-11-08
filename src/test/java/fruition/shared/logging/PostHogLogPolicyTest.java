@@ -29,6 +29,9 @@ class PostHogLogPolicyTest {
         assertThat(PostHogLogPolicy.shouldSend(event("io.opentelemetry.exporter.X", Level.ERROR, "export failed", null))).isFalse();
         assertThat(PostHogLogPolicy.shouldSend(event("okhttp3.OkHttpClient", Level.ERROR, "leak", null))).isFalse();
         assertThat(PostHogLogPolicy.shouldSend(event(PostHogLogExport.class.getName(), Level.WARN, "disabled", null))).isFalse();
+        // 감사 JSON은 요청 입력이 섞여 operation=이 들어 있어도 보내지 않는다. 오류는 보낸다.
+        assertThat(PostHogLogPolicy.shouldSend(event("fruition.mcp.audit", Level.INFO, "{\"target_ids\":[\"x operation=y\"]}", null))).isFalse();
+        assertThat(PostHogLogPolicy.shouldSend(event("fruition.mcp.audit", Level.ERROR, "MCP_AUDIT_SERIALIZATION_FAILED", null))).isTrue();
     }
 
     @Test void keepsAllowedFieldsAndDropsSensitiveValues() {

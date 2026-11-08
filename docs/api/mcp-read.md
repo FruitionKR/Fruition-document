@@ -30,6 +30,14 @@ Request bodies are capped at 4 MiB after gzip decompression. Candidate counts, s
 page sizes, response bytes, cursor bytes, and document chunk blocks/bytes use explicit deployment settings.
 Required fields and blocks are never silently truncated. Audit events contain only actor/grant/tool/target,
 result/error, timestamp, ID, and origin; query, snippets, Markdown, and tokens are excluded.
+
+MCP 도구 호출 로그: 감사 JSON(`fruition.mcp.audit`)은 형식을 그대로 두고 콘솔에만 남긴다(INFO는 PostHog로 보내지 않는다).
+같은 호출마다 `fruition.mcp.activity`가 `[MCP 도구 호출 성공|실패] operation=mcp_tool stage=completed` 한 줄을 남기고,
+`PostHogLogPolicy` 허용 필드로 PostHog Logs에 전송된다. 검색 필드는 `status`(SUCCESS/ERROR), `toolName`, `errorCode`,
+`auditId`(감사 JSON의 `audit_id`와 같다), `userId`, `workspaceId`, `grantId`, `clientIdHash`(URL인 `client_id`의 SHA-256 앞 16자리),
+`targetCount`, `targetIds`(안전한 형식의 ID 최대 20개), `origin`, `requestId`다. 성공은 INFO, 실패는 WARN이다.
+승인·영수증 등 MCP 전용 승인 단계(`McpAgentApprovalService`, `McpWikiApprovalService`)는 별도 `operation=` 로그가 없어
+DB 이력으로만 남는다.
 Markdown-like document and wiki fields are passed through the existing AI Markdown sanitizer before final response
 sizing, so external links/images and raw HTML are neutralized while relative links, anchors, and code remain data.
 
