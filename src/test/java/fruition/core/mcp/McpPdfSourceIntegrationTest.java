@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import fruition.TestcontainersConfiguration;
 import fruition.core.authz.WorkspaceSettingsClient;
 import fruition.core.document.repository.ConvertCommandOutbox;
+import fruition.core.document.domain.Document;
 import fruition.core.document.service.McpDocumentDataGateway;
 import fruition.shared.util.StorageProperties;
 import io.minio.MinioClient;
@@ -26,7 +27,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -54,12 +55,19 @@ class McpPdfSourceIntegrationTest {
         window.putObject("result_schema");
         window.putArray("image_keys").add(key);
         McpWikiDraftClient ai = mock(McpWikiDraftClient.class);
-        when(ai.post(anyString(), any())).thenReturn(window);
-        var tools = new McpPdfTools(mock(McpDocumentDataGateway.class), mock(McpPlanProposalService.class),
+        when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/windows/read"), any())).thenReturn(window);
+        when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/status"), any()))
+                .thenReturn(mapper.createObjectNode().put("source_document_id", "doc_pdf")
+                        .put("source_content_hash", "sha256:" + "a".repeat(64)));
+        McpDocumentDataGateway documents = mock(McpDocumentDataGateway.class);
+        var tools = new McpPdfTools(documents, mock(McpPlanProposalService.class),
                 mock(McpAccessClient.class), ai, mock(ConvertCommandOutbox.class), mock(TransactionTemplate.class),
                 mock(WorkspaceSettingsClient.class), minio, storage, mapper, 10, storage.getEndpoint());
         McpIdentity identity = new McpIdentity("user_it", "ws_it", "https://client.example/mcp",
                 "00000000-0000-4000-8000-000000000001", 1, Set.of("read"), "OWNER", Set.of());
+
+        when(documents.convertSource(identity, "doc_pdf", "sha256:" + "a".repeat(64)))
+                .thenReturn(new McpDocumentDataGateway.ConvertSource(mock(Document.class), true));
 
         @SuppressWarnings("unchecked")
         var view = (Map<String, Object>) tools.invoke(identity, "get_conversion_window",

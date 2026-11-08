@@ -172,6 +172,10 @@ public class McpPdfTools {
         String conversionId = uuid(args.get("conversion_id"));
         if (!(args.get("window_ordinal") instanceof Integer ordinal) || ordinal < 1)
             throw new McpToolException("INVALID_INPUT");
+        JsonNode status = ai.post(BASE + "/" + conversionId + "/status",
+                linked("schema_version", SCHEMA, "actor", actorMap(actor)));
+        convertSource(identity, documentId(status.path("source_document_id").asText()),
+                hash(status.path("source_content_hash").asText()));
         JsonNode window = ai.post(BASE + "/" + conversionId + "/windows/read",
                 linked("schema_version", SCHEMA, "actor", actorMap(actor), "window_ordinal", ordinal));
         String prefix = "tmp/convert/mcp/" + identity.workspaceId() + "/" + conversionId + "/";
