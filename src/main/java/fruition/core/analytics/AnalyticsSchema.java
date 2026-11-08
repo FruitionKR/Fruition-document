@@ -31,7 +31,7 @@ public final class AnalyticsSchema {
         entry("meeting_notes_completed", "failure_reason"));
     /** Agent result actions and sync_call run kinds; anything else is reported as unknown. */
     static final Set<String> AGENT_ACTIONS = Set.of("markdown_create", "markdown_edit", "folder_organize", "workspace_workflow",
-        "chat_answer", "conversation_reply", "clarify", "reject", "skill_authoring", "skill_draft_proposal", "folder_lookup", "unknown",
+        "chat_answer", "conversation_reply", "product_help", "clarify", "reject", "skill_authoring", "skill_draft_proposal", "folder_lookup", "unknown",
         // sync_call run kinds
         "speech_transcription", "speech_synthesis", "skill_author", "skill_publish", "skill_update", "skill_test_run");
     private static Map.Entry<String,Set<String>> entry(String event, String fields) {

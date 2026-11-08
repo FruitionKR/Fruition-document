@@ -77,7 +77,7 @@ public record ChatMessageResponse(
         @JsonInclude(JsonInclude.Include.NON_NULL)
         @Schema(description = "AI가 고른 갈래. 화면이 이 값으로 편집 미리보기와 일반 답변을 나눈다. "
                 + "질의 메시지는 키가 빠진다.",
-                allowableValues = {"chat_answer", "conversation_reply", "markdown_edit", "markdown_create", "clarify", "reject",
+                allowableValues = {"chat_answer", "conversation_reply", "product_help", "markdown_edit", "markdown_create", "clarify", "reject",
                         "folder_organize", "folder_lookup", "workspace_workflow", "skill_authoring", "skill_draft_proposal"},
                 example = "markdown_edit")
         String action,
