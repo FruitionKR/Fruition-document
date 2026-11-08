@@ -93,12 +93,14 @@ public class McpSkillTools {
         return id;
     }
 
-    /** 웹 Agent가 적용하는 버전과 같게 enabled_version이 있는 Skill만 쓸 수 있다. 다른 워크스페이스 Skill은 숨긴다. */
+    /** 웹 Agent가 적용하는 버전과 같게 활성 상태이고 enabled_version이 있는 Skill만 쓸 수 있다. 다른 워크스페이스 Skill은 숨긴다. */
     private static boolean usable(JsonNode skill, McpIdentity identity) {
         JsonNode workspace = skill.path("workspace_id");
         boolean sameWorkspace = workspace.isMissingNode() || workspace.isNull()
                 || identity.workspaceId().equals(workspace.asText());
-        return sameWorkspace && skill.path("enabled_version").isObject();
+        // 비활성화는 skills.status만 바꾸고 enabled_version을 남기므로 상태도 확인한다.
+        return sameWorkspace && "enabled".equals(skill.path("status").asText())
+                && skill.path("enabled_version").isObject();
     }
 
     private static Map<String, Object> project(JsonNode skill, boolean withInstructions) {

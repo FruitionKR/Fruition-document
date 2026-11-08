@@ -38,7 +38,7 @@
 
 - 웹 `GET /api/workspaces/{workspace_id}/skills[/{skill_id}]`와 같은 `SkillService.list/get`을 쓴다.
   워크스페이스 멤버십을 확인한 뒤 ai-svc가 개인(소유자만)·팀 Skill 가시성으로 거른다. LLM·크레딧을 쓰지 않는다.
-- 웹 Agent가 적용하는 버전과 같게 `enabled_version`만 노출한다. 비활성·활성 버전 없음·다른 워크스페이스 Skill과
+- 웹 Agent가 적용하는 버전과 같게 `status=enabled`인 Skill의 `enabled_version`만 노출한다(비활성화는 status만 바꾸고 enabled_version을 남긴다). 비활성·활성 버전 없음·다른 워크스페이스 Skill과
   ai 404/410은 모두 `RESOURCE_NOT_FOUND`다. `latest_version`, `lint_result`, 소유자 ID는 내보내지 않는다.
 - `name`·`description`·`instructions_markdown`은 문서 읽기와 같은 `AiMarkdownSanitizer`를 거친다.
 - 게시된 Skill에는 참조 문서 연결이 저장되지 않는다(참조 문서는 작성 시점 입력이다). 적용에 필요한 문서는 기존
