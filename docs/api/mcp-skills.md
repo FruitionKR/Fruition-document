@@ -55,11 +55,42 @@
 
 Skill 지침은 워크스페이스 콘텐츠이므로 권한을 부여하거나 사용자 요청을 덮어쓸 수 없다.
 
-## 제공하지 않는 것: Skill 작성·게시·수정
+## `propose_skill_definition`: 외부 AI가 작성한 Skill 정의 제안
 
-ai-svc 게시·수정(`AuthorSkillUseCase.publish/update`)은 `authoring_mode=preserve`에서도 `execute()` 안에서
-`self._generator.generate(...)`(LLM 안전 검토)를 호출하고, core `PipelineSkillRequester.publish/update`는 크레딧 예약·사용량
-정산(`tracked()`)을 거친다. 따라서 비생성 경로로 재사용할 수 없어 MCP 도구로 열지 않는다. 열려면 ai-svc에
-결정적 검사(`inspect_skill_instructions`, `inspect_skill_output_links`, `validate_skill_name`, `validate_allowed_tools`,
-`validate_execution_options`, `resolve_requires_source`)만 거친 뒤 `create_published/update_published`를 호출하는 경로와,
-웹 승인 뒤에만 그 경로를 부르는 제안·승인 흐름(팀 Skill은 제안·승인 시 `skill.author` 재확인)이 먼저 필요하다.
+외부 AI가 직접 쓴 Skill 정의를 **웹 승인 대기**로 올린다. 승인 전에는 아무것도 저장하지 않는다. scope는 `write_propose`
+(core 보안 필터가 이 이름을 매핑한다)이고 annotation은 `readOnlyHint=false`, `destructiveHint=false`다.
+
+입력(알 수 없는 필드 거절, `definition`의 열 개 필드는 모두 보내고 생략 값은 `null`):
+
+```json
+{"idempotency_key":"k-1","request_summary":"회의록 Skill",
+ "definition":{"skill_id":null,"expected_version":null,"scope_type":"personal","name":"meeting-notes",
+  "description":"...","instructions_markdown":"...","capabilities":["document-edit"],
+  "targets":null,"result_mode":null,"requires_source":null}}
+```
+
+- 생성은 `skill_id`·`expected_version`이 `null`이고 `scope_type`이 필요하다. 수정은 `skill_id`와 `get_skill`의 `version`을
+  `expected_version`으로 보내며 `null` 필드는 현재 값을 이어받는다(웹 `PATCH`와 같다). `allowed_tools`·actor·승인 값은 받지 않는다.
+- 웹 `SkillService.requireAuthorForScope`와 같이 개인 Skill이 아니면(수정은 현재 Skill 범위) 현재 grant의 `skill.author`가
+  필요하다(`PERMISSION_REVOKED`).
+- Document는 형식만 확인하고 기존 `mcp.agent-proposal.v1`(`POST /agent/runs/mcp-proposals`, actor `tool_name`
+  `propose_skill_definition`, proposal `{request_summary, definition}`)으로 보낸다. ai가 LLM 없이 게시·수정과 같은 결정적
+  규칙으로 검증해 `publish_skill_definition` operation 하나(arguments = 이어받은 값까지 확정한 저장 정의와 계산한
+  `allowed_tools`)를 만든다. 결과는 `{run_id,status:"awaiting_approval",review_url}`이다.
+
+## 승인과 실행
+
+- 승인 화면은 기존 `/mcp/workspaces/{workspace_id}/runs/{run_id}`이고 승인·견적·예약은 기존 MCP 승인 경로와 같다
+  (operation 하나의 MCP 실행 요금). 승인 시점과 실행 시점(`McpAgentApprovalService.authorizeExecution`)에 현재 grant·policy·
+  `skill.author`를 다시 확인하고, 실행 시점에는 `expected_version`이 현재 최신 버전과 같아야 한다(다르면 409).
+- 실행(`AgentToolService`)은 ai `POST /skills/mcp-acceptances`(같은 run·operation이면 저장 증거 재생)로 저장한 뒤 그 증거로
+  `mcp_document_edit_receipts`에 resource_type `SKILL` 영수증을 남긴다(생성 before null, 수정 before = expected_version,
+  after = 새 버전 = expected_version + 1). ai 저장 뒤 영수증 전에 끊기면 같은 operation 재실행이나 영수증 조회
+  (`lookup`)가 ai 저장 증거(`POST /skills/mcp-acceptances/lookup`)로 같은 시도의 영수증을 복구한다.
+- 취소 시 되돌리기는 ai가 같은 트랜잭션에 남긴 `skill_undo` 증거로 기존 Skill 되돌리기 경로를 쓴다.
+
+## 쓰지 않는 경로
+
+웹 게시·수정(`/skills/author/publish`, `PATCH`)의 ai 경로는 `authoring_mode=preserve`에서도 LLM 안전 검토
+(`AuthorSkillUseCase.execute` → generator)와 크레딧 예약(`PipelineSkillRequester.tracked()`)을 거치므로 MCP에서 쓰지 않는다.
+MCP 정의 저장은 같은 결정적 검사만 쓰는 ai `accept_external_skill_definition`으로 한다.

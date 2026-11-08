@@ -65,7 +65,10 @@ public class AgentToolService {
             "rename_document", Set.of("document_id", "display_name", "base_version"),
             "create_document", Set.of("display_name", "folder_id", "content_artifact_id", "content_hash"),
             "apply_document_edit", Set.of(
-                    "document_id", "base_version", "target", "content_artifact_id", "content_hash"));
+                    "document_id", "base_version", "target", "content_artifact_id", "content_hash"),
+            McpAgentApprovalService.SKILL_TOOL, Set.of("skill_id", "expected_version", "scope_type", "name",
+                    "description", "instructions_markdown", "capabilities", "allowed_tools", "targets",
+                    "result_mode", "requires_source"));
 
     /** MCP 승인 계획 전용 PDF 변환본 생성 인자. 내부 Agent 실행 경로는 받지 않는다. */
     private static final Set<String> CONVERTED_CREATE_DOCUMENT_ARGUMENTS = Set.of(
@@ -124,6 +127,13 @@ public class AgentToolService {
         this.mcpApprovals = mcpApprovals;
     }
 
+    private fruition.core.skill.repository.PipelineSkillRequester skills;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setSkills(fruition.core.skill.repository.PipelineSkillRequester skills) {
+        this.skills = skills;
+    }
+
     public Object read(String toolName, AgentToolReadRequest request) {
         if ("list_agent_run_artifacts".equals(toolName)) {
             requireArguments(request.arguments(), Set.of());
@@ -149,7 +159,8 @@ public class AgentToolService {
         try {
             Object result;
             if (request.mcpApprovalPresent() && Set.of("create_folder", "rename_folder", "move_folder",
-                    "move_document", "rename_document", "create_document").contains(toolName)) {
+                    "move_document", "rename_document", "create_document",
+                    McpAgentApprovalService.SKILL_TOOL).contains(toolName)) {
                 result = executeMcpMutation(toolName, request);
             } else {
                 result = "apply_document_edit".equals(toolName) || "delete_document".equals(toolName)
@@ -176,6 +187,7 @@ public class AgentToolService {
         if (mcpApprovals == null)
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "MCP execution authorization is unavailable.");
+        if (McpAgentApprovalService.SKILL_TOOL.equals(toolName)) return executeMcpSkillDefinition(request);
         JsonNode arguments = request.arguments();
         PipelineAgentArtifactClient.ResolvedArtifact artifact = null;
         if ("create_document".equals(toolName)) {
@@ -243,6 +255,43 @@ public class AgentToolService {
                 }
                 default -> throw badRequest("지원하지 않는 MCP mutation Tool입니다.");
             });
+            mcpApprovals.executionFinished(execution);
+            return receipt;
+        } catch (RuntimeException failure) {
+            mcpApprovals.executionFailed(execution, failure);
+            throw failure;
+        }
+    }
+
+    /**
+     * 승인된 Skill 정의 operation. 현재 승인·grant·policy·skill.author·expected_version을 authorizeExecution에서 확인한 뒤
+     * ai 수락 API(같은 run·operation이면 저장 증거 재생)로 저장하고, 그 증거로 Document 영수증을 남긴다.
+     * ai 저장 뒤 영수증 전에 끊기면 같은 operation 재실행 또는 영수증 조회가 ai 증거로 영수증을 복구한다.
+     */
+    private Object executeMcpSkillDefinition(AgentToolExecuteRequest request) {
+        if (skills == null)
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Skill service is unavailable.");
+        McpAgentApprovalService.Execution execution =
+                mcpApprovals.authorizeExecution(request, McpAgentApprovalService.SKILL_TOOL);
+        if (execution.replay() != null) return execution.replay();
+        try {
+            JsonNode arguments = request.arguments();
+            var definition = ((com.fasterxml.jackson.databind.node.ObjectNode) arguments.deepCopy());
+            definition.remove("allowed_tools"); // ai가 capabilities로 다시 계산한다.
+            JsonNode evidence = skills.acceptMcpDefinition(request.runId(), request.operationId(),
+                    request.workspaceId(), request.userId(), definition);
+            boolean update = arguments.path("skill_id").isTextual();
+            Long before = update ? arguments.path("expected_version").longValue() : null;
+            long after = evidence.path("version").asLong(-1);
+            if (!"applied".equals(evidence.path("status").asText()) || !evidence.path("skill_id").isTextual()
+                    || evidence.path("rolled_back").asBoolean(true) || after < 1
+                    || evidence.path("created").asBoolean(update) == update
+                    || (update && (!arguments.path("skill_id").asText().equals(evidence.path("skill_id").asText())
+                    || after != before + 1))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Skill acceptance evidence does not match.");
+            }
+            McpAgentApprovalService.Receipt receipt = mcpApprovals.recordSkillReceipt(execution, request.operationId(),
+                    evidence.path("skill_id").asText(), before, after);
             mcpApprovals.executionFinished(execution);
             return receipt;
         } catch (RuntimeException failure) {

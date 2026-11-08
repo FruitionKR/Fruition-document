@@ -532,6 +532,49 @@ class AgentToolServiceTest {
         verify(approvals).executionFinished(execution);
     }
 
+    @Test
+    void mcpSkillDefinitionUsesAiAcceptanceEvidenceForReceiptWithoutDocumentTransaction() throws Exception {
+        var approvals = mock(McpAgentApprovalService.class);
+        var skills = mock(fruition.core.skill.repository.PipelineSkillRequester.class);
+        service.setMcpApprovals(approvals);
+        service.setSkills(skills);
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var arguments = mapper.readTree("""
+                {"skill_id":"11111111-2222-4333-8444-555555555555","expected_version":3,"scope_type":"team",
+                 "name":"meeting-notes","description":"d","instructions_markdown":"i","capabilities":["document-edit"],
+                 "allowed_tools":["apply_document_edit"],"targets":["current_document"],"result_mode":"edit",
+                 "requires_source":false}""");
+        var request = new AgentToolExecuteRequest("run-1", "workspace-1", "user-1", "plan-1", 1, "a".repeat(64),
+                "operation-1", "idem-1", arguments, UUID.randomUUID().toString(), UUID.randomUUID().toString(),
+                UUID.randomUUID().toString(), "https://client.example", 1L);
+        var execution = new McpAgentApprovalService.Execution(null, UUID.randomUUID(), null, null);
+        var receipt = mock(McpAgentApprovalService.Receipt.class);
+        when(approvals.authorizeExecution(request, "publish_skill_definition")).thenReturn(execution);
+        when(skills.acceptMcpDefinition(eq("run-1"), eq("operation-1"), eq("workspace-1"), eq("user-1"), any()))
+                .thenReturn(mapper.readTree("""
+                        {"status":"applied","replayed":false,"skill_id":"11111111-2222-4333-8444-555555555555",
+                         "version_id":"v","version":4,"created":false,"rolled_back":false}"""));
+        when(approvals.recordSkillReceipt(execution, "operation-1", "11111111-2222-4333-8444-555555555555", 3L, 4L))
+                .thenReturn(receipt);
+
+        assertThat(service.execute("publish_skill_definition", request)).isSameAs(receipt);
+
+        var sent = org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
+        verify(skills).acceptMcpDefinition(any(), any(), any(), any(), sent.capture());
+        assertThat(sent.getValue().has("allowed_tools")).isFalse();
+        verify(authorizationClient).authorizeExecute("publish_skill_definition", request);
+        verify(approvals).executionFinished(execution);
+        verify(transactionTemplate, never()).execute(any());
+
+        // 증거 버전이 expected_version + 1이 아니면 영수증을 남기지 않고 실패로 기록한다.
+        when(skills.acceptMcpDefinition(any(), any(), any(), any(), any())).thenReturn(mapper.readTree("""
+                {"status":"applied","replayed":true,"skill_id":"11111111-2222-4333-8444-555555555555",
+                 "version_id":"v","version":9,"created":false,"rolled_back":false}"""));
+        assertThatThrownBy(() -> service.execute("publish_skill_definition", request))
+                .isInstanceOf(ResponseStatusException.class);
+        verify(approvals).executionFailed(eq(execution), any());
+    }
+
     private AgentToolExecuteRequest executeRequest(com.fasterxml.jackson.databind.JsonNode arguments) {
         return new AgentToolExecuteRequest(
                 "run-1", "workspace-1", "user-1", "plan-1", 1, "a".repeat(64),

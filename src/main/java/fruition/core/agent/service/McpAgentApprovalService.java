@@ -38,6 +38,7 @@ import java.util.UUID;
 @ConditionalOnProperty(name = "app.mcp.enabled", havingValue = "true")
 public class McpAgentApprovalService {
     private static final String SCHEMA = "mcp.agent-approval.v1";
+    static final String SKILL_TOOL = "publish_skill_definition";
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
@@ -69,6 +70,13 @@ public class McpAgentApprovalService {
         this.planCap = planCap;
         this.currency = currency;
         this.priceVersion = priceVersion;
+    }
+
+    private fruition.core.skill.repository.PipelineSkillRequester skills;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setSkills(fruition.core.skill.repository.PipelineSkillRequester skills) {
+        this.skills = skills;
     }
 
     public static boolean isMcpRun(JsonNode run) {
@@ -244,6 +252,7 @@ public class McpAgentApprovalService {
             return new ReceiptStatus("NOT_FOUND", null);
         }
         Receipt receipt = receipt(lookup.approvalId(), lookup.operationId());
+        if (receipt == null) receipt = recoverSkillReceipt(approval, lookup.operationId());
         if (receipt != null) return new ReceiptStatus(receipt.outcome(), receipt);
         List<String> attempts = jdbc.queryForList("SELECT status FROM mcp_document_edit_attempts "
                 + "WHERE approval_id = ? AND operation_id = ? ORDER BY updated_at DESC",
@@ -252,6 +261,38 @@ public class McpAgentApprovalService {
         if (attempts.contains("STARTED")) return new ReceiptStatus("IN_PROGRESS", null);
         if (attempts.contains("FAILED")) return new ReceiptStatus("FAILED", null);
         return new ReceiptStatus("NOT_FOUND", null);
+    }
+
+    /**
+     * Skill 저장은 ai DB에서 커밋되므로 Document 영수증 기록 전에 응답이 끊길 수 있다. ai 저장 증거가 있으면 그 operation의
+     * 마지막 시도로 영수증을 남긴다. 수정의 새 버전은 행 잠금 안에서 expected_version + 1로 확인되므로 before는 version - 1이다.
+     * 문서·폴더 operation은 증거가 없어(absent) 영향이 없고, ai를 부를 수 없으면 기존 판정을 그대로 쓴다.
+     */
+    private Receipt recoverSkillReceipt(Approval approval, String operationId) {
+        if (skills == null) return null;
+        JsonNode evidence;
+        try {
+            evidence = skills.lookupMcpAcceptance(approval.runId(), operationId, approval.userId());
+        } catch (RuntimeException unavailable) {
+            return null;
+        }
+        if (!"applied".equals(evidence.path("status").asText()) || evidence.path("rolled_back").asBoolean(true)
+                || !evidence.path("skill_id").isTextual() || !evidence.path("version").canConvertToLong()) return null;
+        List<UUID> attempts = jdbc.queryForList("SELECT attempt_id FROM mcp_document_edit_attempts "
+                        + "WHERE approval_id = ? AND operation_id = ? ORDER BY updated_at DESC LIMIT 1",
+                UUID.class, UUID.fromString(approval.approvalId()), operationId);
+        if (attempts.isEmpty()) return null;
+        long version = evidence.path("version").asLong();
+        Long before = evidence.path("created").asBoolean(false) ? null : version - 1;
+        return recordSkillReceipt(new Execution(approval, attempts.getFirst(), null, null), operationId,
+                evidence.path("skill_id").asText(), before, version);
+    }
+
+    /** ai 수락 증거로 Skill 영수증을 남긴다. 같은 operation의 영수증이 있으면 그것을 돌려준다. */
+    public Receipt recordSkillReceipt(Execution execution, String operationId, String skillId, Long beforeVersion,
+                                      long afterVersion) {
+        return transaction.execute(tx -> recordReceipt(execution, operationId, SKILL_TOOL, "SKILL", skillId,
+                beforeVersion, afterVersion, true, Instant.now()));
     }
 
     public ApprovalStatus lookupApproval(ApprovalLookup lookup) {
@@ -375,7 +416,7 @@ public class McpAgentApprovalService {
         for (JsonNode operation : operations) {
             String tool = operation.path("tool_name").asText();
             if (!Set.of("create_folder", "rename_folder", "move_folder", "move_document",
-                    "rename_document", "create_document", "apply_document_edit").contains(tool))
+                    "rename_document", "create_document", "apply_document_edit", SKILL_TOOL).contains(tool))
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported MCP plan operation.");
             if (selectedSet == null || selectedSet.contains(operation.path("id").asText())) {
                 operationIds.add(operation.path("id").asText());
@@ -546,7 +587,7 @@ public class McpAgentApprovalService {
             String tool = operation.path("tool_name").asText();
             JsonNode arguments = operation.path("arguments");
             authorizeOperation(tool, arguments, identity, false);
-            if (!Set.of("create_folder", "create_document").contains(tool)) {
+            if (!Set.of("create_folder", "create_document", SKILL_TOOL).contains(tool)) {
                 long baseVersion = operation.path("base_version").asLong(-1);
                 if (baseVersion < 1) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid base version.");
                 requireTarget(tool, operation.path("target_id").asText(), identity, checkVersion ? baseVersion : null);
@@ -557,6 +598,10 @@ public class McpAgentApprovalService {
     private void authorizeOperation(String tool, JsonNode arguments, McpIdentity identity, boolean checkVersion) {
         if (arguments == null || !arguments.isObject())
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid operation arguments.");
+        if (SKILL_TOOL.equals(tool)) {
+            requireSkillDefinition(arguments, identity, checkVersion);
+            return;
+        }
         if (!Set.of("create_folder", "rename_folder", "move_folder", "move_document",
                 "rename_document", "create_document", "apply_document_edit").contains(tool))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported MCP operation.");
@@ -583,6 +628,33 @@ public class McpAgentApprovalService {
             if (!source.hashMatches())
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "MCP source PDF changed.");
         }
+    }
+
+    /**
+     * 웹 SkillService.requireAuthorForScope와 같이 개인 Skill이 아니면 현재 grant의 skill.author가 필요하다(fail-closed).
+     * 수정은 현재 Skill을 다시 읽어 범위를 정하고, 실행 시점에는 expected_version이 최신 버전과 같은지도 확인한다.
+     * 정의 내용 검증·관리 권한·행 잠금 안 버전 비교는 ai 수락 API가 다시 한다.
+     */
+    private void requireSkillDefinition(JsonNode arguments, McpIdentity identity, boolean checkVersion) {
+        if (skills == null) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Skill service unavailable.");
+        String scope = arguments.path("scope_type").asText(null);
+        if (arguments.path("skill_id").isTextual()) {
+            JsonNode current;
+            try {
+                current = skills.get(identity.workspaceId(), identity.userId(), arguments.path("skill_id").asText());
+            } catch (fruition.core.skill.exception.PipelineSkillException e) {
+                if (e.getHttpStatus() == 404 || e.getHttpStatus() == 410)
+                    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Skill not found.");
+                throw e;
+            }
+            scope = current.path("scope_type").asText(null);
+            JsonNode latest = current.path("latest_version").isObject() ? current.path("latest_version")
+                    : current.path("enabled_version");
+            if (checkVersion && latest.path("version").asLong(-1) != arguments.path("expected_version").asLong(-2))
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "MCP target version changed.");
+        }
+        if (!"personal".equals(scope) && !identity.permissions().contains("skill.author"))
+            throw new McpAuthorizationException(403, "PERMISSION_REVOKED");
     }
 
     private void requireTarget(String tool, String targetId, McpIdentity identity, Long baseVersion) {
