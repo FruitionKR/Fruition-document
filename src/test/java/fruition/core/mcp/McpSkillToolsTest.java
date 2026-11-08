@@ -85,6 +85,7 @@ class McpSkillToolsTest {
                 .isInstanceOfSatisfying(McpToolException.class, e -> assertThat(e.code()).isEqualTo("RESOURCE_NOT_FOUND"));
     }
 
+    /** 실제 DB처럼 비활성 Skill도 enabled_version을 그대로 갖는다(set_enabled는 status만 바꾼다). */
     private static String skill(String id, String workspace, boolean enabled) {
         String version = "{\"id\":\"v\",\"version\":3,\"name\":\"meeting-notes\",\"description\":\"회의록 정리\","
                 + "\"instructions_markdown\":\"{문서}를 정리한다.<script>x</script>\",\"capabilities\":[\"document-edit\"],"
@@ -92,6 +93,6 @@ class McpSkillToolsTest {
                 + "\"result_mode\":\"edit\",\"requires_source\":true,\"lint_result\":{},\"status\":\"published\"}";
         return "{\"id\":\"" + id + "\",\"workspace_id\":\"" + workspace + "\",\"scope_type\":\"team\","
                 + "\"owner_user_id\":null,\"slug\":\"meeting-notes\",\"status\":\"" + (enabled ? "enabled" : "disabled")
-                + "\",\"enabled_version\":" + (enabled ? version : "null") + ",\"latest_version\":" + version + "}";
+                + "\",\"enabled_version\":" + version + ",\"latest_version\":" + version + "}";
     }
 }
