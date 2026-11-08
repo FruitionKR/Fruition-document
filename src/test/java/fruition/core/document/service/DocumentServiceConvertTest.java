@@ -1239,6 +1239,25 @@ class DocumentServiceConvertTest {
         return placeholder;
     }
 
+    @Test
+    void indexingKeepsDocumentProcessingUntilReadyAndLateEventsCannotReopenIt() {
+        Document document = placeholderDocument();
+        document.markPipelineStarted("run-1", Instant.now());
+        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder")).thenReturn(Optional.of(document));
+        documentService.applyPipelineResult("doc_placeholder", "run-1", "indexing", null);
+        assertThat(document.getStatus()).isEqualTo(DocumentStatus.processing);
+        assertThat(document.getProcessingStage()).isEqualTo("위키 검색을 준비하고 있어요");
+        documentService.applyPipelineResult("doc_placeholder", "old-run", "succeeded", null);
+        assertThat(document.getStatus()).isEqualTo(DocumentStatus.processing);
+        documentService.applyPipelineResult("doc_placeholder", "run-1", "succeeded", null);
+        assertThat(document.getStatus()).isEqualTo(DocumentStatus.completed);
+        Instant completed = document.getProcessedAt();
+        documentService.applyPipelineResult("doc_placeholder", "run-1", "indexing", null);
+        documentService.applyPipelineResult("doc_placeholder", "run-1", "succeeded", null);
+        assertThat(document.getStatus()).isEqualTo(DocumentStatus.completed);
+        assertThat(document.getProcessedAt()).isEqualTo(completed);
+    }
+
     private DocumentMetadata metadata(Document document) {
         return new DocumentMetadata(
                 document.getProcessedAt(), document.getUpdatedAt(), document.getErrorMessage(),

@@ -246,7 +246,7 @@ public class AiTaskResultApplier {
         operationIngestService.accept(operationId, result);
         if (analytics != null) analytics.ingestCompleted(event, operationLogRepository.findById(operationId).orElse(null));
         documentService.applyPipelineResult(documentId, runId,
-                "succeeded".equals(text(event, "status")) ? "succeeded" : "failed",
+                holdForPostIngest ? "indexing" : "succeeded".equals(text(event, "status")) ? "succeeded" : "failed",
                 event.path("error").asText(null));
     }
 

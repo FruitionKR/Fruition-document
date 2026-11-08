@@ -1941,6 +1941,10 @@ public class DocumentService {
             return;
         }
         Instant now = Instant.now();
+        if ("indexing".equals(status)) {
+            document.markProcessingHeartbeat("위키 검색을 준비하고 있어요", now);
+            return;
+        }
         if ("succeeded".equals(status)) {
             document.updateStatus(DocumentStatus.completed, null, now, null);
         } else if ("failed".equals(status)) {

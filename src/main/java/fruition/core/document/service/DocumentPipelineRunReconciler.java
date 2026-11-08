@@ -72,7 +72,7 @@ public class DocumentPipelineRunReconciler {
                     }
                     if ("succeeded".equals(run.status()) || "failed".equals(run.status())) {
                         documentService.applyPipelineResult(
-                                document.getId(), run.id(), run.status(), run.error());
+                                document.getId(), run.id(), run.documentStatus(), run.documentError());
                     }
                 });
                 failures.recovered(document.getPipelineRunId());

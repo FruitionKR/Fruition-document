@@ -22,6 +22,48 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class DocumentPipelineRunReconcilerTest {
 
+    @Test
+    void reconcile_waitsForIndexThenCompletesBeforeQualityReview() throws Exception {
+        Document document = new Document("doc-1", "ws-1", "user-1", "paper.md", "text/markdown", 1, "source", "hash");
+        document.markPipelineStarted("run-1", java.time.Instant.now());
+        when(documentRepository.findAllByStatusAndPipelineRunIdIsNotNull(DocumentStatus.processing)).thenReturn(List.of(document));
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        when(requester.find("run-1")).thenReturn(Optional.of(new PipelineRunStatusRequester.PipelineRunStatus(
+                "run-1", "doc-1", "ws-1", "user-1", "document", "succeeded", null,
+                json.readTree("{\"post_ingest\":{\"status\":\"running\"}}"))));
+        reconciler().reconcile();
+        verify(documentService).applyPipelineResult("doc-1", "run-1", "indexing", null);
+        when(requester.find("run-1")).thenReturn(Optional.of(new PipelineRunStatusRequester.PipelineRunStatus(
+                "run-1", "doc-1", "ws-1", "user-1", "document", "succeeded", null,
+                json.readTree("""
+                        {"post_ingest":{"status":"running","embedding":
+                          {"target_count":2,"embedded_count":1,"skipped_count":1,"failed_count":0}}}
+                        """))));
+        reconciler().reconcile();
+        verify(documentService).applyPipelineResult("doc-1", "run-1", "succeeded", null);
+    }
+
+    @Test
+    void readinessDistinguishesQualityReviewFromIncompleteOrFailedIndex() throws Exception {
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        for (String status : List.of("ready", "needs_review")) {
+            var ready = new PipelineRunStatusRequester.PipelineRunStatus("run", "doc", "ws", "user", "document", "succeeded", null,
+                    json.readTree("""
+                            {"post_ingest":{"status":"%s","result":{"embedding":
+                              {"target_count":1,"embedded_count":1,"skipped_count":0,"failed_count":0}}}}
+                            """.formatted(status)));
+            org.assertj.core.api.Assertions.assertThat(ready.documentStatus()).isEqualTo("succeeded");
+        }
+        for (String embedding : List.of("null", "{}",
+                "{\"target_count\":2,\"embedded_count\":1,\"skipped_count\":0,\"failed_count\":1}",
+                "{\"target_count\":2,\"embedded_count\":1,\"skipped_count\":0,\"failed_count\":0}")) {
+            var failed = new PipelineRunStatusRequester.PipelineRunStatus("run", "doc", "ws", "user", "document", "succeeded", null,
+                    json.readTree("{\"post_ingest\":{\"status\":\"needs_review\",\"result\":{\"embedding\":" + embedding + "}}}"));
+            org.assertj.core.api.Assertions.assertThat(failed.documentStatus()).isEqualTo("failed");
+            org.assertj.core.api.Assertions.assertThat(failed.documentError()).isEqualTo("wiki_index_preparation_failed");
+        }
+    }
+
     @Mock DocumentRepository documentRepository;
     @Mock PipelineRunStatusRequester requester;
     @Mock DocumentService documentService;
