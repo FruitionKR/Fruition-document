@@ -19,6 +19,7 @@ lint·복구는 Kafka `ai.maintenance.command`로 전달한다.
 | [`GET /api/workspaces/{workspace_id}/wiki/maintenance/runs/{run_id}`](#summary-get-api-workspaces-workspace-id-wiki-maintenance-runs-run-id) | 실행 중이거나 완료된 Wiki 정합성 검사 결과를 반환합니다. |
 | [`GET /api/workspaces/{workspace_id}/wiki/maintenance/status`](#summary-get-api-workspaces-workspace-id-wiki-maintenance-status) | 워크스페이스 Wiki 유지보수 작업의 현재 상태를 반환합니다. |
 | [`POST /internal/wiki/contributions`](#summary-post-internal-wiki-contributions) | 요청한 Wiki 페이지의 기여 이력을 조회합니다. |
+| `POST /internal/wiki/publications/receipt` | AI publication의 body-free durable receipt를 정확한 scope·publication·operation·event alias로 조회합니다. |
 
 ## 한눈에 보기
 
@@ -1069,5 +1070,23 @@ curl -X POST "$DOCUMENT/internal/wiki/contributions" \
 - 배선 상태: 배선됨
 
 [↑ 요약으로 돌아가기](#summary-post-internal-wiki-contributions)
+
+### `POST /internal/wiki/publications/receipt`
+
+AI maintenance worker가 broker ACK 뒤 receiver 결과를 대사하는 읽기 전용 내부 API다. `X-Internal-Token`을 상수 시간으로 검증한 뒤 `workspace_id`, `user_id`, `publication_id`, `operation_id`, `event_id` 모두가 기존 `wiki_publication_inbox`와 durable `wiki_publication_event_aliases`에 일치할 때만 receipt를 돌려준다. 하나라도 다르거나 receipt가 없으면 같은 `404 PUBLICATION_RECEIPT_NOT_FOUND`이다.
+
+요청 예:
+
+```json
+{
+  "workspace_id": "workspace-1",
+  "user_id": "user-1",
+  "publication_id": "wiki:operation-1",
+  "operation_id": "operation-1",
+  "event_id": "publication:wiki:operation-1"
+}
+```
+
+응답은 `publication_id`, `operation_id`, `event_id`, `workspace_id`, `user_id`, `kind`, `outcome`, `published_reference_hash`, `committed_at`, `disposition`, `rejection_reason`만 포함한다. `result`, Markdown, source, object key/body는 반환하지 않으며 조회는 apply·replay·alias claim을 수행하지 않는다. `disposition`은 `ACCEPTED` 또는 `REJECTED_CONFLICT`이고 현재 후자의 사유는 `STALE_RESTORE`다.
 
 </details>

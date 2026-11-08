@@ -11,11 +11,16 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -25,9 +30,47 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @Import(TestcontainersConfiguration.class)
 // 앱 클래스가 하위 패키지(fruition.core)에 있어 upward 탐색으로는 찾지 못한다 — 명시 지정.
-@SpringBootTest(classes = DocumentApplication.class)
+@SpringBootTest(classes = DocumentApplication.class, properties = {
+		"app.mcp.enabled=true",
+		"app.mcp.resource-uri=https://mcp.openapi.test/mcp",
+		"app.mcp.authorization-server-uri=https://auth.openapi.test",
+		"app.mcp.allowed-origins=https://client.openapi.test",
+		"app.mcp.review-origin=https://review.openapi.test",
+		"app.mcp.wiki-search-uri=https://ai.openapi.test/internal/mcp/wiki/search",
+		"app.mcp.cursor-secret=01234567890123456789012345678901",
+		"app.mcp.max-page-size=10",
+		"app.mcp.max-candidates=20",
+		"app.mcp.max-response-bytes=1000000",
+		"app.mcp.max-cursor-bytes=4096",
+		"app.mcp.max-source-blocks=100",
+		"app.mcp.max-source-bytes=1000000",
+		"app.mcp.max-document-blocks-per-page=100",
+		"app.mcp.max-document-content-bytes=1000000",
+		"app.mcp.dependency-timeout-seconds=10",
+		"app.mcp.wiki.currency=KRW",
+		"app.mcp.wiki.ingest.unit-price-minor=2",
+		"app.mcp.wiki.ingest.unit-size=100",
+		"app.mcp.wiki.ingest.unit=source_bytes_per_100",
+		"app.mcp.wiki.ingest.formula=ceil(source_bytes/100)*2",
+		"app.mcp.wiki.ingest.price-version=openapi-test-v1",
+		"app.mcp.wiki.lint.fixed-price-minor=3",
+		"app.mcp.wiki.lint.unit=apply",
+		"app.mcp.wiki.lint.formula=fixed 3 KRW per apply",
+		"app.mcp.wiki.lint.price-version=openapi-test-v1",
+		"app.mcp.wiki.max-source-documents=8",
+		"app.mcp.wiki.max-total-source-bytes=1000000",
+		"app.jwt.secret=",
+		"app.scheduling.enabled=false"
+})
 @AutoConfigureMockMvc
 class DocumentApplicationTests {
+	private static final KeyPair MCP_KEY = rsaKey();
+
+	@DynamicPropertySource
+	static void mcpJwt(DynamicPropertyRegistry properties) {
+		properties.add("app.jwt.key-id", () -> "openapi-test-key");
+		properties.add("app.jwt.public-key", DocumentApplicationTests::mcpPublicKey);
+	}
 
 	@Autowired
 	MockMvc mockMvc;
@@ -145,6 +188,22 @@ class DocumentApplicationTests {
 			throw new IllegalStateException("openapi.snapshot.path가 없습니다. Gradle test 태스크로 실행하세요.");
 		}
 		return Path.of(configured);
+	}
+
+	private static KeyPair rsaKey() {
+		try {
+			KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+			generator.initialize(2048);
+			return generator.generateKeyPair();
+		} catch (Exception e) {
+			throw new IllegalStateException(e);
+		}
+	}
+
+	private static String mcpPublicKey() {
+		return "-----BEGIN PUBLIC KEY-----\n"
+				+ Base64.getMimeEncoder(64, new byte[]{'\n'}).encodeToString(MCP_KEY.getPublic().getEncoded())
+				+ "\n-----END PUBLIC KEY-----";
 	}
 
 }

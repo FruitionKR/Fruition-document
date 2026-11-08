@@ -5,12 +5,13 @@
 사용자용 Agent 실행·승인과 내부 Tool 실행 API다. Agent turn은 Kafka `ai.agent.command`,
 계획 조회·승인·거절·취소·수정은 ai-svc 내부 HTTP로 전달한다.
 
-- API 수: 17
+- API 수: 20
 
 ## API 목차
 
 | API | 목적 |
 |---|---|
+| [`GET /api/workspaces/{workspace_id}/agent/mcp-runs`](#mcp-run-locator) | 현재 사용자의 특정 MCP grant 실행 목록을 조회합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}`](#summary-get-api-workspaces-workspace-id-agent-runs-run-id) | 자율 AgentRun 계획과 실행 상태를 조회합니다. |
 | [`GET /api/workspaces/{workspace_id}/agent/runs/{run_id}/edit-previews`](#summary-get-api-workspaces-workspace-id-agent-runs-run-id-edit-previews) | 첨부 문서 수정 계획의 문서별 변경을 조회합니다. |
 | [`POST /api/workspaces/{workspace_id}/agent/runs/{run_id}/approve`](#summary-post-api-workspaces-workspace-id-agent-runs-run-id-approve) | 현재 AgentRun 계획을 승인합니다. |
@@ -28,6 +29,64 @@
 | [`POST /internal/agent/skill-execution/folder-sources/read`](#summary-post-internal-agent-skill-execution-folder-sources-read) | Skill 실행 원문으로 쓸 폴더 바로 아래 문서의 최신 본문을 반환합니다. |
 | [`POST /internal/agent/tools/execute/{tool_name}`](#summary-post-internal-agent-tools-execute-tool-name) | 승인된 Agent Tool 변경 작업을 실행합니다. |
 | [`POST /internal/agent/tools/read/{tool_name}`](#summary-post-internal-agent-tools-read-tool-name) | 승인된 Agent Tool 읽기 작업을 실행합니다. |
+| `POST /internal/agent/mcp/receipts/lookup` | MCP 문서 편집의 body-free receipt/attempt 상태를 actor 범위로 조회합니다. |
+| `POST /internal/agent/mcp/approvals/lookup` | MCP 승인 scope와 남은 전액 예약/fence를 first enqueue 전에 조회합니다. |
+
+## MCP 다중 작업 승인·정산(I6 Document 경계)
+
+`origin=MCP_CLIENT` run은 자동 승인과 revise를 허용하지 않고 `awaiting_approval`에 남는다. 조회는 기존 web
+membership/owner 경계만 사용하므로 Access나 가격 설정이 일시적으로 없더라도 run/history/cancel은 읽을 수 있다.
+승인 전 현재 Access grant·등록 client 이름·문서 편집권한과 가격을 모두 확인할 수 있을 때만 다음 필드를 덧붙인다.
+
+```json
+{"mcp_approval_quote":{"client_name":"Registered Client","selected_operation_count":4,
+  "price_snapshot":{"unit_price_minor":1,"plan_cap_minor":10,"currency":"KRW",
+    "price_version":"2026-11-08-a","maximum_charge_minor":4}}}
+```
+
+grant·client·편집권한은 유효하지만 대상 문서·폴더가 계획의 `base_version` 이후 바뀌었으면(편집은 본문 revision,
+나머지는 메타데이터 버전 기준) 가격 없이 `{"mcp_approval_quote":{"client_name":"Registered Client",
+"unavailable_reason":"TARGET_VERSION_CHANGED"}}`만 덧붙인다. `price_snapshot`이 없으므로 승인할 수 없고, 화면은
+client 이름을 유지한 채 원본 변경을 사유로 보여 준다. 그 밖의 확인 실패에는 필드를 덧붙이지 않는다.
+
+MCP 승인 body는 기존 필드에 위 다섯 필드와 정확히 같은 `expected_price_snapshot`을 필수로 보낸다. 값은 가격을
+지정하는 입력이 아니라 사용자가 본 가격의 조건부 승인이다. 누락·설정 변경은 예약 전에 `409 MCP_PRICE_CHANGED`,
+가격 미설정은 `503 MCP_PRICE_UNCONFIGURED`, 전액 부족은 원장 변화 없이 `402 INSUFFICIENT_CREDIT`이다. 성공하면
+Document가 UUIDv4 `approval_id`, 선택 scope, grant/client/policy generation, client 이름과 가격을 고정하고 전액을
+예약한 뒤 ai-svc로 가격을 제외한 exact `mcp.agent-approval.v1`을 보낸다. 응답 소실/5xx는 새 승인이나 예약을 만들지
+않고 같은 body retry가 같은 approval을 재사용한다. 선택 작업은 canonical plan 순서와 dependency closure를 만족해야
+하며, 전체 계획이 아니라 선택한 작업 수와 cap으로 계산한 최대액을 예약한다. 공개 write tool은 별도 출시 gate가
+끝날 때까지 계속 비활성화한다.
+
+승인 행이 있으면 run 응답에 `mcp_settlement`을 덧붙인다. `execution_status`(`RESERVED|FORWARDED|CANCELLED|HALTED|PURGED`),
+`forward_status`(`NOT_SENT|UNKNOWN|ACCEPTED`), `settlement_status`(`RESERVED|EXECUTING|PENDING_RECONCILIATION|SETTLED`)는
+서로 독립이며 unknown을 실패로 바꾸지 않는다. `client_name`, `price_snapshot`, `charged_minor`도 함께 반환한다.
+
+`POST /internal/agent/mcp/receipts/lookup`은 `X-Agent-Service-Token`과 exact
+`{approval_id,operation_id,workspace_id,user_id,grant_id,client_id}`를 요구하고
+`COMMITTED|NO_CHANGE|IN_PROGRESS|FAILED|UNKNOWN|NOT_FOUND`만 반환한다. 실행을 재호출하지 않는다.
+폴더 작업은 canonical folder UUID와 `FOLDER`, 문서 작업은 domain document ID와 `DOCUMENT`를 기록한다. create의
+`before_version`은 null이고 실제 생성 version은 양수다. 기존 resource 작업은 양수 before/after를 사용하며 semantic
+변화가 없으면 `NO_CHANGE`, `changed=false`, 같은 version으로 남아 무료 정산된다. 여섯 non-edit mutation도 mutation과
+receipt를 같은 Document transaction에 저장한다.
+
+`POST /internal/agent/mcp/approvals/lookup`은 service token과 exact
+`{approval_id,run_id,workspace_id,user_id,plan_version,operation_hash,operation_ids,grant_id,client_id,policy_generation}`를
+요구한다. actor mismatch는 `NOT_FOUND`, plan/scope mismatch는 `MISMATCH`, 남은 전액 MCP 예약과 live fence가 맞으면
+`VALID`, cancel/admin/security/purge는 reason이 있는 `FENCED`, 이미 끝난 승인은 `SETTLED`, 원장 결과를 확정할 수 없으면
+`UNKNOWN`이다. 응답은 `status,reason,lifecycle_status,forward_status,settlement_status`만 싣는다. 이 조회와 AI enqueue
+사이에는 분산 transaction이 없으므로 AI도 persistent local cancel lock으로 check/enqueue를 직렬화해야 하며,
+Document의 mutation-time authorization/fence가 최종 권한이다. receipt 부재를 예약 증거로 쓰지 않는다.
+
+<a id="mcp-run-locator"></a>
+### `GET /api/workspaces/{workspace_id}/agent/mcp-runs`
+
+인증된 사용자의 현재 workspace membership을 확인한 뒤
+`GET ${AGENT_RUN_ENDPOINT}/mcp-owned?workspace_id={workspace}&user_id={server_actor}&grant_id={uuidv4}&cursor={opaque?}&limit={1..20}`로
+전달한다. caller가 `user_id`를 보낼 수 없으며, 이미 저장된 run history를 찾는 경로라 active grant를 다시 요구하지 않는다.
+입력은 UUIDv4 `grant_id`, 선택 `cursor`(1~1024자), `limit`(기본 20)이고, 응답은 정확히
+`{"items":[{"run_id":string,"status":string}],"next_cursor":string|null}`다. upstream 오류·깨진 응답은 공급자 본문을
+노출하지 않고 bounded `4xx/503`으로 변환한다.
 
 <a id="agent-auto-approval"></a>
 ## 계획 자동 승인(사용자 설정)
@@ -97,7 +156,8 @@ AgentRun 계획은 기본적으로 사용자가 승인 화면에서 승인해야
 
 자율 AgentRun 계획과 실행 상태를 조회합니다.
 
-응답 본문은 ai-svc AgentRun 응답을 그대로 전달한다(document-svc는 필드를 고르거나 바꾸지 않는다).
+일반 web run은 ai-svc AgentRun 응답을 그대로 전달한다. MCP run에는 위 `mcp_approval_quote` 또는
+`mcp_settlement`만 Document가 덧붙인다.
 따라서 폴더 정리 계획의 메타데이터(`target_folder_id`, 스킬 규칙 요약, `plan.operations[].warning`·
 `suggested_selected` 등)는 ai-svc가 AgentRun 응답에 넣으면 이 API에 별도 변경 없이 그대로 실린다.
 승인(`approve`)·수정(`revise`)·거절·취소 응답도 같다.
@@ -326,6 +386,7 @@ document-svc는 현재 계획을 조회해 다음을 먼저 검사하고, 어긋
 | body | `plan_version` | `integer` | 예 | 승인 대상 plan 버전 |
 | body | `operation_hash` | `string` | 예 | 승인 대상 편집안 해시(64자) |
 | body | `operation_ids` | `string[]` | 아니오 | 실행할 작업 ID(1~20개). 생략하면 계획 전체 |
+| body | `expected_price_snapshot` | `object` | MCP만 예 | 조회 응답에서 본 exact `unit_price_minor`, `plan_cap_minor`, `currency`, `price_version`, `maximum_charge_minor` |
 
 - Content-Type: `application/json` (`AgentRunApproveRequest`)
 
@@ -358,6 +419,8 @@ document-svc는 현재 계획을 조회해 다음을 먼저 검사하고, 어긋
 | `402` | 크레딧 부족 | `ErrorResponse` |
 | `404` | AgentRun 없음 | `ErrorResponse` |
 | `409` | ai-svc가 거절(계획 버전·해시 불일치 등, `AGENT_REQUEST_REJECTED`) | `ErrorResponse` |
+| `409` | MCP 가격 snapshot 변경 또는 approval fence/idempotency 충돌 | `ErrorResponse` |
+| `503` | MCP 가격/현재 인가/ai-svc exact receiver를 확인할 수 없음 | `ErrorResponse` |
 
 #### 7. Pagination / filtering
 

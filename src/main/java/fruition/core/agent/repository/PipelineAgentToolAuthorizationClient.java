@@ -1,5 +1,6 @@
 package fruition.core.agent.repository;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.agent.dto.AgentToolExecuteRequest;
@@ -39,7 +40,8 @@ public class PipelineAgentToolAuthorizationClient {
         authorize("/execute", new ExecuteAuthorizationRequest(
                 request.runId(), request.workspaceId(), request.userId(), request.planId(),
                 request.planVersion(), request.operationHash(), request.operationId(), toolName,
-                request.arguments()));
+                request.arguments(), request.approvalId(), request.attemptId(), request.grantId(),
+                request.clientId(), request.policyGeneration()));
     }
 
     private void authorize(String path, Object body) {
@@ -70,6 +72,7 @@ public class PipelineAgentToolAuthorizationClient {
             @JsonProperty("user_id") String userId
     ) {}
 
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private record ExecuteAuthorizationRequest(
             @JsonProperty("run_id") String runId,
             @JsonProperty("workspace_id") String workspaceId,
@@ -79,6 +82,11 @@ public class PipelineAgentToolAuthorizationClient {
             @JsonProperty("operation_hash") String operationHash,
             @JsonProperty("operation_id") String operationId,
             @JsonProperty("tool_name") String toolName,
-            JsonNode arguments
+            JsonNode arguments,
+            @JsonProperty("approval_id") String approvalId,
+            @JsonProperty("attempt_id") String attemptId,
+            @JsonProperty("grant_id") String grantId,
+            @JsonProperty("client_id") String clientId,
+            @JsonProperty("policy_generation") Long policyGeneration
     ) {}
 }

@@ -43,6 +43,17 @@ public class DocumentAccessPolicy {
 
     /** 한 요청 안에서 여러 문서의 권한을 판정할 때 쓴다. 설정과 폴더 계층을 한 번만 읽는다. */
     public Viewer viewer(String workspaceId, String userId) {
+        ViewerData data = viewerData(workspaceId);
+        WorkspaceAccessGuard.Access access = workspaceAccessGuard.access(workspaceId, userId);
+        return data.viewer(userId, access.isOwner(), access.hasPermission(WorkspacePermissions.DOCUMENT_CONVERT));
+    }
+
+    /** MCP calls use the current direct Access decision instead of the web cache. */
+    public Viewer viewer(String workspaceId, String userId, boolean workspaceOwner, boolean convertPermission) {
+        return viewerData(workspaceId).viewer(userId, workspaceOwner, convertPermission);
+    }
+
+    private ViewerData viewerData(String workspaceId) {
         Map<String, String> documentAccess = new HashMap<>();
         Map<UUID, String> folderAccess = new HashMap<>();
         jdbc.query("SELECT document_id, folder_id, access FROM document_permissions WHERE workspace_id = ?", rs -> {
@@ -60,10 +71,14 @@ public class DocumentAccessPolicy {
                     rs -> { parents.put(rs.getObject("id", UUID.class), rs.getObject("parent_folder_id", UUID.class)); },
                     workspaceId);
         }
-        // 소유자 여부와 변환 권한을 한 번 읽은 역할·권한으로 함께 판정한다.
-        WorkspaceAccessGuard.Access access = workspaceAccessGuard.access(workspaceId, userId);
-        return new Viewer(userId, access.isOwner(), access.hasPermission(WorkspacePermissions.DOCUMENT_CONVERT),
-                documentAccess, folderAccess, parents);
+        return new ViewerData(documentAccess, folderAccess, parents);
+    }
+
+    private record ViewerData(Map<String, String> documentAccess, Map<UUID, String> folderAccess,
+                              Map<UUID, UUID> parents) {
+        Viewer viewer(String userId, boolean owner, boolean canConvert) {
+            return new Viewer(userId, owner, canConvert, documentAccess, folderAccess, parents);
+        }
     }
 
     /**
@@ -99,6 +114,13 @@ public class DocumentAccessPolicy {
 
     public void requireEdit(Document document, String userId) {
         if (!viewer(document.getWorkspaceId(), userId).canEdit(document)) {
+            throw new DocumentWriteForbiddenException("이 문서를 편집할 권한이 없습니다.");
+        }
+    }
+
+    /** MCP proposal checks use the fresh role/permission decision returned by Access, never the web cache. */
+    public void requireEdit(Document document, String userId, boolean workspaceOwner, boolean convertPermission) {
+        if (!viewer(document.getWorkspaceId(), userId, workspaceOwner, convertPermission).canEdit(document)) {
             throw new DocumentWriteForbiddenException("이 문서를 편집할 권한이 없습니다.");
         }
     }

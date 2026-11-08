@@ -3,6 +3,7 @@ package fruition.core.agent.repository;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.agent.dto.AgentRunEditPreviewsResponse;
+import fruition.core.agent.dto.McpOwnedRunsResponse;
 import fruition.core.agent.exception.AgentRunNotFoundException;
 import fruition.core.agent.exception.PipelineAgentException;
 import fruition.shared.http.PipelineClientFactory;
@@ -66,6 +67,33 @@ public class PipelineAgentRunStatusRequester {
                 .body(JsonNode.class), runId);
     }
 
+    public McpOwnedRunsResponse getMcpOwnedRuns(String workspaceId, String userId, String grantId,
+                                                String cursor, int limit) {
+        URI uri = UriComponentsBuilder.fromUriString(autonomousRunEndpoint)
+                .pathSegment("mcp-owned")
+                .queryParam("workspace_id", workspaceId)
+                .queryParam("user_id", userId)
+                .queryParam("grant_id", grantId)
+                .queryParamIfPresent("cursor", Optional.ofNullable(cursor))
+                .queryParam("limit", limit)
+                .build()
+                .encode()
+                .toUri();
+        McpOwnedRunsResponse response = requestAutonomous(() -> autonomousRunRestClient.get()
+                .uri(uri)
+                .retrieve()
+                .body(McpOwnedRunsResponse.class), grantId);
+        if (response == null || response.items() == null || response.items().size() > limit
+                || response.items().stream().anyMatch(item -> item == null
+                || item.runId() == null || item.runId().isBlank() || item.runId().length() > 128
+                || item.status() == null || item.status().isBlank() || item.status().length() > 64)
+                || response.nextCursor() != null
+                && (response.nextCursor().isBlank() || response.nextCursor().length() > 1024)) {
+            throw new PipelineAgentException("MCP AgentRun 목록 응답이 올바르지 않습니다.", 503, null);
+        }
+        return response;
+    }
+
     /** 문서 내용이 담긴 응답이다. 오류·깨진 응답의 본문은 예외(따라서 로그)에 싣지 않는다. */
     public AgentRunEditPreviewsResponse getEditPreviews(String workspaceId, String userId, String runId) {
         AgentRunEditPreviewsResponse previews;
@@ -103,6 +131,15 @@ public class PipelineAgentRunStatusRequester {
                                          int planVersion, String operationHash, String approvedBy) {
         return postAutonomous(runId,
                 new ApproveRequest(workspaceId, userId, planVersion, operationHash, null, approvedBy), "/approve");
+    }
+
+    /** Exact I5 approval DTO. Price remains Document-owned and is intentionally not forwarded. */
+    public JsonNode approveMcp(String workspaceId, String userId, String runId, int planVersion,
+                               String operationHash, java.util.List<String> operationIds, String approvalId,
+                               String grantId, String clientId, long policyGeneration) {
+        return postAutonomous(runId, new McpApproveRequest("mcp.agent-approval.v1", workspaceId, userId,
+                planVersion, operationHash, operationIds, approvalId, "EXPLICIT_WEB", grantId, clientId,
+                policyGeneration), "/approve");
     }
 
     public JsonNode reject(String workspaceId, String userId, String runId) {
@@ -220,5 +257,19 @@ public class PipelineAgentRunStatusRequester {
             @JsonProperty("workspace_id") String workspaceId,
             @JsonProperty("user_id") String userId,
             String instruction
+    ) {}
+
+    private record McpApproveRequest(
+            @JsonProperty("schema_version") String schemaVersion,
+            @JsonProperty("workspace_id") String workspaceId,
+            @JsonProperty("user_id") String userId,
+            @JsonProperty("plan_version") int planVersion,
+            @JsonProperty("operation_hash") String operationHash,
+            @JsonProperty("operation_ids") java.util.List<String> operationIds,
+            @JsonProperty("approval_id") String approvalId,
+            @JsonProperty("approval_mode") String approvalMode,
+            @JsonProperty("grant_id") String grantId,
+            @JsonProperty("client_id") String clientId,
+            @JsonProperty("policy_generation") long policyGeneration
     ) {}
 }

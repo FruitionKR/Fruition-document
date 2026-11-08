@@ -301,7 +301,9 @@ class DocumentTrashPurgeWorkerIntegrationTest {
         StorageProperties missingBucket = new StorageProperties();
         missingBucket.setBucket("missing-" + UUID.randomUUID().toString().substring(0, 8));
         DocumentTrashPurgeWorker failing = new DocumentTrashPurgeWorker(namedJdbc, transactionTemplate,
-                new DataPurgeService(jdbc, transactionTemplate, minio, missingBucket), ingestCommandOutbox, scrubber, Duration.ofDays(30));
+                new DataPurgeService(jdbc, transactionTemplate, minio, missingBucket,
+                        new fruition.core.aihistory.service.WikiPublicationPurgeFence(jdbc)),
+                ingestCommandOutbox, scrubber, Duration.ofDays(30));
 
         failing.purge(now);
 
@@ -314,7 +316,9 @@ class DocumentTrashPurgeWorkerIntegrationTest {
         StorageProperties missingBucket = new StorageProperties();
         missingBucket.setBucket("missing-" + UUID.randomUUID().toString().substring(0, 8));
         DocumentTrashPurgeWorker failing = new DocumentTrashPurgeWorker(namedJdbc, transactionTemplate,
-                new DataPurgeService(jdbc, transactionTemplate, minio, missingBucket), ingestCommandOutbox, scrubber, Duration.ofDays(30));
+                new DataPurgeService(jdbc, transactionTemplate, minio, missingBucket,
+                        new fruition.core.aihistory.service.WikiPublicationPurgeFence(jdbc)),
+                ingestCommandOutbox, scrubber, Duration.ofDays(30));
 
         failing.purge(now);
         assertThat(exists("documents", expired)).isTrue();

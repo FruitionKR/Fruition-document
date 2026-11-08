@@ -6,6 +6,7 @@ import fruition.core.agent.dto.AgentRunEditPreviewsResponse;
 import fruition.core.agent.dto.AgentRunReviseRequest;
 import fruition.core.agent.dto.AgentTurnRequest;
 import fruition.core.agent.dto.AgentTurnResponse;
+import fruition.core.agent.dto.McpOwnedRunsResponse;
 import fruition.core.agent.service.AgentTurnService;
 import fruition.shared.util.ErrorResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -24,6 +25,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -115,6 +117,19 @@ public class AgentTurnController {
             @AuthenticationPrincipal String userId,
             @PathVariable("run_id") String runId) {
         return ResponseEntity.ok(agentTurnService.getRun(workspaceId, userId, runId));
+    }
+
+    @Operation(summary = "MCP AgentRun 목록 조회",
+            description = "현재 사용자가 이 워크스페이스에서 만든 특정 MCP grant의 실행 목록을 조회합니다.")
+    @GetMapping("/mcp-runs")
+    public ResponseEntity<McpOwnedRunsResponse> getMcpOwnedRuns(
+            @PathVariable("workspace_id") String workspaceId,
+            @AuthenticationPrincipal String userId,
+            @RequestParam("grant_id") String grantId,
+            @RequestParam(value = "cursor", required = false) String cursor,
+            @RequestParam(value = "limit", defaultValue = "20") int limit) {
+        return ResponseEntity.ok(agentTurnService.getMcpOwnedRuns(
+                workspaceId, userId, grantId, cursor, limit));
     }
 
     @Operation(summary = "AgentRun 변경 미리 보기",

@@ -143,6 +143,23 @@ class AgentEditPreviewsIntegrationTest {
         assertThat(turns.getEditPreviews(workspace, user, RUN).items()).isEmpty();
     }
 
+    @Test
+    void keepsOwnedCurrentPlanCreatePreviewWithoutInventingDocumentIdentity() {
+        var create = new AgentRunEditPreviewsResponse.Item("op-create", "create_document", null,
+                "새 문서", null, "생성 요약", 2, 0,
+                List.of(new AgentRunEditPreviewsResponse.Hunk(0, 1,
+                        List.of(new AgentRunEditPreviewsResponse.Line("insert", BODY_MARKER)))));
+        aiReturns(null, create);
+
+        var item = turns.getEditPreviews(workspace, user, RUN).items().getFirst();
+
+        assertThat(item.toolName()).isEqualTo("create_document");
+        assertThat(item.documentId()).isNull();
+        assertThat(item.baseVersion()).isNull();
+        assertThat(item.displayName()).isEqualTo("새 문서");
+        assertThat(item.removedLines()).isZero();
+    }
+
     private String document(String title) {
         return documents.createMarkdown(workspace, user, UUID.randomUUID().toString(),
                 new MarkdownDocumentCreateRequest(title, "# 본문", null)).id();

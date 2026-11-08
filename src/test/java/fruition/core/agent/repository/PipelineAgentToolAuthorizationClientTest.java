@@ -55,7 +55,26 @@ class PipelineAgentToolAuthorizationClientTest {
                 .contains("\"run_id\":\"run-1\"")
                 .contains("\"tool_name\":\"create_folder\"")
                 .contains("\"arguments\":{\"name\":\"새 폴더\",\"parent_folder_id\":null}")
-                .doesNotContain("idempotency_key");
+                .doesNotContain("idempotency_key", "approval_id", "attempt_id", "grant_id", "client_id",
+                        "policy_generation");
+    }
+
+    @Test
+    void executeAuthorizationForwardsExactMcpApprovalIdentity() throws Exception {
+        client().authorizeExecute("apply_document_edit", mcpRequest());
+
+        var body = new ObjectMapper().readTree(capturedBody.get());
+        var fields = new java.util.HashSet<String>();
+        body.fieldNames().forEachRemaining(fields::add);
+        assertThat(fields).containsExactlyInAnyOrder(
+                "run_id", "workspace_id", "user_id", "plan_id", "plan_version", "operation_hash",
+                "operation_id", "tool_name", "arguments", "approval_id", "attempt_id", "grant_id",
+                "client_id", "policy_generation");
+        assertThat(body.path("approval_id").textValue()).isEqualTo("00000000-0000-4000-8000-000000000001");
+        assertThat(body.path("attempt_id").textValue()).isEqualTo("00000000-0000-4000-8000-000000000002");
+        assertThat(body.path("grant_id").textValue()).isEqualTo("00000000-0000-4000-8000-000000000003");
+        assertThat(body.path("client_id").textValue()).isEqualTo("https://client.example/metadata");
+        assertThat(body.path("policy_generation").longValue()).isEqualTo(7);
     }
 
     @Test
@@ -78,5 +97,14 @@ class PipelineAgentToolAuthorizationClientTest {
                 "run-1", "workspace-1", "user-1", "plan-1", 1, "a".repeat(64),
                 "operation-1", "idem-1",
                 new ObjectMapper().readTree("{\"name\":\"새 폴더\",\"parent_folder_id\":null}"));
+    }
+
+    private AgentToolExecuteRequest mcpRequest() throws Exception {
+        return new AgentToolExecuteRequest(
+                "run-1", "workspace-1", "user-1", "plan-1", 1, "a".repeat(64),
+                "operation-1", "idem-1", new ObjectMapper().readTree("{\"replacement\":\"body\"}"),
+                "00000000-0000-4000-8000-000000000001",
+                "00000000-0000-4000-8000-000000000002",
+                "00000000-0000-4000-8000-000000000003", "https://client.example/metadata", 7L);
     }
 }

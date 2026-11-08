@@ -8,6 +8,9 @@
 
 ## 2026-11-07
 
+- MCP I6 Document 경계를 추가했다(V113). bounded authoritative plan context와 staged `propose_plan`, dependency-closed 부분 승인/선택 가격 예약, 폴더·문서 create/rename/move의 current-authority 실행, nullable create version을 포함한 atomic receipt, create preview를 지원한다. 동일 생성 후보는 이름만으로 재사용하지 않고 in-flight hold가 가리킨 exact committed receipt로만 owner projection에 노출한다. 공개 MCP catalog는 계속 네 read tool뿐이다.
+- MCP 단일 문서 explicit approval의 Document 경계를 추가했다(V112). 신뢰된 client 이름과 사전 가격 quote를 표시하고 exact reviewed snapshot을 조건으로 전액 예약한 뒤 가격 없는 `mcp.agent-approval.v1`을 전달한다. 실제 `apply_document_edit` mutation과 COMMITTED/NO_CHANGE receipt는 같은 transaction이며, 별도 attempt·주기 대사·MCP 전용 원장 reservation type·cancel/admin/purge fence가 unknown을 실패나 무료로 단정하지 않고 보존한다. ai-svc exact receiver와 출시 가격/retention gate가 준비될 때까지 공개 write registration은 금지한다.
+- MCP client disconnect 뒤에도 저장된 제안을 찾도록 `GET .../agent/mcp-runs`를 추가했다. 서버가 인증 사용자 ID와 workspace membership을 고정하고 UUIDv4 grant·bounded cursor/limit만 받아 ai-svc의 service-auth `GET /agent/runs/mcp-owned`로 전달한다. history 조회에는 active grant를 다시 요구하지 않고 upstream 오류 본문은 노출하지 않는다.
 - 자동 편입 설정을 경로별로 따른다. Markdown·txt 업로드 직후 편입은 access `auto_ingest_markdown_on_upload`, PDF 변환 뒤 편입은 `auto_ingest_pdf_on_convert`를 보고, 새 필드가 없는 옛 access면 `auto_ingest_on_upload`로 대신한다. `wiki.ingest` 조건은 그대로다.
 - PDF 변환 뒤 편입의 설정 판정을 변환 요청 때로 옮기고 V109 `documents.auto_ingest_scheduled`에 남긴다. 문서 목록·트리·상세에 `auto_ingest_scheduled`를 추가했다(변환 중·직후 편입 예정이면 true, 편입 등록·건너뜀·실패 뒤 false). 권한은 변환이 끝날 때 다시 본다.
 - 검증: 전체 테스트 2067개(실패·오류·스킵 0), bootJar 통과.
@@ -84,3 +87,10 @@
 
 - 인코딩된 내부 API 경로의 토큰 검사, 삭제된 대화의 늦은 결과 종결, 폴더 복원 권한, 이미지·음성 저장 보상과 파기 경합, 회의 연결·녹음 멤버십 재검사를 보강한다. 최신 main의 RSA·자동 병합 계약을 유지한다.
 - 기존 수정의 격리 회귀 검증을 수행했고 최신 main 통합본은 CI에서 전체 회귀를 확인한다.
+## 2026-11-08 — I9 staged MCP wiki approval and settlement
+
+- Added six strict, non-public wiki ingest/lint adapters with server-owned source/evidence snapshot mapping.
+- Added whole-draft owner preview, explicit approve/reject/cancel, immutable configured quotes, full MCP credit
+  reservation, authoritative AI approval lookup, and durable publication fee reconciliation.
+- Extended the existing wiki source callback for exact `submit_lint_changes` authorization without weakening the
+  unchanged `start_ingest` contract; added V114/V115 data and purge handling.

@@ -9,10 +9,13 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.regex.Pattern;
 
 public class AgentServiceTokenFilter extends OncePerRequestFilter {
 
     private static final String PROTECTED_PREFIX = "/internal/agent/tools";
+    private static final Pattern MCP_WIKI_SOURCE =
+            Pattern.compile("/internal/documents/[^/]+/mcp-wiki-source");
 
     private final byte[] serviceToken;
 
@@ -23,8 +26,9 @@ public class AgentServiceTokenFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = InternalRequestPaths.canonicalPath(request);
-        return java.util.stream.Stream.of(PROTECTED_PREFIX, "/internal/agent/skill-execution", "/internal/agent/folder-lookup",
-                        "/internal/agent/runs")
+        return !MCP_WIKI_SOURCE.matcher(path).matches() && java.util.stream.Stream.of(
+                        PROTECTED_PREFIX, "/internal/agent/skill-execution", "/internal/agent/folder-lookup",
+                        "/internal/agent/runs", "/internal/agent/mcp", "/internal/mcp/wiki")
                 .noneMatch(prefix -> path.equals(prefix) || path.startsWith(prefix + "/"));
     }
 

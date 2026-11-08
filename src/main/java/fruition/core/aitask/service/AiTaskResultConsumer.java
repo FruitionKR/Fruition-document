@@ -12,6 +12,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.query.service.QueryEventBroker;
 import fruition.core.query.service.QueryRunStore;
 import fruition.core.wiki.repository.WikiWorkspaceVersionRepository;
+import fruition.core.aihistory.dto.WikiPublicationEvent;
+import fruition.core.aihistory.service.WikiPublicationEventApplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -33,19 +35,22 @@ public class AiTaskResultConsumer {
     private final QueryEventBroker queryEventBroker;
     private final WikiWorkspaceVersionRepository wikiVersions;
     private final DocumentCopyScrubber copyScrubber;
+    private final WikiPublicationEventApplier publicationApplier;
 
     public AiTaskResultConsumer(ObjectMapper objectMapper,
                                 AiTaskResultApplier applier,
                                 QueryRunStore queryRunStore,
                                 QueryEventBroker queryEventBroker,
                                 WikiWorkspaceVersionRepository wikiVersions,
-                                DocumentCopyScrubber copyScrubber) {
+                                DocumentCopyScrubber copyScrubber,
+                                WikiPublicationEventApplier publicationApplier) {
         this.objectMapper = objectMapper;
         this.applier = applier;
         this.queryRunStore = queryRunStore;
         this.queryEventBroker = queryEventBroker;
         this.wikiVersions = wikiVersions;
         this.copyScrubber = copyScrubber;
+        this.publicationApplier = publicationApplier;
     }
 
     @KafkaListener(
@@ -70,6 +75,11 @@ public class AiTaskResultConsumer {
         boolean failed = false;
         log.debug("[AI task 결과 소비 시작] kind={} flowId={}", kind, flowId);
         try {
+            if (WikiPublicationEvent.TYPE.equals(event.path("event_type").asText())) {
+                var publication = objectMapper.treeToValue(event, WikiPublicationEvent.class);
+                publicationApplier.apply(publication);
+                return;
+            }
             // 진행 이벤트는 종류와 무관하게 중계만 한다. kind 분기보다 먼저 걸러야 한다 —
             // 뒤에 두면 agent 진행 이벤트가 applyAgent로 들어가 최종 결과로 오인된다.
             if ("progress".equals(event.path("status").asText())) {
@@ -193,9 +203,8 @@ public class AiTaskResultConsumer {
     }
 
     /**
-     * 위키를 바꾸는 결과마다 워크스페이스 위키 버전을 올린다(#68). 반영과 별도 트랜잭션이라 반영 중 잠금을 늘리지 않는다.
-     * 반영이 커밋된 뒤 여기서 실패하면 레코드가 다시 소비되고, 반영은 receipt로 건너뛰며 버전만 다시 오른다.
-     * 상태와 무관하게 올린다. 실패한 편입·복구도 일부 페이지를 바꿨을 수 있다. 중복 이벤트는 304 한 번을 놓칠 뿐이다.
+     * 위키를 바꾸는 legacy 결과마다 워크스페이스 위키 버전을 올린다(#68). 중복 증가는 허용한다.
+     * publication receipt가 먼저 보여도 이 legacy 반영의 bump가 끝났다는 증거는 아니므로 억제하지 않는다.
      */
     private void bumpWikiVersion(JsonNode event) {
         String workspaceId = event.path("workspace_id").asText("");

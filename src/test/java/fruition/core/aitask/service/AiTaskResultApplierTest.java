@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.aihistory.domain.OperationLog;
 import fruition.core.aihistory.domain.OperationStatus;
+import fruition.core.aihistory.domain.OperationType;
+import fruition.core.aihistory.dto.OperationResultRequest;
+import fruition.core.aihistory.exception.OperationPayloadConflictException;
 import fruition.core.aihistory.exception.RestorePreviewStaleException;
 import fruition.core.aihistory.repository.OperationLogRepository;
 import fruition.core.aihistory.service.LintOperationStarter;
@@ -689,7 +692,7 @@ class AiTaskResultApplierTest {
         OperationLog operation = org.mockito.Mockito.mock(OperationLog.class);
         when(jdbcTemplate.update(any(String.class),
                 eq("restore-event-1"), eq("restore-run-1"))).thenReturn(1);
-        when(operationLogRepository.findById("restore-op")).thenReturn(Optional.of(operation));
+        when(operationLogRepository.findByIdForUpdate("restore-op")).thenReturn(Optional.of(operation));
         when(operation.getStatus()).thenReturn(OperationStatus.applying);
         when(operation.getRestoreManifest()).thenReturn(restoreManifest());
         doThrow(new RestorePreviewStaleException()).when(restoreApplier)
@@ -710,11 +713,52 @@ class AiTaskResultApplierTest {
     }
 
     @Test
+    void persistedStaleRestoreConflictSkipsIngest() {
+        OperationLog operation = org.mockito.Mockito.mock(OperationLog.class);
+        when(operation.getOperationType()).thenReturn(OperationType.restore);
+        when(operation.getStatus()).thenReturn(OperationStatus.conflict);
+        when(operation.getPayloadHash()).thenReturn(null);
+
+        assertThat(applier.applySuccessfulRestore(operation, objectMapper.convertValue(
+                restoreEvent().path("payload"), OperationResultRequest.class))).isFalse();
+
+        verify(operationIngestService, never()).accept(any(), any());
+    }
+
+    @Test
+    void terminalConflictOutsideStaleRestoreSignatureStillValidatesPayload() {
+        OperationLog operation = org.mockito.Mockito.mock(OperationLog.class);
+        when(operation.getOperationType()).thenReturn(OperationType.restore);
+        when(operation.getStatus()).thenReturn(OperationStatus.conflict);
+        when(operation.getPayloadHash()).thenReturn("existing-payload-hash");
+        when(operation.getOperationId()).thenReturn("restore-op");
+        doThrow(new OperationPayloadConflictException("restore-op"))
+                .when(operationIngestService).accept(eq("restore-op"), any());
+
+        assertThatThrownBy(() -> applier.applySuccessfulRestore(operation, objectMapper.convertValue(
+                restoreEvent().path("payload"), OperationResultRequest.class)))
+                .isInstanceOf(OperationPayloadConflictException.class);
+    }
+
+    @Test
+    void nonRestoreTerminalConflictIsNotTreatedAsStale() {
+        OperationLog operation = org.mockito.Mockito.mock(OperationLog.class);
+        when(operation.getOperationType()).thenReturn(OperationType.lint);
+        when(operation.getStatus()).thenReturn(OperationStatus.conflict);
+        when(operation.getOperationId()).thenReturn("lint-op");
+
+        assertThat(applier.applySuccessfulRestore(operation, objectMapper.convertValue(
+                restoreEvent().path("payload"), OperationResultRequest.class))).isTrue();
+
+        verify(operationIngestService).accept(eq("lint-op"), any());
+    }
+
+    @Test
     void restoreTransientFailureIsRetriedByKafka() throws Exception {
         OperationLog operation = org.mockito.Mockito.mock(OperationLog.class);
         when(jdbcTemplate.update(any(String.class),
                 eq("restore-event-1"), eq("restore-run-1"))).thenReturn(1);
-        when(operationLogRepository.findById("restore-op")).thenReturn(Optional.of(operation));
+        when(operationLogRepository.findByIdForUpdate("restore-op")).thenReturn(Optional.of(operation));
         when(operation.getStatus()).thenReturn(OperationStatus.applying);
         when(operation.getRestoreManifest()).thenReturn(restoreManifest());
         doThrow(new IllegalStateException("temporary")).when(restoreApplier)
@@ -733,7 +777,7 @@ class AiTaskResultApplierTest {
         OperationLog operation = org.mockito.Mockito.mock(OperationLog.class);
         when(jdbcTemplate.update(any(String.class),
                 eq("restore-event-1"), eq("restore-run-1"))).thenReturn(1);
-        when(operationLogRepository.findById("restore-op")).thenReturn(Optional.of(operation));
+        when(operationLogRepository.findByIdForUpdate("restore-op")).thenReturn(Optional.of(operation));
         var event = (com.fasterxml.jackson.databind.node.ObjectNode) restoreEvent();
         event.put("status", "failed");
         event.put("error", "restore_conflict");

@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 
 public interface FolderRepository extends JpaRepository<Folder, UUID> {
 
@@ -48,6 +49,17 @@ public interface FolderRepository extends JpaRepository<Folder, UUID> {
     List<Folder> findChildren(
             @Param("workspaceId") String workspaceId,
             @Param("parentFolderId") UUID parentFolderId
+    );
+
+    /** MCP plan context must bound sibling rows before they leave PostgreSQL. */
+    @Query("SELECT f FROM Folder f WHERE f.workspaceId = :workspaceId "
+            + "AND ((:parentFolderId IS NULL AND f.parentFolderId IS NULL) "
+            + "OR f.parentFolderId = :parentFolderId) "
+            + "AND f.deletedAt IS NULL ORDER BY f.sortOrder ASC, f.id ASC")
+    List<Folder> findChildren(
+            @Param("workspaceId") String workspaceId,
+            @Param("parentFolderId") UUID parentFolderId,
+            Pageable pageable
     );
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

@@ -205,6 +205,13 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
                 .body(ErrorResponse.of("INSUFFICIENT_CREDIT", e.getMessage()));
     }
 
+    @ExceptionHandler(fruition.core.agent.service.McpAgentApprovalService.McpApprovalException.class)
+    public ResponseEntity<ErrorResponse> handleMcpApproval(
+            fruition.core.agent.service.McpAgentApprovalService.McpApprovalException e) {
+        logHandled(e, e.status(), e.getMessage());
+        return ResponseEntity.status(e.status()).body(ErrorResponse.of(e.getMessage(), e.getMessage()));
+    }
+
     /** 사용자별 AI 하루 사용 한도 초과. 한도가 풀리는 시각(KST)을 reset_at과 Retry-After(초)로 알린다. */
     @ExceptionHandler(fruition.core.usage.limit.AiUsageLimitExceededException.class)
     public ResponseEntity<ErrorResponse> handleAiUsageLimit(fruition.core.usage.limit.AiUsageLimitExceededException e) {

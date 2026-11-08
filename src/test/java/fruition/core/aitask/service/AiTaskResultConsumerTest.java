@@ -28,6 +28,7 @@ class AiTaskResultConsumerTest {
     @Mock QueryEventBroker queryEventBroker;
     @Mock WikiWorkspaceVersionRepository wikiVersions;
     @Mock fruition.core.document.service.DocumentCopyScrubber copyScrubber;
+    @Mock fruition.core.aihistory.service.WikiPublicationEventApplier publicationApplier;
 
     private AiTaskResultConsumer consumer;
 
@@ -35,7 +36,8 @@ class AiTaskResultConsumerTest {
     void setUp() {
         org.mockito.Mockito.lenient().when(applier.acceptsProgress(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         consumer = new AiTaskResultConsumer(
-                new ObjectMapper(), applier, queryRunStore, queryEventBroker, wikiVersions, copyScrubber);
+                new ObjectMapper().findAndRegisterModules(), applier, queryRunStore, queryEventBroker,
+                wikiVersions, copyScrubber, publicationApplier);
     }
 
     @Test
@@ -238,6 +240,28 @@ class AiTaskResultConsumerTest {
         consumer.consume("{\"kind\":\"post_ingest\",\"run_id\":\"post-1\",\"status\":\"succeeded\"}");
 
         verify(applier).applyPostIngest(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void publicationEventUsesTheExistingResultTopicRouter() throws Exception {
+        when(publicationApplier.apply(any())).thenReturn(
+                new fruition.core.aihistory.service.WikiPublicationEventApplier.ApplyResult(
+                        true, false, true,
+                        fruition.core.aihistory.repository.WikiPublicationInboxRepository.Disposition.ACCEPTED,
+                        null));
+        consumer.consume("""
+                {"event_id":"publication:event-1","event_type":"ai.wiki.publication.v1",
+                 "publication_id":"publication-1","operation_id":"op-1",
+                 "workspace_id":"ws-1","user_id":"user-1","kind":"LINT","outcome":"PUBLISHED",
+                 "result":{"operation_id":"op-1","operation_type":"lint","status":"succeeded",
+                   "workspace_id":"ws-1","user_id":"user-1","summary":"done","changed_pages":[]},
+                 "published_reference_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                 "committed_at":"2026-11-08T00:00:00Z"}
+                """);
+
+        verify(publicationApplier).apply(any());
+        verifyNoInteractions(wikiVersions);
+        verifyNoInteractions(queryRunStore, queryEventBroker);
     }
 
     @Test

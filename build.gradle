@@ -52,6 +52,9 @@ dependencies {
 	implementation 'io.opentelemetry:opentelemetry-sdk'
 	implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
+	// Official MCP Java SDK. Keep the transport independent of Spring AI/Boot upgrades.
+	implementation 'io.modelcontextprotocol.sdk:mcp-core:2.1.0'
+	implementation 'io.modelcontextprotocol.sdk:mcp-json-jackson2:2.1.0'
 	// MarkdownDiffService: 선형 공간 Myers diff 구현(편집 거리와 무관하게 O(n+m) 메모리)
 	implementation 'io.github.java-diff-utils:java-diff-utils:4.15'
 	// 다중 인스턴스 공유 store: query run 상태·SSE 이벤트 중계

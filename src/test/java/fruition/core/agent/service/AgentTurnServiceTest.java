@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.agent.dto.AgentRunApproveRequest;
 import fruition.core.agent.dto.AgentRunReviseRequest;
+import fruition.core.agent.dto.McpOwnedRunsResponse;
 import fruition.core.agent.dto.AgentTurnRequest;
 import fruition.core.agent.exception.AgentRunNotFoundException;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
@@ -126,6 +127,30 @@ class AgentTurnServiceTest {
                 .contains("\"instructions_markdown\":\"# 정확한 원문 지침\"")
                 .contains("\"requires_source\":true");
         assertThat(command.getValue().conversationContext().pendingSkillProposal().requiresSource()).isTrue();
+    }
+
+    @Test
+    void mcpOwnedRunsChecksMembershipAndUsesServerActorWithoutGrantAuthorization() {
+        String grantId = "00000000-0000-4000-8000-000000000001";
+        var response = new McpOwnedRunsResponse(
+                java.util.List.of(new McpOwnedRunsResponse.Item("run-mcp-1", "awaiting_approval")), null);
+        when(statusRequester.getMcpOwnedRuns("ws_1", "user_1", grantId, null, 20)).thenReturn(response);
+
+        assertThat(service.getMcpOwnedRuns("ws_1", "user_1", grantId, null, 20)).isSameAs(response);
+
+        verify(workspaceAccessGuard).requireMember("ws_1", "user_1");
+        verify(statusRequester).getMcpOwnedRuns("ws_1", "user_1", grantId, null, 20);
+    }
+
+    @Test
+    void mcpOwnedRunsRejectsInvalidGrantOrPaginationBeforeUpstream() {
+        assertThatThrownBy(() -> service.getMcpOwnedRuns("ws_1", "user_1", "not-a-uuid", null, 20))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+        assertThatThrownBy(() -> service.getMcpOwnedRuns("ws_1", "user_1",
+                "00000000-0000-4000-8000-000000000001", null, 21))
+                .isInstanceOf(InvalidAgentTurnRequestException.class);
+
+        verifyNoInteractions(statusRequester);
     }
 
     @Test
