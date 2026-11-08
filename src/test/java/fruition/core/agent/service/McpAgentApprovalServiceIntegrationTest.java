@@ -410,6 +410,97 @@ class McpAgentApprovalServiceIntegrationTest {
                 workspace)).isOne();
     }
 
+    @Test
+    void teamSkillDefinitionRequiresSkillAuthorAndRecordsVersionedSkillReceipt() throws Exception {
+        var skills = mock(fruition.core.skill.repository.PipelineSkillRequester.class);
+        service.setSkills(skills);
+        String skillId = UUID.randomUUID().toString();
+        when(skills.get(workspace, user, skillId)).thenReturn(mapper.readTree(
+                "{\"id\":\"" + skillId + "\",\"scope_type\":\"team\",\"latest_version\":{\"version\":3}}"));
+        credits.post(user, "grant", 2_000, "skill-grant:" + user, "test");
+        JsonNode run = skillRun("agent_" + "7".repeat(32), skillId, 3);
+        when(requester.approveMcp(anyString(), anyString(), anyString(), anyInt(), anyString(), anyList(),
+                anyString(), anyString(), anyString(), anyLong())).thenReturn(run);
+
+        assertThatThrownBy(() -> service.approve(workspace, user, run.path("id").asText(), request(), run))
+                .isInstanceOf(fruition.core.mcp.McpAuthorizationException.class);
+
+        McpIdentity author = new McpIdentity(user, workspace, client, grant, 2,
+                Set.of("write_propose"), "MEMBER", Set.of("skill.author"), "Test MCP Client");
+        when(access.authorizeWebApproval(any())).thenReturn(author);
+        when(access.authorizeOperationBoundary(any(), anyLong())).thenReturn(author);
+        service.approve(workspace, user, run.path("id").asText(), request(), run);
+        String approvalId = approvalId(run.path("id").asText());
+        JsonNode arguments = run.path("plan").path("operations").get(0).path("arguments");
+
+        when(skills.get(workspace, user, skillId)).thenReturn(mapper.readTree(
+                "{\"id\":\"" + skillId + "\",\"scope_type\":\"team\",\"latest_version\":{\"version\":4}}"));
+        assertThatThrownBy(() -> service.authorizeExecution(executionRequest(run, approvalId, "op-1", arguments),
+                "publish_skill_definition")).isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+
+        when(skills.get(workspace, user, skillId)).thenReturn(mapper.readTree(
+                "{\"id\":\"" + skillId + "\",\"scope_type\":\"team\",\"latest_version\":{\"version\":3}}"));
+        var execution = service.authorizeExecution(executionRequest(run, approvalId, "op-1", arguments),
+                "publish_skill_definition");
+        var receipt = service.recordSkillReceipt(execution, "op-1", skillId, 3L, 4);
+        service.executionFinished(execution);
+        assertThat(receipt.resourceType()).isEqualTo("SKILL");
+        assertThat(receipt.beforeVersion()).isEqualTo(3L);
+        assertThat(receipt.afterVersion()).isEqualTo(4);
+        assertThat(service.authorizeExecution(executionRequest(run, approvalId, "op-1", arguments),
+                "publish_skill_definition").replay()).isEqualTo(receipt);
+    }
+
+    @Test
+    void lookupRecoversSkillReceiptFromAiAcceptanceEvidence() throws Exception {
+        var skills = mock(fruition.core.skill.repository.PipelineSkillRequester.class);
+        service.setSkills(skills);
+        credits.post(user, "grant", 2_000, "skill-lookup:" + user, "test");
+        JsonNode run = skillRun("agent_" + "8".repeat(32), null, null);
+        when(requester.approveMcp(anyString(), anyString(), anyString(), anyInt(), anyString(), anyList(),
+                anyString(), anyString(), anyString(), anyLong())).thenReturn(run);
+        service.approve(workspace, user, run.path("id").asText(), request(), run);
+        String approvalId = approvalId(run.path("id").asText());
+        JsonNode arguments = run.path("plan").path("operations").get(0).path("arguments");
+        var execution = service.authorizeExecution(executionRequest(run, approvalId, "op-1", arguments),
+                "publish_skill_definition");
+        service.executionFailed(execution, new IllegalStateException("response lost"));
+        var lookup = new McpAgentApprovalService.ReceiptLookup(approvalId, "op-1", workspace, user, grant, client);
+
+        when(skills.lookupMcpAcceptance(run.path("id").asText(), "op-1", user))
+                .thenReturn(mapper.readTree("{\"status\":\"absent\"}"));
+        assertThat(service.lookup(lookup).status()).isEqualTo("FAILED");
+
+        String skillId = UUID.randomUUID().toString();
+        when(skills.lookupMcpAcceptance(run.path("id").asText(), "op-1", user)).thenReturn(mapper.readTree(
+                "{\"status\":\"applied\",\"skill_id\":\"" + skillId
+                        + "\",\"version_id\":\"v\",\"version\":1,\"created\":true,\"rolled_back\":false}"));
+        var recovered = service.lookup(lookup);
+        assertThat(recovered.status()).isEqualTo("COMMITTED");
+        assertThat(recovered.receipt().resourceId()).isEqualTo(skillId);
+        assertThat(recovered.receipt().beforeVersion()).isNull();
+        assertThat(recovered.receipt().attemptId()).isEqualTo(execution.attemptId());
+    }
+
+    private JsonNode skillRun(String runId, String skillId, Integer expectedVersion) throws Exception {
+        String id = skillId == null ? "null" : "\"" + skillId + "\"";
+        String version = expectedVersion == null ? "null" : expectedVersion.toString();
+        String scope = skillId == null ? "\"personal\"" : "null";
+        return mapper.readTree("""
+                {"id":"%s","workspace_id":"%s","status":"awaiting_approval","origin":"MCP_CLIENT",
+                 "grant_id":"%s","client_id":"%s","policy_generation":2,
+                 "invocation_id":"%s","spec_version":"2025-11-25","tool_name":"propose_skill_definition",
+                 "plan":{"id":"plan-1","version":1,"operation_hash":"%s","status":"awaiting_approval",
+                   "operations":[{"id":"op-1","tool_name":"publish_skill_definition","depends_on":[],
+                     "target_type":"skill","target_id":%s,"base_version":%s,
+                     "arguments":{"skill_id":%s,"expected_version":%s,"scope_type":%s,"name":"meeting-notes",
+                       "description":"d","instructions_markdown":"i","capabilities":["document-edit"],
+                       "allowed_tools":["apply_document_edit"],"targets":["current_document"],
+                       "result_mode":null,"requires_source":false}}]}}
+                """.formatted(runId, workspace, grant, client, UUID.randomUUID(), "c".repeat(64),
+                        id, version, id, version, scope));
+    }
+
     private AgentRunApproveRequest request() {
         return request("op-1");
     }

@@ -24,16 +24,19 @@ class McpSkillToolsTest {
             1, Set.of("read"), "MEMBER", Set.of());
     private final ObjectMapper mapper = new ObjectMapper();
     private final SkillService service = mock(SkillService.class);
-    private final McpSkillTools tools = new McpSkillTools(service);
+    private final McpDocumentProposalService proposals = mock(McpDocumentProposalService.class);
+    private final McpSkillTools tools = new McpSkillTools(service, proposals, mapper);
 
     @Test void advertisesTwoStrictReadOnlyToolsThatPointToExistingProposals() {
         var list = tools.tools();
-        assertThat(list).extracting(t -> t.name()).containsExactly("list_skills", "get_skill");
-        list.forEach(tool -> {
+        assertThat(list).extracting(t -> t.name()).containsExactly("list_skills", "get_skill", "propose_skill_definition");
+        list.subList(0, 2).forEach(tool -> {
             assertThat(tool.annotations().readOnlyHint()).isTrue();
             assertThat(tool.inputSchema().get("additionalProperties")).isEqualTo(false);
             assertThat(tool.description()).contains("propose_document_edit", "propose_plan");
         });
+        assertThat(list.get(2).annotations().readOnlyHint()).isFalse();
+        assertThat(list.get(2).annotations().destructiveHint()).isFalse();
         assertThat((List<Object>) list.get(1).inputSchema().get("required")).containsExactly("skill_id");
     }
 
@@ -86,6 +89,63 @@ class McpSkillToolsTest {
     }
 
     /** 실제 DB처럼 비활성 Skill도 enabled_version을 그대로 갖는다(set_enabled는 status만 바꾼다). */
+    @Test void proposesCanonicalDefinitionThroughExistingAgentProposalPath() {
+        var expected = new McpDocumentProposalService.Result("run", "awaiting_approval", "https://review/x");
+        var captured = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
+        when(proposals.submit(org.mockito.ArgumentMatchers.eq(ID), any())).thenAnswer(call -> {
+            captured.set(call.getArgument(1));
+            return expected;
+        });
+
+        assertThat(tools.invoke(ID, "propose_skill_definition", proposal(null, null, "personal"))).isEqualTo(expected);
+
+        var request = captured.get();
+        var actor = (Map<String, Object>) request.get("actor");
+        assertThat(actor.get("tool_name")).isEqualTo("propose_skill_definition");
+        assertThat(actor.get("user_id")).isEqualTo("user-1");
+        assertThat((String) request.get("request_hash")).matches("sha256:[0-9a-f]{64}");
+        var definition = (Map<String, Object>) ((Map<String, Object>) request.get("proposal")).get("definition");
+        assertThat(definition).containsKeys("skill_id", "expected_version", "targets", "result_mode", "requires_source");
+        assertThat(definition.get("skill_id")).isNull();
+    }
+
+    @Test void teamOrExistingTeamSkillRequiresSkillAuthor() throws Exception {
+        assertThatThrownBy(() -> tools.invoke(ID, "propose_skill_definition", proposal(null, null, "team")))
+                .isInstanceOfSatisfying(McpToolException.class, e -> assertThat(e.code()).isEqualTo("PERMISSION_REVOKED"));
+        when(service.get("ws-1", "user-1", SKILL)).thenReturn(mapper.readTree(skill(SKILL, "ws-1", true)));
+        assertThatThrownBy(() -> tools.invoke(ID, "propose_skill_definition", proposal(SKILL, 3, null)))
+                .isInstanceOfSatisfying(McpToolException.class, e -> assertThat(e.code()).isEqualTo("PERMISSION_REVOKED"));
+        verifyNoInteractions(proposals);
+    }
+
+    @Test void rejectsMalformedProposalBeforeSubmitting() {
+        var missingVersion = proposal(SKILL, null, null);
+        var extra = new java.util.HashMap<>(proposal(null, null, "personal"));
+        extra.put("confirmed", true);
+        var badCapability = proposal(null, null, "personal");
+        ((Map<String, Object>) badCapability.get("definition")).put("capabilities", List.of("delete"));
+        for (Map<String, Object> args : List.of(missingVersion, extra, badCapability)) {
+            assertThatThrownBy(() -> tools.invoke(ID, "propose_skill_definition", args))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        verifyNoInteractions(proposals);
+    }
+
+    private static Map<String, Object> proposal(String skillId, Integer version, String scope) {
+        Map<String, Object> definition = new java.util.LinkedHashMap<>();
+        definition.put("skill_id", skillId);
+        definition.put("expected_version", version);
+        definition.put("scope_type", scope);
+        definition.put("name", "meeting-notes");
+        definition.put("description", "회의록 정리");
+        definition.put("instructions_markdown", "{문서}의 결정 사항을 정리한다.");
+        definition.put("capabilities", List.of("document-edit"));
+        definition.put("targets", null);
+        definition.put("result_mode", null);
+        definition.put("requires_source", null);
+        return Map.of("idempotency_key", "k-1", "request_summary", "회의록 Skill", "definition", definition);
+    }
+
     private static String skill(String id, String workspace, boolean enabled) {
         String version = "{\"id\":\"v\",\"version\":3,\"name\":\"meeting-notes\",\"description\":\"회의록 정리\","
                 + "\"instructions_markdown\":\"{문서}를 정리한다.<script>x</script>\",\"capabilities\":[\"document-edit\"],"
