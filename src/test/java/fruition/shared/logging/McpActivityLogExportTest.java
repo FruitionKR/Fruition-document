@@ -8,6 +8,7 @@ import io.opentelemetry.sdk.common.CompletableResultCode;
 import io.opentelemetry.sdk.logs.data.LogRecordData;
 import io.opentelemetry.sdk.logs.export.LogRecordExporter;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 import java.util.Collection;
@@ -40,11 +41,22 @@ class McpActivityLogExportTest {
         audit.log(id, "propose_document_edit", List.of("doc_3", "doc_9 documentId=evil operation=spoof",
                 "# 비밀 본문 Bearer abc.def eyJhbGci.x.y phc_secret"), "ERROR", "INVALID_INPUT");
         MDC.clear();
+        // 전역 전송기는 다른 요청의 라이브러리 오류도 함께 수집한다.
+        LoggerFactory.getLogger("org.springframework.kafka.support.LoggingProducerListener")
+                .error("Unrelated producer failure", new org.apache.kafka.common.errors.TimeoutException("test timeout"));
         export.stop();
 
         // 감사 JSON(fruition.mcp.audit)은 전송하지 않고 정화된 업무 로그만 나간다.
-        assertThat(sent).hasSize(2).allSatisfy(r -> assertThat(attr(r, "logger")).isEqualTo("fruition.mcp.activity"));
-        LogRecordData ok = sent.get(0);
+        assertThat(sent).noneSatisfy(r -> assertThat(attr(r, "logger")).isEqualTo("fruition.mcp.audit"));
+        assertThat(sent).anySatisfy(r -> {
+            assertThat(attr(r, "logger")).isEqualTo("org.springframework.kafka.support.LoggingProducerListener");
+            assertThat(attr(r, "exception.type")).isEqualTo("org.apache.kafka.common.errors.TimeoutException");
+        });
+        List<LogRecordData> activity = sent.stream()
+                .filter(r -> "fruition.mcp.activity".equals(attr(r, "logger")) && "req-7".equals(attr(r, "requestId")))
+                .toList();
+        assertThat(activity).hasSize(2);
+        LogRecordData ok = activity.get(0);
         assertThat(ok.getSeverityText()).isEqualTo("info");
         assertThat(attr(ok, "operation")).isEqualTo("mcp_tool");
         assertThat(attr(ok, "status")).isEqualTo("SUCCESS");
@@ -60,7 +72,7 @@ class McpActivityLogExportTest {
         assertThat(attr(ok, "auditId")).matches("[0-9a-f-]{36}");
         assertThat(ok.getTimestampEpochNanos()).isPositive();
 
-        LogRecordData failed = sent.get(1);
+        LogRecordData failed = activity.get(1);
         assertThat(failed.getSeverityText()).isEqualTo("warn");
         assertThat(attr(failed, "errorCode")).isEqualTo("INVALID_INPUT");
         assertThat(attr(failed, "status")).isEqualTo("ERROR");
