@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
 @ConditionalOnProperty(name = "app.mcp.enabled", havingValue = "true")
 public class McpPlanProposalService {
     static final String TOOL_NAME = "propose_plan";
-    private static final int MAX_REQUEST_BYTES = 4 * 1024 * 1024;
+    static final int MAX_REQUEST_BYTES = 4 * 1024 * 1024;
     private static final Pattern DOCUMENT_ID = Pattern.compile("(?:doc_|chatdoc_)[A-Za-z0-9][A-Za-z0-9_-]{0,246}");
     private static final Pattern HASH = Pattern.compile("sha256:[0-9a-f]{64}");
     private static final Set<String> INPUT_FIELDS = Set.of(
