@@ -20,7 +20,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
                 mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var tools = catalog.tools();
         assertThat(tools).extracting(s -> s.tool().name()).containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page",
                         "propose_document_edit", "propose_plan", "start_ingest", "resume_ingest", "get_window",
@@ -85,7 +85,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
                 mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var pageTool = catalog.tools().get(3);
         var id = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
                 Set.of("read"), "MEMBER", Set.of());
@@ -117,7 +117,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
                 mock(McpDocumentReadService.class), proposals, mock(McpPlanProposalService.class),
-                mock(McpWikiProposalService.class), mock(McpSkillTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json",
                 "00000000-0000-4000-8000-000000000001", 2, Set.of("write_propose"), "OWNER", Set.of());
         Map<String,Object> arguments = proposalArguments();
@@ -158,7 +158,7 @@ class McpToolCatalogTest {
         var planProposals = mock(McpPlanProposalService.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class), planProposals,
-                mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
+                mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props());
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json",
                 "00000000-0000-4000-8000-000000000001", 2, Set.of("write_propose"), "OWNER", Set.of());
@@ -193,7 +193,7 @@ class McpToolCatalogTest {
         var wikiProposals = mock(McpWikiProposalService.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), wikiProposals, mock(McpSkillTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
+                mock(McpPlanProposalService.class), wikiProposals, mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props());
 
         var staged = catalog.tools().subList(6, 12);
@@ -234,7 +234,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), new McpSkillTools(skills),
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), new McpSkillTools(skills), mock(McpMeetingTools.class),
                 audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var tools = catalog.tools();
         assertThat(tools).extracting(spec -> spec.tool().name()).hasSize(14).endsWith("list_skills", "get_skill");

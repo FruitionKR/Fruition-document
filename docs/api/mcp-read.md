@@ -18,10 +18,11 @@ Forwarding headers are ignored; the servlet request itself must already represen
 
 ## 공개 카탈로그 (`mcp-tools.v3`)
 
-`McpToolCatalog.tools()`는 2026-11-09부터 다음 14개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
+`McpToolCatalog.tools()`는 2026-11-09부터 다음 16개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
 `find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
 (`start_ingest`, `resume_ingest`, `get_window`, `submit_window`, `finalize_ingest`, `submit_lint_changes`), Skill 읽기 2개
-(`list_skills`, `get_skill`, `read` scope, 계약은 [mcp-skills.md](mcp-skills.md)). 다른 MCP 도구 bean(`McpSkillTools` 등)은
+(`list_skills`, `get_skill`, `read` scope, 계약은 [mcp-skills.md](mcp-skills.md)), 회의 읽기 2개(`list_meetings`,
+`get_meeting_transcript`, `read` scope, 아래 절). 다른 MCP 도구 bean(`McpSkillTools`, `McpMeetingTools`)은
 `tools()`와 `invoke(identity, tool, args)`만 제공하고, 카탈로그가 같은 wrapper로 감싼다. 별도 enable
 플래그나 숨은 등록 경로는 없다. 제안·위키 도구는 승인 대기 run/draft와 `review_url`만 만들며, 승인·크레딧 예약·실행·정산은
 아래 각 절의 웹 승인 경로에서만 일어난다. 도구 인자로 승인이나 실행을 대신할 수 없다. 모든 도구는 같은 spec wrapper로
@@ -54,6 +55,27 @@ MCP 도구 호출 로그: 감사 JSON(`fruition.mcp.audit`)은 형식을 그대�
 DB 이력으로만 남는다.
 Markdown-like document and wiki fields are passed through the existing AI Markdown sanitizer before final response
 sizing, so external links/images and raw HTML are neutralized while relative links, anchors, and code remain data.
+
+## 회의 전사 읽기 (`McpMeetingTools`)
+
+외부 AI가 회의록을 직접 쓰도록 본인 회의의 전사만 읽힌다. 웹과 같은 소유자 전용 `MeetingService.list`/`get`을 쓰므로
+같은 워크스페이스의 다른 사용자 회의는 `RESOURCE_NOT_FOUND`로 숨겨진다. 모델 호출·크레딧·녹음 원본·presign URL·실시간
+스트림은 노출하지 않는다.
+
+- `list_meetings {cursor}` → `mcp.meeting-list.v1` `{meetings[{meeting_id,display_name,source,status,has_notes,created_at}],next_cursor,data_boundary}`.
+  최근 생성 순이며 페이지 크기는 `max-page-size`다.
+- `get_meeting_transcript {meeting_id,cursor}` → `mcp.meeting-transcript.v1`
+  `{meeting_id,display_name,document_id,source,status,live_connected,transcript_complete,segment_count,segments[{segment_id,position,status,text}],next_cursor,data_boundary}`.
+  발화 순서로 `max-document-blocks-per-page` 구간과 `max-document-content-bytes` 안에서 끊고 `next_cursor`로 잇는다.
+  잘라 내지 않으며, 한 구간이 한도를 넘으면 `RESPONSE_LIMIT_EXCEEDED`다. 확정 전 구간은 `status:"pending"`, `text:null`이고,
+  `transcript_complete:false`면 일부 전사다. 저장된 구간에는 화자·시각 정보가 없다.
+
+cursor는 기존 `McpCursorCodec`으로 user·workspace·grant·client·policy generation·도구(전사는 회의 ID까지)에 묶인다.
+텍스트와 이름은 `AiMarkdownSanitizer`를 거친 `UNTRUSTED_WORKSPACE_CONTENT`다. 회의록 저장은 새 경로 없이 `get_document` 후
+`propose_document_edit`(회의 `document_id`에 덧붙이기) 또는 `propose_plan`의 `create_document`로 제안하고 웹에서 승인한다.
+
+채팅 음성 입력(STT)·읽어 주기(TTS)는 사용자 기기의 마이크·스피커에서 일어나는 클라이언트 기능이다. MCP는 오디오를 주고받지
+않으며 Fruition이 외부 AI에 넘길 저장 음성도 없다. Fruition이 저장하는 오디오는 회의 녹음뿐이고, 위 전사 텍스트로만 제공한다.
 
 ## Internal edit context for I4 proposals
 
