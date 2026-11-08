@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import fruition.core.authz.WorkspaceSettingsClient;
 import fruition.core.document.domain.Document;
-import fruition.core.document.repository.ConvertCommandOutbox;
 import fruition.core.document.service.McpDocumentDataGateway;
 import fruition.shared.util.StorageProperties;
 import io.minio.GetObjectArgs;
@@ -48,7 +47,6 @@ class McpPdfToolsTest {
     private final McpPlanProposalService plans = mock(McpPlanProposalService.class);
     private final McpAccessClient access = mock(McpAccessClient.class);
     private final McpWikiDraftClient ai = mock(McpWikiDraftClient.class);
-    private final ConvertCommandOutbox outbox = mock(ConvertCommandOutbox.class);
     private final TransactionTemplate transaction = mock(TransactionTemplate.class);
     private final WorkspaceSettingsClient settings = mock(WorkspaceSettingsClient.class);
     private final MinioClient storage = mock(MinioClient.class);
@@ -60,7 +58,7 @@ class McpPdfToolsTest {
     McpPdfToolsTest() {
         StorageProperties properties = new StorageProperties();
         properties.setBucket("bucket");
-        tools = new McpPdfTools(documents, plans, access, ai, outbox, transaction, settings, storage, storage,
+        tools = new McpPdfTools(documents, plans, access, ai, transaction, settings, storage, storage,
                 properties, mapper, 10);
         when(access.authorizeProposal(any())).thenReturn(identity);
         doAnswer(invocation -> {
@@ -80,7 +78,7 @@ class McpPdfToolsTest {
                 .thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, false));
         assertThatThrownBy(() -> tools.invoke(identity, "start_pdf_conversion", start()))
                 .isInstanceOf(McpToolException.class).hasMessage("SOURCE_CHANGED");
-        verifyNoInteractions(ai, outbox);
+        verifyNoInteractions(ai, transaction);
 
         when(documents.convertSource(identity, "doc_pdf", PDF_HASH))
                 .thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, true));
@@ -92,7 +90,7 @@ class McpPdfToolsTest {
         tools.invoke(identity, "start_pdf_conversion", start());
 
         assertThat(view.get("state")).isEqualTo("PREPARING");
-        verify(outbox, times(2)).enqueueExternalPrepare(CONVERSION, "workspace", "user",
+        verify(documents, times(2)).enqueueExternalPrepare(CONVERSION, "workspace", "user",
                 "doc_pdf", "sources/documents/doc_pdf/original", 0, 10, true);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);

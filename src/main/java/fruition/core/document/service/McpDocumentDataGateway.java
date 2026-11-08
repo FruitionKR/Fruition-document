@@ -3,6 +3,7 @@ package fruition.core.document.service;
 import fruition.core.document.domain.Document;
 import fruition.core.document.domain.Folder;
 import fruition.core.document.repository.DocumentRepository;
+import fruition.core.document.repository.ConvertCommandOutbox;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.document.repository.PostgresDocumentEditStore;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -16,10 +17,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 
-/** Document-domain reads used by the MCP boundary; authorization remains caller-provided and current. */
+/** Document-domain access used by the MCP boundary; authorization remains caller-provided and current. */
 @Service
 @ConditionalOnProperty(name = "app.mcp.enabled", havingValue = "true")
 public class McpDocumentDataGateway {
+    private final ConvertCommandOutbox convertOutbox;
     private final DocumentRepository documents;
     private final FolderRepository folders;
     private final DocumentAccessPolicy policy;
@@ -28,10 +30,18 @@ public class McpDocumentDataGateway {
     public McpDocumentDataGateway(DocumentRepository documents, FolderRepository folders,
                                   DocumentAccessPolicy policy,
                                   PostgresDocumentEditStore editStore,
-                                  DocumentEditStateInitializer editStateInitializer) {
+                                  DocumentEditStateInitializer editStateInitializer, ConvertCommandOutbox convertOutbox) {
+        this.convertOutbox = convertOutbox;
         this.documents = documents; this.folders = folders; this.policy = policy;
         this.editStore = editStore; this.editStateInitializer = editStateInitializer;
     }
+    /** 호출자가 연 현재 트랜잭션에 전처리 명령을 저장한다. */
+    public void enqueueExternalPrepare(String conversionId, String workspaceId, String userId, String sourceDocumentId,
+                                       String sourceKey, int startPage, int pageCount, boolean describeFigures) {
+        convertOutbox.enqueueExternalPrepare(conversionId, workspaceId, userId, sourceDocumentId,
+                sourceKey, startPage, pageCount, describeFigures);
+    }
+
     public List<Document> search(String workspaceId, String query, int limit) {
         return documents.searchMcpCandidates(workspaceId, query, PageRequest.of(0, limit));
     }

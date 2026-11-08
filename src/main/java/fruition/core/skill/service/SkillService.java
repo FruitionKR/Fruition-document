@@ -40,6 +40,16 @@ public class SkillService {
         });
     }
 
+    /** MCP 승인 경계가 현재 권한과 정의를 검증한 뒤 호출한다. 저장 증거의 재시도 의미를 유지한다. */
+    public JsonNode acceptMcpDefinition(String runId, String operationId, String workspaceId, String userId,
+                                        JsonNode definition) {
+        return requester.acceptMcpDefinition(runId, operationId, workspaceId, userId, definition);
+    }
+
+    public JsonNode lookupMcpAcceptance(String runId, String operationId, String userId) {
+        return requester.lookupMcpAcceptance(runId, operationId, userId);
+    }
+
     public JsonNode list(String workspaceId, String userId) {
         requireMember(workspaceId, userId);
         return requester.list(workspaceId, userId);

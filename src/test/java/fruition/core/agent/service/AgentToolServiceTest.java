@@ -535,7 +535,7 @@ class AgentToolServiceTest {
     @Test
     void mcpSkillDefinitionUsesAiAcceptanceEvidenceForReceiptWithoutDocumentTransaction() throws Exception {
         var approvals = mock(McpAgentApprovalService.class);
-        var skills = mock(fruition.core.skill.repository.PipelineSkillRequester.class);
+        var skills = mock(fruition.core.skill.service.SkillService.class);
         service.setMcpApprovals(approvals);
         service.setSkills(skills);
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper();

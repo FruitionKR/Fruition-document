@@ -94,7 +94,7 @@ class McpAgentApprovalServiceIntegrationTest {
                 "{\"role\":\"OWNER\",\"permissions\":[]}");
         McpAgentApprovalService real = new McpAgentApprovalService(jdbc, new TransactionTemplate(manager), mapper,
                 access, new McpDocumentDataGateway(documentRepository, folderRepository, accessPolicy, editStore,
-                editStateInitializer), credits, requester, "1", "1", "KRW", "i5-test-v1");
+                editStateInitializer, mock(fruition.core.document.repository.ConvertCommandOutbox.class)), credits, requester, "1", "1", "KRW", "i5-test-v1");
         String documentId = documentService.createMarkdown(workspace, user, UUID.randomUUID().toString(),
                 new MarkdownDocumentCreateRequest("Drift", "# Drift\n\nbase", null)).id();
         // 이름 변경은 documents.current_version만 올리고 본문 revision·content hash는 그대로 둔다.
@@ -451,7 +451,7 @@ class McpAgentApprovalServiceIntegrationTest {
 
     @Test
     void teamSkillDefinitionRequiresSkillAuthorAndRecordsVersionedSkillReceipt() throws Exception {
-        var skills = mock(fruition.core.skill.repository.PipelineSkillRequester.class);
+        var skills = mock(fruition.core.skill.service.SkillService.class);
         service.setSkills(skills);
         String skillId = UUID.randomUUID().toString();
         when(skills.get(workspace, user, skillId)).thenReturn(mapper.readTree(
@@ -505,7 +505,7 @@ class McpAgentApprovalServiceIntegrationTest {
 
     @Test
     void lookupRecoversSkillReceiptFromAiAcceptanceEvidence() throws Exception {
-        var skills = mock(fruition.core.skill.repository.PipelineSkillRequester.class);
+        var skills = mock(fruition.core.skill.service.SkillService.class);
         service.setSkills(skills);
         credits.post(user, "grant", 2_000, "skill-lookup:" + user, "test");
         JsonNode run = skillRun("agent_" + "8".repeat(32), null, null);

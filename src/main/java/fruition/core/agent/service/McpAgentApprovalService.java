@@ -72,10 +72,10 @@ public class McpAgentApprovalService {
         this.priceVersion = priceVersion;
     }
 
-    private fruition.core.skill.repository.PipelineSkillRequester skills;
+    private fruition.core.skill.service.SkillService skills;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
-    public void setSkills(fruition.core.skill.repository.PipelineSkillRequester skills) {
+    public void setSkills(fruition.core.skill.service.SkillService skills) {
         this.skills = skills;
     }
 

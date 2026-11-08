@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import fruition.TestcontainersConfiguration;
 import fruition.core.authz.WorkspaceSettingsClient;
-import fruition.core.document.repository.ConvertCommandOutbox;
 import fruition.core.document.domain.Document;
 import fruition.core.document.service.McpDocumentDataGateway;
 import fruition.shared.util.StorageProperties;
@@ -61,7 +60,7 @@ class McpPdfSourceIntegrationTest {
                         .put("source_content_hash", "sha256:" + "a".repeat(64)));
         McpDocumentDataGateway documents = mock(McpDocumentDataGateway.class);
         var tools = new McpPdfTools(documents, mock(McpPlanProposalService.class),
-                mock(McpAccessClient.class), ai, mock(ConvertCommandOutbox.class), mock(TransactionTemplate.class),
+                mock(McpAccessClient.class), ai, mock(TransactionTemplate.class),
                 mock(WorkspaceSettingsClient.class), minio, storage, mapper, 10, storage.getEndpoint());
         McpIdentity identity = new McpIdentity("user_it", "ws_it", "https://client.example/mcp",
                 "00000000-0000-4000-8000-000000000001", 1, Set.of("read"), "OWNER", Set.of());

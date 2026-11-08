@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import fruition.core.authz.WorkspaceSettingsClient;
 import fruition.core.document.domain.Document;
-import fruition.core.document.repository.ConvertCommandOutbox;
 import fruition.core.document.service.McpDocumentDataGateway;
 import fruition.shared.util.StorageProperties;
 import io.minio.GetObjectArgs;
@@ -69,7 +68,6 @@ public class McpPdfTools {
     private final McpPlanProposalService plans;
     private final McpAccessClient access;
     private final McpWikiDraftClient ai;
-    private final ConvertCommandOutbox outbox;
     private final TransactionTemplate transaction;
     private final WorkspaceSettingsClient settings;
     private final MinioClient storage;
@@ -80,20 +78,20 @@ public class McpPdfTools {
 
     @Autowired
     public McpPdfTools(McpDocumentDataGateway documents, McpPlanProposalService plans, McpAccessClient access,
-                       McpWikiDraftClient ai, ConvertCommandOutbox outbox, TransactionTemplate transaction,
+                       McpWikiDraftClient ai, TransactionTemplate transaction,
                        WorkspaceSettingsClient settings, MinioClient storage, StorageProperties storageProperties,
                        ObjectMapper mapper, @Value("${app.convert.pages-per-batch:10}") int pagesPerBatch,
                        @Value("${app.mcp.pdf-source-endpoint:}") String imageEndpoint) {
-        this(documents, plans, access, ai, outbox, transaction, settings, storage,
+        this(documents, plans, access, ai, transaction, settings, storage,
                 imageEndpoint == null || imageEndpoint.isBlank() ? storage : localSigner(imageEndpoint, storageProperties),
                 storageProperties, mapper, pagesPerBatch);
     }
 
     McpPdfTools(McpDocumentDataGateway documents, McpPlanProposalService plans, McpAccessClient access,
-                McpWikiDraftClient ai, ConvertCommandOutbox outbox, TransactionTemplate transaction,
+                McpWikiDraftClient ai, TransactionTemplate transaction,
                 WorkspaceSettingsClient settings, MinioClient storage, MinioClient signer,
                 StorageProperties storageProperties, ObjectMapper mapper, int pagesPerBatch) {
-        this.documents = documents; this.plans = plans; this.access = access; this.ai = ai; this.outbox = outbox;
+        this.documents = documents; this.plans = plans; this.access = access; this.ai = ai;
         this.transaction = transaction; this.settings = settings; this.storage = storage; this.signer = signer;
         this.storageProperties = storageProperties; this.mapper = mapper; this.pagesPerBatch = pagesPerBatch;
     }
@@ -161,7 +159,7 @@ public class McpPdfTools {
         // 이어진다. 다시 넣어도 journal이 같은 run을 한 번만 실행한다.
         JsonNode next = status.path("dispatch_start_page");
         if (next.isInt() && next.intValue() >= 0) {
-            transaction.executeWithoutResult(tx -> outbox.enqueueExternalPrepare(conversionId, identity.workspaceId(),
+            transaction.executeWithoutResult(tx -> documents.enqueueExternalPrepare(conversionId, identity.workspaceId(),
                     identity.userId(), documentId, sourceKey, next.intValue(), pagesPerBatch, describeFigures));
         }
         return statusView(status);
