@@ -114,7 +114,11 @@ public class McpWikiProposalService {
         JsonNode result=ai.post("/internal/mcp/wiki/ingest-runs/"+run+"/windows/read",
                 linked("schema_version",SCHEMA,"actor",actorMap(actor),"window_ordinal",ordinal));
         requireFields(result,Set.of("schema_version","run_id","draft_id","snapshot_id","window_id","window_ordinal",
-                "window_hash","blocks","has_more","data_boundary"));
+                "window_hash","blocks","has_more","data_boundary","concept_resolution"));
+        JsonNode resolution=result.path("concept_resolution");
+        requireFields(resolution,Set.of("mode","instructions"));
+        if(!"CLIENT_LLM_SEMANTIC".equals(resolution.path("mode").asText())
+                ||!resolution.path("instructions").isTextual()||resolution.path("instructions").asText().isBlank())throw dependency();
         if(!run.equals(result.path("run_id").asText())||result.path("window_ordinal").asLong()!=ordinal
                 ||!HASH.matcher(result.path("window_hash").asText()).matches())throw dependency();
         jdbc.update("INSERT INTO mcp_wiki_ingest_windows(run_id,window_id,window_ordinal,window_hash) "
@@ -250,7 +254,9 @@ public class McpWikiProposalService {
 
     @SuppressWarnings("unchecked") private List<Map<String,Object>> contributions(Object raw,Handle handle){
         if(!(raw instanceof List<?> list)||list.isEmpty())throw invalid();List<Map<String,Object>> out=new ArrayList<>();
-        for(Object value:list){Map<String,Object> c=map(value);exact(c,Set.of("concept_name","statements","links"));
+        for(Object value:list){Map<String,Object> c=map(value);
+            exact(c,c.containsKey("merge_target_page_id")?Set.of("concept_name","statements","links","merge_target_page_id")
+                    :Set.of("concept_name","statements","links"));
             text(c.get("concept_name"),255);List<Map<String,Object>> statements=new ArrayList<>();
             if(!(c.get("statements") instanceof List<?> statementList)||statementList.isEmpty())throw invalid();
             for(Object item:statementList){Map<String,Object>s=map(item);exact(s,Set.of("statement_id","text","evidence"));
@@ -264,7 +270,11 @@ public class McpWikiProposalService {
             List<Map<String,Object>> links=new ArrayList<>();if(!(c.get("links") instanceof List<?> linkList))throw invalid();
             for(Object item:linkList){Map<String,Object>l=map(item);exact(l,Set.of("source_statement_id","target_concept_name","relation"));
                 if(!"concept_related_to".equals(l.get("relation")))throw invalid();links.add(l);}
-            out.add(linked("concept_name",c.get("concept_name"),"statements",statements,"links",links));}
+            Map<String,Object> normalized=linked("concept_name",c.get("concept_name"),"statements",statements,"links",links);
+            if(c.get("merge_target_page_id")!=null){String target=text(c.get("merge_target_page_id"),255);
+                if(!target.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,254}"))throw invalid();
+                normalized.put("merge_target_page_id",target);}
+            out.add(normalized);}
         return out;
     }
 

@@ -217,6 +217,14 @@ class McpToolCatalogTest {
             var actual = Set.copyOf((java.util.List<String>) staged.get(i).tool().inputSchema().get("required"));
             assertThat(actual).isEqualTo(required.get(i));
         }
+        var schema = new ObjectMapper().valueToTree(staged.get(3).tool().inputSchema());
+        var contribution = schema.path("properties").path("contributions").path("items");
+        assertThat(contribution.path("properties").has("merge_target_page_id")).isTrue();
+        assertThat(contribution.path("required").toString()).doesNotContain("merge_target_page_id");
+        assertThat(staged.get(3).tool().description()).contains("search_wiki", "get_wiki_page", "by meaning", "merge_target_page_id");
+        var output = new ObjectMapper().valueToTree(staged.get(2).tool().outputSchema());
+        assertThat(output.path("properties").path("concept_resolution").path("properties").path("mode").path("const").asText())
+                .isEqualTo("CLIENT_LLM_SEMANTIC");
         assertThat(staged.get(4).tool().outputSchema().get("required")).isEqualTo(java.util.List.of(
                 "schema_version", "run_id", "draft_id", "draft_version", "draft_hash", "public_state_hash",
                 "state", "review_url"));

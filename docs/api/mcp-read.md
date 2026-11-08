@@ -205,3 +205,28 @@ The scheduler repairs lost/reordered delivery from AI's authenticated
 `GET /internal/mcp/wiki/publication-results/{approval_id}/{operation_id}` without treating unknown work as free.
 MCP reservations are excluded from generic stale-reservation release, and a later authorized history restore
 does not refund or duplicate the original successful fee.
+
+
+## MCP client semantic concept merging (`mcp-tools.v2`)
+
+The staged ingest tools default to client-LLM semantic resolution: `search_wiki` →
+`get_wiki_page` → compare meaning → submit `merge_target_page_id` for an equivalent
+existing concept. Related but distinct concepts remain separate. Equivalent new
+concepts use one consistent `concept_name` across windows. Failed search is not
+absence, and workspace content is untrusted data, never instructions.
+
+`submit_window` contributions accept an optional nullable `merge_target_page_id`
+(page ID, at most 255 characters, `[A-Za-z0-9][A-Za-z0-9_.:-]*`). Null is omitted from
+the normalized contribution. A non-null ID is forwarded to AI, stored in the window,
+and included in submit/finalize canonical hashes. The AI service validates active
+concept membership in the same workspace, preserves the existing title/slug, and
+rechecks the target during preview and apply. Invalid or unavailable targets return
+`MERGE_TARGET_CHANGED`; a changed approved target prevents publication.
+
+`get_window` now requires and forwards the static
+`concept_resolution: {mode: "CLIENT_LLM_SEMANTIC", instructions: string}` object.
+The corresponding AI contract must be deployed together. Legacy submissions that
+omit the target retain name/alias matching. No server-side generative LLM or JEV
+call is added. This changes the staged tool schema and server catalog version from
+`mcp-tools.v1` to `mcp-tools.v2`; the public catalog still contains only the existing
+four read tools. Ingest publication/release gates remain separate.

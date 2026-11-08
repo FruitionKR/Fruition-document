@@ -9,6 +9,8 @@ import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -68,8 +70,9 @@ class McpWikiProposalServiceIntegrationTest {
         aiServer.shutdown();
     }
 
-    @Test
-    void ingestFlowMapsExternalEvidenceToOneBoundSnapshotAndProducesOnlyValidatedReviewUrl() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"legacy", "null", "auth-page"})
+    void ingestFlowMapsExternalEvidenceToOneBoundSnapshotAndProducesOnlyValidatedReviewUrl(String mergeTarget) throws Exception {
         String run = UUID.randomUUID().toString(), draft = UUID.randomUUID().toString();
         String snapshot = UUID.randomUUID().toString(), window = UUID.randomUUID().toString();
         aiServer.enqueue(json("""
@@ -85,7 +88,8 @@ class McpWikiProposalServiceIntegrationTest {
                 {"schema_version":"mcp.wiki-draft.v1","run_id":"%s","draft_id":"%s","snapshot_id":"%s",
                  "window_id":"%s","window_ordinal":1,"window_hash":"sha256:%s",
                  "blocks":[{"block_id":"B0001","ordinal":1,"text":"evidence","content_hash":"sha256:%s"}],
-                 "has_more":false,"data_boundary":"UNTRUSTED_WORKSPACE_CONTENT"}
+                 "has_more":false,"data_boundary":"UNTRUSTED_WORKSPACE_CONTENT",
+                 "concept_resolution":{"mode":"CLIENT_LLM_SEMANTIC","instructions":"Compare meaning before submitting."}}
                 """.formatted(run, draft, snapshot, window, "b".repeat(64), "c".repeat(64))));
         aiServer.enqueue(json("""
                 {"schema_version":"mcp.wiki-draft.v1","run_id":"%s","draft_id":"%s","window_id":"%s",
@@ -99,10 +103,12 @@ class McpWikiProposalServiceIntegrationTest {
 
         service.invoke(identity, "start_ingest", Map.of("idempotency_key", "start-1", "document_id", "doc_i9"));
         service.invoke(identity, "resume_ingest", Map.of("run_id", run));
-        service.invoke(identity, "get_window", Map.of("run_id", run, "window_ordinal", 1));
+        JsonNode windowResult = (JsonNode) service.invoke(identity, "get_window", Map.of("run_id", run, "window_ordinal", 1));
+        assertThat(windowResult.path("concept_resolution").path("mode").asText()).isEqualTo("CLIENT_LLM_SEMANTIC");
         Map<String,Object> evidence = Map.of("document_id", "doc_i9", "block_id", "B0001", "quote", "evidence");
-        Map<String,Object> contribution = Map.of("concept_name", "Concept", "statements", List.of(Map.of(
+        Map<String,Object> contribution = linked("concept_name", "Concept", "statements", List.of(Map.of(
                 "statement_id", "s1", "text", "evidence", "evidence", List.of(evidence))), "links", List.of());
+        if (!"legacy".equals(mergeTarget)) contribution.put("merge_target_page_id", "null".equals(mergeTarget) ? null : mergeTarget);
         service.invoke(identity, "submit_window", linked("idempotency_key", "submit-1", "run_id", run,
                 "window_id", window, "snapshot_id", snapshot, "window_hash", "sha256:" + "b".repeat(64),
                 "contributions", List.of(contribution)));
@@ -117,6 +123,14 @@ class McpWikiProposalServiceIntegrationTest {
         for (int i = 0; i < 6; i++) requests.add(aiServer.takeRequest());
         assertThat(requests.get(0).getHeader("X-Agent-Service-Token")).isEqualTo("i9-agent-token");
         JsonNode submitted = mapper.readTree(requests.get(3).getBody().readUtf8());
+        JsonNode normalized = submitted.path("contributions").get(0);
+        if ("auth-page".equals(mergeTarget)) {
+            assertThat(normalized.path("merge_target_page_id").asText()).isEqualTo("auth-page");
+        } else {
+            assertThat(normalized.has("merge_target_page_id")).isFalse();
+        }
+        String stored = jdbc.queryForObject("SELECT contributions::text FROM mcp_wiki_ingest_windows WHERE run_id=?::uuid AND window_id=?::uuid", String.class, run, window);
+        assertThat(mapper.readTree(stored).get(0)).isEqualTo(normalized);
         JsonNode internalEvidence = submitted.path("contributions").get(0).path("statements").get(0)
                 .path("evidence").get(0);
         assertThat(internalEvidence.path("snapshot_id").asText()).isEqualTo(snapshot);
