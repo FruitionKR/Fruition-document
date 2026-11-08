@@ -80,8 +80,10 @@ Skill 지침은 워크스페이스 콘텐츠이므로 권한을 부여하거나 
 
 ## 승인과 실행
 
-- 승인 화면은 기존 `/mcp/workspaces/{workspace_id}/runs/{run_id}`이고 승인·견적·예약은 기존 MCP 승인 경로와 같다
-  (operation 하나의 MCP 실행 요금). 승인 시점과 실행 시점(`McpAgentApprovalService.authorizeExecution`)에 현재 grant·policy·
+- 승인 화면은 기존 `/mcp/workspaces/{workspace_id}/runs/{run_id}`이고 승인·견적·예약은 기존 MCP 승인 경로와 같다.
+  **Skill 정의 저장은 무료다**: `publish_skill_definition`은 요금 대상 operation 수에서 빠져 견적 `maximum_charge_minor`·예약·
+  정산이 0이고, 영수증도 청구에서 제외한다. Skill을 실제로 적용한 결과(`propose_document_edit`/`propose_plan`)만 그
+  operation의 기존 MCP 요금이 붙으며 Skill 별도 가산 요금은 없다. 승인 시점과 실행 시점(`McpAgentApprovalService.authorizeExecution`)에 현재 grant·policy·
   `skill.author`를 다시 확인하고, 실행 시점에는 `expected_version`이 현재 최신 버전과 같아야 한다(다르면 409).
 - 실행(`AgentToolService`)은 ai `POST /skills/mcp-acceptances`(같은 run·operation이면 저장 증거 재생)로 저장한 뒤 그 증거로
   `mcp_document_edit_receipts`에 resource_type `SKILL` 영수증을 남긴다(생성 before null, 수정 before = expected_version,

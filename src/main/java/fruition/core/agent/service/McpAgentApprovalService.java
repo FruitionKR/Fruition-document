@@ -352,7 +352,8 @@ public class McpAgentApprovalService {
         Approval approval = findById(approvalId.toString());
         if (approval == null || "SETTLED".equals(approval.settlementStatus())) return;
         long changed = jdbc.queryForObject("SELECT count(*) FROM mcp_document_edit_receipts "
-                + "WHERE approval_id = ? AND outcome = 'COMMITTED' AND changed", Long.class, approvalId);
+                + "WHERE approval_id = ? AND outcome = 'COMMITTED' AND changed AND tool_name <> ?", Long.class,
+                approvalId, SKILL_TOOL);
         long chargedMinor = Math.min(Math.multiplyExact(changed, approval.unitPriceMinor()), approval.planCapMinor());
         long chargeCreditMilli = Math.multiplyExact(chargedMinor, 1000L);
         long receipts = jdbc.queryForObject("SELECT count(*) FROM mcp_document_edit_receipts WHERE approval_id = ?",
@@ -377,7 +378,7 @@ public class McpAgentApprovalService {
                 requireSameIntent(existing, proposal);
                 return existing;
             }
-            Price price = price(proposal.operationIds().size());
+            Price price = price(billable(proposal.operations()));
             requireReviewedPrice(proposal.expectedPrice(), price);
             String approvalId = UUID.randomUUID().toString();
             String canonical = canonicalHash(approvalId, proposal, price);
@@ -430,6 +431,14 @@ public class McpAgentApprovalService {
         return new Proposal(runId, workspaceId, userId, request.planVersion(), request.operationHash(),
                 operationIds, selectedOperations, actor,
                 request.expectedPriceSnapshot());
+    }
+
+    /**
+     * 요금 대상 operation 수. Skill 정의 저장(publish_skill_definition)은 무료다. Skill을 실제로 적용한 결과는 문서·위키
+     * operation으로 제출되어 그 operation의 기존 요금이 붙는다.
+     */
+    private static int billable(List<JsonNode> operations) {
+        return (int) operations.stream().filter(operation -> !SKILL_TOOL.equals(operation.path("tool_name").asText())).count();
     }
 
     private Price price(int operationCount) {
@@ -568,7 +577,7 @@ public class McpAgentApprovalService {
             quote.put("unavailable_reason", "TARGET_VERSION_CHANGED");
             return projected;
         }
-        Price price = price(defaultOperations.size());
+        Price price = price(billable(defaultOperations));
         ObjectNode projected = ((ObjectNode) run).deepCopy();
         ObjectNode quote = projected.putObject("mcp_approval_quote");
         quote.put("client_name", identity.clientName());

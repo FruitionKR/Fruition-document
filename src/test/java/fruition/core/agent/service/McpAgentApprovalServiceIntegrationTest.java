@@ -422,14 +422,21 @@ class McpAgentApprovalServiceIntegrationTest {
         when(requester.approveMcp(anyString(), anyString(), anyString(), anyInt(), anyString(), anyList(),
                 anyString(), anyString(), anyString(), anyLong())).thenReturn(run);
 
-        assertThatThrownBy(() -> service.approve(workspace, user, run.path("id").asText(), request(), run))
+        assertThatThrownBy(() -> service.approve(workspace, user, run.path("id").asText(), freeRequest(), run))
                 .isInstanceOf(fruition.core.mcp.McpAuthorizationException.class);
 
         McpIdentity author = new McpIdentity(user, workspace, client, grant, 2,
                 Set.of("write_propose"), "MEMBER", Set.of("skill.author"), "Test MCP Client");
         when(access.authorizeWebApproval(any())).thenReturn(author);
         when(access.authorizeOperationBoundary(any(), anyLong())).thenReturn(author);
-        service.approve(workspace, user, run.path("id").asText(), request(), run);
+        // Skill 정의 저장은 무료다: 견적·예약·정산이 모두 0이다.
+        assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("price_snapshot")
+                .path("maximum_charge_minor").asLong(-1)).isZero();
+        long balance = credits.credits(user).balanceKrwMilli();
+        assertThatThrownBy(() -> service.approve(workspace, user, run.path("id").asText(), request(), run))
+                .isInstanceOf(McpAgentApprovalService.McpApprovalException.class);
+        service.approve(workspace, user, run.path("id").asText(), freeRequest(), run);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
         String approvalId = approvalId(run.path("id").asText());
         JsonNode arguments = run.path("plan").path("operations").get(0).path("arguments");
 
@@ -449,6 +456,12 @@ class McpAgentApprovalServiceIntegrationTest {
         assertThat(receipt.afterVersion()).isEqualTo(4);
         assertThat(service.authorizeExecution(executionRequest(run, approvalId, "op-1", arguments),
                 "publish_skill_definition").replay()).isEqualTo(receipt);
+        assertThat(jdbc.queryForObject("SELECT charged_minor FROM mcp_agent_approvals WHERE approval_id = ?::uuid",
+                Long.class, approvalId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT settlement_status FROM mcp_agent_approvals WHERE approval_id = ?::uuid",
+                String.class, approvalId)).isEqualTo("SETTLED");
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(balance);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
     }
 
     @Test
@@ -459,7 +472,7 @@ class McpAgentApprovalServiceIntegrationTest {
         JsonNode run = skillRun("agent_" + "8".repeat(32), null, null);
         when(requester.approveMcp(anyString(), anyString(), anyString(), anyInt(), anyString(), anyList(),
                 anyString(), anyString(), anyString(), anyLong())).thenReturn(run);
-        service.approve(workspace, user, run.path("id").asText(), request(), run);
+        service.approve(workspace, user, run.path("id").asText(), freeRequest(), run);
         String approvalId = approvalId(run.path("id").asText());
         JsonNode arguments = run.path("plan").path("operations").get(0).path("arguments");
         var execution = service.authorizeExecution(executionRequest(run, approvalId, "op-1", arguments),
@@ -503,6 +516,11 @@ class McpAgentApprovalServiceIntegrationTest {
 
     private AgentRunApproveRequest request() {
         return request("op-1");
+    }
+
+    private AgentRunApproveRequest freeRequest() {
+        return new AgentRunApproveRequest(1, "c".repeat(64), java.util.List.of("op-1"),
+                new AgentRunApproveRequest.McpPriceSnapshot(1L, 1L, "KRW", "i5-test-v1", 0L));
     }
 
     private AgentRunApproveRequest request(String operationId) {
