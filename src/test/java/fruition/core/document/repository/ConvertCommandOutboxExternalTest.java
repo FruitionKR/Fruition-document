@@ -21,10 +21,10 @@ class ConvertCommandOutboxExternalTest {
         String conversion = "0f6f3d1e-2b7a-4c8e-9d5f-1a2b3c4d5e6f";
 
         new ConvertCommandOutbox(writer, mapper, "ai.convert.command").enqueueExternalPrepare(
-                conversion, "ws_1", "user_1", "doc_1", "sources/documents/doc_1/original", 10, false);
+                conversion, "ws_1", "user_1", "doc_1", "sources/documents/doc_1/original", 10, 10, false);
 
         ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
-        String runId = "mcpconvert:" + conversion + ":0";
+        String runId = "mcpconvert:" + conversion + ":10";
         verify(writer).enqueueJoined(eq(runId), eq("ai.convert.command"), eq(runId), payload.capture());
         JsonNode command = mapper.readTree(payload.getValue());
         assertThat(Set.copyOf(command.properties().stream().map(java.util.Map.Entry::getKey).toList())).isEqualTo(Set.of(
@@ -33,6 +33,6 @@ class ConvertCommandOutboxExternalTest {
         assertThat(command.path("parent_run_id").asText()).isEqualTo("mcpconvert:" + conversion);
         assertThat(command.path("kind").asText()).isEqualTo("convert_batch");
         assertThat(command.path("restoration").asText()).isEqualTo("external");
-        assertThat(command.path("start_page").asInt()).isZero();
+        assertThat(command.path("start_page").asInt()).isEqualTo(10);
     }
 }

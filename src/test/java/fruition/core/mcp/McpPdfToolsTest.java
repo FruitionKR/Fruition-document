@@ -92,7 +92,7 @@ class McpPdfToolsTest {
 
         assertThat(view.get("state")).isEqualTo("PREPARING");
         verify(outbox, times(2)).enqueueExternalPrepare(CONVERSION, "workspace", "user",
-                "doc_pdf", "sources/documents/doc_pdf/original", 10, true);
+                "doc_pdf", "sources/documents/doc_pdf/original", 0, 10, true);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
         verify(ai, times(2)).post(eq("/internal/mcp/pdf-conversions"), body.capture());
@@ -192,7 +192,8 @@ class McpPdfToolsTest {
     private ObjectNode status(boolean needsDispatch) {
         ObjectNode node = mapper.createObjectNode().put("schema_version", "mcp.pdf-conversion.v1")
                 .put("conversion_id", CONVERSION).put("state", "PREPARING").put("source_document_id", "doc_pdf")
-                .put("source_content_hash", PDF_HASH).put("prepared_pages", 0).put("needs_dispatch", needsDispatch);
+                .put("source_content_hash", PDF_HASH).put("prepared_pages", 0);
+        if (needsDispatch) node.put("dispatch_start_page", 0); else node.putNull("dispatch_start_page");
         node.putNull("total_pages");
         node.putNull("window_count");
         node.putNull("error_code");

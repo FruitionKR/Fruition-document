@@ -29,9 +29,9 @@
 입력 `{idempotency_key, document_id, source_content_hash}`. 원본은 웹 변환과 같은 판정(`viewer.canConvert`)이어야 하고
 (아니면 `RESOURCE_NOT_FOUND`), hash(`documents.content_hash`, `sha256:` 형식)가 같아야 한다(아니면 `SOURCE_CHANGED`).
 
-AI에 세션을 만들고, 첫 batch(`run_id=mcpconvert:<conversion>:0`, `restoration=external`, provider·model 없음)를 기존
-`ai.convert.command` outbox로 넣는다. converter는 전처리만 하고 남은 쪽 batch를 스스로 잇는다. 같은 인자로 다시 부르면 같은 세션의
-상태를 돌려준다(진행 확인). 응답 `mcp.pdf-conversion.v1`: `conversion_id`, `state`(`PREPARING|READY|FAILED|FINALIZED`),
+AI에 세션을 만들고, 아직 journal에 없는 다음 전처리 batch(`run_id=mcpconvert:<conversion>:<start>`, `restoration=external`,
+provider·model 없음, `app.convert.pages-per-batch`쪽)를 기존 `ai.convert.command` outbox로 넣는다. converter는 전처리만 하고
+command를 발행하지 않는다. 같은 인자로 다시 부르면 같은 세션의 상태를 돌려주고 다음 batch를 잇는다(진행 확인). 응답 `mcp.pdf-conversion.v1`: `conversion_id`, `state`(`PREPARING|READY|FAILED|FINALIZED`),
 `source_document_id`, `source_content_hash`, `total_pages`, `prepared_pages`, `window_count`, `error_code`, `next_step`.
 
 ## `get_conversion_window`

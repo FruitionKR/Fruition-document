@@ -157,10 +157,12 @@ public class McpPdfTools {
         body.putAll(request);
         JsonNode status = ai.post(BASE, body);
         String conversionId = uuid(status.path("conversion_id").asText());
-        // 첫 batch command가 아직 journal에 없으면 넣는다. 다시 넣어도 journal이 같은 run을 한 번만 실행한다.
-        if (status.path("needs_dispatch").asBoolean(false)) {
+        // 아직 journal에 없는 다음 전처리 batch를 기존 outbox로 넣는다. 진행 확인(같은 인자 재호출) 때마다 다음 batch가
+        // 이어진다. 다시 넣어도 journal이 같은 run을 한 번만 실행한다.
+        JsonNode next = status.path("dispatch_start_page");
+        if (next.isInt() && next.intValue() >= 0) {
             transaction.executeWithoutResult(tx -> outbox.enqueueExternalPrepare(conversionId, identity.workspaceId(),
-                    identity.userId(), documentId, sourceKey, pagesPerBatch, describeFigures));
+                    identity.userId(), documentId, sourceKey, next.intValue(), pagesPerBatch, describeFigures));
         }
         return statusView(status);
     }
