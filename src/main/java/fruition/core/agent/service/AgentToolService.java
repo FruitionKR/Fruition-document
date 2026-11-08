@@ -67,6 +67,11 @@ public class AgentToolService {
             "apply_document_edit", Set.of(
                     "document_id", "base_version", "target", "content_artifact_id", "content_hash"));
 
+    /** MCP 승인 계획 전용 PDF 변환본 생성 인자. 내부 Agent 실행 경로는 받지 않는다. */
+    private static final Set<String> CONVERTED_CREATE_DOCUMENT_ARGUMENTS = Set.of(
+            "display_name", "folder_id", "content_artifact_id", "content_hash",
+            "source_document_id", "source_content_hash");
+
     private final PipelineAgentToolAuthorizationClient authorizationClient;
     private final PipelineAgentArtifactClient artifactClient;
     private final AgentRunCommandRepository runCommandRepository;
@@ -164,7 +169,9 @@ public class AgentToolService {
     }
 
     private Object executeMcpMutation(String toolName, AgentToolExecuteRequest request) {
-        requireToolArguments(EXECUTE_TOOL_ARGUMENTS, toolName, request.arguments());
+        boolean converted = "create_document".equals(toolName) && request.arguments().has("source_document_id");
+        if (converted) requireArguments(request.arguments(), CONVERTED_CREATE_DOCUMENT_ARGUMENTS);
+        else requireToolArguments(EXECUTE_TOOL_ARGUMENTS, toolName, request.arguments());
         authorizationClient.authorizeExecute(toolName, request);
         if (mcpApprovals == null)
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
@@ -205,10 +212,15 @@ public class AgentToolService {
                             moved.currentVersion() > before, moved.updatedAt());
                 }
                 case "create_document" -> {
-                    var created = documentService.createAgentMarkdownInCurrentTransaction(
-                            request.workspaceId(), request.userId(), new MarkdownDocumentCreateRequest(
-                                    text(arguments, "display_name"), resolvedArtifact.markdown(),
-                                    nullableUuid(arguments, "folder_id")));
+                    var createRequest = new MarkdownDocumentCreateRequest(
+                            text(arguments, "display_name"), resolvedArtifact.markdown(),
+                            nullableUuid(arguments, "folder_id"));
+                    var created = converted
+                            ? documentService.createConvertedMarkdownInCurrentTransaction(
+                                    request.workspaceId(), request.userId(), text(arguments, "source_document_id"),
+                                    text(arguments, "source_content_hash"), createRequest)
+                            : documentService.createAgentMarkdownInCurrentTransaction(
+                                    request.workspaceId(), request.userId(), createRequest);
                     yield mcpApprovals.recordReceipt(execution, request.operationId(), toolName, "DOCUMENT",
                             created.id(), null, created.currentVersion(), true, created.uploadedAt());
                 }
