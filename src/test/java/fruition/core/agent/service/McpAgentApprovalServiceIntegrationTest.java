@@ -10,6 +10,7 @@ import fruition.core.agent.repository.PipelineAgentRunStatusRequester;
 import fruition.core.agent.repository.AgentRunCommandRepository;
 import fruition.core.document.domain.Document;
 import fruition.core.document.dto.DocumentContentSaveResponse;
+import fruition.core.document.dto.DocumentRenameRequest;
 import fruition.core.document.dto.MarkdownDocumentCreateRequest;
 import fruition.core.document.service.DocumentService;
 import fruition.core.document.service.FolderService;
@@ -55,6 +56,11 @@ class McpAgentApprovalServiceIntegrationTest {
     @Autowired FolderService folderService;
     @Autowired StringRedisTemplate redis;
     @Autowired AgentRunCommandRepository runCommands;
+    @Autowired fruition.core.document.repository.DocumentRepository documentRepository;
+    @Autowired fruition.core.document.repository.FolderRepository folderRepository;
+    @Autowired fruition.core.document.service.DocumentAccessPolicy accessPolicy;
+    @Autowired fruition.core.document.repository.PostgresDocumentEditStore editStore;
+    @Autowired fruition.core.document.service.DocumentEditStateInitializer editStateInitializer;
 
     private McpAccessClient access;
     private McpDocumentDataGateway documents;
@@ -79,6 +85,38 @@ class McpAgentApprovalServiceIntegrationTest {
         Document document = mock(Document.class);
         when(document.getCurrentVersion()).thenReturn(1L);
         when(documents.find(anyString(), anyString())).thenReturn(java.util.Optional.of(document));
+        when(documents.currentEditRevision(any())).thenReturn(java.util.Optional.of(1L));
+    }
+
+    @Test
+    void editApprovalUsesBodyRevisionNotMetadataVersionAndRejectsChangedSource() throws Exception {
+        redis.opsForValue().set("authz:role:v2:" + workspace + ":" + user,
+                "{\"role\":\"OWNER\",\"permissions\":[]}");
+        McpAgentApprovalService real = new McpAgentApprovalService(jdbc, new TransactionTemplate(manager), mapper,
+                access, new McpDocumentDataGateway(documentRepository, folderRepository, accessPolicy, editStore,
+                editStateInitializer), credits, requester, "1", "1", "KRW", "i5-test-v1");
+        String documentId = documentService.createMarkdown(workspace, user, UUID.randomUUID().toString(),
+                new MarkdownDocumentCreateRequest("Drift", "# Drift\n\nbase", null)).id();
+        // 이름 변경은 documents.current_version만 올리고 본문 revision·content hash는 그대로 둔다.
+        documentService.rename(workspace, user, documentId, new DocumentRenameRequest("Drift renamed", 1L));
+        assertThat(jdbc.queryForObject("SELECT current_version FROM documents WHERE id = ?",
+                Long.class, documentId)).isEqualTo(2L);
+
+        JsonNode sameContent = run("agent_" + "1".repeat(32), documentId, "op-1", 1);
+        assertThat(real.projectRun(workspace, user, sameContent).has("mcp_approval_quote")).isTrue();
+
+        documentService.saveContent(workspace, user, documentId, "# Drift\n\nchanged", 1L,
+                UUID.randomUUID().toString(), null);
+        JsonNode stale = run("agent_" + "2".repeat(32), documentId, "op-1", 1);
+        assertThat(real.projectRun(workspace, user, stale).has("mcp_approval_quote")).isFalse();
+        credits.post(user, "grant", 5_000, "drift-grant:" + user, "test");
+        assertThatThrownBy(() -> real.approve(workspace, user, stale.path("id").asText(), request(), stale))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("MCP target version changed.");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM mcp_agent_approvals WHERE user_id = ?",
+                Integer.class, user)).isZero();
+        assertThat(real.projectRun(workspace, user, run("agent_" + "3".repeat(32), documentId, "op-1", 2))
+                .has("mcp_approval_quote")).isTrue();
     }
 
     @Test
@@ -264,6 +302,7 @@ class McpAgentApprovalServiceIntegrationTest {
         Document versionTwo = mock(Document.class);
         when(versionTwo.getCurrentVersion()).thenReturn(2L);
         when(documents.find(anyString(), anyString())).thenReturn(java.util.Optional.of(versionTwo));
+        when(documents.currentEditRevision(any())).thenReturn(java.util.Optional.of(2L));
         service.approve(workspace, user, noopRun.path("id").asText(), request("op-2"), noopRun);
         String noopApproval = approvalId(noopRun.path("id").asText());
         var noopExecution = service.authorizeExecution(execute(noopRun, noopApproval, "op-2", 2),

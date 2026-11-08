@@ -586,7 +586,10 @@ public class McpAgentApprovalService {
         if ("move_document".equals(tool) && document.getFolderId() != null
                 && !documents.viewer(identity).canEditFolder(document.getFolderId()))
             throw new McpAuthorizationException(403, "PERMISSION_REVOKED");
-        if (baseVersion != null && document.getCurrentVersion() != baseVersion)
+        // apply_document_edit의 base_version은 get_document·편집 저장과 같은 본문 revision이다.
+        long current = "apply_document_edit".equals(tool)
+                ? documents.currentEditRevision(document).orElse(-1L) : document.getCurrentVersion();
+        if (baseVersion != null && current != baseVersion)
             throw new ResponseStatusException(HttpStatus.CONFLICT, "MCP target version changed.");
     }
 

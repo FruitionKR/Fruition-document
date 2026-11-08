@@ -58,6 +58,11 @@ public class McpDocumentDataGateway {
                 .or(() -> Optional.of(new CurrentIdentity(document.getCurrentVersion(),
                         document.getCurrentContentHash(), 0)));
     }
+    /** 본문 편집 revision. documents.current_version(이름·이동·삭제 메타데이터 버전)과 별개다. */
+    public Optional<Long> currentEditRevision(Document document) {
+        return editStore.findCurrentIdentity(document.getWorkspaceId(), document.getId())
+                .map(PostgresDocumentEditStore.CurrentIdentity::version);
+    }
     public Optional<CurrentBody> currentBody(Document document, int maxBytes) {
         if ("chat_export".equals(document.getOrigin())) {
             String markdown = document.getPipelineInputMarkdown();

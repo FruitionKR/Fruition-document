@@ -100,6 +100,11 @@ the document's current edit policy locally, then sends `POST /agent/runs/mcp-pro
 `reason`, and creates deterministic `op-1`/`artifact-1` records. The artifact hash covers exact UTF-8 Markdown;
 the canonical request hash excludes invocation ID and includes trusted actor identity and the complete proposal.
 
+`base_version`은 `get_document`·`find_documents`의 `current_version`과 같은 본문 편집 revision
+(`document_edit_states.revision`)이다. 웹 승인 견적·승인·실행 재검증도 같은 revision과 비교하며, 이름 변경·이동처럼
+`documents.current_version`(메타데이터 버전)만 올리는 변경은 편집 승인을 막지 않는다. 본문이 바뀌면 revision이 올라가
+`MCP target version changed.`(409)로 거절한다.
+
 The staged external result is exactly
 `{ "run_id": "<uuid-v4>", "status": "awaiting_approval", "review_url": "https://<configured-origin>/mcp/workspaces/<encoded-workspace-id>/runs/<encoded-run-id>" }`.
 The server builds the link only from `MCP_REVIEW_ORIGIN`, verified actor workspace, and the validated AI run ID;
