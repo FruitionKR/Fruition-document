@@ -274,6 +274,8 @@ rechecks the target during preview and apply. Invalid or unavailable targets ret
 `get_window` now requires and forwards the static
 `concept_resolution: {mode: "CLIENT_LLM_SEMANTIC", instructions: string}` object.
 The corresponding AI contract must be deployed together. Legacy submissions that
-omit the target retain name/alias matching. No server-side generative LLM or JEV
+omit the target retain name/alias matching.
+(2026-11-09) finalize는 웹 편입과 같이 이름·별칭 일치 → Jev 개념 판정(한 번만, 초안에 고정) → 클라이언트 대상 순으로 정한다.
+짝 AI 변경: Martinel2/mcp-expand-ai-integration 309a662. No server-side generative LLM or JEV
 call is added. This changed the tool schema and server catalog version from
 `mcp-tools.v1` to `mcp-tools.v2`; registering the twelve tools publicly bumps it to `mcp-tools.v3`.
