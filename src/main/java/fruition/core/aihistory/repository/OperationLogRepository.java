@@ -5,9 +5,12 @@ import fruition.core.aihistory.domain.OperationStatus;
 import fruition.core.aihistory.domain.OperationType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+
+import jakarta.persistence.LockModeType;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -15,6 +18,11 @@ import java.util.List;
 import java.util.Optional;
 
 public interface OperationLogRepository extends JpaRepository<OperationLog, String> {
+
+    /** Publication/task-result races must settle against one registered operation row. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT l FROM OperationLog l WHERE l.operationId = :operationId")
+    Optional<OperationLog> findByIdForUpdate(@Param("operationId") String operationId);
 
     /** 같은 복구 미리보기 토큰은 하나의 복구 작업만 원자적으로 선점한다. */
     @Modifying

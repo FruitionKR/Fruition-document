@@ -6,6 +6,7 @@ import fruition.core.agent.dto.AgentTurnRequest;
 import fruition.core.agent.dto.AgentTurnResponse;
 import fruition.core.agent.dto.AgentRunApproveRequest;
 import fruition.core.agent.dto.AgentRunReviseRequest;
+import fruition.core.agent.dto.McpOwnedRunsResponse;
 import fruition.core.agent.exception.AgentRunNotFoundException;
 import fruition.core.agent.exception.InvalidAgentTurnRequestException;
 import fruition.core.agent.exception.PipelineAgentException;
@@ -48,6 +49,28 @@ class AgentTurnControllerTest {
     @Autowired JwtTokenProvider jwtTokenProvider;
     @MockBean AgentTurnService agentTurnService;
     @MockBean fruition.core.query.service.QueryEventBroker runEventBroker;
+
+    @Test
+    void mcpOwnedRunsUsesAuthenticatedUserAndForwardsPagination() throws Exception {
+        String grantId = "00000000-0000-4000-8000-000000000001";
+        when(agentTurnService.getMcpOwnedRuns(WORKSPACE_ID, USER_ID, grantId, "cursor-1", 7))
+                .thenReturn(new McpOwnedRunsResponse(
+                        java.util.List.of(new McpOwnedRunsResponse.Item("run-mcp-1", "awaiting_approval")),
+                        "cursor-2"));
+
+        mockMvc.perform(get("/api/workspaces/" + WORKSPACE_ID + "/agent/mcp-runs")
+                        .header("Authorization", "Bearer "
+                                + jwtTokenProvider.generateAccessToken(USER_ID, "test@example.com"))
+                        .queryParam("grant_id", grantId)
+                        .queryParam("cursor", "cursor-1")
+                        .queryParam("limit", "7"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].run_id").value("run-mcp-1"))
+                .andExpect(jsonPath("$.items[0].status").value("awaiting_approval"))
+                .andExpect(jsonPath("$.next_cursor").value("cursor-2"));
+
+        verify(agentTurnService).getMcpOwnedRuns(WORKSPACE_ID, USER_ID, grantId, "cursor-1", 7);
+    }
 
     @Test
     void turn_passesReadOnlyDocumentIdToService() throws Exception {

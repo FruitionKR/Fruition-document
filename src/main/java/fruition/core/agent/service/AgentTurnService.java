@@ -3,6 +3,7 @@ package fruition.core.agent.service;
 import fruition.shared.i18n.ResponseLanguage;
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.agent.dto.AgentRunEditPreviewsResponse;
+import fruition.core.agent.dto.McpOwnedRunsResponse;
 import fruition.core.agent.dto.AgentTurnRequest;
 import fruition.core.agent.dto.AgentTurnResponse;
 import fruition.core.agent.dto.AgentRunApproveRequest;
@@ -69,6 +70,7 @@ public class AgentTurnService {
     private final FolderRepository folderRepository;
     private final TransactionTemplate transaction;
     private AgentAutoApprovalService autoApproval;
+    private McpAgentApprovalService mcpApprovals;
 
     public AgentTurnService(DocumentService documentService,
                             DocumentEditLockService editLockService,
@@ -110,6 +112,11 @@ public class AgentTurnService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setAutoApproval(AgentAutoApprovalService autoApproval) {
         this.autoApproval = autoApproval;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMcpApprovals(McpAgentApprovalService mcpApprovals) {
+        this.mcpApprovals = mcpApprovals;
     }
 
     /**
@@ -335,9 +342,33 @@ public class AgentTurnService {
     public JsonNode getRun(String workspaceId, String userId, String runId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         JsonNode run = statusRequester.getAutonomousRun(workspaceId, userId, runId);
+        if (McpAgentApprovalService.isMcpRun(run)) {
+            return requireMcpApprovals().projectRun(workspaceId, userId, run);
+        }
         // 승인 대기 계획은 사용자의 자동 승인 설정을 지금 다시 적용해 본다. ai-svc의 계획 알림이 실패했거나
         // 알림 뒤에 설정을 켠 경우에도 화면이 계획을 열 때 판단한다.
         return closeIfTerminal(workspaceId, userId, runId, autoApproveIfAllowed(workspaceId, userId, runId, run));
+    }
+
+    public McpOwnedRunsResponse getMcpOwnedRuns(String workspaceId, String userId, String grantId,
+                                                String cursor, int limit) {
+        workspaceAccessGuard.requireMember(workspaceId, userId);
+        UUID parsedGrant;
+        try {
+            parsedGrant = UUID.fromString(grantId);
+        } catch (IllegalArgumentException | NullPointerException exception) {
+            throw new InvalidAgentTurnRequestException("grant_id 형식이 올바르지 않습니다.");
+        }
+        if (parsedGrant.version() != 4 || !parsedGrant.toString().equals(grantId)) {
+            throw new InvalidAgentTurnRequestException("grant_id 형식이 올바르지 않습니다.");
+        }
+        if (limit < 1 || limit > 20) {
+            throw new InvalidAgentTurnRequestException("limit은 1 이상 20 이하여야 합니다.");
+        }
+        if (cursor != null && (cursor.isBlank() || cursor.length() > 1024)) {
+            throw new InvalidAgentTurnRequestException("cursor 형식이 올바르지 않습니다.");
+        }
+        return statusRequester.getMcpOwnedRuns(workspaceId, userId, grantId, cursor, limit);
     }
 
     /**
@@ -348,12 +379,16 @@ public class AgentTurnService {
         workspaceAccessGuard.requireMember(workspaceId, userId);
         AgentRunEditPreviewsResponse previews = statusRequester.getEditPreviews(workspaceId, userId, runId);
         List<AgentRunEditPreviewsResponse.Item> items = previews.items().stream().filter(Objects::nonNull).toList();
+        List<AgentRunEditPreviewsResponse.Item> edits = items.stream()
+                .filter(AgentRunEditPreviewsResponse.Item::isReadableEditShape).toList();
         Map<String, String> titles = documentService.readableDocumentTitles(workspaceId, userId,
-                items.stream().map(AgentRunEditPreviewsResponse.Item::documentId).toList());
+                edits.stream().map(AgentRunEditPreviewsResponse.Item::documentId).toList());
         return new AgentRunEditPreviewsResponse(
                 items.stream()
-                        .filter(item -> titles.containsKey(item.documentId()))
-                        .map(item -> item.withDisplayName(titles.get(item.documentId())))
+                        .filter(item -> item.isOwnedCreateShape()
+                                || item.isReadableEditShape() && titles.containsKey(item.documentId()))
+                        .map(item -> item.isCreateDocument()
+                                ? item : item.withDisplayName(titles.get(item.documentId())))
                         .toList(),
                 previews.expiresAt());
     }
@@ -364,8 +399,14 @@ public class AgentTurnService {
      * 계획 단계 사용량은 승인과 관계없이 지금 수집한다. 뒤의 조회·승인이 실패해도 잃지 않게 먼저 넣는다.
      */
     public JsonNode autoApprove(String workspaceId, String userId, String runId) {
+        workspaceAccessGuard.requireMember(workspaceId, userId);
+        JsonNode run = statusRequester.getAutonomousRun(workspaceId, userId, runId);
+        if (McpAgentApprovalService.isMcpRun(run)) {
+            return requireMcpApprovals().projectRun(workspaceId, userId, run);
+        }
         usageCharges.collectAgentPlan(runId);
-        return getRun(workspaceId, userId, runId);
+        return closeIfTerminal(workspaceId, userId, runId,
+                autoApproveIfAllowed(workspaceId, userId, runId, run));
     }
 
     private JsonNode autoApproveIfAllowed(String workspaceId, String userId, String runId, JsonNode run) {
@@ -395,8 +436,12 @@ public class AgentTurnService {
     public JsonNode approve(String workspaceId, String userId, String runId,
                             AgentRunApproveRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
+        JsonNode fetched = statusRequester.getAutonomousRun(workspaceId, userId, runId);
+        if (McpAgentApprovalService.isMcpRun(fetched)) {
+            return requireMcpApprovals().approve(workspaceId, userId, runId, request, fetched);
+        }
         // 고른 작업은 예약하기 전에 검사한다. 잘못된 선택이면 크레딧을 건드리지 않고 400으로 끝난다.
-        JsonNode approved = rerun(workspaceId, userId, runId, APPROVABLE, current -> {
+        JsonNode approved = rerun(workspaceId, userId, runId, fetched, APPROVABLE, current -> {
             List<String> operationIds = selectedOperationIds(current, request.operationIds());
             return () -> operationIds == null
                     ? statusRequester.approve(workspaceId, userId, runId, request.planVersion(), request.operationHash())
@@ -412,7 +457,7 @@ public class AgentTurnService {
      * 계획의 모든 작업을 골랐으면 전체 승인과 같으므로 null을 돌려 기존 요청 모양으로 보낸다.
      * 고른 작업이 고르지 않은 작업의 결과에 기대면(depends_on) 실행할 수 없으므로 거절한다.
      */
-    private static List<String> selectedOperationIds(JsonNode run, List<String> requested) {
+    static List<String> selectedOperationIds(JsonNode run, List<String> requested) {
         if (requested == null) {
             return null;
         }
@@ -425,8 +470,10 @@ public class AgentTurnService {
             throw new InvalidAgentTurnRequestException("선택해 승인할 계획이 없습니다.");
         }
         Set<String> planned = new HashSet<>();
+        List<String> planOrder = new ArrayList<>();
         for (JsonNode operation : operations) {
             planned.add(operation.path("id").asText());
+            planOrder.add(operation.path("id").asText());
         }
         if (!planned.containsAll(selected)) {
             throw new InvalidAgentTurnRequestException("계획에 없는 작업을 승인할 수 없습니다.");
@@ -439,7 +486,8 @@ public class AgentTurnService {
                 }
             }
         }
-        return selected.size() == planned.size() ? null : List.copyOf(selected);
+        return selected.size() == planned.size() ? null
+                : planOrder.stream().filter(selected::contains).toList();
     }
 
     public JsonNode reject(String workspaceId, String userId, String runId) {
@@ -451,6 +499,7 @@ public class AgentTurnService {
 
     public JsonNode cancel(String workspaceId, String userId, String runId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
+        if (mcpApprovals != null) mcpApprovals.cancelRun(runId);
         if (cancellation.findStatus(runId, workspaceId, userId).isPresent()) {
             return mapper.valueToTree(cancellation.cancel(runId, workspaceId, userId));
         }
@@ -462,7 +511,11 @@ public class AgentTurnService {
     public JsonNode revise(String workspaceId, String userId, String runId,
                            AgentRunReviseRequest request) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
-        JsonNode revised = rerun(workspaceId, userId, runId, REVISABLE,
+        JsonNode fetched = statusRequester.getAutonomousRun(workspaceId, userId, runId);
+        if (McpAgentApprovalService.isMcpRun(fetched)) {
+            throw new InvalidAgentTurnRequestException("MCP 제안은 계획 수정을 지원하지 않습니다.");
+        }
+        JsonNode revised = rerun(workspaceId, userId, runId, fetched, REVISABLE,
                 current -> () -> statusRequester.revise(workspaceId, userId, runId, request.instruction()));
         logForwarded("[Agent 실행 수정 전달]", "revise_forwarded", runId, workspaceId, userId, revised);
         return revised;
@@ -485,7 +538,12 @@ public class AgentTurnService {
      */
     private JsonNode rerun(String workspaceId, String userId, String runId, Set<String> accepting,
                            java.util.function.Function<JsonNode, java.util.function.Supplier<JsonNode>> prepare) {
-        JsonNode current = statusRequester.getAutonomousRun(workspaceId, userId, runId);
+        return rerun(workspaceId, userId, runId,
+                statusRequester.getAutonomousRun(workspaceId, userId, runId), accepting, prepare);
+    }
+
+    private JsonNode rerun(String workspaceId, String userId, String runId, JsonNode current, Set<String> accepting,
+                           java.util.function.Function<JsonNode, java.util.function.Supplier<JsonNode>> prepare) {
         // 현재 run으로 요청을 검사·준비한다(예약 전). 전달은 아래에서 한다.
         java.util.function.Supplier<JsonNode> forward = prepare.apply(current);
         // 이미 끝났거나 이 요청을 받지 않는 상태(예: 이미 승인돼 실행 중)면 ai-svc가 거절한다. 예약을 건드리지 않는다.
@@ -520,8 +578,18 @@ public class AgentTurnService {
 
     /** AgentRun이 끝났으면 크레딧 실행을 닫아 사용량 수집·정산(예약 해제)을 시작한다. */
     private JsonNode closeIfTerminal(String workspaceId, String userId, String runId, JsonNode run) {
-        usageCharges.endAutonomousRunIfTerminal(runId, workspaceId, userId, run);
+        if (!McpAgentApprovalService.isMcpRun(run)) {
+            usageCharges.endAutonomousRunIfTerminal(runId, workspaceId, userId, run);
+        }
         return run;
+    }
+
+    private McpAgentApprovalService requireMcpApprovals() {
+        if (mcpApprovals == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "MCP approval is unavailable.");
+        }
+        return mcpApprovals;
     }
 
     private String publicStatus(String status) {

@@ -84,6 +84,34 @@ public class DocumentPlacementService {
                 });
     }
 
+    /** MCP caller has already applied the fresh Access role and folder/document policy. */
+    public DocumentPositionResponse moveAgentInCurrentTransaction(String workspaceId, String documentId,
+                                                                  DocumentPositionRequest request) {
+        Document target = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                .filter(document -> !document.isSkillReference())
+                .orElseThrow(() -> new HierarchyItemNotFoundException("문서를 찾을 수 없습니다."));
+        if (target.getCurrentVersion() != request.baseVersion())
+            throw new HierarchyVersionConflictException("문서가 이미 변경되어 이동할 수 없습니다.");
+        UUID targetFolderId = request.folderId();
+        if (targetFolderId != null && folderRepository.findActiveForUpdate(targetFolderId, workspaceId).isEmpty())
+            throw new HierarchyItemNotFoundException("대상 폴더를 찾을 수 없습니다.");
+        if (java.util.Objects.equals(target.getFolderId(), targetFolderId)
+                && siblingReorderer.documentPlacementUnchanged(
+                workspaceId, targetFolderId, documentId, request.position())) {
+            return new DocumentPositionResponse(target.getId(), target.getFolderId(),
+                    target.getSortOrder(), target.getCurrentVersion());
+        }
+        long sortOrder = siblingReorderer.placeDocument(
+                workspaceId, targetFolderId, documentId, request.position());
+        if (documentRepository.moveIfVersionMatches(documentId, workspaceId, request.baseVersion(),
+                targetFolderId, sortOrder, Instant.now()) == 0)
+            throw new HierarchyVersionConflictException("문서가 이미 변경되어 이동할 수 없습니다.");
+        Document moved = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                .orElseThrow(() -> new HierarchyItemNotFoundException("문서를 찾을 수 없습니다."));
+        return new DocumentPositionResponse(moved.getId(), moved.getFolderId(), moved.getSortOrder(),
+                moved.getCurrentVersion());
+    }
+
     private void verifyMembership(String workspaceId, String userId) {
         workspaceAccessGuard.requireMember(workspaceId, userId);
     }

@@ -4,6 +4,8 @@ import fruition.core.aihistory.domain.ChangeType;
 import fruition.core.aihistory.domain.OperationChange;
 import fruition.core.aihistory.domain.ResourceType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
@@ -18,6 +20,23 @@ public interface OperationChangeRepository extends JpaRepository<OperationChange
             String operationId, String resourceId, ChangeType changeType);
 
     long countByOperationId(String operationId);
+
+    /** Versions, ledger state, deletes and links are public effects; delegate/failure rows are audit only. */
+    @Query(value = """
+            SELECT EXISTS (
+                SELECT 1 FROM wiki_page_versions WHERE operation_id = :operationId
+                UNION ALL
+                SELECT 1 FROM wiki_page_contributions
+                WHERE ingest_operation_id = :operationId OR lint_operation_id = :operationId
+                   OR deactivated_by = :operationId
+                UNION ALL
+                SELECT 1 FROM ai_operation_changes
+                WHERE operation_id = :operationId
+                  AND change_type IN ('created', 'updated', 'deleted', 'restored', 'rebuilt',
+                                      'link_removed', 'link_restored')
+            )
+            """, nativeQuery = true)
+    boolean hasPublicEffect(@Param("operationId") String operationId);
 
     /** 대상 작업 이후 같은 리소스의 변경. lint 복원이 뒤 작업과 충돌하는지 본다. */
     List<OperationChange> findByResourceIdAndIdGreaterThan(String resourceId, Long id);

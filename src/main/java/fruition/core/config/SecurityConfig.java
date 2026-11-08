@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -60,6 +61,7 @@ public class SecurityConfig {
     }
 
     @Bean
+    @Order(2)
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -79,6 +81,7 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/health", "/actuator/prometheus").permitAll()
                         // "/swagger-ui/**"는 "/swagger-ui.html"을 매칭하지 않는다 — 진입 URL을 따로 연다.
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        .requestMatchers("/.well-known/oauth-protected-resource/mcp").permitAll()
                         // access(인증 서비스)가 호출하는 내부 API: 컨트롤러에서 X-Internal-Token을 검증한다
                         .requestMatchers("/internal/**").permitAll()
                         // 회의 실시간 받아쓰기 WebSocket. 브라우저가 Authorization 헤더를 못 보내므로

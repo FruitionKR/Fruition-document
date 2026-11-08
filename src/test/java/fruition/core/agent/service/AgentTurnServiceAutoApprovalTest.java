@@ -49,6 +49,7 @@ class AgentTurnServiceAutoApprovalTest {
     @Mock fruition.core.usage.service.UsageChargeService usageCharges;
     @Mock fruition.core.document.repository.FolderRepository folderRepository;
     @Mock AgentAutoApprovalService autoApproval;
+    @Mock McpAgentApprovalService mcpApprovals;
 
     private AgentTurnService service;
     private JsonNode awaiting;
@@ -63,6 +64,7 @@ class AgentTurnServiceAutoApprovalTest {
                 new org.springframework.transaction.support.TransactionTemplate(
                         org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class)));
         service.setAutoApproval(autoApproval);
+        service.setMcpApprovals(mcpApprovals);
         ObjectMapper mapper = new ObjectMapper();
         awaiting = mapper.readTree("""
                 {"id":"%s","status":"awaiting_approval","plan":{"version":2,"operation_hash":"%s",
@@ -161,6 +163,24 @@ class AgentTurnServiceAutoApprovalTest {
         service.autoApprove("ws_1", "user_1", RUN_ID);
 
         verify(usageCharges).collectAgentPlan(RUN_ID);
+    }
+
+    @Test
+    void mcpPlanReadyNeverCollectsPlanningUsageOrAutoApproves() throws Exception {
+        JsonNode mcp = new ObjectMapper().readTree("""
+                {"id":"%s","workspace_id":"ws_1","status":"awaiting_approval","origin":"MCP_CLIENT",
+                 "plan":{"version":1,"operation_hash":"%s","operations":[{"id":"op-1"}]}}
+                """.formatted(RUN_ID, HASH));
+        when(statusRequester.getAutonomousRun("ws_1", "user_1", RUN_ID)).thenReturn(mcp);
+        when(mcpApprovals.projectRun("ws_1", "user_1", mcp)).thenReturn(mcp);
+
+        assertThat(service.autoApprove("ws_1", "user_1", RUN_ID)).isEqualTo(mcp);
+
+        verify(usageCharges, never()).collectAgentPlan(anyString());
+        verify(usageCharges, never()).reserveAutonomousRun(anyString(), anyString(), anyString());
+        verify(autoApproval, never()).decide(anyString(), anyString(), org.mockito.ArgumentMatchers.any());
+        verify(statusRequester, never()).approveAutomatically(anyString(), anyString(), anyString(), anyInt(),
+                anyString(), anyString());
     }
 
     /** 화면 폴링은 승인 대기 중 반복되므로 수집 대기열에 넣지 않는다. */

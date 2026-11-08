@@ -58,6 +58,37 @@ public class PostgresDocumentEditStore {
                 : Optional.empty(), documentId);
     }
 
+    /** Returns one aligned current body snapshot without materializing an over-limit Markdown value. */
+    public Optional<CurrentBody> findCurrentBody(String workspaceId, String documentId, int maxBytes) {
+        return jdbcTemplate.query("""
+                SELECT e.revision, e.content_hash, octet_length(e.markdown) AS body_bytes,
+                       CASE WHEN octet_length(e.markdown) <= ? THEN e.markdown END AS markdown
+                FROM document_edit_states e
+                JOIN documents d ON d.id = e.document_id
+                WHERE d.workspace_id = ? AND d.id = ? AND d.deleted_at IS NULL
+                  AND d.current_content_hash = e.content_hash
+                """, rs -> rs.next() ? Optional.of(new CurrentBody(
+                        rs.getLong("revision"), rs.getString("content_hash"),
+                        rs.getString("markdown"), rs.getInt("body_bytes"))) : Optional.empty(),
+                maxBytes, workspaceId, documentId);
+    }
+
+    /** Returns editable identity without transferring the Markdown body. */
+    public Optional<CurrentIdentity> findCurrentIdentity(String workspaceId, String documentId) {
+        return jdbcTemplate.query("""
+                SELECT e.revision, e.content_hash
+                FROM document_edit_states e
+                JOIN documents d ON d.id = e.document_id
+                WHERE d.workspace_id = ? AND d.id = ? AND d.deleted_at IS NULL
+                  AND d.current_content_hash = e.content_hash
+                """, rs -> rs.next() ? Optional.of(new CurrentIdentity(
+                        rs.getLong("revision"), rs.getString("content_hash"))) : Optional.empty(),
+                workspaceId, documentId);
+    }
+
+    public record CurrentBody(long version, String contentHash, String markdown, int bodyBytes) {}
+    public record CurrentIdentity(long version, String contentHash) {}
+
     public PostgresDocumentEditSaveResult save(
             String workspaceId,
             String documentId,

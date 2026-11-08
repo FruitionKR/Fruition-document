@@ -42,6 +42,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.time.Instant;
 
 @Service
 public class AgentToolService {
@@ -80,6 +81,7 @@ public class AgentToolService {
     private final IdempotencyService idempotencyService;
     private final TransactionTemplate transactionTemplate;
     private final DocumentAccessPolicy documentAccessPolicy;
+    private McpAgentApprovalService mcpApprovals;
 
     public AgentToolService(
             PipelineAgentToolAuthorizationClient authorizationClient,
@@ -112,6 +114,11 @@ public class AgentToolService {
         this.documentAccessPolicy = documentAccessPolicy;
     }
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMcpApprovals(McpAgentApprovalService mcpApprovals) {
+        this.mcpApprovals = mcpApprovals;
+    }
+
     public Object read(String toolName, AgentToolReadRequest request) {
         if ("list_agent_run_artifacts".equals(toolName)) {
             requireArguments(request.arguments(), Set.of());
@@ -135,9 +142,15 @@ public class AgentToolService {
 
     public Object execute(String toolName, AgentToolExecuteRequest request) {
         try {
-            Object result = "apply_document_edit".equals(toolName) || "delete_document".equals(toolName)
-                    ? dispatchExecute(toolName, request)
-                    : transactionTemplate.execute(status -> dispatchExecute(toolName, request));
+            Object result;
+            if (request.mcpApprovalPresent() && Set.of("create_folder", "rename_folder", "move_folder",
+                    "move_document", "rename_document", "create_document").contains(toolName)) {
+                result = executeMcpMutation(toolName, request);
+            } else {
+                result = "apply_document_edit".equals(toolName) || "delete_document".equals(toolName)
+                        ? dispatchExecute(toolName, request)
+                        : transactionTemplate.execute(status -> dispatchExecute(toolName, request));
+            }
             // 재시도한 호출도 같은 응답을 받는다. 처음 실행인지는 같은 requestId의 멱등 재생 로그로 구분한다.
             // 변경 도구만 이 경로로 온다. 어느 Agent 실행이 바꿨는지 문서·폴더 로그와 이어 준다.
             log.info("[Agent 도구 실행 응답] operation=agent_tool stage=responded runId={} operationId={} toolName={} workspaceId={} userId={}",
@@ -147,6 +160,82 @@ public class AgentToolService {
             log.warn("[Agent 도구 실행 실패] operation=agent_tool stage=execute runId={} operationId={} toolName={} workspaceId={} userId={} errorType={} 원인=도구 실행이 끝나지 못해 해당 트랜잭션을 롤백했습니다. 같은 requestId의 공통 예외 로그로 거부와 장애를 구분합니다.",
                     request.runId(), request.operationId(), CommittedLog.code(toolName), request.workspaceId(), request.userId(), e.getClass().getSimpleName());
             throw e;
+        }
+    }
+
+    private Object executeMcpMutation(String toolName, AgentToolExecuteRequest request) {
+        requireToolArguments(EXECUTE_TOOL_ARGUMENTS, toolName, request.arguments());
+        authorizationClient.authorizeExecute(toolName, request);
+        if (mcpApprovals == null)
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "MCP execution authorization is unavailable.");
+        JsonNode arguments = request.arguments();
+        PipelineAgentArtifactClient.ResolvedArtifact artifact = null;
+        if ("create_document".equals(toolName)) {
+            artifact = artifactClient.resolve(request, toolName, arguments);
+            requireResolvedArtifact(artifact, arguments, toolName);
+        }
+        McpAgentApprovalService.Execution execution = mcpApprovals.authorizeExecution(request, toolName);
+        if (execution.replay() != null) return execution.replay();
+        PipelineAgentArtifactClient.ResolvedArtifact resolvedArtifact = artifact;
+        try {
+            McpAgentApprovalService.Receipt receipt = transactionTemplate.execute(status -> switch (toolName) {
+                case "create_folder" -> {
+                    var created = folderService.createAgentInCurrentTransaction(request.workspaceId(),
+                            text(arguments, "name"), nullableUuid(arguments, "parent_folder_id"));
+                    yield mcpApprovals.recordReceipt(execution, request.operationId(), toolName, "FOLDER",
+                            created.id().toString(), null, created.currentVersion(), true, created.updatedAt());
+                }
+                case "rename_folder" -> {
+                    long before = positiveLong(arguments, "base_version");
+                    var renamed = folderService.renameAgentInCurrentTransaction(request.workspaceId(),
+                            uuid(arguments, "folder_id"), text(arguments, "name"), before);
+                    yield mcpApprovals.recordReceipt(execution, request.operationId(), toolName, "FOLDER",
+                            renamed.id().toString(), before, renamed.currentVersion(),
+                            renamed.currentVersion() > before, renamed.updatedAt());
+                }
+                case "move_folder" -> {
+                    long before = positiveLong(arguments, "base_version");
+                    var moved = folderService.moveAgentInCurrentTransaction(request.workspaceId(),
+                            uuid(arguments, "folder_id"), new FolderPositionRequest(
+                                    nullableUuid(arguments, "parent_folder_id"),
+                                    nullableInteger(arguments, "position"), before));
+                    yield mcpApprovals.recordReceipt(execution, request.operationId(), toolName, "FOLDER",
+                            moved.id().toString(), before, moved.currentVersion(),
+                            moved.currentVersion() > before, moved.updatedAt());
+                }
+                case "create_document" -> {
+                    var created = documentService.createAgentMarkdownInCurrentTransaction(
+                            request.workspaceId(), request.userId(), new MarkdownDocumentCreateRequest(
+                                    text(arguments, "display_name"), resolvedArtifact.markdown(),
+                                    nullableUuid(arguments, "folder_id")));
+                    yield mcpApprovals.recordReceipt(execution, request.operationId(), toolName, "DOCUMENT",
+                            created.id(), null, created.currentVersion(), true, created.uploadedAt());
+                }
+                case "rename_document" -> {
+                    long before = positiveLong(arguments, "base_version");
+                    var renamed = documentService.renameAgentInCurrentTransaction(
+                            request.workspaceId(), request.userId(), text(arguments, "document_id"),
+                            new DocumentRenameRequest(text(arguments, "display_name"), before));
+                    yield mcpApprovals.recordReceipt(execution, request.operationId(), toolName, "DOCUMENT",
+                            renamed.id(), before, renamed.currentVersion(), renamed.changed(), renamed.updatedAt());
+                }
+                case "move_document" -> {
+                    long before = positiveLong(arguments, "base_version");
+                    var moved = documentPlacementService.moveAgentInCurrentTransaction(
+                            request.workspaceId(), text(arguments, "document_id"),
+                            new DocumentPositionRequest(nullableUuid(arguments, "folder_id"),
+                                    nullableInteger(arguments, "position"), before));
+                    yield mcpApprovals.recordReceipt(execution, request.operationId(), toolName, "DOCUMENT",
+                            moved.id(), before, moved.currentVersion(), moved.currentVersion() > before, Instant.now());
+                }
+                default -> throw badRequest("지원하지 않는 MCP mutation Tool입니다.");
+            });
+            mcpApprovals.executionFinished(execution);
+            return receipt;
+        } catch (RuntimeException failure) {
+            mcpApprovals.executionFailed(execution, failure);
+            throw failure;
         }
     }
 
@@ -224,7 +313,9 @@ public class AgentToolService {
                 || !target.has("type") || !target.has("start_line") || !target.has("end_line")) {
             throw badRequest("target 값이 올바르지 않습니다.");
         }
-        requireEditableDocument(request.workspaceId(), request.userId(), documentId);
+        if (!request.mcpApprovalPresent()) {
+            requireEditableDocument(request.workspaceId(), request.userId(), documentId);
+        }
         PipelineAgentArtifactClient.ResolvedArtifact artifact =
                 artifactClient.resolve(request, "apply_document_edit", arguments);
         requireResolvedArtifact(artifact, arguments, "apply_document_edit");
@@ -234,10 +325,32 @@ public class AgentToolService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "승인된 Agent 문서 편집 대상과 일치하지 않습니다.");
         }
-        prepareToolApply(request, documentId, baseVersion, artifact.markdown());
-        return documentService.saveContentMergeOnly(
-                request.workspaceId(), request.userId(), documentId, artifact.markdown(),
-                baseVersion, request.idempotencyKey(), request.operationId());
+        if (!request.mcpApprovalPresent()) {
+            prepareToolApply(request, documentId, baseVersion, artifact.markdown());
+            return documentService.saveContentMergeOnly(
+                    request.workspaceId(), request.userId(), documentId, artifact.markdown(),
+                    baseVersion, request.idempotencyKey(), request.operationId());
+        }
+        if (mcpApprovals == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "MCP execution authorization is unavailable.");
+        }
+        McpAgentApprovalService.Execution execution = mcpApprovals.authorizeExecution(request, "apply_document_edit");
+        if (execution.replay() != null) return execution.replay();
+        try {
+            prepareToolApply(request, documentId, baseVersion, artifact.markdown());
+            McpAgentApprovalService.Receipt receipt = transactionTemplate.execute(status -> {
+                var saved = documentService.saveAgentContentInCurrentTransaction(
+                        request.workspaceId(), request.userId(), documentId, artifact.markdown(),
+                        baseVersion, request.idempotencyKey(), request.operationId());
+                return mcpApprovals.recordReceipt(execution, request.operationId(), documentId, saved);
+            });
+            mcpApprovals.executionFinished(execution);
+            return receipt;
+        } catch (RuntimeException failure) {
+            mcpApprovals.executionFailed(execution, failure);
+            throw failure;
+        }
     }
 
     private void prepareToolApply(

@@ -55,6 +55,19 @@ tags:
 - description: Wiki 정합성 검사와 유지보수 실행 API
   name: Wiki Maintenance
 paths:
+  /.well-known/oauth-protected-resource/mcp:
+    get:
+      operationId: getMcpProtectedResourceMetadata
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Metadata"
+          description: OK
+      summary: MCP protected resource metadata 조회
+      tags:
+      - mcp-metadata-controller
   /api/ai-models:
     get:
       description: 선택할 수 있는 provider/model 조합과 채팅 답변 듣기 사용 가능 여부를 반환합니다. API key는 노출하지 않습니다.
@@ -343,6 +356,45 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
           description: 워크스페이스를 찾을 수 없음
       summary: Agent 자동 승인 설정 변경
+      tags:
+      - Agent
+  /api/workspaces/{workspace_id}/agent/mcp-runs:
+    get:
+      description: 현재 사용자가 이 워크스페이스에서 만든 특정 MCP grant의 실행 목록을 조회합니다.
+      operationId: getMcpOwnedRuns
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: query
+        name: grant_id
+        required: true
+        schema:
+          type: string
+      - in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+      - in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 20
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/McpOwnedRunsResponse"
+          description: OK
+      summary: MCP AgentRun 목록 조회
       tags:
       - Agent
   /api/workspaces/{workspace_id}/agent/runs/{run_id}:
@@ -3682,6 +3734,146 @@ paths:
       summary: 가져온 문서 편입 예상 비용
       tags:
       - Imports
+  /api/workspaces/{workspace_id}/mcp/wiki-drafts/{draft_id}:
+    get:
+      operationId: getMcpWikiDraft
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: draft_id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties: {}
+          description: OK
+      summary: MCP wiki 전체 draft 승인 미리보기와 상태 조회
+      tags:
+      - mcp-wiki-draft-controller
+  /api/workspaces/{workspace_id}/mcp/wiki-drafts/{draft_id}/approve:
+    post:
+      operationId: approveMcpWikiDraft
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: draft_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalBody"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties: {}
+          description: 승인·publication·settlement 상태
+        "402":
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties: {}
+          description: 최대 금액 전체 예약에 필요한 credit 부족
+        "409":
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties: {}
+          description: Draft/source/public 상태 또는 멱등 충돌
+      summary: 현재 owner 권한으로 전체 draft 명시 승인
+      tags:
+      - mcp-wiki-draft-controller
+  /api/workspaces/{workspace_id}/mcp/wiki-drafts/{draft_id}/cancel:
+    post:
+      operationId: cancelMcpWikiDraft
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: draft_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmptyBody"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties: {}
+          description: OK
+      summary: 전체 draft 취소 및 apply fence
+      tags:
+      - mcp-wiki-draft-controller
+  /api/workspaces/{workspace_id}/mcp/wiki-drafts/{draft_id}/reject:
+    post:
+      operationId: rejectMcpWikiDraft
+      parameters:
+      - example: ws_9d47a0e9a6324341b47562553b75f92a
+        in: path
+        name: workspace_id
+        required: true
+        schema:
+          type: string
+          default: ws_9d47a0e9a6324341b47562553b75f92a
+      - in: path
+        name: draft_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmptyBody"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties: {}
+          description: OK
+      summary: 승인 전 전체 draft 거절
+      tags:
+      - mcp-wiki-draft-controller
   /api/workspaces/{workspace_id}/meetings:
     get:
       description: "내가 만든 회의를 최근 생성 순으로 반환합니다. 새로고침 뒤 진행 중이던 회의를 다시 여는 데 씁니다. 전사 구간 같은 무거운 내용은 넣지 않으므로 GET /{meeting_id}로 이어서 조회합니다."
@@ -5845,6 +6037,82 @@ paths:
       summary: Agent 폴더 트리 읽기
       tags:
       - agent-folder-lookup-controller
+  /internal/agent/mcp/approvals/lookup:
+    post:
+      operationId: lookupMcpAgentApproval
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalLookupRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ApprovalStatus"
+          description: OK
+      summary: MCP Agent 명시 승인 상태 조회
+      tags:
+      - mcp-agent-receipt-controller
+  /internal/agent/mcp/document-edit-context:
+    post:
+      operationId: readMcpDocumentEditContext
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/McpDocumentEditContextRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+          description: OK
+      summary: MCP 문서 편집 제안의 현재 본문 조회
+      tags:
+      - mcp-document-edit-context-controller
+  /internal/agent/mcp/plan-context:
+    post:
+      operationId: readMcpPlanContext
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/McpPlanContextRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+          description: OK
+      summary: MCP 계획 제안의 현재 문서 계층과 편집 본문 조회
+      tags:
+      - mcp-plan-context-controller
+  /internal/agent/mcp/receipts/lookup:
+    post:
+      operationId: lookupMcpAgentReceipt
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LookupRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ReceiptStatus"
+          description: OK
+      summary: MCP Agent operation의 body-free 실행 영수증 조회
+      tags:
+      - mcp-agent-receipt-controller
   /internal/agent/runs/{run_id}/plan-ready:
     post:
       operationId: planReady
@@ -6035,6 +6303,31 @@ paths:
           description: OK
       tags:
       - ai-task-cancellation-controller
+  /internal/documents/{document_id}/mcp-wiki-source:
+    post:
+      operationId: readMcpWikiSource
+      parameters:
+      - in: path
+        name: document_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/McpWikiSourceRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+          description: OK
+      summary: MCP wiki draft의 현재 Document source callback
+      tags:
+      - mcp-wiki-source-controller
   /internal/documents/{document_id}/pipeline-source:
     get:
       operationId: findPipelineSource
@@ -6058,6 +6351,42 @@ paths:
           description: OK
       tags:
       - internal-document-controller
+  /internal/mcp/wiki/approvals/lookup:
+    post:
+      operationId: lookupMcpWikiApproval
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalLookupBody"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ApprovalStatus"
+          description: OK
+      summary: AI apply 경계의 authoritative approval/source lookup
+      tags:
+      - internal-mcp-wiki-controller
+  /internal/mcp/wiki/publications/receipt:
+    post:
+      operationId: receiveMcpWikiPublication
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublicationBody"
+        required: true
+      responses:
+        "204":
+          description: 수신·중복 판정·수수료 결정을 원자적으로 반영
+        "409":
+          description: Canonical event 또는 stable pair 충돌
+      summary: Body-free durable MCP wiki publication 수신 및 fee reconciliation
+      tags:
+      - internal-mcp-wiki-controller
   /internal/payments/webhook:
     post:
       description: "X-Payment-Signature(본문 HMAC-SHA256 hex)를 검증하고 eventId(없으면 본문 해시)로 한 번만 처리합니다. 승인 응답을 받지 못한 결제를 지급하고, PG 쪽 취소(CANCELED·PARTIAL_CANCELED)는 PG 결제 조회 결과대로 크레딧을 회수합니다. 서명이 틀리면 401입니다."
@@ -6130,7 +6459,7 @@ paths:
       - internal-purge-controller
   /internal/wiki/contributions:
     post:
-      operationId: find
+      operationId: find_1
       parameters:
       - in: header
         name: X-Internal-Token
@@ -6152,6 +6481,30 @@ paths:
           description: OK
       tags:
       - internal-wiki-contribution-controller
+  /internal/wiki/publications/receipt:
+    post:
+      operationId: find
+      parameters:
+      - in: header
+        name: X-Internal-Token
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReceiptRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                type: object
+          description: OK
+      tags:
+      - internal-wiki-publication-receipt-controller
   /internal/workspaces/{workspace_id}/initial-note:
     post:
       operationId: createInitialNote
@@ -6220,14 +6573,16 @@ components:
         base_version:
           type: integer
           format: int64
-          description: 편집안의 기준 편집 revision
+          description: 편집안의 기준 편집 revision. create_document는 null이다.
           example: 3
+        createDocument:
+          type: boolean
         display_name:
           type: string
           description: 문서의 현재 제목
         document_id:
           type: string
-          description: 수정할 문서 ID
+          description: 수정할 문서 ID. create_document는 null이다.
         hunks:
           type: array
           description: 변경 구간. 앞뒤 문맥 3줄을 포함한다.
@@ -6236,6 +6591,10 @@ components:
         operation_id:
           type: string
           description: 계획 안의 작업 ID. 부분 승인의 operation_ids에 쓴다.
+        ownedCreateShape:
+          type: boolean
+        readableEditShape:
+          type: boolean
         removed_lines:
           type: integer
           format: int32
@@ -6244,6 +6603,12 @@ components:
         summary:
           type: string
           description: 변경 요약
+        tool_name:
+          type: string
+          description: 미리 보기 작업 종류
+          enum:
+          - apply_document_edit
+          - create_document
     AgentDocumentEditPreviewHunk:
       type: object
       description: 연속된 변경 구간 하나
@@ -6305,6 +6670,9 @@ components:
       type: object
       description: Agent 편집안 승인 요청. 정의되지 않은 필드가 있으면 거절된다.
       properties:
+        expected_price_snapshot:
+          $ref: "#/components/schemas/McpPriceSnapshot"
+          description: MCP 명시적 승인 화면에서 조회한 가격. MCP run만 필수이며 서버 가격과 달라졌으면 409로 거절된다.
         operation_hash:
           type: string
           description: 승인 대상 편집안의 해시(64자). 내용이 바뀌면 값이 달라져 잘못된 승인을 막는다.
@@ -6354,8 +6722,16 @@ components:
     AgentToolExecuteRequest:
       type: object
       properties:
+        approval_id:
+          type: string
         arguments:
           $ref: "#/components/schemas/JsonNode"
+        attempt_id:
+          type: string
+        client_id:
+          type: string
+        grant_id:
+          type: string
         idempotency_key:
           type: string
           minLength: 1
@@ -6372,6 +6748,9 @@ components:
         plan_version:
           type: integer
           format: int32
+        policy_generation:
+          type: integer
+          format: int64
         run_id:
           type: string
           minLength: 1
@@ -6589,6 +6968,157 @@ components:
           - openai
           - gemini
           example: openai
+    ApprovalBody:
+      type: object
+      additionalProperties: false
+      properties:
+        draft_hash:
+          type: string
+          minLength: 1
+          pattern: "^sha256:[0-9a-f]{64}$"
+        draft_id:
+          type: string
+          minLength: 1
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        draft_version:
+          type: integer
+          format: int64
+          minimum: 1
+        public_state_hash:
+          type: string
+          minLength: 1
+          pattern: "^sha256:[0-9a-f]{64}$"
+      required:
+      - draft_hash
+      - draft_id
+      - public_state_hash
+    ApprovalLookupBody:
+      type: object
+      additionalProperties: false
+      properties:
+        approval_id:
+          type: string
+          minLength: 1
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        client_id:
+          type: string
+          maxLength: 2048
+          minLength: 0
+        draft_hash:
+          type: string
+          minLength: 1
+          pattern: "^sha256:[0-9a-f]{64}$"
+        draft_id:
+          type: string
+          minLength: 1
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        draft_version:
+          type: integer
+          format: int64
+          minimum: 1
+        grant_id:
+          type: string
+          minLength: 1
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        operation_id:
+          type: string
+          maxLength: 255
+          minLength: 0
+        policy_generation:
+          type: integer
+          format: int64
+          minimum: 1
+        public_state_hash:
+          type: string
+          minLength: 1
+          pattern: "^sha256:[0-9a-f]{64}$"
+        schema_version:
+          type: string
+          minLength: 1
+        source_snapshots:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceBody"
+          maxItems: 64
+          minItems: 1
+        user_id:
+          type: string
+          maxLength: 255
+          minLength: 0
+        workspace_id:
+          type: string
+          maxLength: 255
+          minLength: 0
+      required:
+      - approval_id
+      - client_id
+      - draft_hash
+      - draft_id
+      - grant_id
+      - operation_id
+      - public_state_hash
+      - schema_version
+      - source_snapshots
+      - user_id
+      - workspace_id
+    ApprovalLookupRequest:
+      type: object
+      properties:
+        approval_id:
+          type: string
+          minLength: 1
+        client_id:
+          type: string
+          minLength: 1
+        grant_id:
+          type: string
+          minLength: 1
+        operation_hash:
+          type: string
+          maxLength: 64
+          minLength: 64
+        operation_ids:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          maxItems: 20
+          minItems: 1
+        plan_version:
+          type: integer
+          format: int32
+          minimum: 1
+        policy_generation:
+          type: integer
+          format: int64
+          minimum: 1
+        run_id:
+          type: string
+          minLength: 1
+        user_id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+      required:
+      - approval_id
+      - client_id
+      - grant_id
+      - operation_hash
+      - operation_ids
+      - run_id
+      - user_id
+      - workspace_id
+    ApprovalStatus:
+      type: object
+      properties:
+        reason:
+          type: string
+        schema_version:
+          type: string
+        status:
+          type: string
     BreadcrumbNode:
       type: object
       description: 경로 상의 한 단계
@@ -8381,6 +8911,14 @@ components:
           type: string
           description: 페이지 제목
           example: 검색 인덱싱
+    EditDocument:
+      type: object
+      properties:
+        base_version:
+          type: integer
+          format: int64
+        document_id:
+          type: string
     EditLockResponse:
       type: object
       description: 편집 잠금 상태. 잠금이 없으면 필드 자체가 빠진다.
@@ -8415,6 +8953,9 @@ components:
           description: 편집 대상 범위. 생략하면 문서 전체가 대상이다.
       required:
       - markdown
+    EmptyBody:
+      type: object
+      additionalProperties: false
     Entry:
       type: object
       properties:
@@ -8803,6 +9344,13 @@ components:
           minLength: 1
       required:
       - user_id
+    Item:
+      type: object
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
     JsonNode: {}
     Line:
       type: object
@@ -8828,6 +9376,34 @@ components:
           - CONTEXT
           - DELETE
           - ADD
+    LookupRequest:
+      type: object
+      properties:
+        approval_id:
+          type: string
+          minLength: 1
+        client_id:
+          type: string
+          minLength: 1
+        grant_id:
+          type: string
+          minLength: 1
+        operation_id:
+          type: string
+          minLength: 1
+        user_id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+      required:
+      - approval_id
+      - client_id
+      - grant_id
+      - operation_id
+      - user_id
+      - workspace_id
     MarkdownDocumentCreateRequest:
       type: object
       properties:
@@ -8855,6 +9431,102 @@ components:
           type: string
           description: skill_reference면 스킬 참고 문서로 만든다. 문서 트리·목록·위키 편입에서 빠지며 folder_id와 함께 쓸 수 없다. 그 밖의 값은 400이다.
           example: skill_reference
+    McpDocumentEditContextRequest:
+      type: object
+      properties:
+        actor:
+          $ref: "#/components/schemas/McpProposalActor"
+        base_version:
+          type: integer
+          format: int64
+        document_id:
+          type: string
+        schema_version:
+          type: string
+    McpOwnedRunsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Item"
+        next_cursor:
+          type: string
+    McpPlanContextRequest:
+      type: object
+      properties:
+        actor:
+          $ref: "#/components/schemas/McpProposalActor"
+        edit_documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/EditDocument"
+        resources:
+          type: array
+          items:
+            $ref: "#/components/schemas/Resource"
+        schema_version:
+          type: string
+        target_folder_id:
+          type: string
+    McpPriceSnapshot:
+      type: object
+      properties:
+        currency:
+          type: string
+          maxLength: 3
+          minLength: 3
+        maximum_charge_minor:
+          type: integer
+          format: int64
+          minimum: 0
+        plan_cap_minor:
+          type: integer
+          format: int64
+          minimum: 0
+        price_version:
+          type: string
+          maxLength: 128
+          minLength: 0
+        unit_price_minor:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - currency
+      - maximum_charge_minor
+      - plan_cap_minor
+      - price_version
+      - unit_price_minor
+    McpProposalActor:
+      type: object
+      properties:
+        client_id:
+          type: string
+        grant_id:
+          type: string
+        invocation_id:
+          type: string
+        origin:
+          type: string
+        policy_generation:
+          type: integer
+          format: int64
+        spec_version:
+          type: string
+        tool_name:
+          type: string
+        user_id:
+          type: string
+        workspace_id:
+          type: string
+    McpWikiSourceRequest:
+      type: object
+      properties:
+        actor:
+          $ref: "#/components/schemas/McpProposalActor"
+        schema_version:
+          type: string
     MeetingCreateRequest:
       type: object
       description: 회의 생성 요청
@@ -9264,6 +9936,19 @@ components:
           type: string
           description: 처리 상태
           example: completed
+    Metadata:
+      type: object
+      properties:
+        authorization_servers:
+          type: array
+          items:
+            type: string
+        resource:
+          type: string
+        scopes_supported:
+          type: array
+          items:
+            type: string
     ModelCharge:
       type: object
       properties:
@@ -9628,6 +10313,65 @@ components:
         page_id:
           type: string
           description: Wiki 페이지 ID
+    PublicationBody:
+      type: object
+      additionalProperties: false
+      properties:
+        approval_id:
+          type: string
+          minLength: 1
+        changed:
+          type: boolean
+        client_id:
+          type: string
+          minLength: 1
+        committed_at:
+          type: string
+          minLength: 1
+        draft_id:
+          type: string
+          minLength: 1
+        event_id:
+          type: string
+          minLength: 1
+        event_type:
+          type: string
+          minLength: 1
+        grant_id:
+          type: string
+          minLength: 1
+        kind:
+          type: string
+          minLength: 1
+        operation_id:
+          type: string
+          minLength: 1
+        outcome:
+          type: string
+          minLength: 1
+        published_reference_hash:
+          type: string
+          minLength: 1
+        user_id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+      required:
+      - approval_id
+      - client_id
+      - committed_at
+      - draft_id
+      - event_id
+      - event_type
+      - grant_id
+      - kind
+      - operation_id
+      - outcome
+      - published_reference_hash
+      - user_id
+      - workspace_id
     QueryRequest:
       type: object
       description: Wiki 기반 자연어 질의 요청. provider와 model은 함께 생략하거나 함께 전달해야 한다.
@@ -9760,6 +10504,65 @@ components:
           type: string
           description: 근거가 있는 문서 ID
           example: doc_1b9f4c7e2a8d4f1e6c3b0a97d25e4f83
+    Receipt:
+      type: object
+      properties:
+        after_version:
+          type: integer
+          format: int64
+        approval_id:
+          type: string
+        attempt_id:
+          type: string
+          format: uuid
+        before_version:
+          type: integer
+          format: int64
+        changed:
+          type: boolean
+        client_id:
+          type: string
+        committed_at:
+          type: string
+          format: date-time
+        grant_id:
+          type: string
+        operation_id:
+          type: string
+        outcome:
+          type: string
+        receipt_id:
+          type: string
+        resource_id:
+          type: string
+        resource_type:
+          type: string
+        tool_name:
+          type: string
+        user_id:
+          type: string
+        workspace_id:
+          type: string
+    ReceiptRequest:
+      type: object
+      properties:
+        event_id:
+          type: string
+        operation_id:
+          type: string
+        publication_id:
+          type: string
+        user_id:
+          type: string
+        workspace_id:
+          type: string
+    ReceiptStatus:
+      type: object
+      properties:
+        receipt:
+          $ref: "#/components/schemas/Receipt"
+        status:
+          type: string
     RelatedPage:
       type: object
       description: 답변 근거가 된 Wiki 페이지
@@ -9792,6 +10595,16 @@ components:
           type: string
           description: 페이지 제목
           example: 검색 인덱싱
+    Resource:
+      type: object
+      properties:
+        base_version:
+          type: integer
+          format: int64
+        resource_id:
+          type: string
+        resource_type:
+          type: string
     RestorationSummary:
       type: object
       properties:
@@ -10587,6 +11400,30 @@ components:
       - name
       - status
       - version
+    SourceBody:
+      type: object
+      additionalProperties: false
+      properties:
+        document_id:
+          type: string
+          maxLength: 255
+          minLength: 0
+        snapshot_id:
+          type: string
+          minLength: 1
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        source_content_hash:
+          type: string
+          minLength: 1
+          pattern: "^sha256:[0-9a-f]{64}$"
+        source_version:
+          type: integer
+          format: int64
+          minimum: 1
+      required:
+      - document_id
+      - snapshot_id
+      - source_content_hash
     SourceDocRef:
       type: object
       description: 노드가 참조하는 원본 문서

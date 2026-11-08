@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.data.domain.Pageable;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.persistence.LockModeType;
@@ -129,6 +130,40 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             @Param("query") String query
     );
 
+    /** MCP candidate reads are deployment-bounded before rows leave PostgreSQL. */
+    @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
+            + "AND d.deletedAt IS NULL AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
+            + "ORDER BY d.sortOrder ASC, d.id ASC")
+    List<Document> findMcpCandidates(@Param("workspaceId") String workspaceId, Pageable pageable);
+
+    @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
+            + "AND d.deletedAt IS NULL AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
+            + "AND (LOWER(d.displayName) LIKE LOWER(CONCAT('%', :query, '%')) "
+            + "OR LOWER(d.filename) LIKE LOWER(CONCAT('%', :query, '%'))) "
+            + "ORDER BY d.sortOrder ASC, d.id ASC")
+    List<Document> searchMcpCandidates(@Param("workspaceId") String workspaceId,
+                                       @Param("query") String query, Pageable pageable);
+
+    /** Hashes a bounded chat-export source inside PostgreSQL without returning its body. */
+    @Query(value = """
+            SELECT d.current_version AS version,
+                   CASE WHEN octet_length(d.pipeline_input_markdown) <= :maxBytes
+                        THEN encode(sha256(convert_to(d.pipeline_input_markdown, 'UTF8')), 'hex') END AS contentHash,
+                   octet_length(d.pipeline_input_markdown) AS bodyBytes
+            FROM documents d
+            WHERE d.workspace_id = :workspaceId AND d.id = :documentId AND d.deleted_at IS NULL
+              AND d.origin = 'chat_export' AND d.pipeline_input_markdown IS NOT NULL
+            """, nativeQuery = true)
+    Optional<McpChatIdentity> findMcpChatIdentity(@Param("workspaceId") String workspaceId,
+                                                  @Param("documentId") String documentId,
+                                                  @Param("maxBytes") int maxBytes);
+
+    interface McpChatIdentity {
+        long getVersion();
+        String getContentHash();
+        int getBodyBytes();
+    }
+
     /** 스킬 피커용 참고 문서 목록. 최근 업로드가 앞에 온다. */
     @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
             + "AND d.deletedAt IS NULL AND d.origin = 'skill_reference' "
@@ -214,6 +249,17 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
     List<Document> findChildDocuments(
             @Param("workspaceId") String workspaceId,
             @Param("folderId") java.util.UUID folderId
+    );
+
+    /** MCP plan context must bound sibling rows before they leave PostgreSQL. */
+    @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
+            + "AND ((:folderId IS NULL AND d.folderId IS NULL) OR d.folderId = :folderId) "
+            + "AND d.deletedAt IS NULL AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
+            + "ORDER BY d.sortOrder ASC, d.id ASC")
+    List<Document> findChildDocuments(
+            @Param("workspaceId") String workspaceId,
+            @Param("folderId") java.util.UUID folderId,
+            Pageable pageable
     );
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

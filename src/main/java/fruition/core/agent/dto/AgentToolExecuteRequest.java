@@ -16,5 +16,21 @@ public record AgentToolExecuteRequest(
         @NotBlank @Size(min = 64, max = 64) @JsonProperty("operation_hash") String operationHash,
         @NotBlank @JsonProperty("operation_id") String operationId,
         @NotBlank @JsonProperty("idempotency_key") String idempotencyKey,
-        @NotNull JsonNode arguments
-) {}
+        @NotNull JsonNode arguments,
+        @JsonProperty("approval_id") String approvalId,
+        @JsonProperty("attempt_id") String attemptId,
+        @JsonProperty("grant_id") String grantId,
+        @JsonProperty("client_id") String clientId,
+        @JsonProperty("policy_generation") Long policyGeneration
+) {
+    public AgentToolExecuteRequest(String runId, String workspaceId, String userId, String planId,
+                                   int planVersion, String operationHash, String operationId,
+                                   String idempotencyKey, JsonNode arguments) {
+        this(runId, workspaceId, userId, planId, planVersion, operationHash, operationId,
+                idempotencyKey, arguments, null, null, null, null, null);
+    }
+
+    public boolean mcpApprovalPresent() {
+        return approvalId != null;
+    }
+}

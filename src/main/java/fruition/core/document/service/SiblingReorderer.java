@@ -39,20 +39,32 @@ public class SiblingReorderer {
         return place(workspaceId, parentFolderId, DOCUMENT, movedDocumentId, position);
     }
 
-    private long place(String workspaceId, UUID parentFolderId, String movedType, String movedId, Integer position) {
-        List<Sibling> siblings = new ArrayList<>();
-        for (Folder folder : folderRepository.findChildrenForUpdate(workspaceId, parentFolderId)) {
-            if (!(FOLDER.equals(movedType) && folder.getId().toString().equals(movedId))) {
-                siblings.add(new Sibling(FOLDER, folder.getId().toString(), folder.getSortOrder()));
-            }
-        }
-        for (Document document : documentRepository.findChildDocumentsForUpdate(workspaceId, parentFolderId)) {
-            if (!(DOCUMENT.equals(movedType) && document.getId().equals(movedId))) {
-                siblings.add(new Sibling(DOCUMENT, document.getId(), document.getSortOrder()));
-            }
-        }
-        siblings.sort(Comparator.comparingLong(Sibling::sortOrder).thenComparing(Sibling::id));
+    public boolean folderPlacementUnchanged(String workspaceId, UUID parentFolderId, UUID folderId,
+                                            Integer position) {
+        return placementUnchanged(workspaceId, parentFolderId, FOLDER, folderId.toString(), position);
+    }
 
+    public boolean documentPlacementUnchanged(String workspaceId, UUID parentFolderId, String documentId,
+                                              Integer position) {
+        return placementUnchanged(workspaceId, parentFolderId, DOCUMENT, documentId, position);
+    }
+
+    private boolean placementUnchanged(String workspaceId, UUID parentFolderId, String movedType,
+                                       String movedId, Integer position) {
+        List<Sibling> siblings = siblings(workspaceId, parentFolderId, null, null);
+        int current = -1;
+        for (int index = 0; index < siblings.size(); index++) {
+            Sibling sibling = siblings.get(index);
+            if (sibling.type().equals(movedType) && sibling.id().equals(movedId)) current = index;
+        }
+        if (current < 0) return false;
+        int desired = position == null ? siblings.size() - 1
+                : Math.max(0, Math.min(position, siblings.size() - 1));
+        return current == desired;
+    }
+
+    private long place(String workspaceId, UUID parentFolderId, String movedType, String movedId, Integer position) {
+        List<Sibling> siblings = siblings(workspaceId, parentFolderId, movedType, movedId);
         int index = position == null ? siblings.size() : Math.max(0, Math.min(position, siblings.size()));
         Instant now = Instant.now();
         for (int i = 0; i < siblings.size(); i++) {
@@ -67,6 +79,22 @@ public class SiblingReorderer {
             }
         }
         return index;
+    }
+
+    private List<Sibling> siblings(String workspaceId, UUID parentFolderId, String excludedType, String excludedId) {
+        List<Sibling> siblings = new ArrayList<>();
+        for (Folder folder : folderRepository.findChildrenForUpdate(workspaceId, parentFolderId)) {
+            if (!(FOLDER.equals(excludedType) && folder.getId().toString().equals(excludedId))) {
+                siblings.add(new Sibling(FOLDER, folder.getId().toString(), folder.getSortOrder()));
+            }
+        }
+        for (Document document : documentRepository.findChildDocumentsForUpdate(workspaceId, parentFolderId)) {
+            if (!(DOCUMENT.equals(excludedType) && document.getId().equals(excludedId))) {
+                siblings.add(new Sibling(DOCUMENT, document.getId(), document.getSortOrder()));
+            }
+        }
+        siblings.sort(Comparator.comparingLong(Sibling::sortOrder).thenComparing(Sibling::id));
+        return siblings;
     }
 
     private record Sibling(String type, String id, long sortOrder) {}

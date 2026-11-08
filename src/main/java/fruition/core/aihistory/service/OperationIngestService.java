@@ -65,9 +65,9 @@ public class OperationIngestService {
                     "경로와 본문의 operation_id가 다릅니다: " + operationId);
         }
 
-        OperationLog operation = operationLogRepository.findById(operationId)
+        OperationLog operation = operationLogRepository.findByIdForUpdate(operationId)
                 .orElseThrow(() -> new OperationNotFoundException(operationId));
-        String payloadHash = hash(request);
+        String payloadHash = payloadHash(request);
 
         // 이미 확정된 작업이면 같은 payload인지만 본다. 같으면 재전송이므로 기존 결과를 돌려준다.
         if (operation.getStatus().isTerminal()) {
@@ -203,7 +203,7 @@ public class OperationIngestService {
     }
 
     /** 같은 결과가 다시 오면 같은 값이 나와야 한다. */
-    private String hash(OperationResultRequest request) {
+    public String payloadHash(OperationResultRequest request) {
         try {
             String canonical = objectMapper.writeValueAsString(request);
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

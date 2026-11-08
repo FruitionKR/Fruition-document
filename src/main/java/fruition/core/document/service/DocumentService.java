@@ -561,6 +561,17 @@ public class DocumentService {
                 createMarkdownWithDraft(workspaceId, userId, idempotencyKey, request, UploadAccounting.NONE));
     }
 
+    /** MCP receipt is the idempotency boundary; the caller owns the surrounding DB transaction. */
+    public DocumentUploadResponse createAgentMarkdownInCurrentTransaction(
+            String workspaceId, String userId, MarkdownDocumentCreateRequest request) {
+        if (request == null) throw new InvalidMarkdownContentException("Markdown 생성 요청은 필수입니다.");
+        verifyFolder(workspaceId, request.folderId());
+        DocumentEditingRules.Filename filename = DocumentEditingRules.rename(request.displayName(), "document.md");
+        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(request.markdown());
+        return createMarkdownDocument(workspaceId, userId, null, null, filename.filename(), content,
+                "direct", request.folderId(), Document.AGENT_ORIGIN, true, UploadAccounting.NONE);
+    }
+
     /**
      * {@code POST /documents/markdown} 진입점. 사용자가 올린 문서로 보고 다른 업로드처럼 저장 용량 한도를 적용한다
      * (잠금 없는 사전 확인 → 원본 저장 → 사용자 잠금 아래 재확인).
@@ -2318,6 +2329,23 @@ public class DocumentService {
                 workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId, versionSource, false);
     }
 
+    /** MCP Agent edit plus its I5 receipt are committed by one caller-owned PostgreSQL transaction. */
+    public DocumentContentSaveResponse saveAgentContentInCurrentTransaction(
+            String workspaceId,
+            String userId,
+            String documentId,
+            String markdown,
+            Long baseRevision,
+            String revisionWriteId,
+            String applyOperationId
+    ) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("현재 PostgreSQL transaction 안에서 호출해야 합니다.");
+        }
+        return saveContentInTransaction(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
+                "agent", applyOperationId, false, null, StaleBasePolicy.MERGE_ONLY);
+    }
+
     /**
      * @param autoMerge true면 기준 revision이 지나간 저장을 자동 병합한다(ADR 0032). 버전 복원처럼 정확히 그 본문이어야
      *                  하는 저장은 false로 두어 기존처럼 409로 거절한다.
@@ -2895,6 +2923,21 @@ public class DocumentService {
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
         documentAccessPolicy.requireEdit(document, userId);
+        return renameAuthorized(workspaceId, userId, documentId, request, document);
+    }
+
+    /** MCP caller supplies current authorization; mutation semantics stay identical to the web path. */
+    public DocumentRenameResponse renameAgentInCurrentTransaction(
+            String workspaceId, String userId, String documentId, DocumentRenameRequest request) {
+        if (request == null || request.baseVersion() == null || request.baseVersion() < 1)
+            throw new InvalidDocumentFilenameException("base_version은 1 이상이어야 합니다.");
+        Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                .orElseThrow(() -> new DocumentNotFoundException(documentId));
+        return renameAuthorized(workspaceId, userId, documentId, request, document);
+    }
+
+    private DocumentRenameResponse renameAuthorized(String workspaceId, String userId, String documentId,
+                                                     DocumentRenameRequest request, Document document) {
         // 채팅에서 만든 문서는 이름도 문답 출처의 일부라 본문과 함께 잠근다. 이동·삭제는 그대로 허용한다.
         if ("chat_export".equals(document.getOrigin())) {
             throw new DocumentTitleLockedException("채팅에서 만든 문서는 이름을 바꿀 수 없습니다.");

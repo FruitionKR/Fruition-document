@@ -98,6 +98,48 @@ public class FolderService {
                 });
     }
 
+    /** MCP already owns operation idempotency through its durable receipt. Caller supplies current authorization. */
+    public FolderResponse createAgentInCurrentTransaction(String workspaceId, String name, UUID parentFolderId) {
+        name = normalizeName(name);
+        verifyParentFolder(workspaceId, parentFolderId);
+        Folder folder = new Folder(UUID.randomUUID(), workspaceId, parentFolderId, name,
+                nextSortOrder(workspaceId, parentFolderId));
+        folderRepository.save(folder);
+        return FolderResponse.from(folder);
+    }
+
+    public FolderResponse renameAgentInCurrentTransaction(String workspaceId, UUID folderId,
+                                                          String rawName, long baseVersion) {
+        String name = normalizeName(rawName);
+        Folder folder = requireFolder(workspaceId, folderId);
+        if (folder.getCurrentVersion() != baseVersion) {
+            throw new HierarchyVersionConflictException("폴더가 이미 변경되어 이름을 변경할 수 없습니다.");
+        }
+        if (folder.getName().equals(name)) return FolderResponse.from(folder);
+        if (folderRepository.renameIfVersionMatches(folderId, workspaceId, baseVersion, name, Instant.now()) == 0)
+            throw new HierarchyVersionConflictException("폴더가 이미 변경되어 이름을 변경할 수 없습니다.");
+        return FolderResponse.from(requireFolder(workspaceId, folderId));
+    }
+
+    public FolderResponse moveAgentInCurrentTransaction(String workspaceId, UUID folderId,
+                                                        FolderPositionRequest request) {
+        Folder folder = requireFolder(workspaceId, folderId);
+        if (folder.getCurrentVersion() != request.baseVersion())
+            throw new HierarchyVersionConflictException("폴더가 이미 변경되어 이동할 수 없습니다.");
+        UUID targetParentId = request.parentFolderId();
+        verifyParentFolder(workspaceId, targetParentId);
+        if (targetParentId != null && folderRepository.countAncestorMatches(targetParentId, folderId) > 0)
+            throw new HierarchyCycleException("폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.");
+        if (java.util.Objects.equals(folder.getParentFolderId(), targetParentId)
+                && siblingReorderer.folderPlacementUnchanged(
+                workspaceId, targetParentId, folderId, request.position())) return FolderResponse.from(folder);
+        long sortOrder = siblingReorderer.placeFolder(workspaceId, targetParentId, folderId, request.position());
+        if (folderRepository.moveIfVersionMatches(folderId, workspaceId, request.baseVersion(),
+                targetParentId, sortOrder, Instant.now()) == 0)
+            throw new HierarchyVersionConflictException("폴더가 이미 변경되어 이동할 수 없습니다.");
+        return FolderResponse.from(requireFolder(workspaceId, folderId));
+    }
+
     public FolderResponse rename(String workspaceId, String userId, UUID folderId, String idempotencyKey,
                                  FolderRenameRequest request) {
         String name = normalizeName(request.name());
