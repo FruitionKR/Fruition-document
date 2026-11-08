@@ -55,7 +55,7 @@ public class McpToolCatalog {
         this.audit = audit; this.mapper = mapper; this.properties = properties;
     }
 
-    /** 읽기 4개 + 제안 8개 + Skill 3개(읽기 2·정의 제안 1) + 회의 읽기 2개 + PDF 2개. 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
+    /** 읽기 4개 + 제안 8개 + Skill 3개(읽기 2·정의 제안 1) + 회의 읽기 2개 + PDF 변환 4개. 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
     public List<io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification> tools() {
         var tools = new java.util.ArrayList<>(List.of(
                 spec(tool("search_wiki", "Search published workspace wiki pages", searchSchema()),
@@ -98,9 +98,9 @@ public class McpToolCatalog {
             if ("get_document".equals(tool)) targets = List.of(argument(request.arguments(), "document_id"));
             if ("propose_document_edit".equals(tool)) targets = List.of(proposalDocumentId(request.arguments()));
             if ("propose_plan".equals(tool)) targets = planProposalTargets(request.arguments());
-            if (McpPdfTools.GET_PDF_SOURCE.equals(tool)) targets = List.of(argument(request.arguments(), "document_id"));
-            if (McpPdfTools.PROPOSE_PDF_CONVERSION.equals(tool))
-                targets = List.of(argument(request.arguments(), "source_document_id"));
+            if (McpPdfTools.START.equals(tool)) targets = List.of(argument(request.arguments(), "document_id"));
+            if (Set.of(McpPdfTools.WINDOW, McpPdfTools.SUBMIT, McpPdfTools.FINALIZE).contains(tool))
+                targets = List.of(argument(request.arguments(), "conversion_id"));
             if (McpMeetingTools.TRANSCRIPT.equals(tool)) targets = List.of(McpMeetingTools.meetingId(request.arguments()));
             if (McpSkillTools.PROPOSE.equals(tool)) targets = skillDefinitionTargets(request.arguments());
             if (McpSkillTools.GET.equals(tool)) targets = List.of(McpSkillTools.skillId(request.arguments()));
