@@ -1,5 +1,6 @@
 package fruition.core.wikimaintenance.service;
 
+import fruition.shared.i18n.ResponseLanguage;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import fruition.core.aitask.AiErrorMessages;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -98,11 +99,11 @@ public class WikiMaintenanceService {
                 .filter(value -> workspaceId.equals(value.workspaceId()) && userId.equals(value.userId()));
         if (found.isEmpty()) return coreRun(workspaceId, userId, runId);
         var run = found.get();
-        // error는 ai가 보낸 코드다. 화면에는 한국어 문구를 error로, 코드를 error_code로 내보낸다.
+        // error는 ai가 보낸 코드다. 화면에는 요청 언어의 문구를 error로, 코드를 error_code로 내보낸다.
         var node = (ObjectNode) objectMapper.valueToTree(run);
         if (run.error() != null) {
             node.put("error_code", run.error());
-            node.put("error", AiErrorMessages.lint(run.error()));
+            node.put("error", AiErrorMessages.lint(run.error(), ResponseLanguage.current()));
         }
         return node;
     }
@@ -127,7 +128,7 @@ public class WikiMaintenanceService {
         // 결과가 왔는데 ai에 run이 없다면 행을 만들기 전에 실패한 것이다.
         node.put("status", "failed");
         if (code != null) node.put("error_code", code);
-        return node.put("error", AiErrorMessages.lint(code));
+        return node.put("error", AiErrorMessages.lint(code, ResponseLanguage.current()));
     }
 
     /** 마지막 lint 성공 이후 위키 페이지가 변경됐으면 needs_lint = true. */

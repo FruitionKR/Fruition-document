@@ -23,7 +23,7 @@ Notion "Markdown & CSV" 내보내기를 가져온다(alpha MVP). zip 해석·폴
 
 가져온 PDF는 PDF 원본 문서로만 만들고 자동 변환하지 않는다. 사용자가 고르면 `POST .../convert`(또는 문서별
 `POST /documents/{id}/convert-markdown`, 헤더 불필요)로 변환한다. 변환하면 변환본(placeholder)도 원본의
-`import_id`로 표시되고, 변환이 끝나도 자동 편입하지 않는다(`ingestConvertedParts`에서 import 문서는 건너뜀). 편입 대상은 Markdown 문서뿐이라
+`import_id`로 표시되고, 변환이 끝나도 자동 편입하지 않는다(변환 요청 때 `auto_ingest_scheduled=false`로 두고, `ingestConvertedParts`도 import 문서는 건너뜀). 편입 대상은 Markdown 문서뿐이라
 PDF 원본은 빠지고, 변환본은 변환이 끝난 뒤에만 `ingest-estimate`·`ingest` 대상이 된다. 변환 중인 수는 `converting_count`로 알린다.
 
 ## 한도
@@ -34,7 +34,7 @@ PDF 원본은 빠지고, 변환본은 변환이 끝난 뒤에만 `ingest-estimat
 | 세션 항목(문서+이미지) | - | 세기만 하고 상한 없음(`items_used`) |
 | 저장 공간(5GB, 사용자 단위) | 적용 | 적용(`413 STORAGE_QUOTA_EXCEEDED`) |
 | Markdown 5MB, 이미지 10MB, 저장당 이미지 20개, 요청 100MB | 적용 | 적용 |
-| 자동 편입(워크스페이스 설정) | 업로드 Markdown·PDF 변환본 | **하지 않음**(가져온 PDF의 변환본 포함) |
+| 자동 편입(워크스페이스 설정 `auto_ingest_markdown_on_upload`·`auto_ingest_pdf_on_convert`) | 업로드 Markdown·PDF 변환본 | **하지 않음**(가져온 PDF의 변환본 포함) |
 | PDF 100MB(직접 업로드) | 적용 | 적용(`413 FILE_TOO_LARGE`) |
 
 헤더 값이 열린 내 세션(같은 워크스페이스, 만료 전, 완료 전)이 아니면 일반 한도로 대신 처리하지 않고 `400 IMPORT_INVALID`다.

@@ -1,5 +1,6 @@
 package fruition.core.meeting;
 
+import fruition.shared.i18n.ResponseLanguage;
 import fruition.shared.logging.CommittedLog;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -129,7 +130,9 @@ public class MeetingNotesService {
             @JsonProperty("display_name") String displayName,
             @JsonProperty("meeting_date") String meetingDate,
             @JsonInclude(JsonInclude.Include.NON_EMPTY) List<String> attendees,
-            List<Map<String, String>> segments
+            List<Map<String, String>> segments,
+            // 요청자 화면 언어("ko"|"en"). 회의록 문장·머리글의 언어다. 비동기 작업이라 요청 시점 값을 command에 담는다.
+            @JsonProperty("response_language") String responseLanguage
     ) {}
 
     public record AppendPreview(String documentId, long baseRevision, String markdown) {}
@@ -174,7 +177,7 @@ public class MeetingNotesService {
             WorkspaceAiModelClient.AiModelSelection model = workspaceAiModelClient.get(workspaceId);
             var command = new MeetingNotesCommand(runId, "meeting_notes", workspaceId, userId, model.provider(),
                     model.model(), meetingId, meeting.displayName(), meetingDate(meeting), attendees(meeting, userId),
-                    segments);
+                    segments, ResponseLanguage.current().code());
             // 워크스페이스당 생성은 하나다(팀 회의는 한 사람이 녹음한다). 잠금은 같은 트랜잭션 끝까지 쥐어 Pod 사이에서도 직렬이다.
             // generating 행·크레딧 예약·작업 등록·outbox 저장이 한 트랜잭션이라, 중간에 실패하면 명령 없는 generating 행이
             // 남아 워크스페이스를 막지 않는다.

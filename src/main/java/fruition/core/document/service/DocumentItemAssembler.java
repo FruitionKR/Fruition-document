@@ -1,5 +1,7 @@
 package fruition.core.document.service;
 
+import fruition.core.aitask.AiErrorMessages;
+import fruition.shared.i18n.ResponseLanguage;
 import fruition.core.document.domain.ConversionReport;
 import fruition.core.document.domain.Document;
 import fruition.core.document.domain.DocumentEditState;
@@ -88,7 +90,7 @@ public class DocumentItemAssembler {
                 doc.getUploadedAt(),
                 doc.getProcessedAt(),
                 doc.getProcessingStartedAt(),
-                doc.getErrorMessage(),
+                AiErrorMessages.localizeStored(doc.getErrorCode(), doc.getErrorMessage(), ResponseLanguage.current()),
                 doc.getErrorCode(),
                 doc.getPipelineRunId(),
                 resolveProcessingState(doc),
@@ -113,7 +115,8 @@ public class DocumentItemAssembler {
                 doc.getAiOrigin(),
                 lastAiChange,
                 restorationSummaryOf(doc),
-                figureDescriptionsOf(doc));
+                figureDescriptionsOf(doc),
+                doc.isAutoIngestScheduled());
     }
 
     static ConversionReport.RestorationSummary restorationSummaryOf(Document doc) {

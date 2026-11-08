@@ -115,7 +115,9 @@ class DocumentPurgeCitationsIntegrationTest {
         // 이 기능 전의 영구 삭제: FK만 document_id를 비우고 quote와 변경 기록은 그대로 남았다.
         jdbc.update("DELETE FROM documents WHERE id = ?", purged);
 
-        assertThat(scrubber.scrubOrphans(100)).isPositive();
+        // 공유 DB에서 다른 테스트 context의 휴지통 영구 삭제 worker(시작 직후 한 번 실행)가 같은 고아 행을
+        // 먼저 정리할 수 있다. 정리 건수가 아니라 정리된 결과로 확인한다.
+        scrubber.scrubOrphans(100);
 
         assertThat(quote(citation)).isEmpty();
         assertThat(journalEqualsRow(citation)).isTrue();
@@ -137,8 +139,8 @@ class DocumentPurgeCitationsIntegrationTest {
         // 이 기능 전의 영구 삭제: 인용은 대표 문서만 FK로 걸려 있어 그대로 남았다.
         jdbc.update("DELETE FROM documents WHERE id = ?", purged);
 
-        // 같은 DB를 쓰는 다른 테스트 컨텍스트의 영구 삭제 스케줄러가 시작하면서 먼저 정리할 수 있다.
-        // 반환 건수는 그 경쟁에 따라 0일 수 있으므로, 정리 결과는 아래 행 상태로 확인한다.
+        // 공유 DB에서 다른 테스트 context의 휴지통 영구 삭제 worker(시작 직후 한 번 실행)가 같은 고아 행을
+        // 먼저 정리할 수 있다. 정리 건수가 아니라 정리된 결과로 확인한다.
         scrubber.scrubOrphans(100);
 
         assertThat(quote(mixed)).isEmpty();

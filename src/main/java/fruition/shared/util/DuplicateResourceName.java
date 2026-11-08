@@ -11,7 +11,23 @@ public final class DuplicateResourceName {
             "uq_documents_active_name", "같은 워크스페이스에 같은 파일명이 이미 있습니다. 다른 이름을 사용해 주세요.",
             "uq_folders_active_name", "같은 워크스페이스에 같은 폴더명이 이미 있습니다. 다른 이름을 사용해 주세요.");
 
+    /** 영어 요청의 같은 안내. 문서·폴더 이름 문구는 access-svc와 같은 문장이다. */
+    private static final Map<String, String> ENGLISH_MESSAGES = Map.of(
+            MESSAGES.get("uq_document_tree_active_name"),
+            "A file or folder with the same name already exists in this folder. Please use a different name.",
+            MESSAGES.get("uq_documents_skill_reference_name"),
+            "A skill reference document with the same name already exists. Please use a different name.",
+            MESSAGES.get("uq_documents_active_name"),
+            "A file with the same name already exists in this workspace. Please use a different name.",
+            MESSAGES.get("uq_folders_active_name"),
+            "A folder with the same name already exists in this workspace. Please use a different name.");
+
     private DuplicateResourceName() {}
+
+    /** {@link #message}가 만든 한국어 문구의 영어. 모르는 문구면 null이다. */
+    public static String englishMessage(String koreanMessage) {
+        return koreanMessage == null ? null : ENGLISH_MESSAGES.get(koreanMessage);
+    }
 
     public static String message(Throwable error) {
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {

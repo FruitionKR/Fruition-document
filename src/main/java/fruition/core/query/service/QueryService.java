@@ -123,7 +123,7 @@ public class QueryService {
 
     @Transactional
     public void failAsync(String requestId, QueryMessageContext messageContext, String errorCode) {
-        chatTurnRecorder.markFailed(messageContext.assistantMessageId(), AiErrorMessages.query(errorCode));
+        chatTurnRecorder.markFailed(messageContext.assistantMessageId(), errorCode, AiErrorMessages.query(errorCode));
         log.warn("[질의 Kafka 실패 반영] requestId={} assistantMessageId={} errorCode={}",
                 requestId, messageContext.assistantMessageId(), errorCode);
     }

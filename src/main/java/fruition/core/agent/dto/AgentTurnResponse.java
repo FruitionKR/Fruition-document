@@ -1,5 +1,6 @@
 package fruition.core.agent.dto;
 
+import fruition.shared.i18n.ResponseLanguage;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.aitask.AiErrorMessages;
@@ -44,7 +45,7 @@ public record AgentTurnResponse(
         String error,
 
         @JsonProperty("error_message")
-        @Schema(description = "실패 코드에 대응하는 사용자용 한국어 문구. 성공이면 null이다.", nullable = true)
+        @Schema(description = "실패 코드에 대응하는 사용자용 문구. Accept-Language가 en이면 영어, 그 밖은 한국어다. 성공이면 null이다.", nullable = true)
         String errorMessage,
 
         @JsonProperty("folder_id")
@@ -60,6 +61,6 @@ public record AgentTurnResponse(
     public AgentTurnResponse(String documentId, Long baseVersion, String requestId, String applyOperationId,
                              String status, JsonNode result, String error, String folderId) {
         this(documentId, baseVersion, requestId, applyOperationId, status, result, error,
-                error == null ? null : AiErrorMessages.agent(error), folderId);
+                error == null ? null : AiErrorMessages.agent(error, ResponseLanguage.current()), folderId);
     }
 }

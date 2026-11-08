@@ -1,5 +1,6 @@
 package fruition.core.aitask.service;
 
+import fruition.shared.i18n.ResponseLanguage;
 import fruition.shared.logging.RepeatedFailureLogger;
 import fruition.core.document.service.DocumentCopyScrubber;
 import java.util.ArrayList;
@@ -119,7 +120,8 @@ public class AiTaskResultConsumer {
                     if (result.error() == null) {
                         queryEventBroker.complete(flowId);
                     } else {
-                        queryEventBroker.fail(flowId, result.error(), AiErrorMessages.agent(result.error()));
+                        queryEventBroker.fail(flowId, result.error(),
+                                AiErrorMessages.agent(result.error(), requestLanguage(event)));
                     }
                 }
                 return;
@@ -148,7 +150,7 @@ public class AiTaskResultConsumer {
                 }
             } else if (queryRunStore.markFailed(projection.runId(), projection.error())) {
                 queryEventBroker.fail(projection.runId(), projection.error(),
-                        AiErrorMessages.query(projection.error()));
+                        AiErrorMessages.query(projection.error(), requestLanguage(event)));
             }
         } catch (Exception e) {
             failed = true;
@@ -212,5 +214,10 @@ public class AiTaskResultConsumer {
             }
         }
         return "-";
+    }
+
+    /** SSE로 바로 보내는 실패 문구의 언어. 요청 때 command에 담은 response_language를 쓰고, 없으면(구 command) 한국어다. */
+    private static ResponseLanguage requestLanguage(JsonNode event) {
+        return ResponseLanguage.of(event.path("request").path("response_language").asText(null));
     }
 }

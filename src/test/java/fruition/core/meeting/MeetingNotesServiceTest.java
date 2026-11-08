@@ -38,7 +38,7 @@ class MeetingNotesServiceTest {
     @Test
     void meetingDate_isKoreanDateOfMeetingCreation() {
         // UTC 10월 19일 15:30은 한국 시간 10월 20일 00:30이다.
-        var meeting = new MeetingResponse("mtg_1", "회의", null, "live", "open", false, false, null, true,
+        var meeting = new MeetingResponse("mtg_1", "회의", null, "live", "open", false, false, null, null, true,
                 List.of(), List.of(), Instant.parse("2026-10-19T15:30:00Z"));
 
         assertThat(MeetingNotesService.meetingDate(meeting)).isEqualTo("2026-10-20");
