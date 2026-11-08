@@ -1,7 +1,8 @@
 # MCP read boundary
 
 The document service owns the protected MCP resource at `POST /mcp` and its RFC 9728 metadata at
-`GET /.well-known/oauth-protected-resource/mcp`. The boundary is disabled unless `MCP_ENABLED=true`;
+`GET /.well-known/oauth-protected-resource/mcp` (`scopes_supported`는 Access가 발급하는
+`["read","write_propose","wiki_write"]`와 같다. 광고만 할 뿐 자동 부여는 없다). The boundary is disabled unless `MCP_ENABLED=true`;
 enabling it also requires canonical HTTPS resource/authorization/AI URIs, an exact Origin allowlist,
 RSA verification keys, a cursor secret, and every positive deployment limit in `application.properties`.
 `MCP_REVIEW_ORIGIN` is an explicit canonical HTTPS frontend origin used only by the proposal tools;

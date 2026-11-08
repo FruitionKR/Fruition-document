@@ -18,7 +18,7 @@ public class McpMetadataController {
     @GetMapping("/.well-known/oauth-protected-resource/mcp")
     Metadata metadata() {
         return new Metadata(properties.resourceUri().toString(),
-                List.of(properties.authorizationServerUri().toString()), List.of("read"));
+                List.of(properties.authorizationServerUri().toString()), List.of("read", "write_propose", "wiki_write"));
     }
     record Metadata(String resource, @JsonProperty("authorization_servers") List<String> authorizationServers,
                     @JsonProperty("scopes_supported") List<String> scopesSupported) {}
