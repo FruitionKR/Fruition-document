@@ -14,6 +14,8 @@ import java.util.Set;
 @Component
 @ConditionalOnProperty(name = "app.mcp.enabled", havingValue = "true")
 public class McpToolCatalog {
+    static final List<String> WIKI_TOOLS = List.of("start_ingest", "resume_ingest", "get_window", "submit_window",
+            "finalize_ingest", "submit_lint_changes");
     private static final String SEMANTIC_CONCEPT_INSTRUCTIONS = " Before submitting, use search_wiki and get_wiki_page "
             + "to compare concepts by meaning. For an equivalent existing concept, set merge_target_page_id to its page_id. "
             + "Keep related but distinct concepts separate; omit the target if no equivalent exists. "
@@ -32,32 +34,24 @@ public class McpToolCatalog {
     private final McpWikiPageClient wikiPages;
     private final McpDocumentReadService documents;
     private final McpDocumentProposalService proposals;
-    private McpPlanProposalService planProposals;
-    private McpWikiProposalService wikiProposals;
+    private final McpPlanProposalService planProposals;
+    private final McpWikiProposalService wikiProposals;
     private final McpAuditLogger audit;
     private final ObjectMapper mapper;
     private final McpProperties properties;
 
     public McpToolCatalog(McpWikiSearchClient wiki, McpWikiPageClient wikiPages, McpDocumentReadService documents,
-                          McpDocumentProposalService proposals, McpAuditLogger audit, ObjectMapper mapper,
+                          McpDocumentProposalService proposals, McpPlanProposalService planProposals,
+                          McpWikiProposalService wikiProposals, McpAuditLogger audit, ObjectMapper mapper,
                           McpProperties properties) {
         this.wiki = wiki; this.wikiPages = wikiPages; this.documents = documents;
-        this.proposals = proposals;
+        this.proposals = proposals; this.planProposals = planProposals; this.wikiProposals = wikiProposals;
         this.audit = audit; this.mapper = mapper; this.properties = properties;
     }
 
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    public void setPlanProposals(McpPlanProposalService planProposals) {
-        this.planProposals = planProposals;
-    }
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    public void setWikiProposals(McpWikiProposalService wikiProposals) {
-        this.wikiProposals = wikiProposals;
-    }
-
+    /** 읽기 4개 + 제안 8개. 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
     public List<io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification> tools() {
-        return List.of(
+        var tools = new java.util.ArrayList<>(List.of(
                 spec(tool("search_wiki", "Search published workspace wiki pages", searchSchema()),
                         (id, args) -> wiki.search(id, text(args, "query"), optionalText(args, "cursor"), integer(args, "page_size"))),
                 spec(tool("find_documents", "Find readable workspace documents", searchSchema()),
@@ -65,33 +59,17 @@ public class McpToolCatalog {
                 spec(tool("get_document", "Read a readable document at block boundaries", getSchema()),
                         (id, args) -> documents.get(id, text(args, "document_id"), optionalText(args, "cursor"))),
                 spec(tool("get_wiki_page", "Read a published workspace wiki page", wikiPageSchema()),
-                        (id, args) -> wikiPages.get(id, pageId(args)))
-        );
-    }
-
-    /** I5 registers this specification only after explicit approval, fees and a real review URL are complete. */
-    io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification stagedProposeDocumentEditTool() {
-        return spec(tool("propose_document_edit", "Propose a document edit for later review and approval",
-                        proposalSchema(), PROPOSAL_ONLY),
-                (id, args) -> proposals.propose(id, args));
-    }
-
-    /** I6 remains staged until the original runtime, frontend, price and retention gates pass. */
-    io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification stagedProposePlanTool() {
-        if (planProposals == null) throw new IllegalStateException("MCP plan proposal service is unavailable");
-        return spec(tool("propose_plan", "Propose a multi-step document plan for later review and approval",
-                        planProposalSchema(), PROPOSAL_ONLY),
-                (id, args) -> planProposals.propose(id, args));
-    }
-
-    /** I9 remains staged: these strict specifications are not passed to the public MCP server builder. */
-    List<io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification> stagedWikiTools() {
-        if (wikiProposals == null) throw new IllegalStateException("MCP wiki proposal service is unavailable");
-        return List.of("start_ingest", "resume_ingest", "get_window", "submit_window", "finalize_ingest",
-                        "submit_lint_changes").stream()
-                .map(name -> spec(tool(name, wikiDescription(name), wikiSchema(name), PROPOSAL_ONLY),
-                        (id, args) -> wikiProposals.invoke(id, name, args)))
-                .toList();
+                        (id, args) -> wikiPages.get(id, pageId(args))),
+                spec(tool("propose_document_edit", "Propose a document edit for later review and approval",
+                                proposalSchema(), PROPOSAL_ONLY),
+                        (id, args) -> proposals.propose(id, args)),
+                spec(tool("propose_plan", "Propose a multi-step document plan for later review and approval",
+                                planProposalSchema(), PROPOSAL_ONLY),
+                        (id, args) -> planProposals.propose(id, args))));
+        for (String name : WIKI_TOOLS)
+            tools.add(spec(tool(name, wikiDescription(name), wikiSchema(name), PROPOSAL_ONLY),
+                    (id, args) -> wikiProposals.invoke(id, name, args)));
+        return List.copyOf(tools);
     }
 
     private io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification spec(
@@ -108,8 +86,7 @@ public class McpToolCatalog {
             if ("get_document".equals(tool)) targets = List.of(text(request.arguments(), "document_id"));
             if ("propose_document_edit".equals(tool)) targets = List.of(proposalDocumentId(request.arguments()));
             if ("propose_plan".equals(tool)) targets = planProposalTargets(request.arguments());
-            if (Set.of("start_ingest", "resume_ingest", "get_window", "submit_window", "finalize_ingest",
-                    "submit_lint_changes").contains(tool)) targets = wikiTargets(request.arguments());
+            if (WIKI_TOOLS.contains(tool)) targets = wikiTargets(request.arguments());
             Object result = handler.call(id, request.arguments());
             byte[] bytes = mapper.writeValueAsBytes(result);
             if (bytes.length > properties.maxResponseBytes()) throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");

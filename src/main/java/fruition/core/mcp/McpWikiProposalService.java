@@ -24,7 +24,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-/** Six staged I9 adapters. They are intentionally absent from {@link McpToolCatalog#tools()}. */
+/** I9 위키 도구 6개. {@link McpToolCatalog#tools()}에 공개 등록된다. */
 @Service
 @ConditionalOnProperty(name = "app.mcp.enabled", havingValue = "true")
 public class McpWikiProposalService {

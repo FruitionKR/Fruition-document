@@ -15,15 +15,17 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 class McpToolCatalogTest {
-    @Test void catalogIsStaticReadOnlyStrictAndAdvertisesBoundedWikiPageRead() {
+    @Test void catalogReadToolsAreStaticReadOnlyStrictAndAdvertiseBoundedWikiPageRead() {
         var pages = mock(McpWikiPageClient.class);
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
-                mock(McpDocumentProposalService.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpDocumentProposalService.class),
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var tools = catalog.tools();
-        assertThat(tools).extracting(s -> s.tool().name())
-                .containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page");
-        assertThat(tools).allSatisfy(s -> {
+        assertThat(tools).extracting(s -> s.tool().name()).containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page",
+                        "propose_document_edit", "propose_plan", "start_ingest", "resume_ingest", "get_window",
+                        "submit_window", "finalize_ingest", "submit_lint_changes");
+        assertThat(tools.subList(0, 4)).allSatisfy(s -> {
             assertThat(s.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
             assertThat(s.tool().outputSchema().get("additionalProperties")).isEqualTo(false);
             assertThat(s.tool().annotations().readOnlyHint()).isTrue();
@@ -82,7 +84,8 @@ class McpToolCatalogTest {
         var pages = mock(McpWikiPageClient.class);
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
-                mock(McpDocumentProposalService.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpDocumentProposalService.class),
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var pageTool = catalog.tools().get(3);
         var id = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
                 Set.of("read"), "MEMBER", Set.of());
@@ -109,11 +112,12 @@ class McpToolCatalogTest {
         verifyNoMoreInteractions(pages);
     }
 
-    @Test void stagedProposalSpecificationIsStrictInvocableAndNotInProductionCatalog() {
+    @Test void proposalToolIsStrictInvocableAndRegistered() {
         var proposals = mock(McpDocumentProposalService.class);
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
-                mock(McpDocumentReadService.class), proposals, audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpDocumentReadService.class), proposals, mock(McpPlanProposalService.class),
+                mock(McpWikiProposalService.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json",
                 "00000000-0000-4000-8000-000000000001", 2, Set.of("write_propose"), "OWNER", Set.of());
         Map<String,Object> arguments = proposalArguments();
@@ -122,9 +126,7 @@ class McpToolCatalogTest {
                         "awaiting_approval",
                         "https://app.example/mcp/workspaces/workspace/runs/00000000-0000-4000-8000-000000000003"));
 
-        assertThat(catalog.tools()).extracting(spec -> spec.tool().name())
-                .containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page");
-        var specification = catalog.stagedProposeDocumentEditTool();
+        var specification = catalog.tools().get(4);
         assertThat(specification.tool().name()).isEqualTo("propose_document_edit");
         assertThat(specification.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
         assertThat(specification.tool().outputSchema().get("required"))
@@ -152,12 +154,12 @@ class McpToolCatalogTest {
         verifyNoMoreInteractions(proposals);
     }
 
-    @Test void stagedPlanSpecificationIsStrictInvocableAndNotInProductionCatalog() {
+    @Test void planToolIsStrictInvocableAndRegistered() {
         var planProposals = mock(McpPlanProposalService.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
-                mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
-                mock(McpAuditLogger.class), new ObjectMapper(), McpTokenVerifierTest.props());
-        catalog.setPlanProposals(planProposals);
+                mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class), planProposals,
+                mock(McpWikiProposalService.class), mock(McpAuditLogger.class), new ObjectMapper(),
+                McpTokenVerifierTest.props());
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json",
                 "00000000-0000-4000-8000-000000000001", 2, Set.of("write_propose"), "OWNER", Set.of());
         Map<String,Object> operation = new java.util.LinkedHashMap<>();
@@ -175,8 +177,7 @@ class McpToolCatalogTest {
         var expected = new McpDocumentProposalService.Result("run-1", "awaiting_approval", "https://review/run-1");
         when(planProposals.propose(identity, arguments)).thenReturn(expected);
 
-        assertThat(catalog.tools()).extracting(spec -> spec.tool().name()).doesNotContain("propose_plan");
-        var specification = catalog.stagedProposePlanTool();
+        var specification = catalog.tools().get(5);
         assertThat(specification.tool().name()).isEqualTo("propose_plan");
         assertThat(specification.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
         assertThat(specification.tool().annotations().readOnlyHint()).isFalse();
@@ -188,16 +189,14 @@ class McpToolCatalogTest {
         verify(planProposals).propose(identity, arguments);
     }
 
-    @Test void sixWikiAdaptersHaveExactStagedSchemasAndNeverEnterPublicCatalog() {
+    @Test void sixWikiToolsHaveExactSchemasInPublicCatalog() {
         var wikiProposals = mock(McpWikiProposalService.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
-                mock(McpAuditLogger.class), new ObjectMapper(), McpTokenVerifierTest.props());
-        catalog.setWikiProposals(wikiProposals);
+                mock(McpPlanProposalService.class), wikiProposals, mock(McpAuditLogger.class), new ObjectMapper(),
+                McpTokenVerifierTest.props());
 
-        assertThat(catalog.tools()).extracting(spec -> spec.tool().name())
-                .containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page");
-        var staged = catalog.stagedWikiTools();
+        var staged = catalog.tools().subList(6, 12);
         assertThat(staged).extracting(spec -> spec.tool().name()).containsExactly(
                 "start_ingest", "resume_ingest", "get_window", "submit_window", "finalize_ingest",
                 "submit_lint_changes");

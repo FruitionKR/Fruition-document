@@ -4,17 +4,28 @@ The document service owns the protected MCP resource at `POST /mcp` and its RFC 
 `GET /.well-known/oauth-protected-resource/mcp`. The boundary is disabled unless `MCP_ENABLED=true`;
 enabling it also requires canonical HTTPS resource/authorization/AI URIs, an exact Origin allowlist,
 RSA verification keys, a cursor secret, and every positive deployment limit in `application.properties`.
-`MCP_REVIEW_ORIGIN` is an explicit canonical HTTPS frontend origin used only by the staged write proposal;
+`MCP_REVIEW_ORIGIN` is an explicit canonical HTTPS frontend origin used only by the proposal tools;
 leaving it blank keeps the four read tools available but makes proposal invocation fail closed.
 
 The transport is the stateless servlet transport from the official Java SDK 2.1.0. It does not issue or
 accept MCP session IDs. Every HTTP request verifies an RS256 MCP-audience token, reads at most 4 MiB after
-decompression to select the required `read` or `write_propose` scope, and calls Access's current
+decompression to select the required `read`, `write_propose` (`propose_document_edit`, `propose_plan`) or
+`wiki_write` (six wiki tools) scope, and calls Access's current
 `POST /internal/mcp/grants/{grant_id}/authorize` contract before SDK protocol parsing. A missing Origin is
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-The versioned read-only catalog currently contains:
+## 공개 카탈로그 (`mcp-tools.v3`)
+
+`McpToolCatalog.tools()`는 2026-11-09부터 다음 12개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
+`find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
+(`start_ingest`, `resume_ingest`, `get_window`, `submit_window`, `finalize_ingest`, `submit_lint_changes`). 별도 enable
+플래그나 숨은 등록 경로는 없다. 제안·위키 도구는 승인 대기 run/draft와 `review_url`만 만들며, 승인·크레딧 예약·실행·정산은
+아래 각 절의 웹 승인 경로에서만 일어난다. 도구 인자로 승인이나 실행을 대신할 수 없다. 모든 도구는 같은 spec wrapper로
+감사 로그·오류 코드·응답 크기 제한을 공유한다. 이 카탈로그는 Document `f9882a4`와 AI `6bc6a6d`의 semantic merge 계약을
+전제로 하므로 두 서비스를 함께 배포해야 한다.
+
+The read tools are:
 
 - `search_wiki` → AI `POST /internal/mcp/wiki/search`, with a server-created actor and only
   `X-Internal-Token`; each stored document/block locator is shape-checked and its document is rechecked for
@@ -79,16 +90,13 @@ base-version drift, size limits, and inconsistent stored hashes fail closed. The
 only to create one deterministic `awaiting_approval` proposal; public write registration and execution remain
 future work.
 
-## Staged I4 document proposal adapter
+## I4 document proposal tool
 
-The static `propose_document_edit` specification and handler exist for focused invocation tests, but the
-production `tools()` catalog still returns only the four read tools above. Direct public calls therefore remain
-unknown-tool failures. I5 has one deliberate registration point,
-`McpToolCatalog.stagedProposeDocumentEditTool()`, after stable web approval, reservation/current authorization,
-execution receipts, and a real workspace-safe run-specific preview route are complete. There is no hidden
-enable switch or permissive bypass.
+`propose_document_edit` is registered in the public catalog and requires `write_propose`. It only creates an
+`awaiting_approval` run; web approval, reservation/current authorization, execution receipts, and the
+workspace-safe run preview route (`/mcp/workspaces/{workspace_id}/runs/{run_id}`) own every later step.
 
-The staged input is exactly:
+The input is exactly:
 
 ```json
 {
@@ -113,19 +121,17 @@ the canonical request hash excludes invocation ID and includes trusted actor ide
 `documents.current_version`(메타데이터 버전)만 올리는 변경은 편집 승인을 막지 않는다. 본문이 바뀌면 revision이 올라가
 `MCP target version changed.`(409)로 거절한다.
 
-The staged external result is exactly
+The external result is exactly
 `{ "run_id": "<uuid-v4>", "status": "awaiting_approval", "review_url": "https://<configured-origin>/mcp/workspaces/<encoded-workspace-id>/runs/<encoded-run-id>" }`.
 The server builds the link only from `MCP_REVIEW_ORIGIN`, verified actor workspace, and the validated AI run ID;
 it never uses request/forwarding headers or places tokens, grants, prices, or proposal content in the URL. The
 configured value must be an HTTPS origin with no userinfo, non-root path, query, or fragment. Missing configuration
-fails before the remote proposal is created. The handler never approves or executes a run, and the production
-catalog remains the four read tools.
+fails before the remote proposal is created. The handler never approves or executes a run.
 
-Static schema change record: on 2026-11-08, `mcp-tools.v1` gained this staged, non-destructive proposal schema and
-its I5 result added the required `review_url`. Static descriptions contain no workspace or user content, and the
-released production catalog remains the four read tools until the remaining I5 release gates are satisfied.
+Static schema change record: on 2026-11-08, `mcp-tools.v1` gained this non-destructive proposal schema and
+its I5 result added the required `review_url`. Static descriptions contain no workspace or user content.
 
-## Internal I6 plan context and staged multi-operation proposal
+## Internal I6 plan context and multi-operation proposal
 
 `POST /internal/agent/mcp/plan-context` accepts exact `mcp.plan-context.v1`, a verified `propose_plan` actor,
 an optional target folder, at most 40 unique folder/document resources, and at most 20 unique version-bound edit
@@ -134,13 +140,12 @@ role for every target/destination/root policy, and returns only the authoritativ
 chain, readable duplicate-review siblings, and requested edit bodies. Database rows, cumulative bodies, and the
 whole response are bounded; version/hash drift and overflow fail the request instead of truncating it.
 
-The strict staged `propose_plan` adapter accepts only
+The strict `propose_plan` tool (`write_propose`) accepts only
 `{idempotency_key,request_summary,target_folder_id,operations,artifacts}` and sends the existing
 `mcp.agent-proposal.v1` endpoint with `instruction:null`, the verified actor, and the shared canonical request hash.
 It supports at most 20 closed-set operations (`create_folder`, `rename_folder`, `move_folder`, `create_document`,
 `rename_document`, `move_document`, `apply_document_edit`) plus exact result references and artifact shapes. Its
-validated response remains `{run_id,status,review_url}`. It is deliberately absent from production `tools()`, so
-the public catalog remains exactly the four read tools and there is no hidden write flag.
+validated response remains `{run_id,status,review_url}`. It never approves, reserves credit, or executes.
 
 ## Internal I9 source snapshot callback
 
@@ -163,12 +168,12 @@ server block IDs `B0001` onward, and hashes the exact UTF-8 source and each bloc
 Existing configured MCP source byte/block limits apply. PDF, client-supplied source bytes/version/URLs, storage
 locators, unreadable documents, inconsistent stored hashes, and unknown request fields fail closed.
 
-## Staged I9 wiki adapters, web approval, and settlement
+## I9 wiki tools, web approval, and settlement
 
-The six strict adapter specifications are `start_ingest`, `resume_ingest`, `get_window`, `submit_window`,
-`finalize_ingest`, and `submit_lint_changes`. They are directly invocable only by focused internal tests and are
-deliberately absent from `McpToolCatalog.tools()`: the production catalog remains the four read tools, with no
-enable flag or hidden registration. Their external top-level fields are, respectively:
+The six strict wiki tools are `start_ingest`, `resume_ingest`, `get_window`, `submit_window`,
+`finalize_ingest`, and `submit_lint_changes`. They are registered in the public catalog, and the transport preflight
+requires `wiki_write` (a `read`/`write_propose`-only grant gets 403 `insufficient_scope` before any handler runs).
+Their external top-level fields are, respectively:
 
 - `{idempotency_key,document_id}`
 - `{run_id}`
@@ -222,7 +227,7 @@ does not refund or duplicate the original successful fee.
 
 ## MCP client semantic concept merging (`mcp-tools.v2`)
 
-The staged ingest tools default to client-LLM semantic resolution: `search_wiki` →
+The ingest tools default to client-LLM semantic resolution: `search_wiki` →
 `get_wiki_page` → compare meaning → submit `merge_target_page_id` for an equivalent
 existing concept. Related but distinct concepts remain separate. Equivalent new
 concepts use one consistent `concept_name` across windows. Failed search is not
@@ -240,6 +245,5 @@ rechecks the target during preview and apply. Invalid or unavailable targets ret
 `concept_resolution: {mode: "CLIENT_LLM_SEMANTIC", instructions: string}` object.
 The corresponding AI contract must be deployed together. Legacy submissions that
 omit the target retain name/alias matching. No server-side generative LLM or JEV
-call is added. This changes the staged tool schema and server catalog version from
-`mcp-tools.v1` to `mcp-tools.v2`; the public catalog still contains only the existing
-four read tools. Ingest publication/release gates remain separate.
+call is added. This changed the tool schema and server catalog version from
+`mcp-tools.v1` to `mcp-tools.v2`; registering the twelve tools publicly bumps it to `mcp-tools.v3`.

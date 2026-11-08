@@ -99,6 +99,29 @@ class McpSecurityFilterTest {
         verify(access).authorize(token, Set.of("write_propose"));
     }
 
+    @Test void wikiToolCallRequiresWikiWriteAndReadOnlyGrantNeverReachesHandler() throws Exception {
+        var verifier = mock(McpTokenVerifier.class); var access = mock(McpAccessClient.class);
+        var token = new McpTokenVerifier.Token("user", "workspace", "https://client.example/client.json",
+                "grant", 1, Set.of("read", "write_propose"));
+        when(verifier.verify(anyString())).thenReturn(token);
+        when(access.authorize(token, Set.of("wiki_write")))
+                .thenThrow(new McpAuthorizationException(403, "INSUFFICIENT_SCOPE"));
+        var filter = new McpSecurityFilter(McpTokenVerifierTest.props(), verifier, access, new ObjectMapper());
+        var request = new MockHttpServletRequest("POST", "/mcp");
+        request.addHeader("Authorization", "Bearer token");
+        request.setSecure(true); request.setServerName("mcp.example"); request.setServerPort(443);
+        request.setContent("""
+                {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"start_ingest","arguments":{}}}
+                """.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, (r, s) -> { throw new AssertionError(); });
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getHeader("WWW-Authenticate")).contains("scope=\"wiki_write\"");
+        verify(access).authorize(token, Set.of("wiki_write"));
+    }
+
     private static byte[] gzip(byte[] input) throws Exception {
         var out = new ByteArrayOutputStream(); try (var gzip = new GZIPOutputStream(out)) { gzip.write(input); }
         return out.toByteArray();

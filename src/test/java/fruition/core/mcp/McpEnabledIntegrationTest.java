@@ -182,8 +182,10 @@ class McpEnabledIntegrationTest {
         JsonNode tools = rpc("""
                 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
                 """);
-        assertThat(tools.path("result").path("tools").findValues("name")).extracting(JsonNode::asText)
-                .containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page");
+        assertThat(tools.path("result").path("tools")).extracting(tool -> tool.path("name").asText())
+                .containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page",
+                        "propose_document_edit", "propose_plan", "start_ingest", "resume_ingest", "get_window",
+                        "submit_window", "finalize_ingest", "submit_lint_changes");
 
         JsonNode call = rpc("""
                 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_documents",
