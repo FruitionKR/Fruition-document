@@ -84,7 +84,8 @@ class DocumentImportIntegrationTest {
         when(workspaceAiModelClient.get(anyString()))
                 .thenReturn(new WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
         // 워크스페이스가 업로드 자동 편입을 켜 두어도 가져온 문서는 편입하지 않아야 한다.
-        when(workspaceSettings.autoIngestOnUpload(anyString())).thenReturn(true);
+        when(workspaceSettings.autoIngestMarkdownOnUpload(anyString())).thenReturn(true);
+        when(workspaceSettings.autoIngestPdfOnConvert(anyString())).thenReturn(true);
     }
 
     // ---------- 세션 생성

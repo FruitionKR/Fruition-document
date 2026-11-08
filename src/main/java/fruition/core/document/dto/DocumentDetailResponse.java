@@ -161,5 +161,13 @@ public record DocumentDetailResponse(
 
         @JsonProperty("figure_descriptions")
         @Schema(description = "PDF 변환의 그림 설명 집계. requested(bool)는 그림 설명 요청 여부, described·failed·skipped는 batch별 합이다(AI가 batch당 50장까지). AI가 집계를 주지 않았으면 키가 빠진다.")
-        ConversionReport.FigureDescriptions figureDescriptions
+        ConversionReport.FigureDescriptions figureDescriptions,
+
+        @JsonProperty("auto_ingest_scheduled")
+        @Schema(description = "PDF 변환으로 만든 문서이고, 변환을 요청할 때 워크스페이스 설정(auto_ingest_pdf_on_convert)과 요청자의 wiki.ingest로 "
+                    + "판정한 결과 변환이 끝나면 서버가 자동으로 위키에 편입하기로 정해졌으며, 그 편입이 아직 시작되지 않았으면(변환 중이거나 변환 직후) true다. "
+                    + "그 밖에는 false다. 요청 뒤 설정이 바뀌어도 그 변환은 요청 때 판정을 따른다. 변환 도중 요청자의 wiki.ingest가 회수되면 "
+                    + "편입하지 않고 변환이 끝날 때 false가 된다. 화면은 true면 편입 여부를 묻지 않는다.",
+                example = "false")
+        boolean autoIngestScheduled
 ) {}

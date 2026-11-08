@@ -95,7 +95,7 @@ public class QueryEventBroker implements MessageListener {
                         String message,
                         Map<String, Object> data) {
         if (!claimSourceEvent(sourceEventId)) {
-            log.info("[질의 SSE 중복 이벤트 생략] requestId={} sourceEventId={}", requestId, sourceEventId);
+            log.debug("[질의 SSE 중복 이벤트 생략] requestId={} sourceEventId={}", requestId, sourceEventId);
             return;
         }
         long sequence = nextSequence(requestId);
@@ -107,7 +107,7 @@ public class QueryEventBroker implements MessageListener {
         payload.put("message", message);
         payload.put("data", data == null ? Map.of() : data);
         storeAndBroadcast(new StoredEvent(requestId, sequence, "query.log", payload));
-        log.info("[질의 SSE 이벤트 발행] requestId={} sequence={} event=query.log stage={} dataKeys={}",
+        log.debug("[질의 SSE 이벤트 발행] requestId={} sequence={} event=query.log stage={} dataKeys={}",
                 requestId, sequence, stage, data != null ? data.keySet() : List.of());
     }
 

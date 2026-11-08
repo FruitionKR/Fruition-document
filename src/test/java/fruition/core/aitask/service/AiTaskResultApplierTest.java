@@ -252,6 +252,39 @@ class AiTaskResultApplierTest {
         assertThat(content.getValue()).isNotBlank();
     }
 
+    /** 기본 말풍선 문구는 그 턴 command의 response_language를 따른다. 값이 없으면(구 command) 한국어다. */
+    @Test
+    void agentFallbackChatMessageFollowsCommandResponseLanguage() throws Exception {
+        assertThat(fallbackChatMessage("folder_organize", ",\"response_language\":\"en\""))
+                .isEqualTo("Created a folder organization plan. Check it in the preview.");
+        assertThat(fallbackChatMessage("folder_organize", ""))
+                .isEqualTo("폴더 정리 계획을 만들었습니다. 미리보기에서 확인해 주세요.");
+        assertThat(fallbackChatMessage("folder_organize", ",\"response_language\":\"ko\""))
+                .isEqualTo("폴더 정리 계획을 만들었습니다. 미리보기에서 확인해 주세요.");
+    }
+
+    private String fallbackChatMessage(String action, String languageField) throws Exception {
+        String runId = "run-" + action + languageField.hashCode();
+        JsonNode event = objectMapper.readTree("""
+                {"event_id":"agent:%1$s:succeeded","run_id":"%1$s","kind":"agent",
+                 "status":"succeeded","request":{"workspace_id":"ws-1","user_id":"user-1",
+                 "document_id":"doc-1","base_version":1,"apply_operation_id":"op-1",
+                 "message_context":{"assistant_message_id":"chat_%1$s"}%2$s},
+                 "payload":{"action":"%3$s"}}
+                """.formatted(runId, languageField, action));
+        when(jdbcTemplate.update(any(String.class), eq("agent:" + runId + ":succeeded"), eq(runId), any()))
+                .thenReturn(1);
+        when(jdbcTemplate.query(contains("FOR UPDATE"), any(ResultSetExtractor.class), eq(runId)))
+                .thenReturn(new AiTaskResultApplier.AgentProjection("ws-1", "user-1", "doc-1", 1L, "op-1"));
+        when(jdbcTemplate.update(contains("SET status = 'ready'"), any(), any(), eq(runId))).thenReturn(1);
+
+        applier.applyAgent(event);
+
+        ArgumentCaptor<String> content = ArgumentCaptor.forClass(String.class);
+        verify(chatTurnRecorder).completeAgentTurn(eq("chat_" + runId), eq(action), content.capture(), eq(null));
+        return content.getValue();
+    }
+
     /**
      * AI가 질의로 판정한 턴은 답변과 함께 근거가 온다. 질의 경로와 같은 자리에 남기지 않으면
      * 새로고침한 뒤 근거가 사라져, 같은 답변이 어느 입구로 들어왔는지에 따라 달라 보인다.
@@ -512,13 +545,13 @@ class AiTaskResultApplierTest {
 
         assertThat(result.error()).isEqualTo("agent_result_unsupported_action");
         // 말풍선에는 코드 대신 문장이 남아야 한다.
-        verify(chatTurnRecorder).markFailed("chat_assistant_1", "AI가 지원하지 않는 처리 결과를 내놓아 문서를 바꾸지 않았어요. 요청을 고쳐 다시 시도해 주세요.");
+        verify(chatTurnRecorder).markFailed("chat_assistant_1", "agent_result_unsupported_action", "AI가 지원하지 않는 처리 결과를 내놓아 문서를 바꾸지 않았어요. 요청을 고쳐 다시 시도해 주세요.");
         verify(chatTurnRecorder, never()).completeAgentTurn(anyString(), any(), any(), any());
     }
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {
-            "chat_answer", "conversation_reply", "clarify", "reject", "skill_authoring", "skill_draft_proposal",
+            "chat_answer", "conversation_reply", "product_help", "clarify", "reject", "skill_authoring", "skill_draft_proposal",
             "folder_lookup"
     })
     void nonMutatingAgentResultBecomesReadyWithoutCanonicalMarkdown(String action) throws Exception {
@@ -573,7 +606,7 @@ class AiTaskResultApplierTest {
 
         applier.applyAgent(event);
 
-        verify(chatTurnRecorder).markFailed("chat_assistant_4",
+        verify(chatTurnRecorder).markFailed("chat_assistant_4", "provider_unavailable",
                 "AI 서비스가 응답하지 않거나 일시적인 문제가 있어 문서를 바꾸지 않았어요. 잠시 후 다시 시도해 주세요.");
     }
 
@@ -662,7 +695,13 @@ class AiTaskResultApplierTest {
         doThrow(new RestorePreviewStaleException()).when(restoreApplier)
                 .apply(eq(operation), any(), any(), any(), any());
 
-        assertThatCode(() -> applier.applyRestore(restoreEvent())).doesNotThrowAnyException();
+        try (var capture = new fruition.shared.logging.LogCapture(AiTaskResultApplier.class)) {
+            assertThatCode(() -> applier.applyRestore(restoreEvent())).doesNotThrowAnyException();
+            org.assertj.core.api.Assertions.assertThat(capture.messages())
+                    .anyMatch(m -> m.startsWith("[위키 편입 되돌리기 충돌 확정]") && m.contains("targetType=ingest")
+                            && m.contains("errorCode=RESTORE_CONFLICT") && m.contains("restoreOperationId=restore-op"))
+                    .noneMatch(m -> m.contains("되돌리기 완료]"));
+        }
 
         verify(operation).complete(eq(OperationStatus.conflict),
                 eq("복구 대상이 변경되었습니다. 미리보기를 다시 확인해 주세요."),
@@ -759,6 +798,9 @@ class AiTaskResultApplierTest {
         verify(usageCharges).enqueue("ingest-false");
         verify(usageCharges, never()).enqueueAfterPostIngest("ingest-false");
         verify(usageCharges).enqueueAfterPostIngest("ingest-absent");
+        verify(documentService).applyPipelineResult("doc-1", "ingest-true", "indexing", null);
+        verify(documentService).applyPipelineResult("doc-1", "ingest-false", "succeeded", null);
+        verify(documentService).applyPipelineResult("doc-1", "ingest-absent", "indexing", null);
     }
 
     @Test

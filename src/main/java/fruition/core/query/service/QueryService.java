@@ -123,7 +123,7 @@ public class QueryService {
 
     @Transactional
     public void failAsync(String requestId, QueryMessageContext messageContext, String errorCode) {
-        chatTurnRecorder.markFailed(messageContext.assistantMessageId(), AiErrorMessages.query(errorCode));
+        chatTurnRecorder.markFailed(messageContext.assistantMessageId(), errorCode, AiErrorMessages.query(errorCode));
         log.warn("[질의 Kafka 실패 반영] requestId={} assistantMessageId={} errorCode={}",
                 requestId, messageContext.assistantMessageId(), errorCode);
     }
@@ -143,7 +143,7 @@ public class QueryService {
 
         chatEvidenceRecorder.record(assistantMessage, pipelineResponse);
         touchSessionLastMessageAt(session);
-        log.info("[질의 결과 저장 완료] requestId={} pairId={}", requestId, messageContext.pairId());
+        fruition.shared.logging.CommittedLog.info(log, "[질의 결과 저장 완료] operation=query stage=completed runId={} pairId={}", requestId, messageContext.pairId());
 
         return new QueryResponse(
                 new QueryResponse.MessageSummary(messageContext.userMessageId(), "user", question,

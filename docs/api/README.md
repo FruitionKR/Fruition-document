@@ -27,10 +27,19 @@ Backend가 ai-svc 내부 계약에 필요한 사용자·워크스페이스·모�
 위 표의 "API 수"는 각 도메인 문서가 다루는 API 수이고, 충돌할 경우 실행 코드와 생성된 OpenAPI를 우선한다.
 표의 도메인별 API 수 합계는 같은 path의 여러 method를 세는 단위가 섞여 operation 수와 다를 수 있다. 정확한 수는 OpenAPI를 본다.
 
+## 응답 언어(`Accept-Language`)
+
+모든 `/api/**` 요청은 `Accept-Language`로 화면 언어를 보낸다. 지원 언어는 `ko`·`en`이고, 그 밖의 언어나 헤더가 없으면 `ko`다([ADR-0034](../adr/0034-response-language.md)).
+
+- 공통 오류 `ErrorResponse`: 응답 형식과 언어 규칙은 access-svc와 같다. `code`는 언어와 상관없이 같다. `message`는 `en`이면 code별 영어 문구(`messages_en.properties`의 `error.<code>`, 없으면 기본 문구), `ko`면 지금처럼 상세 한국어 문구다. 검증 실패 `details[].reason`도 `en`이면 영어다. pipeline 응답을 그대로 중계하는 본문은 바꾸지 않는다.
+- 저장된 실패 문구(문서 `error_message`, 채팅 말풍선 `error_message`, 회의 전사 `error`): 함께 저장한 `error_code`가 있으면 요청 언어로 다시 만든다. 코드 없이 저장된 이전 실패는 저장된 한국어 문구 그대로이며, 화면은 `error_code`가 있으면 코드로 번역할 수 있다. 새로 저장하는 실패에는 코드를 항상 남긴다.
+- 응답 때 만드는 AI 실패 문구(Agent 턴 `error_message`, 질의 run `error`, Wiki 정리 `error`)는 요청 언어다. Agent·질의 SSE 실패 문구는 요청 때 command에 담은 언어다.
+- AI command: 질의(`ai.query.command`)·Agent(`ai.agent.command`)·회의록(`kind: meeting_notes`) command에 요청 시점 언어를 `response_language`(`"ko"`|`"en"`)로 담는다. AI는 답변·계획 카드·안내·회의록 문구를 이 언어로 쓴다. 위키 편입은 언어를 넘기지 않아 위키 페이지는 원문 언어를 따른다.
+
 ## AI 실패 코드와 사용자 문구
 
 ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 로그에만 남긴다. 사용자에게 나가는 문구는
-`AiErrorMessages`(`fruition/core/aitask/AiErrorMessages.java`) 한 곳에서 코드를 한국어로 바꾼다.
+`AiErrorMessages`(`fruition/core/aitask/AiErrorMessages.java`) 한 곳에서 코드를 한국어로 바꾼다. 영어 문구는 같은 키의 `AiErrorMessagesEn`에 있다.
 코드가 목록에 없으면 기능별 기본 문구(질의 "질의를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.", Agent "요청을 끝까지 처리하지 못했어요. 문서 내용을 확인한 뒤 다시 시도해 주세요.",
 위키 편입 "위키 편입에 실패했습니다. 문서는 그대로 있으니 다시 시도해 주세요.", 위키 정리 "위키 정리에 실패했습니다. 잠시 후 다시 시도해 주세요.", PDF 변환 "PDF 변환에 실패했습니다. …", 회의 녹음 전사 "녹음 파일을 전사하지 못했습니다. 다시 올려 주세요.")로 바꾸고 코드마다 한 번 WARN을 남긴다. 회의록 API(`MEETING_NOTES_*`)는 이 목록을 거치지 않고 코드를 그대로 준다.
 
@@ -40,13 +49,16 @@ ai-svc는 실패 원인을 **코드**로만 보내고 예외 원문은 자기 �
 | Agent 채팅 말풍선 `error_message`, Agent·질의 SSE `error` | - | 문구만. SSE에는 `code`도 함께 간다 |
 | 질의 `GET /query/runs/{id}` | `error_code` | `error` |
 | 질의 SSE `query.failed` | `code` | `error` |
-| 문서 `error_message`(목록·상세), 회의 전사 `error` | 저장 안 함 | 문구 (변환은 `convert`, 전사는 `transcription` 문구) |
+| 문서 `error_message`(목록·상세) | `error_code` | 문구 (변환은 `convert`, 편입은 `ingest` 문구). 코드가 있으면 요청 언어로 다시 만든다 |
+| 채팅 말풍선 `error_message`, 회의 전사 `error` | `error_code`(V110 이후 저장분) | 문구 (전사는 `transcription` 문구, 사용자 취소는 `transcription_cancelled`). 코드가 있으면 요청 언어로 다시 만든다 |
 | Wiki 정리 `GET .../wiki/maintenance/runs/{id}` | `error_code` | `error` |
 
 | 코드 | 문구 |
 |---|---|
 | `provider_rate_limited` | AI 서비스 요청이 많아 처리하지 못했습니다. 잠시 후 다시 시도해 주세요. (Agent: 요청이 많거나 이용 한도에 걸려 문서를 바꾸지 않았어요. …) |
 | `provider_unavailable` | AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요. (Agent: 응답하지 않거나 일시적인 문제가 있어 문서를 바꾸지 않았어요. …) |
+| `ai_service_starting` | AI 서비스를 시작하고 있어요. 준비까지 약 2~3분 걸릴 수 있습니다. 잠시 후 다시 시도해 주세요. (내부 서비스가 기동 중임을 명시한 경우만 사용) |
+| `wiki_index_preparation_failed` | 문서는 저장했지만 위키 검색을 준비하지 못했습니다. 잠시 후 다시 편입해 주세요. |
 | `input_rejected` | AI 서비스가 요청 내용이나 길이를 받아들이지 않아 처리하지 못했습니다. 내용을 줄이거나 고쳐서 다시 시도해 주세요. (Agent는 문서 상태를 함께 알림) |
 | `deadline_exceeded` | 처리 시간이 초과되어 중단했습니다. 내용을 줄이거나 잠시 후 다시 시도해 주세요. (Agent는 문서 상태를 함께 알림) |
 | `cancelled` | 처리가 취소되었습니다. |

@@ -43,8 +43,15 @@ public record ChatMessageResponse(
 
         @JsonInclude(JsonInclude.Include.NON_NULL)
         @JsonProperty("error_message")
-        @Schema(description = "실패했을 때의 사유. 성공이면 키가 빠진다.")
+        @Schema(description = "실패했을 때의 사유. 성공이면 키가 빠진다. error_code가 있으면 Accept-Language(ko·en, 그 밖은 ko)에 맞춘 문구이고, "
+                + "코드 없이 저장된 이전 실패는 저장된 한국어 문구 그대로다.")
         String errorMessage,
+
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        @JsonProperty("error_code")
+        @Schema(description = "실패 코드(예: provider_unavailable, agent_turn_cancelled). 성공했거나 코드 없이 저장된 이전 실패는 키가 빠진다. "
+                + "화면은 문구 대신 이 값으로 갈래를 정한다.", example = "provider_unavailable")
+        String errorCode,
 
         @JsonInclude(JsonInclude.Include.NON_NULL)
         @Schema(description = "이 답변을 생성한 LLM provider. 실행 시점 값이 snapshot으로 남는다.",
@@ -70,7 +77,7 @@ public record ChatMessageResponse(
         @JsonInclude(JsonInclude.Include.NON_NULL)
         @Schema(description = "AI가 고른 갈래. 화면이 이 값으로 편집 미리보기와 일반 답변을 나눈다. "
                 + "질의 메시지는 키가 빠진다.",
-                allowableValues = {"chat_answer", "conversation_reply", "markdown_edit", "markdown_create", "clarify", "reject",
+                allowableValues = {"chat_answer", "conversation_reply", "product_help", "markdown_edit", "markdown_create", "clarify", "reject",
                         "folder_organize", "folder_lookup", "workspace_workflow", "skill_authoring", "skill_draft_proposal"},
                 example = "markdown_edit")
         String action,

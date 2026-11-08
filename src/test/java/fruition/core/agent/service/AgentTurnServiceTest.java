@@ -108,6 +108,7 @@ class AgentTurnServiceTest {
                 org.mockito.ArgumentMatchers.eq("session_1"), command.capture());
         assertThat(command.getValue().provider()).isEqualTo("openai");
         assertThat(command.getValue().model()).isEqualTo("gpt-6-luna");
+        assertThat(command.getValue().responseLanguage()).isEqualTo("ko");
         assertThat(command.getValue().skillMode()).isEqualTo("auto");
         assertThat(command.getValue().skillId()).isNull();
         assertThat(command.getValue().conversationContext().pendingSkillProposal().scopeType()).isEqualTo("personal");
@@ -1373,7 +1374,7 @@ class AgentTurnServiceTest {
                 "s3://source", null, Instant.now(), Instant.now(), null, null, List.of(),
                 null, null, null, filename.substring(0, filename.lastIndexOf('.')),
                 filename.substring(filename.lastIndexOf('.') + 1), null, false, currentVersion,
-                currentVersion, null, Instant.now(), null, null, null, true, false, false, null, null, null, null, null, null);
+                currentVersion, null, Instant.now(), null, null, null, true, false, false, null, null, null, null, null, null, false);
     }
 
     /** 고른 문답 ID는 조회의 IN 절로 그대로 들어간다. 클라이언트가 SQL 크기를 정하지 못하게 막는다. */

@@ -1610,7 +1610,7 @@ paths:
       tags:
       - Documents
     post:
-      description: "PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_on_upload가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다."
+      description: "PDF, Markdown 또는 txt 파일을 업로드합니다. 형식은 Content-Type이 아니라 확장자(.pdf, .md, .markdown, .txt)로 판단하고, PDF는 내용이 %PDF-로 시작해야 합니다. Markdown과 txt(.md 이름으로 저장)는 편집 상태를 생성하고, PDF는 읽기 전용 원본으로만 저장합니다. 워크스페이스 설정 auto_ingest_markdown_on_upload(새 워크스페이스 기본 켬)가 켜져 있고 업로더에게 wiki.ingest 권한이 있으면 Markdown·txt는 업로드 직후 자동으로 위키에 편입합니다(스킬 참고 문서 제외). 그렇지 않으면 편입하지 않습니다."
       operationId: upload
       parameters:
       - example: ws_9d47a0e9a6324341b47562553b75f92a
@@ -6538,7 +6538,7 @@ components:
           example: provider_unavailable
         error_message:
           type: string
-          description: 실패 코드에 대응하는 사용자용 한국어 문구. 성공이면 null이다.
+          description: "실패 코드에 대응하는 사용자용 문구. Accept-Language가 en이면 영어, 그 밖은 한국어다. 성공이면 null이다."
         folder_id:
           type: string
           format: uuid
@@ -6783,6 +6783,7 @@ components:
           enum:
           - chat_answer
           - conversation_reply
+          - product_help
           - markdown_edit
           - markdown_create
           - clarify
@@ -6805,9 +6806,13 @@ components:
           format: date-time
           description: 생성 시각(ISO-8601 UTC)
           example: 2026-08-13T04:25:24.371948Z
+        error_code:
+          type: string
+          description: "실패 코드(예: provider_unavailable, agent_turn_cancelled). 성공했거나 코드 없이 저장된 이전 실패는 키가 빠진다. 화면은 문구 대신 이 값으로 갈래를 정한다."
+          example: provider_unavailable
         error_message:
           type: string
-          description: 실패했을 때의 사유. 성공이면 키가 빠진다.
+          description: "실패했을 때의 사유. 성공이면 키가 빠진다. error_code가 있으면 Accept-Language(ko·en, 그 밖은 ko)에 맞춘 문구이고, 코드 없이 저장된 이전 실패는 저장된 한국어 문구 그대로다."
         id:
           type: string
           description: 메시지 ID
@@ -7335,6 +7340,10 @@ components:
           - agent
           - meeting_notes
           - chat_export
+        auto_ingest_scheduled:
+          type: boolean
+          description: "PDF 변환으로 만든 문서이고, 변환을 요청할 때 워크스페이스 설정(auto_ingest_pdf_on_convert)과 요청자의 wiki.ingest로 판정한 결과 변환이 끝나면 서버가 자동으로 위키에 편입하기로 정해졌으며, 그 편입이 아직 시작되지 않았으면(변환 중이거나 변환 직후) true다. 그 밖에는 false다. 요청 뒤 설정이 바뀌어도 그 변환은 요청 때 판정을 따른다. 변환 도중 요청자의 wiki.ingest가 회수되면 편입하지 않고 변환이 끝날 때 false가 된다. 화면은 true면 편입 여부를 묻지 않는다."
+          example: false
         byte_size:
           type: integer
           format: int64
@@ -7867,6 +7876,10 @@ components:
         area:
           type: string
           description: 문서가 속한 영역
+        auto_ingest_scheduled:
+          type: boolean
+          description: "PDF 변환으로 만든 문서이고, 변환을 요청할 때 워크스페이스 설정(auto_ingest_pdf_on_convert)과 요청자의 wiki.ingest로 판정한 결과 변환이 끝나면 서버가 자동으로 위키에 편입하기로 정해졌으며, 그 편입이 아직 시작되지 않았으면(변환 중이거나 변환 직후) true다. 그 밖에는 false다. 요청 뒤 설정이 바뀌어도 그 변환은 요청 때 판정을 따른다. 변환 도중 요청자의 wiki.ingest가 회수되면 편입하지 않고 변환이 끝날 때 false가 된다. 화면은 true면 편입 여부를 묻지 않는다."
+          example: false
         byte_size:
           type: integer
           format: int64
@@ -8446,7 +8459,7 @@ components:
           example: 회의록
         message:
           type: string
-          description: 사용자에게 그대로 보여도 되는 한국어 문구
+          description: "사용자에게 그대로 보여도 되는 문구. Accept-Language가 en이면 code별 영어 문구, 그 밖의 언어·헤더 없음이면 한국어다."
           example: 요청 형식이 올바르지 않습니다.
         reset_at:
           type: string
@@ -8506,7 +8519,7 @@ components:
           example: email
         reason:
           type: string
-          description: 그 필드의 위반 사유
+          description: 그 필드의 위반 사유. Accept-Language가 en이면 영어 문구다.
           example: email은 필수입니다.
     FigureDescriptions:
       type: object
@@ -9156,7 +9169,11 @@ components:
           description: 회의록 저장 대상 문서. 없으면 새 문서로 저장한다.
         error:
           type: string
-          description: 녹음 파일 전사 실패 사유. 없으면 null
+          description: "녹음 파일 전사 실패 사유. 없으면 null. error_code가 있으면 Accept-Language(ko·en, 그 밖은 ko)에 맞춘 문구이고, 코드 없이 저장된 이전 실패는 저장된 한국어 문구 그대로다."
+        error_code:
+          type: string
+          description: "녹음 파일 전사 실패 코드(예: MEETING_RECORDING_TOO_LONG, transcription_cancelled). 없거나 이전 실패면 null"
+          example: MEETING_RECORDING_TOO_LONG
         has_recording:
           type: boolean
           description: 녹음 원본이 있는지
@@ -9704,7 +9721,7 @@ components:
       properties:
         error:
           type: string
-          description: 실패 사유(사용자에게 보여줄 한국어 문구). 성공이면 키가 빠진다.
+          description: "실패 사유(사용자에게 보여줄 문구, Accept-Language가 en이면 영어·그 밖은 한국어). 성공이면 키가 빠진다."
         error_code:
           type: string
           description: 실패 코드. 성공이면 키가 빠진다.

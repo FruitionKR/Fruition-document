@@ -542,6 +542,7 @@ ID만 남는다(메시지는 세션과 함께 지워진다).
       "clarify_reason": "markdown_document_required",
       "content": "string",
       "created_at": "2026-08-13T04:25:24.371948Z",
+      "error_code": "provider_unavailable",
       "error_message": "string",
       "id": "string",
       "model": "gpt-6-luna",
@@ -626,6 +627,7 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/chat/s
       "clarify_reason": "markdown_document_required",
       "content": "string",
       "created_at": "2026-08-13T04:25:24.371948Z",
+      "error_code": "provider_unavailable",
       "error_message": "string",
       "id": "string",
       "model": "gpt-6-luna",
@@ -891,3 +893,5 @@ string
 메시지 응답의 `progress`에는 실제 실행 단계(`stage`, `message`, `sequence`)가 순서대로 보존됩니다. `run_id`는 Agent와 질의 모두에 기록합니다. 미완료 대화를 다시 열면 메시지를 주기적으로 조회해 저장된 단계와 최종 답변을 복원합니다. 기록이 없는 과거 대화에는 고정된 가상 단계를 만들지 않습니다.
 
 첫 문답 완료 후 AI가 문답 주제를 요약한 30자 이내 제목을 생성합니다. 답변을 먼저 전송한 뒤 제목이 갱신되며, 기존에 정한 제목은 덮어쓰지 않습니다. 턴 시작 시 이미 제목을 정한 세션은 AI가 제목을 만들지 않습니다(command의 `session_title_needed=false`). 헤더와 세션 목록은 모두 저장된 `title`을 표시합니다.
+
+`product_help`는 Fruition 사용법 안내이며 비변경 결과로 정상 저장한다. `message`를 답변 본문으로 표시하고 작업 탭에서 보낸 안내는 새로고침 후에도 작업 탭에 남긴다. 일반 채팅의 사용법 안내는 기존 Query 응답/저장 계약을 사용한다.

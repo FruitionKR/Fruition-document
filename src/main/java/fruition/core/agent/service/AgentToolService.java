@@ -37,6 +37,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import fruition.shared.logging.CommittedLog;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -44,6 +45,7 @@ import java.util.UUID;
 
 @Service
 public class AgentToolService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgentToolService.class);
 
     private static final Map<String, Set<String>> READ_TOOL_ARGUMENTS = Map.of(
             "list_root_items", Set.of(),
@@ -132,10 +134,20 @@ public class AgentToolService {
     }
 
     public Object execute(String toolName, AgentToolExecuteRequest request) {
-        if ("apply_document_edit".equals(toolName) || "delete_document".equals(toolName)) {
-            return dispatchExecute(toolName, request);
+        try {
+            Object result = "apply_document_edit".equals(toolName) || "delete_document".equals(toolName)
+                    ? dispatchExecute(toolName, request)
+                    : transactionTemplate.execute(status -> dispatchExecute(toolName, request));
+            // 재시도한 호출도 같은 응답을 받는다. 처음 실행인지는 같은 requestId의 멱등 재생 로그로 구분한다.
+            // 변경 도구만 이 경로로 온다. 어느 Agent 실행이 바꿨는지 문서·폴더 로그와 이어 준다.
+            log.info("[Agent 도구 실행 응답] operation=agent_tool stage=responded runId={} operationId={} toolName={} workspaceId={} userId={}",
+                    request.runId(), request.operationId(), CommittedLog.code(toolName), request.workspaceId(), request.userId());
+            return result;
+        } catch (RuntimeException e) {
+            log.warn("[Agent 도구 실행 실패] operation=agent_tool stage=execute runId={} operationId={} toolName={} workspaceId={} userId={} errorType={} 원인=도구 실행이 끝나지 못해 해당 트랜잭션을 롤백했습니다. 같은 requestId의 공통 예외 로그로 거부와 장애를 구분합니다.",
+                    request.runId(), request.operationId(), CommittedLog.code(toolName), request.workspaceId(), request.userId(), e.getClass().getSimpleName());
+            throw e;
         }
-        return transactionTemplate.execute(status -> dispatchExecute(toolName, request));
     }
 
     private Object dispatchExecute(String toolName, AgentToolExecuteRequest request) {

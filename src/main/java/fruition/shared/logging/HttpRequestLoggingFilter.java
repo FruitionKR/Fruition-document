@@ -25,6 +25,11 @@ public class HttpRequestLoggingFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(HttpRequestLoggingFilter.class);
     private static final Pattern VALID_REQUEST_ID = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
+    private static final Pattern ROUTINE_READ = Pattern.compile(
+            "/api/query/runs/[^/]+|/api/users/me/credits|/api/workspaces/[^/]+/(?:"
+            + "agent/(?:turn|runs)/[^/]+|ai/tasks/[^/]+|wiki/maintenance/status|notifications|ai-operation-logs(?:/[^/]+)?|"
+            + "meetings/[^/]+/notes|usage/settlements?)");
+    private static final long SLOW_REQUEST_MS = 2000;
     private static final String HEALTH_PATH = "/actuator/health";
 
     @Override
@@ -33,20 +38,31 @@ public class HttpRequestLoggingFilter extends OncePerRequestFilter {
         // 헬스 체크는 주기적으로 반복되고 진단 가치가 없어 로그를 남기지 않는다. 필터 자체는
         // 건너뛰지 않는다 — 안쪽 필터가 채운 MDC를 여기서 치우므로, 건너뛰면 값이 스레드에 남는다.
         boolean logged = !HEALTH_PATH.equals(request.getRequestURI());
+        boolean routine = "GET".equals(request.getMethod()) && ROUTINE_READ.matcher(request.getRequestURI()).matches();
         String requestId = resolveRequestId(request.getHeader(REQUEST_ID_HEADER));
         long startedAt = System.nanoTime();
         MDC.put("requestId", requestId);
         response.setHeader(REQUEST_ID_HEADER, requestId);
         if (logged) {
-            log.info("[HTTP 요청 시작] method={} uri={}", request.getMethod(), LoggableUri.mask(request.getRequestURI()));
+            if (routine) log.debug("[HTTP 요청 시작] method={} uri={}", request.getMethod(), LoggableUri.mask(request.getRequestURI()));
+            else log.info("[HTTP 요청 시작] method={} uri={}", request.getMethod(), LoggableUri.mask(request.getRequestURI()));
         }
         try {
             filterChain.doFilter(request, response);
+        } catch (IOException | ServletException | RuntimeException failure) {
+            if (routine && logged) log.warn("[HTTP 반복 조회 예외] method={} uri={} errorType={}",
+                    request.getMethod(), LoggableUri.mask(request.getRequestURI()), failure.getClass().getSimpleName());
+            throw failure;
         } finally {
             if (logged) {
                 long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
-                log.info("[HTTP 요청 완료] method={} uri={} status={} elapsedMs={}",
-                        request.getMethod(), LoggableUri.mask(request.getRequestURI()), response.getStatus(), elapsedMs);
+                if (routine && !request.isAsyncStarted() && response.getStatus() < 400 && elapsedMs < SLOW_REQUEST_MS) {
+                    log.debug("[HTTP 요청 완료] method={} uri={} status={} elapsedMs={}",
+                            request.getMethod(), LoggableUri.mask(request.getRequestURI()), response.getStatus(), elapsedMs);
+                } else {
+                    log.info("[HTTP 요청 완료] method={} uri={} status={} elapsedMs={}",
+                            request.getMethod(), LoggableUri.mask(request.getRequestURI()), response.getStatus(), elapsedMs);
+                }
             }
             // 요청 MDC 범위는 가장 바깥인 이 필터가 닫는다. userId는 JwtAuthenticationFilter가 채운다.
             MDC.remove("userId");

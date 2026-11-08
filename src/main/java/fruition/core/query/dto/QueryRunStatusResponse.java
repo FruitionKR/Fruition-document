@@ -1,5 +1,7 @@
 package fruition.core.query.dto;
 
+import fruition.core.aitask.AiErrorMessages;
+import fruition.shared.i18n.ResponseLanguage;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import fruition.core.query.domain.QueryRun;
@@ -28,7 +30,7 @@ public record QueryRunStatusResponse(
         @Schema(description = "완료된 질의의 결과. 완료 전에는 키가 빠진다.")
         QueryResponse result,
 
-        @Schema(description = "실패 사유(사용자에게 보여줄 한국어 문구). 성공이면 키가 빠진다.")
+        @Schema(description = "실패 사유(사용자에게 보여줄 문구, Accept-Language가 en이면 영어·그 밖은 한국어). 성공이면 키가 빠진다.")
         String error,
 
         @JsonProperty("error_code")
@@ -38,6 +40,8 @@ public record QueryRunStatusResponse(
     public static QueryRunStatusResponse from(QueryRun run) {
         return new QueryRunStatusResponse(
                 run.requestId(), run.status().name().toLowerCase(), run.provider(), run.model(), run.webSearchEnabled(),
-                run.result(), run.errorMessage(), run.errorCode());
+                run.result(),
+                AiErrorMessages.localizeStored(run.errorCode(), run.errorMessage(), ResponseLanguage.current()),
+                run.errorCode());
     }
 }

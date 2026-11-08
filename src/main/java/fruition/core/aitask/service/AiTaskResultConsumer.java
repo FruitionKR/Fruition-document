@@ -1,5 +1,7 @@
 package fruition.core.aitask.service;
 
+import fruition.shared.i18n.ResponseLanguage;
+import fruition.shared.logging.RepeatedFailureLogger;
 import fruition.core.document.service.DocumentCopyScrubber;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +25,7 @@ import java.util.Map;
 public class AiTaskResultConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(AiTaskResultConsumer.class);
+    private final RepeatedFailureLogger failures = new RepeatedFailureLogger(log);
 
     private final ObjectMapper objectMapper;
     private final AiTaskResultApplier applier;
@@ -50,12 +53,22 @@ public class AiTaskResultConsumer {
             groupId = "${app.ai-task.result-consumer-group}",
             containerFactory = "aiTaskResultKafkaListenerContainerFactory")
     public void consume(String raw) throws Exception {
-        JsonNode event = objectMapper.readTree(raw);
+        JsonNode event;
+        try {
+            event = java.util.Objects.requireNonNull(objectMapper.readTree(raw), "AI result is empty");
+        } catch (Exception failure) {
+            // Never include the raw result: it may contain document or chat content.
+            failures.error("invalid-result", "[AI task 결과 JSON 해석 실패] operation=ai_result_consume stage=parse errorCode=AI_RESULT_INVALID_JSON errorType="
+                    + failure.getClass().getSimpleName(), null);
+            throw failure;
+        }
         String kind = event.path("kind").asText("unknown");
         String flowId = resolveFlowId(event);
         MDC.put("flowId", flowId);
+        String failureKey = flowId + ":" + event.path("event_id").asText(event.path("status").asText("unknown"));
         long startedAt = System.nanoTime();
-        log.info("[AI task 결과 소비 시작] kind={} flowId={}", kind, flowId);
+        boolean failed = false;
+        log.debug("[AI task 결과 소비 시작] kind={} flowId={}", kind, flowId);
         try {
             // 진행 이벤트는 종류와 무관하게 중계만 한다. kind 분기보다 먼저 걸러야 한다 —
             // 뒤에 두면 agent 진행 이벤트가 applyAgent로 들어가 최종 결과로 오인된다.
@@ -107,7 +120,8 @@ public class AiTaskResultConsumer {
                     if (result.error() == null) {
                         queryEventBroker.complete(flowId);
                     } else {
-                        queryEventBroker.fail(flowId, result.error(), AiErrorMessages.agent(result.error()));
+                        queryEventBroker.fail(flowId, result.error(),
+                                AiErrorMessages.agent(result.error(), requestLanguage(event)));
                     }
                 }
                 return;
@@ -136,15 +150,20 @@ public class AiTaskResultConsumer {
                 }
             } else if (queryRunStore.markFailed(projection.runId(), projection.error())) {
                 queryEventBroker.fail(projection.runId(), projection.error(),
-                        AiErrorMessages.query(projection.error()));
+                        AiErrorMessages.query(projection.error(), requestLanguage(event)));
             }
         } catch (Exception e) {
-            log.error("[AI task 결과 소비 실패] kind={} flowId={} errorType={}",
-                    kind, flowId, e.getClass().getSimpleName(), e);
+            failed = true;
+            failures.error(failureKey, "[AI task 결과 소비 실패] operation=ai_result_consume stage=consume errorCode=AI_RESULT_CONSUME_FAILED retryable=true kind=" + kind + " flowId=" + flowId + " 원인=결과를 반영하지 못해 트랜잭션을 롤백했고 같은 이벤트를 다시 처리합니다.", e);
             throw e;
         } finally {
             long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
-            log.info("[AI task 결과 소비 종료] kind={} flowId={} elapsedMs={}", kind, flowId, elapsedMs);
+            if (!failed) failures.recovered(failureKey);
+            if (!"progress".equals(event.path("status").asText()) && !failed) {
+                log.info("[AI task 결과 소비 종료] kind={} flowId={} elapsedMs={}", kind, flowId, elapsedMs);
+            } else {
+                log.debug("[AI task 결과 소비 종료] kind={} flowId={} elapsedMs={}", kind, flowId, elapsedMs);
+            }
             MDC.remove("flowId");
         }
     }
@@ -195,5 +214,10 @@ public class AiTaskResultConsumer {
             }
         }
         return "-";
+    }
+
+    /** SSE로 바로 보내는 실패 문구의 언어. 요청 때 command에 담은 response_language를 쓰고, 없으면(구 command) 한국어다. */
+    private static ResponseLanguage requestLanguage(JsonNode event) {
+        return ResponseLanguage.of(event.path("request").path("response_language").asText(null));
     }
 }

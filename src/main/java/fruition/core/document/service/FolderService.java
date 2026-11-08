@@ -41,6 +41,7 @@ import java.util.stream.Collectors;
 
 @Service
 public class FolderService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(FolderService.class);
 
     private static final int MAX_NAME_LENGTH = 255;
 
@@ -91,6 +92,8 @@ public class FolderService {
                             UUID.randomUUID(), workspaceId, parentFolderId, name,
                             nextSortOrder(workspaceId, parentFolderId));
                     folderRepository.save(folder);
+                    fruition.shared.logging.CommittedLog.info(log, "[폴더 생성 완료] operation=folder_create stage=completed folderId={} workspaceId={} userId={} parentFolderId={}",
+                            folder.getId(), workspaceId, userId, parentFolderId);
                     return FolderResponse.from(folder);
                 });
     }
@@ -111,6 +114,8 @@ public class FolderService {
                     if (updated == 0) {
                         throw new HierarchyVersionConflictException("폴더가 이미 변경되어 이름을 변경할 수 없습니다.");
                     }
+                    fruition.shared.logging.CommittedLog.info(log, "[폴더 이름 변경 완료] operation=folder_rename stage=completed folderId={} workspaceId={} userId={} newVersion={}",
+                            folderId, workspaceId, userId, request.baseVersion() + 1);
                     return FolderResponse.from(requireFolder(workspaceId, folderId));
                 });
     }
@@ -140,6 +145,11 @@ public class FolderService {
                             folderId, workspaceId, request.baseVersion(), targetParentId, sortOrder, Instant.now());
                     if (updated == 0) {
                         throw new HierarchyVersionConflictException("폴더가 이미 변경되어 이동할 수 없습니다.");
+                    }
+                    // 같은 상위 폴더 안의 순서 변경은 자주 일어나 남기지 않는다.
+                    if (!java.util.Objects.equals(folder.getParentFolderId(), targetParentId)) {
+                        fruition.shared.logging.CommittedLog.info(log, "[폴더 이동 완료] operation=folder_move stage=completed folderId={} workspaceId={} userId={} fromFolderId={} toFolderId={}",
+                                folderId, workspaceId, userId, folder.getParentFolderId(), targetParentId);
                     }
                     return FolderResponse.from(requireFolder(workspaceId, folderId));
                 });
@@ -189,6 +199,8 @@ public class FolderService {
                     documentRepository.softDeleteDocumentsInSubtree(folderId, userId, now, operationId);
                     documentWikiRetirement.retire(
                             workspaceId, documentRepository.findIdsByDeleteOperationId(operationId));
+                    fruition.shared.logging.CommittedLog.info(log, "[폴더 휴지통 이동 완료] operation=folder_delete stage=completed folderId={} workspaceId={} userId={} operationId={} newVersion={}",
+                            folderId, workspaceId, userId, operationId, baseVersion + 1);
                     return new FolderLifecycleResponse(
                             folderId, baseVersion + 1, true, now, operationId);
                 });
@@ -230,6 +242,8 @@ public class FolderService {
                     if (updated == 0) {
                         throw new HierarchyVersionConflictException("폴더가 이미 변경되어 복구할 수 없습니다.");
                     }
+                    fruition.shared.logging.CommittedLog.info(log, "[폴더 복구 완료] operation=folder_restore stage=completed folderId={} workspaceId={} userId={} operationId={} newVersion={}",
+                            folderId, workspaceId, userId, operationId, baseVersion + 1);
                     if (operationId != null) {
                         folderRepository.restoreDescendantFolders(folderId, operationId, now);
                         documentRepository.restoreDocumentsInSubtree(folderId, operationId, now);

@@ -520,7 +520,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/meeti
 AI가 오디오를 S3에서 읽어 시간 단위로 나눠 전사하고 `ai.task.event`(`kind=meeting_transcription`, key=`run_id`)로 돌려준다. document는 이벤트의 `run_id`가 회의의 `transcription_run_id`와 같고 회의가 `transcribing`일 때만 반영한다(취소·재업로드·삭제·중복 이벤트는 회의를 바꾸지 않는다).
 
 - 성공(`payload.text`): 문장 부호·줄바꿈으로 나눈 뒤 약 1,000자 단위로 묶은 구간(`s1_seg_0001`…)으로 저장하고 `open`으로 바꾼다. 회의록 AI의 1,000구간 한도에 걸리지 않게 하려는 것이다. 연결 기록 하나(`finished`)가 생겨 `transcript_complete=true`가 된다. run은 완료로 닫아 사용 금액을 정산한다.
-- 실패: 회의를 `failed`로 바꾸고 `error`에 사유를 남긴다. 자동 재시도는 없고 사용자가 다시 올리면 새 `run_id`로 시작한다. run은 실패로 닫아 호출분을 정산한다.
+- 실패: 회의를 `failed`로 바꾸고 `error`에 사유를, `error_code`에 코드를 남긴다(코드가 없던 실패는 `internal_error`). 조회 응답의 `error`는 `error_code`가 있으면 요청 `Accept-Language`(ko·en)에 맞춰 다시 만든다. 자동 재시도는 없고 사용자가 다시 올리면 새 `run_id`로 시작한다. run은 실패로 닫아 호출분을 정산한다.
 
 | AI 오류 코드 | `error` 메시지 |
 |---|---|
@@ -537,7 +537,7 @@ AI가 오디오를 S3에서 읽어 시간 단위로 나눠 전사하고 `ai.task
 <a id="meeting-transcription-cancel"></a>
 ### `POST .../meetings/{meeting_id}/transcription/cancel` — 전사 취소
 
-전사 중(`transcribing`)인 회의를 `failed`(`error`: "전사를 취소했습니다. 녹음을 다시 올려 주세요.")로 바꾸고 AI run 취소를 요청한다(`AiTaskCancellationService`, 취소 전까지 쓴 비용만 정산). 응답 `200` `MeetingResponse`. 이후 도착하는 결과 이벤트는 무시한다. 같은 원본으로 다시 올릴 수 있다. 전사 중이 아니면 `409`(`MEETING_NOT_TRANSCRIBING`), 다른 사용자의 회의는 `404`.
+전사 중(`transcribing`)인 회의를 `failed`(`error`: "글로 옮기기를 취소했습니다. 녹음을 다시 올려 주세요.", `error_code`: `transcription_cancelled`)로 바꾸고 AI run 취소를 요청한다(`AiTaskCancellationService`, 취소 전까지 쓴 비용만 정산). 응답 `200` `MeetingResponse`. 이후 도착하는 결과 이벤트는 무시한다. 같은 원본으로 다시 올릴 수 있다. 전사 중이 아니면 `409`(`MEETING_NOT_TRANSCRIBING`), 다른 사용자의 회의는 `404`.
 
 <a id="meeting-recording-url"></a>
 ### `GET .../meetings/{meeting_id}/recording-url` — 재생 주소

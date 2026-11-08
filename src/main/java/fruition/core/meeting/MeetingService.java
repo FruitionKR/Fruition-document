@@ -1,5 +1,7 @@
 package fruition.core.meeting;
 
+import fruition.core.aitask.AiErrorMessages;
+import fruition.shared.i18n.ResponseLanguage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.authz.WorkspaceAccessGuard;
@@ -19,6 +21,7 @@ import java.util.UUID;
 /** 회의 생성·조회와 실시간 받아쓰기 ticket 발급. 회의는 만든 사람만 볼 수 있다. */
 @Service
 public class MeetingService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MeetingService.class);
     static final Duration TICKET_TTL = Duration.ofSeconds(60);
     private static final String DEFAULT_NAME = "회의록";
     private static final int DEFAULT_PAGE_SIZE = 20;
@@ -71,6 +74,8 @@ public class MeetingService {
                             "mtg_" + UUID.randomUUID().toString().replace("-", ""), workspaceId, userId, name,
                             documentId, source, "live".equals(source) ? "open" : "awaiting_upload", Instant.now());
                     repository.insert(meeting);
+                    fruition.shared.logging.CommittedLog.info(log, "[회의 생성 완료] operation=meeting_create stage=completed meetingId={} workspaceId={} userId={} source={}",
+                            meeting.id(), workspaceId, userId, source);
                     return toResponse(meeting);
                 });
     }
@@ -175,8 +180,9 @@ public class MeetingService {
                 && segments.stream().noneMatch(segment -> segment.text() == null)
                 && streams.stream().allMatch(stream -> "finished".equals(stream.endReason()));
         return new MeetingResponse(meeting.id(), meeting.displayName(), meeting.documentId(), meeting.source(),
-                meeting.status(), live, meeting.recordingKey() != null, meeting.error(), complete, streams, segments,
-                meeting.createdAt());
+                meeting.status(), live, meeting.recordingKey() != null,
+                AiErrorMessages.localizeStored(meeting.errorCode(), meeting.error(), ResponseLanguage.current()),
+                meeting.errorCode(), complete, streams, segments, meeting.createdAt());
     }
 
     private String write(Ticket ticket) {

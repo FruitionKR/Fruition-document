@@ -18,7 +18,7 @@ public record ErrorResponse(
                     example = "INVALID_REQUEST")
             String code,
 
-            @Schema(description = "사용자에게 그대로 보여도 되는 한국어 문구",
+            @Schema(description = "사용자에게 그대로 보여도 되는 문구. Accept-Language가 en이면 code별 영어 문구, 그 밖의 언어·헤더 없음이면 한국어다.",
                     example = "요청 형식이 올바르지 않습니다.")
             String message,
 
@@ -49,7 +49,7 @@ public record ErrorResponse(
                 @Schema(description = "문제가 된 요청 필드명", example = "email")
                 String field,
 
-                @Schema(description = "그 필드의 위반 사유", example = "email은 필수입니다.")
+                @Schema(description = "그 필드의 위반 사유. Accept-Language가 en이면 영어 문구다.", example = "email은 필수입니다.")
                 String reason) {}
     }
 

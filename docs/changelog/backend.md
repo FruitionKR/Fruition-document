@@ -1,6 +1,16 @@
 # Backend 변경 기록
 
+## 2026-11-08
+
+### 위키 검색 준비 후 편입 완료 안내
+
+- 인덱스 준비 중에는 문서를 processing으로 유지하고 준비 완료 뒤 완료 알림이 발생하도록 했다. AI 기동과 검색 준비 실패 문구를 구분한다. 관련 테스트 119개를 확인했다.
+
 ## 2026-11-07
+
+- 자동 편입 설정을 경로별로 따른다. Markdown·txt 업로드 직후 편입은 access `auto_ingest_markdown_on_upload`, PDF 변환 뒤 편입은 `auto_ingest_pdf_on_convert`를 보고, 새 필드가 없는 옛 access면 `auto_ingest_on_upload`로 대신한다. `wiki.ingest` 조건은 그대로다.
+- PDF 변환 뒤 편입의 설정 판정을 변환 요청 때로 옮기고 V109 `documents.auto_ingest_scheduled`에 남긴다. 문서 목록·트리·상세에 `auto_ingest_scheduled`를 추가했다(변환 중·직후 편입 예정이면 true, 편입 등록·건너뜀·실패 뒤 false). 권한은 변환이 끝날 때 다시 본다.
+- 검증: 전체 테스트 2067개(실패·오류·스킵 0), bootJar 통과.
 
 - 크레딧 부족 문구에서 제공하지 않는 충전 안내를 제거했다. Agent 시작 전 실패는 문서 미변경을 알리고, 진행 중 중단은 작업 기록 확인을 안내한다. 크레딧 차감·예약·한도 판단은 그대로다.
 

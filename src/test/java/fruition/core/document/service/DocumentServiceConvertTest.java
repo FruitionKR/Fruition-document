@@ -181,7 +181,7 @@ class DocumentServiceConvertTest {
 
     /** 워크스페이스 자동 편입 설정과 요청자의 wiki.ingest 권한을 stub한다. */
     private void enableAutoIngest(boolean permission) {
-        when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        when(workspaceSettingsClient.autoIngestPdfOnConvert(WORKSPACE_ID)).thenReturn(true);
         when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(permission);
     }
 
@@ -212,6 +212,149 @@ class DocumentServiceConvertTest {
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
     }
 
+
+    /** 변환 요청을 보내고 저장된 placeholder를 돌려준다. */
+    private Document requestConversion(Document source) {
+        stubOwnedWorkspace();
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(source));
+        lenient().when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.EDITABLE)).thenReturn(0L);
+        documentService.convertToMarkdown(WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key");
+        ArgumentCaptor<Document> saved = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(saved.capture());
+        return saved.getValue();
+    }
+
+    @Test
+    @DisplayName("변환 요청 때 PDF 자동 편입 설정이 켜져 있고 wiki.ingest가 있으면 placeholder에 자동 편입 예정을 남긴다")
+    void convertToMarkdown_settingOnAndPermitted_schedulesAutoIngest() {
+        enableAutoIngest(true);
+
+        Document placeholder = requestConversion(sourcePdf());
+
+        assertThat(placeholder.getAutoIngestScheduled()).isTrue();
+        assertThat(placeholder.isAutoIngestScheduled()).isTrue();
+        verify(workspaceSettingsClient, never()).autoIngestMarkdownOnUpload(anyString());
+    }
+
+    @Test
+    @DisplayName("변환 요청 때 PDF 자동 편입 설정이 꺼져 있거나 wiki.ingest가 없으면 자동 편입 예정이 아니다")
+    void convertToMarkdown_settingOffOrNoPermission_notScheduled() {
+        when(workspaceSettingsClient.autoIngestPdfOnConvert(WORKSPACE_ID)).thenReturn(false);
+        assertThat(requestConversion(sourcePdf()).getAutoIngestScheduled()).isFalse();
+
+        org.mockito.Mockito.clearInvocations(documentRepository);
+        enableAutoIngest(false);
+        Document noPermission = requestConversion(sourcePdf());
+        assertThat(noPermission.getAutoIngestScheduled()).isFalse();
+        assertThat(noPermission.isAutoIngestScheduled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("가져온 PDF의 변환 요청은 설정을 묻지 않고 자동 편입 예정이 아니다")
+    void convertToMarkdown_importedSource_notScheduled() {
+        Document source = sourcePdf();
+        source.markImported(java.util.UUID.randomUUID());
+
+        assertThat(requestConversion(source).getAutoIngestScheduled()).isFalse();
+        verify(workspaceSettingsClient, never()).autoIngestPdfOnConvert(anyString());
+    }
+
+    @Test
+    @DisplayName("요청 때 자동 편입하기로 정한 변환은 그 뒤 설정이 꺼져도 끝나면 편입하고 예정 표시를 지운다")
+    void scheduledConversion_ingestsEvenIfSettingTurnedOff() throws Exception {
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
+        startScenario(PLACEHOLDER_MARKDOWN);
+        parent.scheduleAutoIngestOnConvert(true);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
+
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
+
+        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+        verify(workspaceSettingsClient, never()).autoIngestPdfOnConvert(anyString());
+        assertThat(parent.getAutoIngestScheduled()).isFalse();
+        assertThat(parent.isAutoIngestScheduled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("요청 때 자동 편입하지 않기로 정한 변환은 그 뒤 설정이 켜져도 편입하지 않는다")
+    void unscheduledConversion_doesNotIngestEvenIfSettingTurnedOn() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        parent.scheduleAutoIngestOnConvert(false);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
+
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
+
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        verify(workspaceSettingsClient, never()).autoIngestPdfOnConvert(anyString());
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
+        assertThat(parent.isAutoIngestScheduled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("자동 편입 예정이었어도 변환 도중 wiki.ingest가 회수되면 편입하지 않고 예정 표시를 지운다")
+    void scheduledConversion_permissionRevoked_doesNotIngestAndClearsSchedule() throws Exception {
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(false);
+        startScenario(PLACEHOLDER_MARKDOWN);
+        parent.scheduleAutoIngestOnConvert(true);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
+
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
+
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
+        assertThat(parent.getAutoIngestScheduled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("자동 편입 예정인 변환이 실패하면 예정 표시를 지운다")
+    void scheduledConversion_failure_clearsSchedule() throws Exception {
+        startScenario(PLACEHOLDER_MARKDOWN);
+        parent.scheduleAutoIngestOnConvert(true);
+        seedDispatched(0);
+
+        documentService.applyConvertBatch(failedEvent(0, "internal_error"));
+
+        assertThat(parent.getStatus()).isEqualTo(DocumentStatus.failed);
+        assertThat(parent.getAutoIngestScheduled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("자동 편입 예정인 변환의 편입이 크레딧 부족으로 거절되면 예정 표시를 지운다")
+    void scheduledConversion_creditRejected_clearsSchedule() throws Exception {
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
+        startScenario(PLACEHOLDER_MARKDOWN);
+        parent.scheduleAutoIngestOnConvert(true);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
+        org.mockito.Mockito.doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("부족"))
+                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+
+        documentService.applyConvertBatch(succeeded(0, 3, 3));
+
+        assertThat(parent.getErrorCode()).isEqualTo("INSUFFICIENT_CREDIT");
+        assertThat(parent.getAutoIngestScheduled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("자동 편입 예정인 변환의 편입 등록이 다른 이유로 실패해도 예정 표시를 지우고 예외는 그대로 올린다")
+    void scheduledConversion_enqueueFailure_clearsScheduleAndRethrows() throws Exception {
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
+        startScenario(PLACEHOLDER_MARKDOWN);
+        parent.scheduleAutoIngestOnConvert(true);
+        seedDispatched(0);
+        stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
+        org.mockito.Mockito.doThrow(new IllegalStateException("outbox down"))
+                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+
+        assertThatThrownBy(() -> documentService.applyConvertBatch(succeeded(0, 3, 3)))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(parent.getAutoIngestScheduled()).isFalse();
+    }
 
     @Test
     @DisplayName("남이 올린 PDF 변환은 document.convert 권한(또는 OWNER)이 있어야 하고, 없으면 WorkspacePermissionRequiredException")
@@ -847,7 +990,7 @@ class DocumentServiceConvertTest {
     @Test
     @DisplayName("가져온 PDF의 변환본은 자동 편입 설정·권한이 있어도 변환 완료 뒤 편입하지 않고 completed로 남는다")
     void importedConversion_completesWithoutAutoIngest() throws Exception {
-        lenient().when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        lenient().when(workspaceSettingsClient.autoIngestPdfOnConvert(WORKSPACE_ID)).thenReturn(true);
         lenient().when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
         startScenario(PLACEHOLDER_MARKDOWN);
         parent.markImported(java.util.UUID.randomUUID());
@@ -1094,6 +1237,25 @@ class DocumentServiceConvertTest {
                 "text/markdown", 15L, null, null, "convert");
         placeholder.initializeConvertPlaceholder(SOURCE_DOCUMENT_ID, null, "placeholder-hash", 15L, 0L);
         return placeholder;
+    }
+
+    @Test
+    void indexingKeepsDocumentProcessingUntilReadyAndLateEventsCannotReopenIt() {
+        Document document = placeholderDocument();
+        document.markPipelineStarted("run-1", Instant.now());
+        when(documentRepository.findByIdInActiveWorkspace("doc_placeholder")).thenReturn(Optional.of(document));
+        documentService.applyPipelineResult("doc_placeholder", "run-1", "indexing", null);
+        assertThat(document.getStatus()).isEqualTo(DocumentStatus.processing);
+        assertThat(document.getProcessingStage()).isEqualTo("위키 검색을 준비하고 있어요");
+        documentService.applyPipelineResult("doc_placeholder", "old-run", "succeeded", null);
+        assertThat(document.getStatus()).isEqualTo(DocumentStatus.processing);
+        documentService.applyPipelineResult("doc_placeholder", "run-1", "succeeded", null);
+        assertThat(document.getStatus()).isEqualTo(DocumentStatus.completed);
+        Instant completed = document.getProcessedAt();
+        documentService.applyPipelineResult("doc_placeholder", "run-1", "indexing", null);
+        documentService.applyPipelineResult("doc_placeholder", "run-1", "succeeded", null);
+        assertThat(document.getStatus()).isEqualTo(DocumentStatus.completed);
+        assertThat(document.getProcessedAt()).isEqualTo(completed);
     }
 
     private DocumentMetadata metadata(Document document) {

@@ -72,6 +72,8 @@ class DocumentTreeControllerTest {
                 .andExpect(jsonPath("$.items[0].children[0].document.needs_reingest").value(true))
                 .andExpect(jsonPath("$.items[0].children[0].document.display_name").value("메모"))
                 .andExpect(jsonPath("$.items[0].children[0].document.can_convert").value(false))
+                // 자동 편입 예정이 아니어도 false로 키가 있다. 화면은 이 값으로 편입 확인창을 띄울지 정한다.
+                .andExpect(jsonPath("$.items[0].children[0].document.auto_ingest_scheduled").value(false))
                 .andExpect(jsonPath("$.items[0].children[0].document.processing_started_at")
                         .value("2026-08-17T00:00:30Z"))
                 // 폴더에는 키 자체가 없어야 한다. doesNotExist()는 "document": null도 통과시키므로
@@ -107,7 +109,7 @@ class DocumentTreeControllerTest {
                 Instant.parse("2026-08-17T00:00:30Z"),
                 null, null, "run_1", DocumentProcessingState.completed, null,
                 "pages", "page", "메모", "md", DocumentRole.EDITABLE, true, 3L, null,
-                Instant.parse("2026-08-17T00:02:00Z"), true, null, "a1b2c3", true, false, false, null, null, null, null, null, null);
+                Instant.parse("2026-08-17T00:02:00Z"), true, null, "a1b2c3", true, false, false, null, null, null, null, null, null, false);
     }
 
     @Test

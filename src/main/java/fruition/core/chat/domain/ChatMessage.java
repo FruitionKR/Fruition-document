@@ -36,6 +36,10 @@ public class ChatMessage {
     @Column(name = "error_message", length = 255)
     private String errorMessage;
 
+    /** 실패 코드. 응답 때 요청 언어로 문구를 다시 만든다. 코드 없이 실패했거나 이전에 저장된 행은 null이다. */
+    @Column(name = "error_code", length = 64)
+    private String errorCode;
+
     @Column(name = "ai_provider")
     private String aiProvider;
 
@@ -114,13 +118,15 @@ public class ChatMessage {
         this.content = content;
         this.status = "completed";
         this.errorMessage = null;
+        this.errorCode = null;
     }
 
     /** error_message는 varchar(255)다. pipeline 오류는 그보다 길 수 있어 잘라 담는다. */
     private static final int MAX_ERROR_MESSAGE_LENGTH = 255;
 
-    public void fail(String errorMessage) {
+    public void fail(String errorCode, String errorMessage) {
         this.status = "failed";
+        this.errorCode = errorCode;
         this.errorMessage = errorMessage == null || errorMessage.length() <= MAX_ERROR_MESSAGE_LENGTH
                 ? errorMessage
                 : errorMessage.substring(0, MAX_ERROR_MESSAGE_LENGTH);
@@ -139,6 +145,7 @@ public class ChatMessage {
     public String getStatus() { return status; }
     public Instant getCreatedAt() { return createdAt; }
     public String getErrorMessage() { return errorMessage; }
+    public String getErrorCode() { return errorCode; }
     public String getAiProvider() { return aiProvider; }
     public String getAiModel() { return aiModel; }
     public Boolean getWebSearchEnabled() { return webSearchEnabled; }

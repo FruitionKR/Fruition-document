@@ -175,6 +175,8 @@ public class MeetingRecordingService {
         if (swap.get().previousKey() != null) {
             removeQuietly(swap.get().previousKey());  // 재업로드로 교체된 이전 원본(음성 개인정보)을 남기지 않는다
         }
+        log.info("[회의 녹음 원본 등록 완료] operation=meeting_recording stage=completed meetingId={} workspaceId={} userId={} size={} runId={} 설명=원본 등록을 마쳤습니다. 전사 완료는 별도로 남습니다.",
+                meetingId, workspaceId, userId, size, runId);
         return meetingService.get(workspaceId, userId, meetingId);
     }
 
@@ -267,6 +269,7 @@ public class MeetingRecordingService {
             try {
                 minio.removeObject(RemoveObjectArgs.builder().bucket(storage.getBucket()).object(recordingKey).build());
             } catch (Exception e) {
+                log.error("[회의 삭제 실패] operation=meeting_delete stage=storage errorCode=MEETING_RECORDING_STORAGE_FAILED retryable=true meetingId={} workspaceId={} userId={} errorType={} 원인=녹음 원본을 저장소에서 지우지 못해 회의를 삭제하지 않았습니다.", meetingId, workspaceId, userId, e.getClass().getSimpleName());
                 throw new MeetingException(HttpStatus.SERVICE_UNAVAILABLE, "MEETING_RECORDING_STORAGE_FAILED",
                         "녹음 원본을 삭제하지 못했습니다. 다시 시도해 주세요.");
             }
@@ -275,6 +278,7 @@ public class MeetingRecordingService {
             throw new MeetingException(HttpStatus.CONFLICT, "MEETING_RECORDING_CHANGED",
                     "삭제 중에 녹음 원본이 바뀌었습니다. 다시 시도해 주세요.");
         }
+        log.info("[회의 삭제 완료] operation=meeting_delete stage=completed meetingId={} workspaceId={} userId={}", meetingId, workspaceId, userId);
     }
 
     /** 추적에서 빠진 객체 정리. 실패하면 수동 정리를 위해 키를 남긴다(요청 결과에는 영향 없음). */
@@ -282,7 +286,7 @@ public class MeetingRecordingService {
         try {
             minio.removeObject(RemoveObjectArgs.builder().bucket(storage.getBucket()).object(key).build());
         } catch (Exception e) {
-            log.warn("[회의 녹음 원본 정리 실패] key={}", key, e);
+            log.warn("[회의 녹음 원본 정리 실패] operation=meeting_recording stage=cleanup errorCode=STORAGE_CLEANUP_FAILED key={} 원인=추적에서 빠진 녹음 객체를 지우지 못했습니다. 수동 정리가 필요합니다.", key, e);
         }
     }
 

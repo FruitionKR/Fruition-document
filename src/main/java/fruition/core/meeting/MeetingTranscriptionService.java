@@ -89,12 +89,17 @@ public class MeetingTranscriptionService {
 
         boolean applied = error == null
                 ? repository.completeTranscription(meetingId, runId, segments(text))
-                : repository.failTranscription(meetingId, runId, AiErrorMessages.transcription(error));
+                : repository.failTranscription(meetingId, runId, failureCode(error), AiErrorMessages.transcription(error));
         if (!applied) log.info("[회의 전사 이벤트 무시] meetingId={} reason=meeting_changed", meetingId);
         // 반영 여부와 무관하게 닫는다. 이미 닫힌 run이면 아무것도 하지 않는다.
         if (error == null && applied) outbox.complete(runId);
         else outbox.fail(runId);
-        if (error != null) log.warn("[회의 전사 실패 반영] meetingId={} code={}", meetingId, error);
+        if (error == null && applied) {
+            fruition.shared.logging.CommittedLog.info(log, "[회의 전사 완료] operation=meeting_transcription stage=completed meetingId={} runId={}", meetingId, runId);
+        } else if (error != null && applied) {
+            fruition.shared.logging.CommittedLog.failure(log, error, "[회의 전사 실패 확정] operation=meeting_transcription stage=result meetingId={} runId={} errorCode={} upstreamCode={} 원인={}",
+                    meetingId, runId, fruition.shared.logging.CommittedLog.stableCode(error), fruition.shared.logging.CommittedLog.code(error), fruition.shared.logging.CommittedLog.reason(error));
+        }
         if (error != null && applied && analytics != null)
             analytics.taskFailed(runId, "transcription", "result", error, null);
     }
@@ -107,9 +112,12 @@ public class MeetingTranscriptionService {
         MeetingRepository.Meeting meeting = meetingService.requireOwned(workspaceId, userId, meetingId);
         String runId = meeting.transcriptionRunId();
         if (!"transcribing".equals(meeting.status()) || runId == null
-                || !repository.failTranscription(meetingId, runId, "글로 옮기기를 취소했습니다. 녹음을 다시 올려 주세요.")) {
+                || !repository.failTranscription(meetingId, runId, AiErrorMessages.TRANSCRIPTION_CANCELLED,
+                AiErrorMessages.transcription(AiErrorMessages.TRANSCRIPTION_CANCELLED))) {
             throw new MeetingException(HttpStatus.CONFLICT, "MEETING_NOT_TRANSCRIBING", "글로 옮기는 중인 회의가 아닙니다.");
         }
+        log.info("[회의 전사 취소 접수] operation=meeting_transcription stage=cancel_accepted meetingId={} runId={} workspaceId={} userId={} 설명=취소 완료는 같은 runId의 AI 실행 취소 완료 로그로 확인합니다.",
+                meetingId, runId, workspaceId, userId);
         cancellation.cancel(runId, workspaceId, userId);
         return meetingService.get(workspaceId, userId, meetingId);
     }
@@ -158,4 +166,9 @@ public class MeetingTranscriptionService {
             @JsonProperty("recording_key") String recordingKey,
             @JsonProperty("content_type") String contentType
     ) {}
+
+    /** 저장하는 실패에는 코드가 빠지지 않게 한다. AI가 코드를 주지 않은 실패는 기본 문구와 같은 internal_error다. */
+    private static String failureCode(String code) {
+        return code == null || code.isBlank() ? "internal_error" : code;
+    }
 }

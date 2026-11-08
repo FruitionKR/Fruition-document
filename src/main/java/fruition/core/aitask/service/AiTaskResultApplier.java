@@ -1,7 +1,9 @@
 package fruition.core.aitask.service;
 
+import fruition.shared.logging.CommittedLog;
 import com.fasterxml.jackson.databind.JsonNode;
 import fruition.core.aitask.AiErrorMessages;
+import fruition.shared.i18n.ResponseLanguage;
 import fruition.core.chat.domain.ChatSession;
 import fruition.core.chat.service.ChatEvidenceRecorder;
 import fruition.core.chat.service.ChatTurnRecorder;
@@ -47,7 +49,7 @@ public class AiTaskResultApplier {
     private static final java.util.regex.Pattern NOTE_MARKER =
             fruition.core.document.service.MarkdownDiffService.NOTE_MARKER;
     private static final Set<String> NON_MUTATING_ACTIONS = Set.of(
-            "chat_answer", "conversation_reply", "clarify", "reject", "skill_authoring", "skill_draft_proposal",
+            "chat_answer", "conversation_reply", "product_help", "clarify", "reject", "skill_authoring", "skill_draft_proposal",
             "folder_lookup");
     private static final Set<String> AUTONOMOUS_ACTIONS = Set.of("folder_organize", "workspace_workflow");
 
@@ -196,11 +198,17 @@ public class AiTaskResultApplier {
         if (jdbcTemplate.update("""
                 INSERT INTO ai_task_result_receipts (event_id, run_id, task_kind)
                 VALUES (?, ?, 'restore') ON CONFLICT (event_id) DO NOTHING
-                """, eventId, runId) == 0) return;
+                """, eventId, runId) == 0) {
+            log.info("[AI 결과 중복 무시] kind=restore runId={} eventId={}", runId, eventId);
+            return;
+        }
         JsonNode request = required(event, "request");
         String operationId = text(request, "operation_id");
         OperationLog operation = operationLogRepository.findById(operationId)
                 .orElseThrow(() -> new IllegalArgumentException("Restore operation을 찾을 수 없습니다."));
+        // restore_ingest·restore_lint 두 종류만 결과로 돌아온다. AI 편집 되돌리기는 동기로 끝난다.
+        var targetType = "restore_lint".equals(event.path("kind").asText())
+                ? fruition.core.aihistory.domain.OperationType.lint : fruition.core.aihistory.domain.OperationType.ingest;
         if (!"succeeded".equals(text(event, "status"))) {
             restoreLifecycle.fail(operationId,
                     event.path("error").asText("Wiki restore 처리에 실패했습니다."),
@@ -219,10 +227,22 @@ public class AiTaskResultApplier {
                 operation.complete(OperationStatus.conflict, e.getMessage(),
                         operation.getChangedResourceCount(), null, java.time.Instant.now());
                 if (analytics != null) analytics.restored(operation, "internal_error");
+                CommittedLog.warn(log, "[{} 되돌리기 충돌 확정] operation=operation_restore stage=conflict errorCode=RESTORE_CONFLICT retryable=false rollback=user_requested targetType={} restoreOperationId={} targetOperationId={} runId={} workspaceId={} 원인=접수 뒤 위키 기여가 바뀌어 반영하지 않았습니다.",
+                        targetType.logLabel(), targetType, operationId, operation.getRestoredFrom(), runId, operation.getWorkspaceId());
                 return;
             }
         }
-        operationIngestService.accept(operationId, result);
+        var applied = operationIngestService.accept(operationId, result);
+        if ("succeeded".equals(applied.status())) {
+            CommittedLog.info(log, "[{} 되돌리기 완료] operation=operation_restore stage=completed rollback=user_requested targetType={} restoreOperationId={} targetOperationId={} runId={} workspaceId={} documentId={} changedResources={}",
+                    targetType.logLabel(), targetType, operationId, operation.getRestoredFrom(), runId, operation.getWorkspaceId(), operation.getTargetDocumentId(), applied.recordedChanges());
+        } else if ("partially_succeeded".equals(applied.status())) {
+            CommittedLog.error(log, "[{} 되돌리기 일부 완료] operation=operation_restore stage=partial partial=true rollback=user_requested targetType={} restoreOperationId={} targetOperationId={} runId={} workspaceId={} changedResources={} 원인=일부 페이지만 되돌렸습니다. 남은 페이지는 작업 기록에서 확인해야 합니다.",
+                    targetType.logLabel(), targetType, operationId, operation.getRestoredFrom(), runId, operation.getWorkspaceId(), applied.recordedChanges());
+        } else {
+            CommittedLog.error(log, "[{} 되돌리기 실패 확정] operation=operation_restore stage=result errorCode=RESTORE_APPLY_FAILED rollback=user_requested targetType={} restoreOperationId={} targetOperationId={} runId={} status={} 원인=재조립 결과를 하나도 반영하지 못했습니다.",
+                    targetType.logLabel(), targetType, operationId, operation.getRestoredFrom(), runId, applied.status());
+        }
     }
 
     @Transactional
@@ -236,7 +256,10 @@ public class AiTaskResultApplier {
         if (jdbcTemplate.update("""
                 INSERT INTO ai_task_result_receipts (event_id, run_id, task_kind)
                 VALUES (?, ?, 'ingest') ON CONFLICT (event_id) DO NOTHING
-                """, eventId, runId) == 0) return;
+                """, eventId, runId) == 0) {
+            log.info("[AI 결과 중복 무시] kind=ingest runId={} eventId={}", runId, eventId);
+            return;
+        }
         JsonNode request = required(event, "request");
         String documentId = text(request, "document_id");
         String operationId = text(request, "operation_id");
@@ -245,7 +268,7 @@ public class AiTaskResultApplier {
         operationIngestService.accept(operationId, result);
         if (analytics != null) analytics.ingestCompleted(event, operationLogRepository.findById(operationId).orElse(null));
         documentService.applyPipelineResult(documentId, runId,
-                "succeeded".equals(text(event, "status")) ? "succeeded" : "failed",
+                holdForPostIngest ? "indexing" : "succeeded".equals(text(event, "status")) ? "succeeded" : "failed",
                 event.path("error").asText(null));
     }
 
@@ -285,7 +308,10 @@ public class AiTaskResultApplier {
                 INSERT INTO ai_task_result_receipts (event_id, run_id, task_kind, event_payload)
                 VALUES (?, ?, 'agent', CAST(? AS jsonb))
                 ON CONFLICT (run_id, task_kind) WHERE task_kind = 'agent' DO NOTHING
-                """, eventId, runId, event.toString()) == 0) return new AgentApplyResult(false, null);
+                """, eventId, runId, event.toString()) == 0) {
+            log.info("[AI 결과 중복 무시] kind=agent runId={} eventId={}", runId, eventId);
+            return new AgentApplyResult(false, null);
+        }
 
         int updated;
         String errorCode;
@@ -324,6 +350,20 @@ public class AiTaskResultApplier {
         if (updated != 1) {
             throw new IllegalStateException("Agent 적용 projection을 갱신하지 못했습니다: " + runId);
         }
+        if (errorCode != null && !"cancelled".equals(errorCode) && !"agent_turn_cancelled".equals(errorCode)
+                && !"cancelled".equals(text(event, "status"))) {
+            boolean validation = "succeeded".equals(text(event, "status"));
+            Object[] fields = {agentLabel(event), agentOperation(event), runId, eventId, event.path("request").path("skill_id").asText(null),
+                    validation ? "validation" : "result",
+                    CommittedLog.stableCode(errorCode), CommittedLog.code(errorCode), agentValidationField(errorCode), CommittedLog.reason(errorCode)};
+            String template = "[{} 결과 처리 실패] operation={} runId={} eventId={} skillId={} stage={} errorCode={} upstreamCode={} validationField={} retryable=false 원인={}";
+            // AI가 성공이라며 보낸 결과가 계약에 맞지 않으면 서버·AI 연동 결함이라 ERROR다. AI가 알린 실패는 사용자 결과라 WARN이다.
+            if (validation) CommittedLog.error(log, template, fields); else CommittedLog.warn(log, template, fields);
+        } else if (errorCode == null) {
+            CommittedLog.info(log, "[{} 결과 저장 완료] operation={} stage=result_saved runId={} eventId={} skillId={} action={} documentId={} 설명=AI 결과를 저장했습니다. 문서 반영은 적용 요청 뒤 별도로 남습니다.",
+                    agentLabel(event), agentOperation(event), runId, eventId, event.path("request").path("skill_id").asText(null),
+                    CommittedLog.code(event.path("payload").path("action").asText(null)), event.path("request").path("document_id").asText(null));
+        }
         recordAgentChatMessage(event, errorCode);
         if (analytics != null) {
             String action = event.path("payload").path("action").asText(null);
@@ -355,10 +395,11 @@ public class AiTaskResultApplier {
             if (errorCode == null) {
                 JsonNode payload = event.path("payload");
                 chatTurnRecorder.completeAgentTurn(assistantMessageId,
-                        payload.path("action").asText(null), agentMessageContent(payload), clarifyReason(event));
+                        payload.path("action").asText(null), agentMessageContent(payload, requestLanguage(event)),
+                        clarifyReason(event));
                 recordAgentChatEvidence(assistantMessageId, payload);
             } else {
-                chatTurnRecorder.markFailed(assistantMessageId, AiErrorMessages.agent(errorCode));
+                chatTurnRecorder.markFailed(assistantMessageId, errorCode, AiErrorMessages.agent(errorCode));
             }
         } catch (RuntimeException e) {
             log.warn("[Agent 채팅 기록 실패] runId={} assistantMessageId={} errorType={}",
@@ -367,6 +408,14 @@ public class AiTaskResultApplier {
     }
 
     public record AgentApplyResult(boolean applied, String error) {}
+
+    private static String agentLabel(JsonNode event) {
+        return "skill_run".equals(agentOperation(event)) ? "스킬 실행" : "Agent 요청";
+    }
+
+    private static String agentOperation(JsonNode event) {
+        return "explicit".equals(event.path("request").path("skill_mode").asText()) ? "skill_run" : "agent_turn";
+    }
 
     /** 소문자·숫자·밑줄 코드만 받는다. 저장 전에 거르므로 잘린 코드나 문장이 화면으로 나가지 않는다. */
     private static final java.util.regex.Pattern CLARIFY_REASON_FORMAT = java.util.regex.Pattern.compile("[a-z0-9_]{1,64}");
@@ -412,6 +461,25 @@ public class AiTaskResultApplier {
             "workspace_workflow", "작업 계획을 만들었습니다. 미리보기에서 확인해 주세요.",
             "skill_authoring", "Skill 초안을 만들었습니다. 미리보기에서 확인해 주세요.",
             "skill_draft_proposal", "Skill 제안을 만들었습니다. 미리보기에서 확인해 주세요.");
+    private static final String DEFAULT_FALLBACK_MESSAGE = "요청을 처리했습니다.";
+
+    /** {@link #ACTION_FALLBACK_MESSAGE}의 영어 문구. 그 턴의 command가 response_language=en일 때만 쓴다. */
+    private static final Map<String, String> ACTION_FALLBACK_MESSAGE_EN = Map.of(
+            "markdown_create", "Created a document draft. Check it in the preview.",
+            "markdown_edit", "Created an edit proposal. Check it in the preview.",
+            "folder_organize", "Created a folder organization plan. Check it in the preview.",
+            "workspace_workflow", "Created a task plan. Check it in the preview.",
+            "skill_authoring", "Created a Skill draft. Check it in the preview.",
+            "skill_draft_proposal", "Created a Skill proposal. Check it in the preview.");
+    private static final String DEFAULT_FALLBACK_MESSAGE_EN = "Processed your request.";
+
+    /**
+     * 기본 말풍선 문구의 언어. 턴을 시작할 때 command에 담은 response_language를 쓰고, 없으면(구 command) 한국어다.
+     * 실패 문구는 ADR-0034대로 한국어로 저장하고 응답 때 error_code로 다시 만든다.
+     */
+    private static ResponseLanguage requestLanguage(JsonNode event) {
+        return ResponseLanguage.of(event.path("request").path("response_language").asText(null));
+    }
 
     /**
      * 말풍선에 보일 본문. chat_answer는 Query 답변이고 conversation_reply는 message에 담긴다.
@@ -419,7 +487,7 @@ public class AiTaskResultApplier {
      * <p>빈 문자열은 돌려주지 않는다. 빈 말풍선은 화면에서 아무것도 아니고,
      * 다음 턴의 대화 맥락에 실리면 pipeline이 요청 전체를 거부한다.
      */
-    private static String agentMessageContent(JsonNode payload) {
+    private static String agentMessageContent(JsonNode payload, ResponseLanguage language) {
         String answer = payload.path("chat").path("answer").asText(null);
         if (answer != null && !answer.isBlank()) {
             return answer;
@@ -428,8 +496,10 @@ public class AiTaskResultApplier {
         if (message != null && !message.isBlank()) {
             return message;
         }
-        return ACTION_FALLBACK_MESSAGE.getOrDefault(payload.path("action").asText(),
-                "요청을 처리했습니다.");
+        String action = payload.path("action").asText();
+        return language.isEnglish()
+                ? ACTION_FALLBACK_MESSAGE_EN.getOrDefault(action, DEFAULT_FALLBACK_MESSAGE_EN)
+                : ACTION_FALLBACK_MESSAGE.getOrDefault(action, DEFAULT_FALLBACK_MESSAGE);
     }
 
     private String expectedStoredMarkdown(JsonNode event, String documentId) {
@@ -481,6 +551,17 @@ public class AiTaskResultApplier {
         return MARKDOWN_ACTIONS.contains(action)
                 || NON_MUTATING_ACTIONS.contains(action)
                 || AUTONOMOUS_ACTIONS.contains(action);
+    }
+
+    private static String agentValidationField(String code) {
+        return switch (code) {
+            case "agent_result_invalid_request" -> "request";
+            case "agent_result_invalid_payload" -> "payload";
+            case "agent_result_unsupported_action" -> "payload.action";
+            case "agent_result_missing_canonical_markdown" -> "canonical_markdown";
+            case "agent_result_request_mismatch" -> "request.identity";
+            default -> "none";
+        };
     }
 
     private int markAgentFailed(String runId, String errorCode) {

@@ -10,6 +10,14 @@ import org.junit.jupiter.api.Test;
 
 class AiErrorMessagesTest {
 
+    @Test
+    void startupNoticeIsSeparateFromProviderFailure() {
+        String notice = "AI 서비스를 시작하고 있어요. 준비까지 약 2~3분 걸릴 수 있습니다. 잠시 후 다시 시도해 주세요.";
+        assertThat(AiErrorMessages.query("ai_service_starting")).isEqualTo(notice);
+        assertThat(AiErrorMessages.agent("ai_service_starting")).isEqualTo(notice);
+        assertThat(AiErrorMessages.query("provider_unavailable")).doesNotContain("시작하고", "2~3분");
+    }
+
     private static final String DOCUMENT_UNCHANGED = "문서를 바꾸지 않았어요.";
     private static final String NEW_DOCUMENT_NOT_CREATED = "새 문서를 만들지 않았어요.";
     private static final Pattern INTERNAL_VALUE = Pattern.compile(

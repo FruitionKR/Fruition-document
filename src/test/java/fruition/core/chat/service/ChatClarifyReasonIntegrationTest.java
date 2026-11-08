@@ -51,6 +51,30 @@ class ChatClarifyReasonIntegrationTest {
         assertThat(message.path("clarify_reason").asText()).isEqualTo(CODE);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "ko, 설정 → AI 설정 → 웹 검색 기본으로 켜기",
+        "en, Settings → AI settings → Turn on web search by default"
+    })
+    void productHelpSurvivesReload(String language, String answer) throws Exception {
+        Turn turn = pendingTurn();
+        var event = (com.fasterxml.jackson.databind.node.ObjectNode) result(turn, "help", "");
+        var payload = (com.fasterxml.jackson.databind.node.ObjectNode) event.path("payload");
+        payload.put("action", "product_help");
+        payload.put("message", answer);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) event.path("request")).put("response_language", language);
+
+        assertThat(applier.applyAgent(event).error()).isNull();
+        assertThat(applier.applyAgent(event).applied()).isFalse();
+
+        JsonNode message = assistantMessage(turn);
+        assertThat(message.path("status").asText()).isEqualTo("completed");
+        assertThat(message.path("action").asText()).isEqualTo("product_help");
+        assertThat(message.path("content").asText()).isEqualTo(answer);
+        assertThat(jdbc.queryForObject("SELECT status FROM agent_apply_projections WHERE run_id = ?",
+                String.class, turn.runId())).isEqualTo("ready");
+    }
+
     /** 재전송은 첫 결과만 반영한다. 나중 이벤트가 값을 지우거나 바꾸면 화면 문구가 흔들린다. */
     @Test
     void redeliveryDoesNotChangeStoredReason() throws Exception {

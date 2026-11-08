@@ -111,14 +111,17 @@ public class CreditOrderService {
         try {
             payment = confirmOrFind(paymentKey, orderId, order.amountKrw());
         } catch (PaymentGatewayClient.PaymentRejectedException e) {
-            jdbc.update("UPDATE credit_orders SET status = 'failed', failure_code = ? WHERE order_id = ? AND status = 'created'",
-                    e.getCode(), orderId);
+            if (jdbc.update("UPDATE credit_orders SET status = 'failed', failure_code = ? WHERE order_id = ? AND status = 'created'",
+                    e.getCode(), orderId) == 1) {
+                log.warn("[결제 승인 거절] operation=credit_payment stage=pg errorCode=PAYMENT_REJECTED upstreamCode={} retryable=false orderId={} userId={} 원인=결제사가 승인을 거절했습니다.",
+                        fruition.shared.logging.CommittedLog.code(e.getCode()), orderId, userId);
+            }
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "결제를 승인하지 못했습니다.");
         } catch (RestClientException | IllegalStateException e) {
             log.warn("[결제 승인 결과 미확인] orderId={} error={}", orderId, e.toString());
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "결제 승인 결과를 확인하지 못했습니다. 잠시 뒤 다시 확인해 주세요.");
         }
-        if (!Boolean.TRUE.equals(transaction.execute(tx -> markPaid(order, payment)))) {
+        if (!Boolean.TRUE.equals(transaction.execute(tx -> markPaid(order, payment, "confirm")))) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "결제 승인 결과가 주문과 다릅니다. 고객센터로 문의해 주세요.");
         }
         return find(orderId, userId);
@@ -169,7 +172,7 @@ public class CreditOrderService {
             }
             Order order = orders.getFirst();
             if ("DONE".equals(status)) {
-                if (!PAID.contains(order.status())) markPaid(order, PaymentGatewayClient.Payment.from(data));
+                if (!PAID.contains(order.status())) markPaid(order, PaymentGatewayClient.Payment.from(data), "webhook");
             } else if (REFUNDABLE.contains(order.status())) {
                 // 알림 순서가 뒤바뀌어도 되도록 본문 대신 PG의 현재 결제로 대조한다. 조회가 실패하면 롤백돼 PG가 다시 보낸다.
                 recordPgCancels(order, gateway.find(order.paymentKey()));
@@ -212,7 +215,7 @@ public class CreditOrderService {
                 log.warn("[결제 취소 결과 미확인] orderId={} error={}", orderId, e.toString());
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "환불 결과를 확인하지 못했습니다. 잠시 뒤 다시 시도해 주세요.");
             }
-            applyRefund(order, refundKrw, refundCredit);
+            applyRefund(order, refundKrw, refundCredit, "user");
         });
         return find(orderId, userId);
     }
@@ -237,7 +240,7 @@ public class CreditOrderService {
         long refundCredit = cancelled == order.amountKrw() ? remaining
                 : Math.min(remaining, refundKrw * order.creditKrwMilli() / order.amountKrw());
         log.warn("[결제 취소 회수] orderId={} 주문에 기록하지 않은 PG 취소 {}원을 회수한다.", order.orderId(), refundKrw);
-        applyRefund(order, refundKrw, refundCredit);
+        applyRefund(order, refundKrw, refundCredit, "pg_cancel");
         return true;
     }
 
@@ -246,15 +249,18 @@ public class CreditOrderService {
         return "refund:" + order.orderId() + ":" + order.refundedCreditKrwMilli();
     }
 
-    private void applyRefund(Order order, long refundKrw, long refundCredit) {
+    private void applyRefund(Order order, long refundKrw, long refundCredit, String source) {
         credits.post(order.userId(), "refund", -refundCredit, refundKey(order), "결제 환불 " + order.orderId());
         jdbc.update("UPDATE credit_orders SET refunded_krw = refunded_krw + ?, refunded_credit_milli = refunded_credit_milli + ?, "
                 + "status = CASE WHEN refunded_credit_milli + ? = credit_milli THEN 'refunded' ELSE 'partially_refunded' END, "
                 + "refunded_at = now() WHERE order_id = ?", refundKrw, refundCredit, refundCredit, order.orderId());
+        fruition.shared.logging.CommittedLog.info(log, "[결제 환불 완료] operation=credit_refund stage=completed orderId={} userId={} refundKrw={} status={} source={}",
+                order.orderId(), order.userId(), refundKrw,
+                refundCredit + order.refundedCreditKrwMilli() == order.creditKrwMilli() ? "refunded" : "partially_refunded", source);
     }
 
     /** PG 결과를 주문과 대조해 지급한다. 조건부 갱신이라 동시에 들어온 승인·webhook 중 하나만 지급한다. */
-    private boolean markPaid(Order order, PaymentGatewayClient.Payment payment) {
+    private boolean markPaid(Order order, PaymentGatewayClient.Payment payment, String source) {
         if (!"DONE".equals(payment.status()) || !order.orderId().equals(payment.orderId())
                 || payment.totalAmount() != order.amountKrw()) {
             log.error("[결제 승인 불일치] orderId={} status={} pgOrderId={} amount={} expected={}", order.orderId(),
@@ -264,6 +270,9 @@ public class CreditOrderService {
         if (jdbc.update("UPDATE credit_orders SET status = 'paid', pg_payment_key = ?, paid_at = now(), failure_code = NULL "
                 + "WHERE order_id = ? AND status IN ('created', 'failed')", payment.paymentKey(), order.orderId()) == 1) {
             credits.post(order.userId(), "purchase", order.creditKrwMilli(), "purchase:" + order.orderId(), order.productCode());
+            // 사용자 확인과 결제사 알림이 둘 다 와도 상태가 실제로 바뀐 한 번만 남는다.
+            fruition.shared.logging.CommittedLog.info(log, "[결제 승인 완료] operation=credit_payment stage=completed orderId={} userId={} productCode={} amountKrw={} source={}",
+                    order.orderId(), order.userId(), order.productCode(), order.amountKrw(), source);
         }
         return true;
     }

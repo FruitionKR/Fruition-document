@@ -1,5 +1,6 @@
 package fruition.core.document.service;
 
+import fruition.shared.logging.RepeatedFailureLogger;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 public class PostgresDocumentEditOutboxPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(PostgresDocumentEditOutboxPublisher.class);
+    private final RepeatedFailureLogger failures = new RepeatedFailureLogger(log);
     private static final int BATCH_SIZE = 100;
     private static final long SEND_TIMEOUT_SECONDS = 10;
 
@@ -61,9 +63,10 @@ public class PostgresDocumentEditOutboxPublisher {
                     rs.getString("workspace_id"), rs.getLong("revision"),
                     rs.getString("content_hash"), rs.getTimestamp("created_at").toInstant()), BATCH_SIZE);
         } catch (Exception exception) {
-            log.error("[문서 편집 outbox pending 조회 실패] eventId=unknown documentId=unknown", exception);
+            failures.error("outbox-query", "[문서 편집 outbox pending 조회 실패]", exception);
             return;
         }
+        failures.recovered("outbox-query");
         for (Event event : events) {
             MDC.put("flowId", event.eventId());
             try {
@@ -77,9 +80,10 @@ public class PostgresDocumentEditOutboxPublisher {
                         SET published = true, published_at = ?
                         WHERE event_id = ? AND published = false
                         """, Timestamp.from(Instant.now()), event.eventId());
+                failures.recovered(event.eventId());
                 int partition = result != null ? result.getRecordMetadata().partition() : -1;
                 long offset = result != null ? result.getRecordMetadata().offset() : -1;
-                log.info("[문서 편집 event 발행 완료] topic={} eventId={} documentId={} revision={} partition={} offset={}",
+                log.debug("[문서 편집 event 발행 완료] topic={} eventId={} documentId={} revision={} partition={} offset={}",
                         eventTopic, event.eventId(), event.documentId(), event.revision(), partition, offset);
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
@@ -87,8 +91,8 @@ public class PostgresDocumentEditOutboxPublisher {
                         event.eventId(), event.documentId(), exception);
                 return;
             } catch (Exception exception) {
-                log.error("[문서 편집 event 발행 또는 published 표시 실패] eventId={} documentId={}",
-                        event.eventId(), event.documentId(), exception);
+                failures.error(event.eventId(), "[문서 편집 event 발행 또는 published 표시 실패] eventId="
+                        + event.eventId() + " documentId=" + event.documentId(), exception);
                 return;
             } finally {
                 MDC.remove("flowId");

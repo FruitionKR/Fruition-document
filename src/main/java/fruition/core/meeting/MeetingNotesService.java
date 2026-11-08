@@ -1,5 +1,7 @@
 package fruition.core.meeting;
 
+import fruition.shared.i18n.ResponseLanguage;
+import fruition.shared.logging.CommittedLog;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -128,7 +130,9 @@ public class MeetingNotesService {
             @JsonProperty("display_name") String displayName,
             @JsonProperty("meeting_date") String meetingDate,
             @JsonInclude(JsonInclude.Include.NON_EMPTY) List<String> attendees,
-            List<Map<String, String>> segments
+            List<Map<String, String>> segments,
+            // 요청자 화면 언어("ko"|"en"). 회의록 문장·머리글의 언어다. 비동기 작업이라 요청 시점 값을 command에 담는다.
+            @JsonProperty("response_language") String responseLanguage
     ) {}
 
     public record AppendPreview(String documentId, long baseRevision, String markdown) {}
@@ -173,7 +177,7 @@ public class MeetingNotesService {
             WorkspaceAiModelClient.AiModelSelection model = workspaceAiModelClient.get(workspaceId);
             var command = new MeetingNotesCommand(runId, "meeting_notes", workspaceId, userId, model.provider(),
                     model.model(), meetingId, meeting.displayName(), meetingDate(meeting), attendees(meeting, userId),
-                    segments);
+                    segments, ResponseLanguage.current().code());
             // 워크스페이스당 생성은 하나다(팀 회의는 한 사람이 녹음한다). 잠금은 같은 트랜잭션 끝까지 쥐어 Pod 사이에서도 직렬이다.
             // generating 행·크레딧 예약·작업 등록·outbox 저장이 한 트랜잭션이라, 중간에 실패하면 명령 없는 generating 행이
             // 남아 워크스페이스를 막지 않는다.
@@ -201,7 +205,7 @@ public class MeetingNotesService {
             inserted = Optional.empty();
             failure = "AI_USAGE_LIMIT_EXCEEDED";
         } catch (RuntimeException e) {
-            log.warn("[회의록 초안 요청 실패] meetingId={} requestId={}", meetingId, requestId, e);
+            log.warn("[회의록 초안 요청 실패] operation=meeting_notes stage=request meetingId={} requestId={}", meetingId, requestId, e);
             inserted = Optional.empty();
             failure = "MEETING_NOTES_FAILED";
         }
@@ -224,6 +228,13 @@ public class MeetingNotesService {
                             "다른 회의록 생성 요청과 겹쳤습니다. 다시 시도해 주세요.")));  // 같은 요청 ID의 재시도·동시 재시도
         }
         int version = inserted.get();
+        if (failure != null) {
+            CommittedLog.failure(log, failure, "[회의록 초안 요청 실패 확정] operation=meeting_notes stage=request meetingId={} runId={} workspaceId={} userId={} version={} errorCode={} 원인={}",
+                    meetingId, runId, workspaceId, userId, version, failure, CommittedLog.reason(failure));
+        } else {
+            CommittedLog.info(log, "[회의록 초안 요청 접수] operation=meeting_notes stage=accepted meetingId={} runId={} workspaceId={} userId={} version={} 설명=생성 명령을 등록했습니다. 초안 생성 완료는 별도로 남습니다.",
+                    meetingId, runId, workspaceId, userId, version);
+        }
         return toResponse(notes.find(meetingId, version).orElseThrow());
     }
 
@@ -234,7 +245,7 @@ public class MeetingNotesService {
     public void applyResult(String runId, boolean succeeded, JsonNode draft, String error) {
         var note = notes.findByRun(runId);
         if (note.isEmpty()) {
-            log.warn("[회의록 결과 무시] runId={} reason=note_not_found", runId);
+            log.warn("[회의록 결과 무시] operation=meeting_notes stage=duplicate_ignored runId={} reason=note_not_found", runId);
             return;
         }
         String meetingId = note.get().meetingId();
@@ -251,7 +262,17 @@ public class MeetingNotesService {
         } else {
             changed = notes.markReady(meetingId, version, json(stored(draft, snapshotSources(note.get().segmentSnapshot()))));
         }
-        if (changed && analytics != null) analytics.meetingNotesCompleted(runId, failure);
+        if (changed) {
+            if (failure == null) {
+                CommittedLog.info(log, "[회의록 초안 생성 완료] operation=meeting_notes stage=completed meetingId={} runId={} version={} 설명=초안을 저장했습니다. 문서 반영은 별도 작업입니다.",
+                        meetingId, runId, version);
+            } else {
+                CommittedLog.failure(log, failure, "[회의록 초안 생성 실패] operation=meeting_notes meetingId={} runId={} version={} stage={} errorCode={} upstreamCode={} 원인={}",
+                        meetingId, runId, version,
+                        "MEETING_NOTES_INVALID".equals(failure) ? "validation" : "result", CommittedLog.stableCode(failure), CommittedLog.code(failure), CommittedLog.reason(failure));
+            }
+            if (analytics != null) analytics.meetingNotesCompleted(runId, failure);
+        }
     }
 
     /** 스냅샷의 묶음 ID → 묶인 원래 구간 ID들. */
@@ -284,6 +305,8 @@ public class MeetingNotesService {
         transaction.executeWithoutResult(status -> notes.expireGenerating(workspaceId, Instant.now().minus(generationTimeout))
                 .forEach(runId -> {
                     aiCancellation.requestCancel(runId);
+                    CommittedLog.warn(log, "[회의록 초안 생성 시간 초과] operation=meeting_notes runId={} stage=timeout errorCode=MEETING_NOTES_TIMEOUT timeoutMinutes={} 원인=정해진 시간 안에 회의록 초안 결과를 받지 못했습니다.",
+                            runId, generationTimeout.toMinutes());
                     if (analytics != null) analytics.meetingNotesCompleted(runId, "MEETING_NOTES_TIMEOUT");
                 }));
     }
@@ -300,8 +323,10 @@ public class MeetingNotesService {
         int version = transaction.execute(status -> {
             int cancelled = notes.cancelGenerating(meetingId).orElseThrow(() -> new MeetingException(HttpStatus.CONFLICT,
                     "MEETING_NOTES_NOT_GENERATING", "만들고 있는 회의록 초안이 없습니다."));
-            notes.find(meetingId, cancelled).map(MeetingNotesRepository.Note::aiRunId)
-                    .ifPresent(aiCancellation::requestCancel);
+            String runId = notes.find(meetingId, cancelled).map(MeetingNotesRepository.Note::aiRunId).orElse(null);
+            if (runId != null) aiCancellation.requestCancel(runId);
+            CommittedLog.info(log, "[회의록 생성 취소 접수] operation=meeting_notes stage=cancel_accepted meetingId={} version={} runId={} workspaceId={} userId={} 설명=취소 완료는 같은 runId의 AI 실행 취소 완료 로그로 확인합니다.",
+                    meetingId, cancelled, runId, workspaceId, userId);
             return cancelled;
         });
         return toResponse(notes.find(meetingId, version).orElseThrow());
@@ -413,6 +438,11 @@ public class MeetingNotesService {
             throw e;
         }
         notes.markApplied(note.meetingId(), note.version(), note.applyRequestId(), documentId);
+        // 같은 요청의 재시도도 이 경로로 오므로 처음 적용만 완료로 남긴다.
+        if (!"applied".equals(note.status())) {
+            log.info("[회의록 문서 반영 완료] operation=meeting_notes_apply stage=completed meetingId={} documentId={} version={} workspaceId={} userId={} mode={}",
+                    note.meetingId(), documentId, note.version(), workspaceId, userId, note.applyMode());
+        }
         return toResponse(notes.find(note.meetingId(), note.version()).orElseThrow());
     }
 

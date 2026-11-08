@@ -1381,8 +1381,12 @@ class DocumentServiceBlocksTest {
                 .thenReturn(Optional.of(new fruition.core.document.domain.DocumentContentVersion(
                         document.getId(), 5L, fullMarkdown, "old-hash", USER_ID, java.time.Instant.now())));
 
-        DocumentContentSaveResponse response = documentService.restoreContentVersion(
-                WORKSPACE_ID, USER_ID, document.getId(), 5L, 1L);
+        DocumentContentSaveResponse response;
+        try (var capture = new fruition.shared.logging.LogCapture(DocumentService.class)) {
+            response = documentService.restoreContentVersion(WORKSPACE_ID, USER_ID, document.getId(), 5L, 1L);
+            assertThat(capture.messages().stream().filter(m -> m.startsWith("[문서 버전 복원 완료]")))
+                    .singleElement().asString().contains("toVersion=5", "newVersion=2");
+        }
 
         assertThat(response.currentVersion()).isEqualTo(2);
         verify(postgresDocumentEditStore).save(
@@ -1479,7 +1483,7 @@ class DocumentServiceBlocksTest {
     @DisplayName("자동 편입: 설정이 켜져 있고 업로더에게 wiki.ingest가 있으면 Markdown 업로드 직후 편입을 등록한다")
     void uploadMarkdown_autoIngest_enqueuesWhenSettingOnAndPermitted() {
         stubMarkdownUploadEnv();
-        when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
 
         DocumentUploadResponse response =
@@ -1496,13 +1500,13 @@ class DocumentServiceBlocksTest {
     @DisplayName("자동 편입: 업로드 트랜잭션이 커밋되기 전에는 등록하지 않고, 커밋 뒤에 등록한다")
     void uploadMarkdown_autoIngest_runsOnlyAfterCommit() {
         stubMarkdownUploadEnv();
-        when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
         org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
         try {
             documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
 
-            verify(workspaceSettingsClient, never()).autoIngestOnUpload(anyString());
+            verify(workspaceSettingsClient, never()).autoIngestMarkdownOnUpload(anyString());
             verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
 
             org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations()
@@ -1530,7 +1534,7 @@ class DocumentServiceBlocksTest {
     @DisplayName("자동 편입: 설정이 켜져 있어도 업로더에게 wiki.ingest가 없으면 편입하지 않는다")
     void uploadMarkdown_autoIngest_withoutPermission_doesNotEnqueue() {
         stubMarkdownUploadEnv();
-        when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(false);
 
         documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
@@ -1542,7 +1546,7 @@ class DocumentServiceBlocksTest {
     @DisplayName("자동 편입: 권한 판정이 실패해도 업로드는 성공하고 편입하지 않는다")
     void uploadMarkdown_autoIngest_authzFailure_uploadStillSucceeds() {
         stubMarkdownUploadEnv();
-        when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest"))
                 .thenThrow(new fruition.core.authz.WorkspaceNotFoundException(WORKSPACE_ID));
 
@@ -1557,7 +1561,7 @@ class DocumentServiceBlocksTest {
     @DisplayName("자동 편입: 편입 등록 단계가 예외를 던져도 업로드는 성공하고 문서는 저장된다")
     void uploadMarkdown_autoIngest_enqueueFailure_uploadStillSucceeds() {
         stubMarkdownUploadEnv();
-        when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
         doThrow(new IllegalStateException("outbox 장애"))
                 .when(ingestCommandOutbox).begin(anyString(), anyString(), anyString());
@@ -1576,7 +1580,7 @@ class DocumentServiceBlocksTest {
     void uploadSkillReference_neverAutoIngests() {
         stubOwnedWorkspace();
         lenient().when(storageProps.getBucket()).thenReturn("test-bucket");
-        lenient().when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        lenient().when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         lenient().when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
 
         documentService.upload(WORKSPACE_ID, USER_ID, "ref-key", null, markdownUploadFile(), "skill_reference");
@@ -1590,7 +1594,7 @@ class DocumentServiceBlocksTest {
         stubOwnedWorkspace();
         lenient().when(storageProps.getBucket()).thenReturn("test-bucket");
         lenient().when(documentRepository.findMaxRootSortOrder(WORKSPACE_ID, DocumentRole.ORIGINAL)).thenReturn(-1L);
-        lenient().when(workspaceSettingsClient.autoIngestOnUpload(WORKSPACE_ID)).thenReturn(true);
+        lenient().when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         lenient().when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
         MockMultipartFile file = new MockMultipartFile(
                 "file", "자료.pdf", "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
