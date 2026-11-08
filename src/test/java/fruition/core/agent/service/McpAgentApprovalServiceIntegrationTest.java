@@ -410,6 +410,45 @@ class McpAgentApprovalServiceIntegrationTest {
                 workspace)).isOne();
     }
 
+    @Test
+    void convertedPdfCreateRechecksSourceHashAtApprovalAndPermissionAtExecution() throws Exception {
+        credits.post(user, "grant", 2_000, "pdf-grant:" + user, "test");
+        String hash = "sha256:" + "a".repeat(64);
+        JsonNode run = mapper.readTree("""
+                {"id":"%s","workspace_id":"%s","status":"awaiting_approval","origin":"MCP_CLIENT",
+                 "grant_id":"%s","client_id":"%s","policy_generation":2,
+                 "invocation_id":"%s","spec_version":"2025-11-25","tool_name":"propose_plan",
+                 "plan":{"id":"plan-1","version":1,"operation_hash":"%s","status":"awaiting_approval",
+                   "operations":[{"id":"op-1","tool_name":"create_document","depends_on":[],
+                     "target_id":null,"base_version":null,
+                     "arguments":{"display_name":"보고서","folder_id":null,"content_artifact_id":"converted-markdown",
+                       "content_hash":"%s","source_document_id":"doc_pdf","source_content_hash":"%s"}}]}}
+                """.formatted("agent_" + "6".repeat(32), workspace, grant, client, UUID.randomUUID(),
+                "c".repeat(64), hash, hash));
+        when(requester.approveMcp(anyString(), anyString(), anyString(), anyInt(), anyString(), anyList(),
+                anyString(), anyString(), anyString(), anyLong())).thenReturn(run);
+        Document pdf = mock(Document.class);
+        when(documents.convertSource(any(), org.mockito.ArgumentMatchers.eq("doc_pdf"),
+                org.mockito.ArgumentMatchers.eq(hash))).thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, false));
+
+        assertThatThrownBy(() -> service.approve(workspace, user, run.path("id").asText(), request(), run))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("MCP source PDF changed.");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM mcp_agent_approvals WHERE run_id = ?",
+                Integer.class, run.path("id").asText())).isZero();
+
+        when(documents.convertSource(any(), org.mockito.ArgumentMatchers.eq("doc_pdf"),
+                org.mockito.ArgumentMatchers.eq(hash))).thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, true));
+        service.approve(workspace, user, run.path("id").asText(), request(), run);
+        when(documents.convertSource(any(), org.mockito.ArgumentMatchers.eq("doc_pdf"),
+                org.mockito.ArgumentMatchers.eq(hash))).thenReturn(new McpDocumentDataGateway.ConvertSource(null, false));
+
+        assertThatThrownBy(() -> service.authorizeExecution(executionRequest(run, approvalId(run.path("id").asText()),
+                "op-1", run.path("plan").path("operations").get(0).path("arguments")), "create_document"))
+                .isInstanceOf(fruition.core.mcp.McpAuthorizationException.class)
+                .hasFieldOrPropertyWithValue("code", "PERMISSION_REVOKED");
+    }
+
     private AgentRunApproveRequest request() {
         return request("op-1");
     }

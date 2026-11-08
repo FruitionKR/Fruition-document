@@ -576,6 +576,13 @@ public class McpAgentApprovalService {
         };
         if (destinationKey != null && arguments.path(destinationKey).isTextual())
             requireFolder(identity, arguments.path(destinationKey).asText());
+        if ("create_document".equals(tool) && arguments.has("source_document_id")) {
+            var source = documents.convertSource(identity, arguments.path("source_document_id").asText(),
+                    arguments.path("source_content_hash").asText());
+            if (source.document() == null) throw new McpAuthorizationException(403, "PERMISSION_REVOKED");
+            if (!source.hashMatches())
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "MCP source PDF changed.");
+        }
     }
 
     private void requireTarget(String tool, String targetId, McpIdentity identity, Long baseVersion) {

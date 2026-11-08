@@ -59,6 +59,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.anyLong;
 
 @ExtendWith(MockitoExtension.class)
 class AgentToolServiceTest {
@@ -494,6 +495,41 @@ class AgentToolServiceTest {
         verify(idempotencyService).validateKey("idem-1");
         verify(documentService, never()).rename(any(), any(), any(), any());
         verify(idempotencyService, never()).save(any(), any(), any(), any(), anyInt(), any(), any());
+    }
+
+    @Test
+    void execute_routesApprovedMcpPdfConversionToLinkedConvertedCreateOnly() throws Exception {
+        var arguments = objectMapper.readTree(
+                "{\"display_name\":\"보고서\",\"folder_id\":null,"
+                        + "\"content_artifact_id\":\"converted-markdown\",\"content_hash\":\"sha256:abc\","
+                        + "\"source_document_id\":\"doc_pdf\",\"source_content_hash\":\"sha256:pdf\"}");
+        // 내부 Agent 실행 경로는 원본 연결 인자를 받지 않는다.
+        assertThatThrownBy(() -> service.execute("create_document", executeRequest(arguments)))
+                .isInstanceOf(ResponseStatusException.class);
+        verifyNoInteractions(documentService, artifactClient);
+
+        McpAgentApprovalService approvals = mock(McpAgentApprovalService.class);
+        service.setMcpApprovals(approvals);
+        AgentToolExecuteRequest request = new AgentToolExecuteRequest(
+                "run-1", "workspace-1", "user-1", "plan-1", 1, "a".repeat(64), "operation-1", "idem-1",
+                arguments, "00000000-0000-4000-8000-000000000010", "00000000-0000-4000-8000-000000000011",
+                "00000000-0000-4000-8000-000000000012", "https://client.example", 3L);
+        when(artifactClient.resolve(request, "create_document", arguments)).thenReturn(
+                new PipelineAgentArtifactClient.ResolvedArtifact(
+                        "converted-markdown", "sha256:abc", "create_document", null, null, null, "# 보고서\n"));
+        var execution = new McpAgentApprovalService.Execution(null, null, null, null);
+        when(approvals.authorizeExecution(request, "create_document")).thenReturn(execution);
+        var created = mock(fruition.core.document.dto.DocumentUploadResponse.class);
+        when(created.id()).thenReturn("doc_converted");
+        when(documentService.createConvertedMarkdownInCurrentTransaction(
+                eq("workspace-1"), eq("user-1"), eq("doc_pdf"), eq("sha256:pdf"), any())).thenReturn(created);
+        var receipt = mock(McpAgentApprovalService.Receipt.class);
+        when(approvals.recordReceipt(eq(execution), eq("operation-1"), eq("create_document"), eq("DOCUMENT"),
+                eq("doc_converted"), any(), anyLong(), eq(true), any())).thenReturn(receipt);
+
+        assertThat(service.execute("create_document", request)).isSameAs(receipt);
+        verify(documentService, never()).createAgentMarkdownInCurrentTransaction(any(), any(), any());
+        verify(approvals).executionFinished(execution);
     }
 
     private AgentToolExecuteRequest executeRequest(com.fasterxml.jackson.databind.JsonNode arguments) {

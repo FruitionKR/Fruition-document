@@ -42,6 +42,10 @@ public class McpPlanProposalService {
             "create_document", Set.of("display_name", "folder_id", "content_artifact_id", "content_hash"),
             "apply_document_edit", Set.of(
                     "document_id", "base_version", "target", "content_artifact_id", "content_hash"));
+    /** PDF 변환본 생성. 원본 PDF와 그 원본 hash를 승인 인자에 고정해 승인·실행 때 다시 확인한다. */
+    static final Set<String> CONVERTED_CREATE_DOCUMENT_FIELDS = Set.of(
+            "display_name", "folder_id", "content_artifact_id", "content_hash",
+            "source_document_id", "source_content_hash");
 
     private final McpPlanContextService contexts;
     private final McpDocumentProposalService proposals;
@@ -155,7 +159,8 @@ public class McpPlanProposalService {
         if (dependencySet.size() != dependsOn.size() || !earlier.containsAll(dependsOn)
                 || !earlier.stream().filter(dependencySet::contains).toList().equals(dependsOn)) throw invalid();
         Map<String, Object> arguments = map(operation.get("arguments"));
-        if (!arguments.keySet().equals(fields)) throw invalid();
+        if (!arguments.keySet().equals(fields) && !("create_document".equals(tool)
+                && arguments.keySet().equals(CONVERTED_CREATE_DOCUMENT_FIELDS))) throw invalid();
         validateArguments(tool, operation, arguments, Set.copyOf(earlier), dependsOn);
         if (id.isEmpty()) throw invalid();
     }
@@ -209,6 +214,10 @@ public class McpPlanProposalService {
         if (arguments.containsKey("content_artifact_id")) text(arguments.get("content_artifact_id"), 255, true);
         if (arguments.containsKey("content_hash") && !HASH.matcher(string(arguments.get("content_hash"))).matches())
             throw invalid();
+        if (arguments.containsKey("source_document_id")) {
+            requireDocumentId(string(arguments.get("source_document_id")));
+            if (!HASH.matcher(string(arguments.get("source_content_hash"))).matches()) throw invalid();
+        }
     }
 
     private static void validateArtifact(Map<String, Object> artifact) {

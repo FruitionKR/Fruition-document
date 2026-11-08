@@ -92,6 +92,27 @@ public class McpDocumentDataGateway {
     public DocumentAccessPolicy.Viewer viewer(McpIdentity identity) {
         return policy.viewer(identity.workspaceId(), identity.userId(), identity.owner(), identity.canConvert());
     }
+    /**
+     * 외부 AI가 변환할 원본 PDF. 웹 변환 요청과 같은 판정(viewer.canConvert)을 쓰고, 넘겨받은 hash가 지금 원본의
+     * hash와 같을 때만 돌려준다. 없거나 권한이 없으면 NOT_FOUND, 원본이 바뀌었으면 CHANGED다.
+     */
+    public ConvertSource convertSource(McpIdentity identity, String sourceDocumentId, String sourceContentHash) {
+        Document source = find(identity.workspaceId(), sourceDocumentId)
+                .filter(DocumentAccessPolicy::isPdf).orElse(null);
+        if (source == null || !viewer(identity).canConvert(source)) return new ConvertSource(null, false);
+        return new ConvertSource(source, pdfHash(source).equals(sourceContentHash));
+    }
+
+    /** 원본 PDF 바이트의 hash(documents.content_hash)를 MCP 형식(sha256:hex)으로 돌려준다. */
+    public static String pdfHash(Document source) {
+        String hash = source.getContentHash();
+        if (hash == null) return "";
+        return hash.startsWith("sha256:") ? hash : "sha256:" + hash;
+    }
+
+    /** {@code document}가 null이면 없거나 변환 권한이 없다. */
+    public record ConvertSource(Document document, boolean hashMatches) {}
+
     private static String sha256(String markdown) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
