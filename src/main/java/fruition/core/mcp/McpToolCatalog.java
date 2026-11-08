@@ -18,6 +18,11 @@ public class McpToolCatalog {
             .readOnlyHint(true).destructiveHint(false).idempotentHint(true).openWorldHint(false).build();
     private static final McpSchema.ToolAnnotations PROPOSAL_ONLY = McpSchema.ToolAnnotations.builder()
             .readOnlyHint(false).destructiveHint(false).idempotentHint(true).openWorldHint(false).build();
+    private static final String TARGET_LINES_DESCRIPTION = "1-based inclusive logical line range in the complete"
+            + " current document text at base_version. Lines are separated by CRLF, CR or LF, and a trailing newline"
+            + " adds a final empty line (\"a\\nb\\n\" has 3 lines). Count lines from the full text across all"
+            + " returned get_document pages, not block ordinals. whole_document requires start_line 1 and end_line"
+            + " equal to the full current line count.";
     private final McpWikiSearchClient wiki;
     private final McpWikiPageClient wikiPages;
     private final McpDocumentReadService documents;
@@ -315,7 +320,7 @@ public class McpToolCatalog {
                         "type", Map.of("type", "string", "enum", List.of("selection", "current_section", "whole_document")),
                         "start_line", Map.of("type", "integer", "minimum", 1),
                         "end_line", Map.of("type", "integer", "minimum", 1)),
-                "required", List.of("type", "start_line", "end_line"));
+                "required", List.of("type", "start_line", "end_line"), "description", TARGET_LINES_DESCRIPTION);
         Map<String,Object> fields = new java.util.LinkedHashMap<>();
         fields.put("idempotency_key", Map.of("type", "string", "minLength", 1, "maxLength", 255));
         fields.put("document_id", Map.of("type", "string", "maxLength", 255,
@@ -360,7 +365,8 @@ public class McpToolCatalog {
                                         "selection", "current_section", "whole_document")),
                                 "start_line", Map.of("type", "integer", "minimum", 1),
                                 "end_line", Map.of("type", "integer", "minimum", 1)),
-                        "required", List.of("type", "start_line", "end_line"))));
+                        "required", List.of("type", "start_line", "end_line"),
+                        "description", TARGET_LINES_DESCRIPTION)));
         Map<String,Object> artifact = Map.of(
                 "type", "object", "additionalProperties", false,
                 "properties", Map.of("id", string,
@@ -438,7 +444,8 @@ public class McpToolCatalog {
                 "selection", "current_section", "whole_document")));
         properties.put("start_line", Map.of("type", "integer", "minimum", 1));
         properties.put("end_line", Map.of("type", "integer", "minimum", 1));
-        return strictObject(properties);
+        return Map.of("type", "object", "additionalProperties", false, "properties", properties,
+                "required", List.copyOf(properties.keySet()), "description", TARGET_LINES_DESCRIPTION);
     }
     private static String text(Map<String,Object> args, String key) {
         Object value = exact(args).get(key); if (!(value instanceof String s) || s.isBlank()) throw new IllegalArgumentException();
