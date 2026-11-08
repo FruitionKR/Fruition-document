@@ -108,7 +108,10 @@ class McpAgentApprovalServiceIntegrationTest {
         documentService.saveContent(workspace, user, documentId, "# Drift\n\nchanged", 1L,
                 UUID.randomUUID().toString(), null);
         JsonNode stale = run("agent_" + "2".repeat(32), documentId, "op-1", 1);
-        assertThat(real.projectRun(workspace, user, stale).has("mcp_approval_quote")).isFalse();
+        JsonNode staleQuote = real.projectRun(workspace, user, stale).path("mcp_approval_quote");
+        assertThat(staleQuote.path("client_name").asText()).isEqualTo("Test MCP Client");
+        assertThat(staleQuote.path("unavailable_reason").asText()).isEqualTo("TARGET_VERSION_CHANGED");
+        assertThat(staleQuote.has("price_snapshot")).isFalse();
         credits.post(user, "grant", 5_000, "drift-grant:" + user, "test");
         assertThatThrownBy(() -> real.approve(workspace, user, stale.path("id").asText(), request(), stale))
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)

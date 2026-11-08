@@ -516,7 +516,17 @@ public class McpAgentApprovalService {
             if (!operation.has("suggested_selected") || operation.path("suggested_selected").asBoolean(true))
                 defaultOperations.add(operation);
         if (defaultOperations.isEmpty()) return run;
-        authorizeOperations(defaultOperations, identity, true);
+        try {
+            authorizeOperations(defaultOperations, identity, true);
+        } catch (ResponseStatusException conflict) {
+            if (conflict.getStatusCode() != HttpStatus.CONFLICT) throw conflict;
+            // 원본이 바뀐 경우에도 검증된 클라이언트 이름은 보여 주되, 가격 없이 두어 승인은 막는다.
+            ObjectNode projected = ((ObjectNode) run).deepCopy();
+            ObjectNode quote = projected.putObject("mcp_approval_quote");
+            quote.put("client_name", identity.clientName());
+            quote.put("unavailable_reason", "TARGET_VERSION_CHANGED");
+            return projected;
+        }
         Price price = price(defaultOperations.size());
         ObjectNode projected = ((ObjectNode) run).deepCopy();
         ObjectNode quote = projected.putObject("mcp_approval_quote");

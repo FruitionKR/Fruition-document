@@ -44,6 +44,11 @@ membership/owner 경계만 사용하므로 Access나 가격 설정이 일시적�
     "price_version":"2026-11-08-a","maximum_charge_minor":4}}}
 ```
 
+grant·client·편집권한은 유효하지만 대상 문서·폴더가 계획의 `base_version` 이후 바뀌었으면(편집은 본문 revision,
+나머지는 메타데이터 버전 기준) 가격 없이 `{"mcp_approval_quote":{"client_name":"Registered Client",
+"unavailable_reason":"TARGET_VERSION_CHANGED"}}`만 덧붙인다. `price_snapshot`이 없으므로 승인할 수 없고, 화면은
+client 이름을 유지한 채 원본 변경을 사유로 보여 준다. 그 밖의 확인 실패에는 필드를 덧붙이지 않는다.
+
 MCP 승인 body는 기존 필드에 위 다섯 필드와 정확히 같은 `expected_price_snapshot`을 필수로 보낸다. 값은 가격을
 지정하는 입력이 아니라 사용자가 본 가격의 조건부 승인이다. 누락·설정 변경은 예약 전에 `409 MCP_PRICE_CHANGED`,
 가격 미설정은 `503 MCP_PRICE_UNCONFIGURED`, 전액 부족은 원장 변화 없이 `402 INSUFFICIENT_CREDIT`이다. 성공하면
