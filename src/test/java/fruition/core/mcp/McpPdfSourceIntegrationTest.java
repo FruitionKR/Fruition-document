@@ -1,69 +1,75 @@
 package fruition.core.mcp;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import fruition.TestcontainersConfiguration;
-import fruition.core.document.repository.DocumentRepository;
-import fruition.core.document.repository.FolderRepository;
-import fruition.core.document.repository.PostgresDocumentEditStore;
-import fruition.core.document.service.DocumentAccessPolicy;
-import fruition.core.document.service.DocumentEditStateInitializer;
-import fruition.core.document.service.DocumentService;
+import fruition.core.authz.WorkspaceSettingsClient;
+import fruition.core.document.repository.ConvertCommandOutbox;
 import fruition.core.document.service.McpDocumentDataGateway;
 import fruition.shared.util.StorageProperties;
 import io.minio.MinioClient;
+import io.minio.PutObjectArgs;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.io.ByteArrayInputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
-/** get_pdf_source 주소를 별도 local 서명 클라이언트로 만들어도 실제 MinIO에서 원본 PDF 바이트를 그대로 받는지 본다. */
+/** 창 이미지 주소를 별도 local 서명 클라이언트로 만들어도 실제 MinIO에서 전처리 묶음 PNG를 그대로 받는지 본다. */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class McpPdfSourceIntegrationTest {
-    @Autowired DocumentService documentService;
-    @Autowired DocumentRepository documentRepository;
-    @Autowired FolderRepository folderRepository;
-    @Autowired DocumentAccessPolicy accessPolicy;
-    @Autowired PostgresDocumentEditStore editStore;
-    @Autowired DocumentEditStateInitializer editStateInitializer;
+    private static final String CONVERSION = "0f6f3d1e-2b7a-4c8e-9d5f-1a2b3c4d5e6f";
     @Autowired MinioClient minio;
     @Autowired StorageProperties storage;
-    @Autowired StringRedisTemplate redis;
 
     @Test
-    void signedSourceUrlFetchesExactOriginalPdf() throws Exception {
-        String workspace = "ws_" + UUID.randomUUID();
-        String user = "user_" + UUID.randomUUID();
-        redis.opsForValue().set("authz:role:v2:" + workspace + ":" + user, "{\"role\":\"OWNER\",\"permissions\":[]}");
-        byte[] pdf = "%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n".getBytes(StandardCharsets.US_ASCII);
-        String pdfId = documentService.upload(workspace, user, "pdf-" + UUID.randomUUID(), null,
-                new MockMultipartFile("file", "작은.pdf", "application/pdf", pdf)).id();
-        var tools = new McpPdfTools(new McpDocumentDataGateway(documentRepository, folderRepository, accessPolicy,
-                editStore, editStateInitializer), mock(McpPlanProposalService.class), minio, storage,
-                storage.getEndpoint());
-        McpIdentity identity = new McpIdentity(user, workspace, "https://client.example/mcp",
+    void signedWindowImageUrlFetchesExactBundlePng() throws Exception {
+        byte[] png = {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 1, 2, 3};
+        String key = "tmp/convert/mcp/ws_it/" + CONVERSION + "/0/external/images/00000.png";
+        minio.putObject(PutObjectArgs.builder().bucket(storage.getBucket()).object(key)
+                .stream(new ByteArrayInputStream(png), png.length, -1).build());
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode window = mapper.createObjectNode().put("schema_version", "mcp.pdf-conversion.v1")
+                .put("conversion_id", CONVERSION).put("window_id", CONVERSION).put("window_ordinal", 1)
+                .put("window_count", 1).put("window_hash", "sha256:" + "a".repeat(64)).put("kind", "repair")
+                .put("lane", "table").put("page", 1).put("instructions", "prompt").put("submitted_attempts", 0)
+                .put("max_attempts", 2).put("data_boundary", "UNTRUSTED_WORKSPACE_CONTENT");
+        window.putObject("payload");
+        window.putObject("result_schema");
+        window.putArray("image_keys").add(key);
+        McpWikiDraftClient ai = mock(McpWikiDraftClient.class);
+        when(ai.post(anyString(), any())).thenReturn(window);
+        var tools = new McpPdfTools(mock(McpDocumentDataGateway.class), mock(McpPlanProposalService.class),
+                mock(McpAccessClient.class), ai, mock(ConvertCommandOutbox.class), mock(TransactionTemplate.class),
+                mock(WorkspaceSettingsClient.class), minio, storage, mapper, 10, storage.getEndpoint());
+        McpIdentity identity = new McpIdentity("user_it", "ws_it", "https://client.example/mcp",
                 "00000000-0000-4000-8000-000000000001", 1, Set.of("read"), "OWNER", Set.of());
 
-        var source = (McpPdfTools.SourceResponse) tools.invoke(identity, "get_pdf_source", Map.of("document_id", pdfId));
+        @SuppressWarnings("unchecked")
+        var view = (Map<String, Object>) tools.invoke(identity, "get_conversion_window",
+                Map.of("conversion_id", CONVERSION, "window_ordinal", 1));
+        String url = (String) ((List<Map<String, Object>>) view.get("images")).getFirst().get("url");
         HttpResponse<byte[]> fetched = HttpClient.newHttpClient().send(
-                HttpRequest.newBuilder(URI.create(source.sourceUrl())).GET().build(),
-                HttpResponse.BodyHandlers.ofByteArray());
+                HttpRequest.newBuilder(URI.create(url)).GET().build(), HttpResponse.BodyHandlers.ofByteArray());
 
         assertThat(fetched.statusCode()).isEqualTo(200);
-        assertThat(fetched.body()).isEqualTo(pdf);
-        assertThat(source.canConvert()).isTrue();
+        assertThat(fetched.body()).isEqualTo(png);
+        assertThat(url).contains("X-Amz-Expires=600");
     }
 }

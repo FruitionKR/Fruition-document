@@ -1593,6 +1593,8 @@ public class DocumentService {
      * 모두 병합되면 정산하고 자동 ingest를 시작한다. 실패는 변환을 실패로 닫고 남은 batch를 취소한다.
      */
     public void applyConvertBatch(JsonNode event) {
+        // MCP 외부 AI 변환의 전처리 batch다. 세션은 AI가 갖고 문서는 승인 뒤에만 만든다.
+        if (event.path("run_id").asText("").startsWith("mcpconvert:")) return;
         var matcher = CONVERT_BATCH_RUN_ID.matcher(event.path("run_id").asText(""));
         if (!matcher.matches()) {
             log.warn("[문서 변환 이벤트 무시] runId={} reason=invalid_run_id", event.path("run_id").asText(""));
