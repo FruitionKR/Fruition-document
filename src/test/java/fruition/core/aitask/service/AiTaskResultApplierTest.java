@@ -798,6 +798,9 @@ class AiTaskResultApplierTest {
         verify(usageCharges).enqueue("ingest-false");
         verify(usageCharges, never()).enqueueAfterPostIngest("ingest-false");
         verify(usageCharges).enqueueAfterPostIngest("ingest-absent");
+        verify(documentService).applyPipelineResult("doc-1", "ingest-true", "indexing", null);
+        verify(documentService).applyPipelineResult("doc-1", "ingest-false", "succeeded", null);
+        verify(documentService).applyPipelineResult("doc-1", "ingest-absent", "indexing", null);
     }
 
     @Test

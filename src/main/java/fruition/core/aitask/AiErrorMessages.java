@@ -68,6 +68,7 @@ public final class AiErrorMessages {
 
     private static final Map<String, String> MESSAGES = Map.ofEntries(
             // ai 공통 코드
+            Map.entry("ai_service_starting", "AI 서비스를 시작하고 있어요. 준비까지 약 2~3분 걸릴 수 있습니다. 잠시 후 다시 시도해 주세요."),
             Map.entry("provider_rate_limited", "AI 서비스 요청이 많아 처리하지 못했습니다. 잠시 후 다시 시도해 주세요."),
             Map.entry("provider_unavailable", "AI 서비스에 일시적인 문제가 있어 처리하지 못했습니다. 잠시 후 다시 시도해 주세요."),
             Map.entry("input_rejected", "AI 서비스가 요청 내용이나 길이를 받아들이지 않아 처리하지 못했습니다. 내용을 줄이거나 고쳐서 다시 시도해 주세요."),
@@ -118,6 +119,7 @@ public final class AiErrorMessages {
             Map.entry("rollback_retry_pending", "변경을 되돌리는 작업을 자동으로 다시 시도하고 있어요. 잠시 기다려 주세요."),
             Map.entry("rollback_document_purged", "영구 삭제된 문서의 변경은 되돌릴 수 없습니다. 나머지 변경은 되돌렸습니다."),
             // document 자체 코드
+            Map.entry("wiki_index_preparation_failed", "문서는 저장했지만 위키 검색을 준비하지 못했습니다. 잠시 후 다시 편입해 주세요."),
             Map.entry("PIPELINE_UNAVAILABLE", "AI 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요."),
             Map.entry("PIPELINE_TIMEOUT", "질의 대기 시간이 지나 취소를 요청했습니다."),
             Map.entry("INSUFFICIENT_CREDIT", INSUFFICIENT_CREDIT),

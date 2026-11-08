@@ -42,6 +42,7 @@ final class AiErrorMessagesEn {
             "agent_turn_failed", "An unexpected problem occurred while processing the request, so the document wasn't changed. Please try again in a moment.");
 
     static final Map<String, String> MESSAGES = Map.ofEntries(
+            Map.entry("ai_service_starting", "The AI service is starting up. It may take about 2-3 minutes to be ready. Please try again in a moment."),
             Map.entry("provider_rate_limited", "The AI service is busy and couldn't process this. Please try again in a moment."),
             Map.entry("provider_unavailable", "The AI service had a temporary problem and couldn't process this. Please try again in a moment."),
             Map.entry("input_rejected", "The AI service didn't accept the request content or length. Shorten or adjust it and try again."),
@@ -87,6 +88,7 @@ final class AiErrorMessagesEn {
             Map.entry("rollback_database_error", "A storage problem prevented undoing the changes. Check the document state in the task history."),
             Map.entry("rollback_retry_pending", "Undoing the changes is being retried automatically. Please wait a moment."),
             Map.entry("rollback_document_purged", "Changes to a permanently deleted document can't be undone. The other changes were undone."),
+            Map.entry("wiki_index_preparation_failed", "The document was saved, but wiki search couldn't be prepared. Please add it to the wiki again in a moment."),
             Map.entry("PIPELINE_UNAVAILABLE", "Couldn't connect to the AI service. Please try again in a moment."),
             Map.entry("PIPELINE_TIMEOUT", "The query took too long, so cancellation was requested."),
             Map.entry("INSUFFICIENT_CREDIT", INSUFFICIENT_CREDIT),

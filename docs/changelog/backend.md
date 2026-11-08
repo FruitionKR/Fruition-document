@@ -1,5 +1,11 @@
 # Backend 변경 기록
 
+## 2026-11-08
+
+### 위키 검색 준비 후 편입 완료 안내
+
+- 인덱스 준비 중에는 문서를 processing으로 유지하고 준비 완료 뒤 완료 알림이 발생하도록 했다. AI 기동과 검색 준비 실패 문구를 구분한다. 관련 테스트 119개를 확인했다.
+
 ## 2026-11-07
 
 - 자동 편입 설정을 경로별로 따른다. Markdown·txt 업로드 직후 편입은 access `auto_ingest_markdown_on_upload`, PDF 변환 뒤 편입은 `auto_ingest_pdf_on_convert`를 보고, 새 필드가 없는 옛 access면 `auto_ingest_on_upload`로 대신한다. `wiki.ingest` 조건은 그대로다.
