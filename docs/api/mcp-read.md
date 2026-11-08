@@ -171,6 +171,9 @@ The strict `propose_plan` tool (`write_propose`) accepts only
 It supports at most 20 closed-set operations (`create_folder`, `rename_folder`, `move_folder`, `create_document`,
 `rename_document`, `move_document`, `apply_document_edit`) plus exact result references and artifact shapes. Its
 validated response remains `{run_id,status,review_url}`. It never approves, reserves credit, or executes.
+`create_document` arguments may additionally carry the pair `{source_document_id,source_content_hash}` for a PDF
+conversion result; the catalog schema advertises it as a separate strict variant, and the pair is revalidated at
+proposal, approval, and save.
 
 ## Internal I9 source snapshot callback
 

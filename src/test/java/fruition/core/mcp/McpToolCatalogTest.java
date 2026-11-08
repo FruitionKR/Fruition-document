@@ -178,6 +178,9 @@ class McpToolCatalogTest {
         when(planProposals.propose(identity, arguments)).thenReturn(expected);
 
         var specification = catalog.tools().get(5);
+        var variants = new ObjectMapper().valueToTree(specification.tool().inputSchema())
+                .path("properties").path("operations").path("items").path("properties").path("arguments").path("oneOf");
+        assertThat(variants.toString()).contains("source_document_id", "source_content_hash");
         assertThat(specification.tool().name()).isEqualTo("propose_plan");
         assertThat(specification.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
         assertThat(specification.tool().annotations().readOnlyHint()).isFalse();

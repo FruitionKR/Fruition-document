@@ -420,6 +420,10 @@ public class McpToolCatalog {
                         "base_version", versionArgument)),
                 strictObject(Map.of("display_name", text, "folder_id", folderDestination,
                         "content_artifact_id", text, "content_hash", hash)),
+                // PDF 변환본 생성: 원본 문서와 그 hash를 고정해 승인·저장 때 다시 확인한다.
+                strictObject(Map.of("display_name", text, "folder_id", folderDestination,
+                        "content_artifact_id", text, "content_hash", hash,
+                        "source_document_id", document, "source_content_hash", hash)),
                 strictObject(Map.of("document_id", document, "base_version", versionArgument,
                         "target", planTargetSchema(), "content_artifact_id", text, "content_hash", hash))));
     }
