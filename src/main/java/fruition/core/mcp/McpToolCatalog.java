@@ -36,20 +36,22 @@ public class McpToolCatalog {
     private final McpDocumentProposalService proposals;
     private final McpPlanProposalService planProposals;
     private final McpWikiProposalService wikiProposals;
+    private final McpSkillTools skillTools;
     private final McpAuditLogger audit;
     private final ObjectMapper mapper;
     private final McpProperties properties;
 
     public McpToolCatalog(McpWikiSearchClient wiki, McpWikiPageClient wikiPages, McpDocumentReadService documents,
                           McpDocumentProposalService proposals, McpPlanProposalService planProposals,
-                          McpWikiProposalService wikiProposals, McpAuditLogger audit, ObjectMapper mapper,
-                          McpProperties properties) {
+                          McpWikiProposalService wikiProposals, McpSkillTools skillTools, McpAuditLogger audit,
+                          ObjectMapper mapper, McpProperties properties) {
         this.wiki = wiki; this.wikiPages = wikiPages; this.documents = documents;
         this.proposals = proposals; this.planProposals = planProposals; this.wikiProposals = wikiProposals;
+        this.skillTools = skillTools;
         this.audit = audit; this.mapper = mapper; this.properties = properties;
     }
 
-    /** 읽기 4개 + 제안 8개. 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
+    /** 읽기 4개 + 제안 8개 + Skill 읽기 2개. 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
     public List<io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification> tools() {
         var tools = new java.util.ArrayList<>(List.of(
                 spec(tool("search_wiki", "Search published workspace wiki pages", searchSchema()),
@@ -69,6 +71,8 @@ public class McpToolCatalog {
         for (String name : WIKI_TOOLS)
             tools.add(spec(tool(name, wikiDescription(name), wikiSchema(name), PROPOSAL_ONLY),
                     (id, args) -> wikiProposals.invoke(id, name, args)));
+        for (McpSchema.Tool tool : skillTools.tools())
+            tools.add(spec(tool, (id, args) -> skillTools.invoke(id, tool.name(), args)));
         return List.copyOf(tools);
     }
 
@@ -86,6 +90,7 @@ public class McpToolCatalog {
             if ("get_document".equals(tool)) targets = List.of(text(request.arguments(), "document_id"));
             if ("propose_document_edit".equals(tool)) targets = List.of(proposalDocumentId(request.arguments()));
             if ("propose_plan".equals(tool)) targets = planProposalTargets(request.arguments());
+            if (McpSkillTools.GET.equals(tool)) targets = List.of(McpSkillTools.skillId(request.arguments()));
             if (WIKI_TOOLS.contains(tool)) targets = wikiTargets(request.arguments());
             Object result = handler.call(id, request.arguments());
             byte[] bytes = mapper.writeValueAsBytes(result);

@@ -20,7 +20,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
                 mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var tools = catalog.tools();
         assertThat(tools).extracting(s -> s.tool().name()).containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page",
                         "propose_document_edit", "propose_plan", "start_ingest", "resume_ingest", "get_window",
@@ -85,7 +85,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
                 mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var pageTool = catalog.tools().get(3);
         var id = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
                 Set.of("read"), "MEMBER", Set.of());
@@ -117,7 +117,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
                 mock(McpDocumentReadService.class), proposals, mock(McpPlanProposalService.class),
-                mock(McpWikiProposalService.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpWikiProposalService.class), mock(McpSkillTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json",
                 "00000000-0000-4000-8000-000000000001", 2, Set.of("write_propose"), "OWNER", Set.of());
         Map<String,Object> arguments = proposalArguments();
@@ -158,7 +158,7 @@ class McpToolCatalogTest {
         var planProposals = mock(McpPlanProposalService.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class), planProposals,
-                mock(McpWikiProposalService.class), mock(McpAuditLogger.class), new ObjectMapper(),
+                mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props());
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json",
                 "00000000-0000-4000-8000-000000000001", 2, Set.of("write_propose"), "OWNER", Set.of());
@@ -193,7 +193,7 @@ class McpToolCatalogTest {
         var wikiProposals = mock(McpWikiProposalService.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), wikiProposals, mock(McpAuditLogger.class), new ObjectMapper(),
+                mock(McpPlanProposalService.class), wikiProposals, mock(McpSkillTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props());
 
         var staged = catalog.tools().subList(6, 12);
@@ -227,6 +227,33 @@ class McpToolCatalogTest {
         assertThat(staged.get(4).tool().outputSchema().get("required")).isEqualTo(java.util.List.of(
                 "schema_version", "run_id", "draft_id", "draft_version", "draft_hash", "public_state_hash",
                 "state", "review_url"));
+    }
+
+    @Test void skillToolsAreWrappedWithReadAnnotationsAuditTargetAndErrorMapping() {
+        var skills = mock(fruition.core.skill.service.SkillService.class);
+        var audit = mock(McpAuditLogger.class);
+        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
+                mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), new McpSkillTools(skills),
+                audit, new ObjectMapper(), McpTokenVerifierTest.props());
+        var tools = catalog.tools();
+        assertThat(tools).extracting(spec -> spec.tool().name()).hasSize(14).endsWith("list_skills", "get_skill");
+        assertThat(tools.subList(12, 14)).allSatisfy(spec -> assertThat(spec.tool().annotations().readOnlyHint()).isTrue());
+        var id = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
+                Set.of("read"), "MEMBER", Set.of());
+        var context = McpTransportContext.create(Map.of(McpSecurityFilter.IDENTITY, id));
+        String skillId = "00000000-0000-4000-8000-000000000009";
+        when(skills.get("workspace", "user", skillId)).thenThrow(new RuntimeException("ai down"));
+
+        var failed = tools.get(13).callHandler().apply(context,
+                new io.modelcontextprotocol.spec.McpSchema.CallToolRequest("get_skill", Map.of("skill_id", skillId), null));
+        var invalid = tools.get(13).callHandler().apply(context,
+                new io.modelcontextprotocol.spec.McpSchema.CallToolRequest("get_skill", Map.of("skill_id", "NOPE"), null));
+
+        assertThat(failed.isError()).isTrue();
+        assertThat(invalid.isError()).isTrue();
+        verify(audit).log(id, "get_skill", java.util.List.of(skillId), "ERROR", "DEPENDENCY_UNAVAILABLE");
+        verify(audit).log(id, "get_skill", java.util.List.of(), "ERROR", "INVALID_INPUT");
     }
 
     private static Map<String,Object> proposalArguments() {

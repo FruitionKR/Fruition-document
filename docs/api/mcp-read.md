@@ -18,9 +18,11 @@ Forwarding headers are ignored; the servlet request itself must already represen
 
 ## 공개 카탈로그 (`mcp-tools.v3`)
 
-`McpToolCatalog.tools()`는 2026-11-09부터 다음 12개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
+`McpToolCatalog.tools()`는 2026-11-09부터 다음 14개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
 `find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
-(`start_ingest`, `resume_ingest`, `get_window`, `submit_window`, `finalize_ingest`, `submit_lint_changes`). 별도 enable
+(`start_ingest`, `resume_ingest`, `get_window`, `submit_window`, `finalize_ingest`, `submit_lint_changes`), Skill 읽기 2개
+(`list_skills`, `get_skill`, `read` scope, 계약은 [mcp-skills.md](mcp-skills.md)). 다른 MCP 도구 bean(`McpSkillTools` 등)은
+`tools()`와 `invoke(identity, tool, args)`만 제공하고, 카탈로그가 같은 wrapper로 감싼다. 별도 enable
 플래그나 숨은 등록 경로는 없다. 제안·위키 도구는 승인 대기 run/draft와 `review_url`만 만들며, 승인·크레딧 예약·실행·정산은
 아래 각 절의 웹 승인 경로에서만 일어난다. 도구 인자로 승인이나 실행을 대신할 수 없다. 모든 도구는 같은 spec wrapper로
 감사 로그·오류 코드·응답 크기 제한을 공유한다. 이 카탈로그는 Document `f9882a4`와 AI `6bc6a6d`의 semantic merge 계약을
