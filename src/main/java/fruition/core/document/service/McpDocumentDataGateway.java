@@ -3,6 +3,7 @@ package fruition.core.document.service;
 import fruition.core.document.domain.Document;
 import fruition.core.document.domain.Folder;
 import fruition.core.document.repository.DocumentRepository;
+import fruition.core.document.repository.ConvertCommandOutbox;
 import fruition.core.document.repository.FolderRepository;
 import fruition.core.document.repository.PostgresDocumentEditStore;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -16,10 +17,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 
-/** Document-domain reads used by the MCP boundary; authorization remains caller-provided and current. */
+/** Document-domain access used by the MCP boundary; authorization remains caller-provided and current. */
 @Service
 @ConditionalOnProperty(name = "app.mcp.enabled", havingValue = "true")
 public class McpDocumentDataGateway {
+    private final ConvertCommandOutbox convertOutbox;
     private final DocumentRepository documents;
     private final FolderRepository folders;
     private final DocumentAccessPolicy policy;
@@ -28,10 +30,18 @@ public class McpDocumentDataGateway {
     public McpDocumentDataGateway(DocumentRepository documents, FolderRepository folders,
                                   DocumentAccessPolicy policy,
                                   PostgresDocumentEditStore editStore,
-                                  DocumentEditStateInitializer editStateInitializer) {
+                                  DocumentEditStateInitializer editStateInitializer, ConvertCommandOutbox convertOutbox) {
+        this.convertOutbox = convertOutbox;
         this.documents = documents; this.folders = folders; this.policy = policy;
         this.editStore = editStore; this.editStateInitializer = editStateInitializer;
     }
+    /** 호출자가 연 현재 트랜잭션에 전처리 명령을 저장한다. */
+    public void enqueueExternalPrepare(String conversionId, String workspaceId, String userId, String sourceDocumentId,
+                                       String sourceKey, int startPage, int pageCount, boolean describeFigures) {
+        convertOutbox.enqueueExternalPrepare(conversionId, workspaceId, userId, sourceDocumentId,
+                sourceKey, startPage, pageCount, describeFigures);
+    }
+
     public List<Document> search(String workspaceId, String query, int limit) {
         return documents.searchMcpCandidates(workspaceId, query, PageRequest.of(0, limit));
     }
@@ -92,6 +102,27 @@ public class McpDocumentDataGateway {
     public DocumentAccessPolicy.Viewer viewer(McpIdentity identity) {
         return policy.viewer(identity.workspaceId(), identity.userId(), identity.owner(), identity.canConvert());
     }
+    /**
+     * 외부 AI가 변환할 원본 PDF. 웹 변환 요청과 같은 판정(viewer.canConvert)을 쓰고, 넘겨받은 hash가 지금 원본의
+     * hash와 같을 때만 돌려준다. 없거나 권한이 없으면 NOT_FOUND, 원본이 바뀌었으면 CHANGED다.
+     */
+    public ConvertSource convertSource(McpIdentity identity, String sourceDocumentId, String sourceContentHash) {
+        Document source = find(identity.workspaceId(), sourceDocumentId)
+                .filter(DocumentAccessPolicy::isPdf).orElse(null);
+        if (source == null || !viewer(identity).canConvert(source)) return new ConvertSource(null, false);
+        return new ConvertSource(source, pdfHash(source).equals(sourceContentHash));
+    }
+
+    /** 원본 PDF 바이트의 hash(documents.content_hash)를 MCP 형식(sha256:hex)으로 돌려준다. */
+    public static String pdfHash(Document source) {
+        String hash = source.getContentHash();
+        if (hash == null) return "";
+        return hash.startsWith("sha256:") ? hash : "sha256:" + hash;
+    }
+
+    /** {@code document}가 null이면 없거나 변환 권한이 없다. */
+    public record ConvertSource(Document document, boolean hashMatches) {}
+
     private static String sha256(String markdown) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")

@@ -94,7 +94,7 @@ class McpAgentApprovalServiceIntegrationTest {
                 "{\"role\":\"OWNER\",\"permissions\":[]}");
         McpAgentApprovalService real = new McpAgentApprovalService(jdbc, new TransactionTemplate(manager), mapper,
                 access, new McpDocumentDataGateway(documentRepository, folderRepository, accessPolicy, editStore,
-                editStateInitializer), credits, requester, "1", "1", "KRW", "i5-test-v1");
+                editStateInitializer, mock(fruition.core.document.repository.ConvertCommandOutbox.class)), credits, requester, "1", "1", "KRW", "i5-test-v1");
         String documentId = documentService.createMarkdown(workspace, user, UUID.randomUUID().toString(),
                 new MarkdownDocumentCreateRequest("Drift", "# Drift\n\nbase", null)).id();
         // 이름 변경은 documents.current_version만 올리고 본문 revision·content hash는 그대로 둔다.
@@ -410,8 +410,156 @@ class McpAgentApprovalServiceIntegrationTest {
                 workspace)).isOne();
     }
 
+    @Test
+    void convertedPdfCreateRechecksSourceHashAtApprovalAndPermissionAtExecution() throws Exception {
+        credits.post(user, "grant", 2_000, "pdf-grant:" + user, "test");
+        String hash = "sha256:" + "a".repeat(64);
+        JsonNode run = mapper.readTree("""
+                {"id":"%s","workspace_id":"%s","status":"awaiting_approval","origin":"MCP_CLIENT",
+                 "grant_id":"%s","client_id":"%s","policy_generation":2,
+                 "invocation_id":"%s","spec_version":"2025-11-25","tool_name":"propose_plan",
+                 "plan":{"id":"plan-1","version":1,"operation_hash":"%s","status":"awaiting_approval",
+                   "operations":[{"id":"op-1","tool_name":"create_document","depends_on":[],
+                     "target_id":null,"base_version":null,
+                     "arguments":{"display_name":"보고서","folder_id":null,"content_artifact_id":"converted-markdown",
+                       "content_hash":"%s","source_document_id":"doc_pdf","source_content_hash":"%s"}}]}}
+                """.formatted("agent_" + "6".repeat(32), workspace, grant, client, UUID.randomUUID(),
+                "c".repeat(64), hash, hash));
+        when(requester.approveMcp(anyString(), anyString(), anyString(), anyInt(), anyString(), anyList(),
+                anyString(), anyString(), anyString(), anyLong())).thenReturn(run);
+        Document pdf = mock(Document.class);
+        when(documents.convertSource(any(), org.mockito.ArgumentMatchers.eq("doc_pdf"),
+                org.mockito.ArgumentMatchers.eq(hash))).thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, false));
+
+        assertThatThrownBy(() -> service.approve(workspace, user, run.path("id").asText(), request(), run))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("MCP source PDF changed.");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM mcp_agent_approvals WHERE run_id = ?",
+                Integer.class, run.path("id").asText())).isZero();
+
+        when(documents.convertSource(any(), org.mockito.ArgumentMatchers.eq("doc_pdf"),
+                org.mockito.ArgumentMatchers.eq(hash))).thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, true));
+        service.approve(workspace, user, run.path("id").asText(), request(), run);
+        when(documents.convertSource(any(), org.mockito.ArgumentMatchers.eq("doc_pdf"),
+                org.mockito.ArgumentMatchers.eq(hash))).thenReturn(new McpDocumentDataGateway.ConvertSource(null, false));
+
+        assertThatThrownBy(() -> service.authorizeExecution(executionRequest(run, approvalId(run.path("id").asText()),
+                "op-1", run.path("plan").path("operations").get(0).path("arguments")), "create_document"))
+                .isInstanceOf(fruition.core.mcp.McpAuthorizationException.class)
+                .hasFieldOrPropertyWithValue("code", "PERMISSION_REVOKED");
+    }
+
+    @Test
+    void teamSkillDefinitionRequiresSkillAuthorAndRecordsVersionedSkillReceipt() throws Exception {
+        var skills = mock(fruition.core.skill.service.SkillService.class);
+        service.setSkills(skills);
+        String skillId = UUID.randomUUID().toString();
+        when(skills.get(workspace, user, skillId)).thenReturn(mapper.readTree(
+                "{\"id\":\"" + skillId + "\",\"scope_type\":\"team\",\"latest_version\":{\"version\":3}}"));
+        credits.post(user, "grant", 2_000, "skill-grant:" + user, "test");
+        JsonNode run = skillRun("agent_" + "7".repeat(32), skillId, 3);
+        when(requester.approveMcp(anyString(), anyString(), anyString(), anyInt(), anyString(), anyList(),
+                anyString(), anyString(), anyString(), anyLong())).thenReturn(run);
+
+        assertThatThrownBy(() -> service.approve(workspace, user, run.path("id").asText(), freeRequest(), run))
+                .isInstanceOf(fruition.core.mcp.McpAuthorizationException.class);
+
+        McpIdentity author = new McpIdentity(user, workspace, client, grant, 2,
+                Set.of("write_propose"), "MEMBER", Set.of("skill.author"), "Test MCP Client");
+        when(access.authorizeWebApproval(any())).thenReturn(author);
+        when(access.authorizeOperationBoundary(any(), anyLong())).thenReturn(author);
+        // Skill 정의 저장은 무료다: 견적·예약·정산이 모두 0이다.
+        assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("price_snapshot")
+                .path("maximum_charge_minor").asLong(-1)).isZero();
+        long balance = credits.credits(user).balanceKrwMilli();
+        assertThatThrownBy(() -> service.approve(workspace, user, run.path("id").asText(), request(), run))
+                .isInstanceOf(McpAgentApprovalService.McpApprovalException.class);
+        service.approve(workspace, user, run.path("id").asText(), freeRequest(), run);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        String approvalId = approvalId(run.path("id").asText());
+        JsonNode arguments = run.path("plan").path("operations").get(0).path("arguments");
+
+        when(skills.get(workspace, user, skillId)).thenReturn(mapper.readTree(
+                "{\"id\":\"" + skillId + "\",\"scope_type\":\"team\",\"latest_version\":{\"version\":4}}"));
+        assertThatThrownBy(() -> service.authorizeExecution(executionRequest(run, approvalId, "op-1", arguments),
+                "publish_skill_definition")).isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+
+        when(skills.get(workspace, user, skillId)).thenReturn(mapper.readTree(
+                "{\"id\":\"" + skillId + "\",\"scope_type\":\"team\",\"latest_version\":{\"version\":3}}"));
+        var execution = service.authorizeExecution(executionRequest(run, approvalId, "op-1", arguments),
+                "publish_skill_definition");
+        var receipt = service.recordSkillReceipt(execution, "op-1", skillId, 3L, 4);
+        service.executionFinished(execution);
+        assertThat(receipt.resourceType()).isEqualTo("SKILL");
+        assertThat(receipt.beforeVersion()).isEqualTo(3L);
+        assertThat(receipt.afterVersion()).isEqualTo(4);
+        assertThat(service.authorizeExecution(executionRequest(run, approvalId, "op-1", arguments),
+                "publish_skill_definition").replay()).isEqualTo(receipt);
+        assertThat(jdbc.queryForObject("SELECT charged_minor FROM mcp_agent_approvals WHERE approval_id = ?::uuid",
+                Long.class, approvalId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT settlement_status FROM mcp_agent_approvals WHERE approval_id = ?::uuid",
+                String.class, approvalId)).isEqualTo("SETTLED");
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(balance);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+    }
+
+    @Test
+    void lookupRecoversSkillReceiptFromAiAcceptanceEvidence() throws Exception {
+        var skills = mock(fruition.core.skill.service.SkillService.class);
+        service.setSkills(skills);
+        credits.post(user, "grant", 2_000, "skill-lookup:" + user, "test");
+        JsonNode run = skillRun("agent_" + "8".repeat(32), null, null);
+        when(requester.approveMcp(anyString(), anyString(), anyString(), anyInt(), anyString(), anyList(),
+                anyString(), anyString(), anyString(), anyLong())).thenReturn(run);
+        service.approve(workspace, user, run.path("id").asText(), freeRequest(), run);
+        String approvalId = approvalId(run.path("id").asText());
+        JsonNode arguments = run.path("plan").path("operations").get(0).path("arguments");
+        var execution = service.authorizeExecution(executionRequest(run, approvalId, "op-1", arguments),
+                "publish_skill_definition");
+        service.executionFailed(execution, new IllegalStateException("response lost"));
+        var lookup = new McpAgentApprovalService.ReceiptLookup(approvalId, "op-1", workspace, user, grant, client);
+
+        when(skills.lookupMcpAcceptance(run.path("id").asText(), "op-1", user))
+                .thenReturn(mapper.readTree("{\"status\":\"absent\"}"));
+        assertThat(service.lookup(lookup).status()).isEqualTo("FAILED");
+
+        String skillId = UUID.randomUUID().toString();
+        when(skills.lookupMcpAcceptance(run.path("id").asText(), "op-1", user)).thenReturn(mapper.readTree(
+                "{\"status\":\"applied\",\"skill_id\":\"" + skillId
+                        + "\",\"version_id\":\"v\",\"version\":1,\"created\":true,\"rolled_back\":false}"));
+        var recovered = service.lookup(lookup);
+        assertThat(recovered.status()).isEqualTo("COMMITTED");
+        assertThat(recovered.receipt().resourceId()).isEqualTo(skillId);
+        assertThat(recovered.receipt().beforeVersion()).isNull();
+        assertThat(recovered.receipt().attemptId()).isEqualTo(execution.attemptId());
+    }
+
+    private JsonNode skillRun(String runId, String skillId, Integer expectedVersion) throws Exception {
+        String id = skillId == null ? "null" : "\"" + skillId + "\"";
+        String version = expectedVersion == null ? "null" : expectedVersion.toString();
+        String scope = skillId == null ? "\"personal\"" : "null";
+        return mapper.readTree("""
+                {"id":"%s","workspace_id":"%s","status":"awaiting_approval","origin":"MCP_CLIENT",
+                 "grant_id":"%s","client_id":"%s","policy_generation":2,
+                 "invocation_id":"%s","spec_version":"2025-11-25","tool_name":"propose_skill_definition",
+                 "plan":{"id":"plan-1","version":1,"operation_hash":"%s","status":"awaiting_approval",
+                   "operations":[{"id":"op-1","tool_name":"publish_skill_definition","depends_on":[],
+                     "target_type":"skill","target_id":%s,"base_version":%s,
+                     "arguments":{"skill_id":%s,"expected_version":%s,"scope_type":%s,"name":"meeting-notes",
+                       "description":"d","instructions_markdown":"i","capabilities":["document-edit"],
+                       "allowed_tools":["apply_document_edit"],"targets":["current_document"],
+                       "result_mode":null,"requires_source":false}}]}}
+                """.formatted(runId, workspace, grant, client, UUID.randomUUID(), "c".repeat(64),
+                        id, version, id, version, scope));
+    }
+
     private AgentRunApproveRequest request() {
         return request("op-1");
+    }
+
+    private AgentRunApproveRequest freeRequest() {
+        return new AgentRunApproveRequest(1, "c".repeat(64), java.util.List.of("op-1"),
+                new AgentRunApproveRequest.McpPriceSnapshot(1L, 1L, "KRW", "i5-test-v1", 0L));
     }
 
     private AgentRunApproveRequest request(String operationId) {

@@ -16,6 +16,6 @@ class McpMetadataControllerTest {
                 .andExpect(status().isOk()).andExpect(content().contentTypeCompatibleWith("application/json"))
                 .andExpect(jsonPath("$.resource").value("https://mcp.example/mcp"))
                 .andExpect(jsonPath("$.authorization_servers[0]").value("https://auth.example"))
-                .andExpect(jsonPath("$.scopes_supported[0]").value("read"));
+                .andExpect(jsonPath("$.scopes_supported").value(org.hamcrest.Matchers.contains("read", "write_propose", "wiki_write")));
     }
 }

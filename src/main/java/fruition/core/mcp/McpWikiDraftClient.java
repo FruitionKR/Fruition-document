@@ -94,7 +94,10 @@ public class McpWikiDraftClient {
         Set<String> allowed = Set.of("INVALID_INPUT", "RESOURCE_NOT_FOUND", "PERMISSION_REVOKED",
                 "IDEMPOTENCY_CONFLICT", "SOURCE_CHANGED", "PUBLIC_STATE_CHANGED", "ACTIVE_RUN_EXISTS",
                 "PREVIEW_TOO_LARGE", "LEDGER_RECONCILIATION_PENDING", "DEPENDENCY_UNAVAILABLE",
-                "CANCELLED", "PURGED", "AUTHZ_UNAVAILABLE");
+                "CANCELLED", "PURGED", "AUTHZ_UNAVAILABLE",
+                // MCP PDF 변환 세션(/internal/mcp/pdf-conversions)
+                "CONVERSION_NOT_READY", "STALE_WINDOW", "ATTEMPTS_EXHAUSTED", "WINDOWS_NOT_SUBMITTED",
+                "CONVERSION_FINALIZED", "SOURCE_LIMIT_EXCEEDED");
         return new McpToolException(allowed.contains(code) ? code : "DEPENDENCY_UNAVAILABLE");
     }
 }
