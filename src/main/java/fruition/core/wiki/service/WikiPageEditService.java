@@ -41,6 +41,7 @@ import java.util.UUID;
  */
 @Service
 public class WikiPageEditService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WikiPageEditService.class);
 
     private static final int MAX_MARKDOWN_BYTES = 5 * 1024 * 1024;
     private static final String SUMMARY = "Wiki 페이지 본문을 직접 수정했습니다.";
@@ -142,6 +143,8 @@ public class WikiPageEditService {
         Long beforeRevision = previous.map(WikiPageVersion::getRevision).orElse(null);
         LineCounter.LineCount lines = lineCounter.count(pageId, beforeRevision,
                 previous.map(WikiPageVersion::getMarkdown).orElse(null), revision, markdown);
+        fruition.shared.logging.CommittedLog.info(log, "[위키 직접 편집 완료] operation=wiki_edit stage=completed pageId={} workspaceId={} userId={} operationId={} revision={}",
+                pageId, workspaceId, userId, operationId, revision);
         operationChangeRepository.save(new OperationChange(
                 operationId, ResourceType.wiki_page, pageId, page.title(), beforeRevision, revision,
                 ChangeType.updated, null, lines.additions(), lines.deletions()));

@@ -98,6 +98,8 @@ public class DocumentImportService {
                 RETURNING expires_at
                 """, (rs, n) -> rs.getTimestamp(1).toInstant(), id, workspaceId, userId, request.source(),
                 request.itemCount(), request.totalBytes());
+        log.info("[노션 가져오기 시작] operation=document_import stage=started importId={} workspaceId={} userId={} itemCount={} totalBytes={}",
+                id, workspaceId, userId, request.itemCount(), request.totalBytes());
         return new CreateResponse(id, "open", expiresAt, null,
                 new Quota(uploadLimits.usedBytes(userId), uploadLimits.limitBytes()));
     }
@@ -111,13 +113,20 @@ public class DocumentImportService {
         }
         UUID id = find(workspaceId, userId, importId, true).id();
         // 같은 세션의 진행 중인 쓰기(항목 수 갱신)가 끝난 뒤 닫히도록 행을 잠그고 바꾼다.
-        jdbc.update("""
+        int closed = jdbc.update("""
                 UPDATE document_imports SET status = 'completed', completed_at = now(),
                        reported_created = ?, reported_failed = ?, reported_skipped = ?
                 WHERE id = ? AND status = 'open'
                 """, request == null ? null : request.created(), request == null ? null : request.failed(),
                 request == null ? null : request.skipped(), id);
-        return new CompleteResponse(id, "completed", documentCount(id));
+        var documentCount = documentCount(id);
+        // 이미 닫힌 세션의 재요청은 같은 결과만 돌려준다.
+        if (closed == 1) {
+            fruition.shared.logging.CommittedLog.info(log, "[노션 가져오기 완료] operation=document_import stage=completed importId={} workspaceId={} userId={} documents={} reportedCreated={} reportedFailed={} reportedSkipped={}",
+                    id, workspaceId, userId, documentCount, request == null ? null : request.created(),
+                    request == null ? null : request.failed(), request == null ? null : request.skipped());
+        }
+        return new CompleteResponse(id, "completed", documentCount);
     }
 
     @Transactional(readOnly = true)
@@ -174,7 +183,10 @@ public class DocumentImportService {
                 break;
             }
         }
-        return new IngestResponse(queued, count(UNCONVERTED_PDF, id, workspaceId));
+        var remaining = count(UNCONVERTED_PDF, id, workspaceId);
+        log.info("[노션 가져오기 변환 요청 접수] operation=document_import stage=convert_accepted importId={} workspaceId={} userId={} queued={} remaining={}",
+                id, workspaceId, userId, queued, remaining);
+        return new IngestResponse(queued, remaining);
     }
 
     /**
@@ -200,6 +212,8 @@ public class DocumentImportService {
                 break;
             }
         }
+        log.info("[노션 가져오기 편입 요청 접수] operation=document_import stage=ingest_accepted importId={} workspaceId={} userId={} queued={}",
+                id, workspaceId, userId, queued);
         return new IngestResponse(queued, notIngestedCount(id, workspaceId));
     }
 

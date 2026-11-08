@@ -111,6 +111,7 @@ public class IdempotencyService {
             throw new IllegalStateException("멱등성 선점 결과를 확인할 수 없습니다.");
         }
         if (!claim.acquired()) {
+            logReplay(userId, endpointScope);
             return deserializeCompleted(claim.replay(), responseType);
         }
 
@@ -154,6 +155,7 @@ public class IdempotencyService {
             throw new IllegalStateException("멱등성 선점 결과를 확인할 수 없습니다.");
         }
         if (!claim.acquired()) {
+            logReplay(userId, endpointScope);
             return Optional.of(deserializeCompleted(claim.replay(), responseType));
         }
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
@@ -176,6 +178,12 @@ public class IdempotencyService {
             }
         });
         return Optional.empty();
+    }
+
+    /** 재요청은 저장된 응답만 돌려준다. 새 작업 완료 로그가 다시 남지 않으므로 재생 사실을 여기서 남긴다. */
+    private void logReplay(String userId, String endpointScope) {
+        log.info("[멱등 재요청 재생] operation=idempotent_replay stage=replayed userId={} uri={} 설명=이미 처리한 요청이라 저장된 응답을 돌려줍니다. 새 작업은 실행하지 않았습니다.",
+                userId, endpointScope.substring(endpointScope.indexOf(':') + 1));
     }
 
     /** 선점한 요청의 응답을 비즈니스 변경과 같은 트랜잭션에서 완료 상태로 전환한다. */

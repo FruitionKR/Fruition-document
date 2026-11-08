@@ -17,6 +17,7 @@ import java.util.UUID;
 
 @Service
 public class ChatSessionService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ChatSessionService.class);
 
     private static final int MAX_SESSIONS_PER_WORKSPACE_MEMBER = 10;
 
@@ -109,6 +110,8 @@ public class ChatSessionService {
         // 답변 음성 행도 CASCADE로 사라지므로 객체를 먼저 지운다.
         speechAudioStore.deleteForSession(sessionId);
         chatSessionRepository.delete(session);
+        fruition.shared.logging.CommittedLog.info(log, "[채팅 세션 삭제 완료] operation=chat_session_delete stage=completed sessionId={} workspaceId={} userId={}",
+                sessionId, workspaceId, userId);
     }
 
     /** 워크스페이스 삭제 시 소속 세션을 함께 정리한다. DB에 workspace_id FK CASCADE가 없어 애플리케이션에서 직접 처리한다. */

@@ -1381,8 +1381,12 @@ class DocumentServiceBlocksTest {
                 .thenReturn(Optional.of(new fruition.core.document.domain.DocumentContentVersion(
                         document.getId(), 5L, fullMarkdown, "old-hash", USER_ID, java.time.Instant.now())));
 
-        DocumentContentSaveResponse response = documentService.restoreContentVersion(
-                WORKSPACE_ID, USER_ID, document.getId(), 5L, 1L);
+        DocumentContentSaveResponse response;
+        try (var capture = new fruition.shared.logging.LogCapture(DocumentService.class)) {
+            response = documentService.restoreContentVersion(WORKSPACE_ID, USER_ID, document.getId(), 5L, 1L);
+            assertThat(capture.messages().stream().filter(m -> m.startsWith("[문서 버전 복원 완료]")))
+                    .singleElement().asString().contains("toVersion=5", "newVersion=2");
+        }
 
         assertThat(response.currentVersion()).isEqualTo(2);
         verify(postgresDocumentEditStore).save(

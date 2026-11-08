@@ -1,5 +1,6 @@
 package fruition.core.aitask.service;
 
+import fruition.shared.logging.CommittedLog;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.aitask.repository.PipelineTaskCancellationClient;
@@ -18,6 +19,8 @@ import java.util.Map;
 
 @Service
 public class AiTaskCancellationService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiTaskCancellationService.class);
+    private final fruition.shared.logging.RepeatedFailureLogger failures = new fruition.shared.logging.RepeatedFailureLogger(log);
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final PipelineTaskCancellationClient pipeline;
@@ -104,6 +107,7 @@ public class AiTaskCancellationService {
             Map<String, Object> task = owned(id, workspaceId, taskUserId, true);
             // 결과를 반영한 말풍선은 복구 기록에 있어 되돌리면 pending으로 돌아가 세션이 잠긴다. Agent turn 취소와 같은 조건으로 막는다.
             if ("agent".equals(task.get("kind")) && FINISHED_AGENT_TURN.contains(task.get("status"))) {
+                logCancelRejected(id, workspaceId, userId);
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 끝난 작업은 취소할 수 없습니다.");
             }
             requestCancel(id);
@@ -128,7 +132,10 @@ public class AiTaskCancellationService {
                     + "AND user_id = ? AND kind = 'agent' FOR UPDATE", String.class, id, workspaceId, userId);
             if (states.isEmpty()) return AgentTurnCancel.NOT_FOUND;
             String status = states.getFirst();
-            if (FINISHED_AGENT_TURN.contains(status)) return AgentTurnCancel.FINISHED;
+            if (FINISHED_AGENT_TURN.contains(status)) {
+                logCancelRejected(id, workspaceId, userId);
+                return AgentTurnCancel.FINISHED;
+            }
             // rollback_failed는 기존 취소처럼 다시 요청해 재시도한다.
             if (List.of("running", "rollback_failed").contains(status)) {
                 requestCancel(id);
@@ -162,8 +169,20 @@ public class AiTaskCancellationService {
      * 사용자 취소({@link #cancel})·Agent turn 취소도 권한·상태 확인 뒤 같은 전이로 이 메서드를 쓴다.
      */
     public void requestCancel(String id) {
-        jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
+        var current = jdbc.queryForList("SELECT status, kind FROM ai_task_runs WHERE id = ?", id);
+        String previous = current.isEmpty() ? null : (String) current.getFirst().get("status");
+        String kind = current.isEmpty() ? null : (String) current.getFirst().get("kind");
+        int updated = jdbc.update("UPDATE ai_task_runs SET status = 'cancel_requested', error_code = NULL, updated_at = now() "
                 + "WHERE id = ? AND status NOT IN ('cancelled', 'rolling_back')", id);
+        if (updated == 1 && !"cancel_requested".equals(previous)) {
+            CommittedLog.info(log, "[AI 실행 취소 요청 접수] operation=ai_task_cancel stage=accepted rollback=task_cancel runId={} kind={} previousStatus={} 설명=취소 상태만 기록했습니다. 취소 완료는 복구가 끝난 뒤 별도로 남습니다.", id, kind, previous);
+        } else {
+            log.info("[AI 실행 취소 중복 요청] operation=ai_task_cancel stage=duplicate_ignored runId={} kind={} status={} 설명=이미 취소 중이거나 취소된 작업이라 새 취소를 시작하지 않았습니다.", id, kind, previous);
+        }
+    }
+
+    private static void logCancelRejected(String id, String workspaceId, String userId) {
+        log.warn("[AI 실행 취소 거부] operation=ai_task_cancel stage=validation errorCode=TASK_ALREADY_FINISHED retryable=false kind=agent runId={} workspaceId={} userId={} 원인=이미 끝난 작업은 취소할 수 없습니다.", id, workspaceId, userId);
     }
 
     public java.util.Optional<Map<String, Object>> findStatus(String id, String workspaceId, String userId) {
@@ -224,13 +243,19 @@ public class AiTaskCancellationService {
                     : row.get("status").equals("cancel_requested")
                     ? pipeline.cancel(id, workspaceId, userId, command)
                     : pipeline.status(id, workspaceId, userId);
-            if (result == null) return;
+            if (result == null) {
+                failures.warn(id, "[AI 실행 취소 재시도 대기] operation=ai_task_cancel stage=rollback retryable=true runId=" + id + " kind=" + row.get("kind") + " errorCode=empty_status 원인=취소한 작업의 현재 상태 응답이 비어 있습니다.", null);
+                return;
+            }
             if (result.status().equals("rollback_failed")) {
                 fail(id, result.errorCode());
                 return;
             }
-            jdbc.update("UPDATE ai_task_runs SET status = 'rolling_back', updated_at = now() "
-                    + "WHERE id = ? AND status = 'cancel_requested'", id);
+            if (jdbc.update("UPDATE ai_task_runs SET status = 'rolling_back', updated_at = now() "
+                    + "WHERE id = ? AND status = 'cancel_requested'", id) == 1) {
+                log.info("[AI 실행 취소 전달 완료] stage=forwarded rollback=task_cancel runId={} kind={} workspaceId={} userId={} runStatus={} 설명=AI에 취소를 전달했습니다. 작업 취소 완료가 아닙니다.",
+                        id, row.get("kind"), workspaceId, userId, result.status());
+            }
             if (!result.status().equals("cancelled")) return;
             pipeline.rollbackBackend(id, workspaceId, userId, command);
             transaction.executeWithoutResult(tx -> {
@@ -252,11 +277,15 @@ public class AiTaskCancellationService {
                 if (converting) jdbc.update("DELETE FROM document_convert_queue WHERE document_id = ?", id.substring("convert:".length()));
                 // 취소 전까지 일어난 호출을 수집해 정산하고 남은 예약을 푼다(#78·#79).
                 jdbc.update("INSERT INTO usage_collect_queue (run_id) VALUES (?) ON CONFLICT (run_id) DO NOTHING", id);
+                CommittedLog.info(log, "[AI 실행 취소 완료] operation=ai_task_cancel stage=completed rollback=task_cancel runId={} kind={} workspaceId={} userId={} 설명=복구할 변경을 모두 되돌리고 취소 상태를 저장했습니다.", id, row.get("kind"), workspaceId, userId);
             });
+            failures.recovered(id);
         } catch (org.springframework.web.client.HttpClientErrorException.Conflict e) {
             fail(id, "rollback_conflict");
         } catch (Exception e) {
             // 연결 장애는 다음 주기에 재시도한다. 복구 확인 전 완료로 표시하지 않는다.
+            failures.warn(id, "[AI 실행 취소 재시도 대기] operation=ai_task_cancel stage=rollback retryable=true runId=" + id + " kind=" + row.get("kind") + " workspaceId=" + workspaceId
+                    + " userId=" + userId + " errorCode=rollback_retry_pending 원인=취소·복구 처리 중 오류가 발생해 다음 주기에 다시 시도합니다.", e);
             jdbc.update("UPDATE ai_task_runs SET error_code = 'rollback_retry_pending', updated_at = now() "
                     + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back')", id);
         }
@@ -274,8 +303,15 @@ public class AiTaskCancellationService {
     }
 
     private void fail(String id, String code) {
-        jdbc.update("UPDATE ai_task_runs SET status = 'rollback_failed', error_code = ?, updated_at = now() "
-                + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back')", code, id);
+        if (jdbc.update("UPDATE ai_task_runs SET status = 'rollback_failed', error_code = ?, updated_at = now() "
+                + "WHERE id = ? AND status IN ('cancel_requested', 'rolling_back')", code, id) == 1) {
+            // 롤백 중 남은 변경 수로 일부만 복구됐는지 구분한다.
+            Long remaining = jdbc.queryForObject("SELECT count(*) FROM ai_task_changes WHERE run_id = ? AND NOT undone", Long.class, id);
+            Long undone = jdbc.queryForObject("SELECT count(*) FROM ai_task_changes WHERE run_id = ? AND undone", Long.class, id);
+            String kind = jdbc.queryForObject("SELECT kind FROM ai_task_runs WHERE id = ?", String.class, id);
+            CommittedLog.failure(log, code, "[AI 실행 취소 복구 실패 확정] operation=ai_task_cancel stage=rollback rollback=task_cancel runId={} kind={} errorCode={} upstreamCode={} retryable=true partial={} undoneChanges={} remainingChanges={} 원인={}",
+                    id, kind, CommittedLog.stableCode(code), CommittedLog.code(code), undone != null && undone > 0, undone, remaining, CommittedLog.reason(code));
+        }
     }
 
     public List<Long> changes(String id, String workspaceId, String userId) {
@@ -308,6 +344,7 @@ public class AiTaskCancellationService {
                         storage.removeObject(io.minio.RemoveObjectArgs.builder().bucket(storageProperties.getBucket()).object(key).build());
                     }
                 } catch (Exception e) {
+                    log.warn("[AI 실행 변경 복구 실패] operation=ai_task_cancel stage=storage_cleanup rollback=task_cancel retryable=true runId={} changeId={} errorType={} 원인=AI 작업이 만든 파일을 저장소에서 지우지 못했습니다.", id, changeId, e.getClass().getSimpleName());
                     throw new IllegalStateException("생성한 파일을 복구하지 못했습니다.", e);
                 }
             }

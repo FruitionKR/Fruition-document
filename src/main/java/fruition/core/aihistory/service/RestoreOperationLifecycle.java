@@ -99,12 +99,24 @@ public class RestoreOperationLifecycle {
                 restoreOperationId, OperationStatus.failed,
                 OperationFailureSummary.restoreFailure(reason), now, TERMINAL_STATUSES);
         if (failed == 0) {
-            log.warn("[복구 실패 신호 무시] 이미 끝난 복구다. operationId={} reason={}",
-                    restoreOperationId, reason);
+            OperationType ignored = targetType(restoreOperationId);
+            log.warn("[{} 되돌리기 실패 신호 무시] operation=operation_restore stage=duplicate_ignored targetType={} restoreOperationId={} reason={} 설명=이미 끝난 되돌리기라 상태를 바꾸지 않았습니다.",
+                    ignored == null ? "작업" : ignored.logLabel(), ignored, restoreOperationId, reason);
             return;
         }
         if (analytics != null) operationLogRepository.findById(restoreOperationId).ifPresent(op -> analytics.restored(op, reason));
-        log.warn("[복구 실패 확정] operationId={} reason={}", restoreOperationId, reason);
+        OperationType targetType = targetType(restoreOperationId);
+        fruition.shared.logging.CommittedLog.failure(log, reason, "[{} 되돌리기 실패 확정] operation=operation_restore stage=result errorCode={} upstreamCode={} retryable=true partial=false rollback=user_requested targetType={} restoreOperationId={} 원인={} 설명=위키는 바뀌지 않았습니다. 같은 미리보기로 다시 시도할 수 있습니다.",
+                targetType == null ? "작업" : targetType.logLabel(), fruition.shared.logging.CommittedLog.stableCode(reason), fruition.shared.logging.CommittedLog.code(reason), targetType, restoreOperationId, fruition.shared.logging.CommittedLog.reason(reason));
+    }
+
+    /** 복구 작업이 되돌리려던 원래 작업의 종류. 찾지 못하면 null이다. */
+    private OperationType targetType(String restoreOperationId) {
+        return operationLogRepository.findById(restoreOperationId)
+                .map(OperationLog::getRestoredFrom)
+                .flatMap(operationLogRepository::findById)
+                .map(OperationLog::getOperationType)
+                .orElse(null);
     }
 
     /** 문서 되돌리기는 재작성이 없어 본문 저장과 같은 트랜잭션에서 확정한다. */
