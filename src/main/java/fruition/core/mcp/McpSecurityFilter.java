@@ -119,7 +119,7 @@ public class McpSecurityFilter extends OncePerRequestFilter {
         if (request == null || !request.isObject()) return;
         if (!"tools/call".equals(request.path("method").asText())) return;
         String name = request.path("params").path("name").asText();
-        scopes.add(Set.of("propose_document_edit", "propose_plan").contains(name) ? "write_propose"
+        scopes.add(Set.of("propose_document_edit", "propose_plan", McpPdfTools.PROPOSE_PDF_CONVERSION).contains(name) ? "write_propose"
                 : McpToolCatalog.WIKI_TOOLS.contains(name) ? "wiki_write" : "read");
     }
 

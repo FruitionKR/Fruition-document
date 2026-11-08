@@ -38,6 +38,7 @@ public class McpToolCatalog {
     private final McpWikiProposalService wikiProposals;
     private final McpSkillTools skillTools;
     private final McpMeetingTools meetingTools;
+    private final McpPdfTools pdfTools;
     private final McpAuditLogger audit;
     private final ObjectMapper mapper;
     private final McpProperties properties;
@@ -45,15 +46,16 @@ public class McpToolCatalog {
     public McpToolCatalog(McpWikiSearchClient wiki, McpWikiPageClient wikiPages, McpDocumentReadService documents,
                           McpDocumentProposalService proposals, McpPlanProposalService planProposals,
                           McpWikiProposalService wikiProposals, McpSkillTools skillTools,
-                          McpMeetingTools meetingTools, McpAuditLogger audit, ObjectMapper mapper,
+                          McpMeetingTools meetingTools, McpPdfTools pdfTools, McpAuditLogger audit, ObjectMapper mapper,
                           McpProperties properties) {
         this.wiki = wiki; this.wikiPages = wikiPages; this.documents = documents;
         this.proposals = proposals; this.planProposals = planProposals; this.wikiProposals = wikiProposals;
         this.skillTools = skillTools; this.meetingTools = meetingTools;
+        this.pdfTools = pdfTools;
         this.audit = audit; this.mapper = mapper; this.properties = properties;
     }
 
-    /** 읽기 4개 + 제안 8개 + Skill 읽기 2개 + 회의 읽기 2개. 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
+    /** 읽기 4개 + 제안 8개 + Skill 읽기 2개 + 회의 읽기 2개 + PDF 2개. 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
     public List<io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification> tools() {
         var tools = new java.util.ArrayList<>(List.of(
                 spec(tool("search_wiki", "Search published workspace wiki pages", searchSchema()),
@@ -77,6 +79,8 @@ public class McpToolCatalog {
             tools.add(spec(tool, (id, args) -> skillTools.invoke(id, tool.name(), args)));
         for (McpSchema.Tool tool : meetingTools.tools())
             tools.add(spec(tool, (id, args) -> meetingTools.invoke(id, tool.name(), args)));
+        for (McpSchema.Tool tool : pdfTools.tools())
+            tools.add(spec(tool, (id, args) -> pdfTools.invoke(id, tool.name(), args)));
         return List.copyOf(tools);
     }
 
@@ -91,9 +95,12 @@ public class McpToolCatalog {
         String tool = request.name(); List<String> targets = List.of();
         try {
             if ("get_wiki_page".equals(tool)) targets = List.of(pageId(request.arguments()));
-            if ("get_document".equals(tool)) targets = List.of(text(request.arguments(), "document_id"));
+            if ("get_document".equals(tool)) targets = List.of(argument(request.arguments(), "document_id"));
             if ("propose_document_edit".equals(tool)) targets = List.of(proposalDocumentId(request.arguments()));
             if ("propose_plan".equals(tool)) targets = planProposalTargets(request.arguments());
+            if (McpPdfTools.GET_PDF_SOURCE.equals(tool)) targets = List.of(argument(request.arguments(), "document_id"));
+            if (McpPdfTools.PROPOSE_PDF_CONVERSION.equals(tool))
+                targets = List.of(argument(request.arguments(), "source_document_id"));
             if (McpMeetingTools.TRANSCRIPT.equals(tool)) targets = List.of(McpMeetingTools.meetingId(request.arguments()));
             if (McpSkillTools.GET.equals(tool)) targets = List.of(McpSkillTools.skillId(request.arguments()));
             if (WIKI_TOOLS.contains(tool)) targets = wikiTargets(request.arguments());
@@ -466,6 +473,11 @@ public class McpToolCatalog {
         Object value = args.get("page_id");
         if (!(value instanceof String id) || !McpWikiPageClient.validPageId(id)) throw new IllegalArgumentException();
         return id;
+    }
+    /** 감사 대상용 문자열 인자. 형식 검증은 도구가 하고, 감사 로그는 안전한 형식만 남긴다. */
+    private static String argument(Map<String,Object> args, String key) {
+        if (args == null || !(args.get(key) instanceof String value)) throw new IllegalArgumentException();
+        return value;
     }
     private static String proposalDocumentId(Map<String,Object> args) {
         return McpDocumentProposalService.input(args).documentId();

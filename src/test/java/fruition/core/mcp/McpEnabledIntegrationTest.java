@@ -186,7 +186,8 @@ class McpEnabledIntegrationTest {
                 .containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page",
                         "propose_document_edit", "propose_plan", "start_ingest", "resume_ingest", "get_window",
                         "submit_window", "finalize_ingest", "submit_lint_changes", "list_skills", "get_skill",
-                        "list_meetings", "get_meeting_transcript");
+                        "list_meetings", "get_meeting_transcript", "get_pdf_source",
+                        "propose_pdf_conversion");
 
         JsonNode call = rpc("""
                 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_documents",
