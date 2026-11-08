@@ -33,6 +33,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -102,23 +103,90 @@ class McpPdfToolsTest {
     }
 
     @Test
+    void windowRejectsUnavailableOrRestrictedSourceBeforeReadingOrSigning() throws Exception {
+        when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/status"), any()))
+                .thenReturn(status(false));
+        when(documents.convertSource(identity, "doc_pdf", PDF_HASH))
+                .thenReturn(new McpDocumentDataGateway.ConvertSource(null, false));
+        when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/windows/read"), any()))
+                .thenReturn(window("tmp/convert/mcp/workspace/" + CONVERSION + "/0/external/images/00000.png"));
+        when(storage.getPresignedObjectUrl(any())).thenReturn("https://storage/signed");
+
+        assertThatThrownBy(() -> tools.invoke(identity, "get_conversion_window",
+                Map.of("conversion_id", CONVERSION, "window_ordinal", 1)))
+                .isInstanceOf(McpToolException.class).hasMessage("RESOURCE_NOT_FOUND");
+        verify(documents).convertSource(identity, "doc_pdf", PDF_HASH);
+        verify(ai, never()).post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/windows/read"), any());
+        verifyNoInteractions(storage, access);
+    }
+
+    @Test
+    void windowRejectsChangedSourceBeforeReadingOrSigning() {
+        when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/status"), any()))
+                .thenReturn(status(false));
+        Document pdf = pdf();
+        when(documents.convertSource(identity, "doc_pdf", PDF_HASH))
+                .thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, false));
+
+        assertThatThrownBy(() -> tools.invoke(identity, "get_conversion_window",
+                Map.of("conversion_id", CONVERSION, "window_ordinal", 1)))
+                .isInstanceOf(McpToolException.class).hasMessage("SOURCE_CHANGED");
+        verify(documents).convertSource(identity, "doc_pdf", PDF_HASH);
+        verify(ai, never()).post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/windows/read"), any());
+        verifyNoInteractions(storage, access);
+    }
+
+    @Test
+    void windowRejectsUnownedConversionBeforeCheckingSource() {
+        when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/status"), any()))
+                .thenThrow(new McpToolException("RESOURCE_NOT_FOUND"));
+
+        assertThatThrownBy(() -> tools.invoke(identity, "get_conversion_window",
+                Map.of("conversion_id", CONVERSION, "window_ordinal", 1)))
+                .isInstanceOf(McpToolException.class).hasMessage("RESOURCE_NOT_FOUND");
+        verify(ai, never()).post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/windows/read"), any());
+        verifyNoInteractions(documents, storage, access);
+    }
+
+    @Test
     void windowSignsOnlyThisConversionsBundleImages() throws Exception {
+        McpIdentity reader = new McpIdentity(identity.userId(), identity.workspaceId(), identity.clientId(),
+                identity.grantId(), identity.policyGeneration(), Set.of("read"), "MEMBER", Set.of());
+        when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/status"), any()))
+                .thenReturn(status(false));
+        Document pdf = pdf();
+        when(documents.convertSource(reader, "doc_pdf", PDF_HASH))
+                .thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, true));
         when(storage.getPresignedObjectUrl(any())).thenReturn("https://storage/signed");
         when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/windows/read"), any()))
                 .thenReturn(window("tmp/convert/mcp/workspace/" + CONVERSION + "/0/external/images/00000.png"));
 
         @SuppressWarnings("unchecked")
-        var view = (Map<String, Object>) tools.invoke(identity, "get_conversion_window",
+        var view = (Map<String, Object>) tools.invoke(reader, "get_conversion_window",
                 Map.of("conversion_id", CONVERSION, "window_ordinal", 1));
         assertThat(view.get("images")).isEqualTo(List.of(Map.of("url", "https://storage/signed", "media_type", "image/png")));
         assertThat(view.get("instructions")).isEqualTo("prompt");
         verifyNoInteractions(access);
+        var order = inOrder(ai, documents, storage);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> statusBody = ArgumentCaptor.forClass(Map.class);
+        order.verify(ai).post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/status"), statusBody.capture());
+        order.verify(documents).convertSource(reader, "doc_pdf", PDF_HASH);
+        order.verify(ai).post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/windows/read"), eq(Map.of(
+                "schema_version", "mcp.pdf-conversion.v1", "actor", statusBody.getValue().get("actor"), "window_ordinal", 1)));
+        order.verify(storage).getPresignedObjectUrl(any());
 
         when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/windows/read"), any()))
                 .thenReturn(window("tmp/convert/mcp/other/" + CONVERSION + "/0/x.png"));
-        assertThatThrownBy(() -> tools.invoke(identity, "get_conversion_window",
+        assertThatThrownBy(() -> tools.invoke(reader, "get_conversion_window",
                 Map.of("conversion_id", CONVERSION, "window_ordinal", 1)))
                 .isInstanceOf(McpToolException.class).hasMessage("DEPENDENCY_UNAVAILABLE");
+        when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/windows/read"), any()))
+                .thenReturn(window("tmp/convert/mcp/workspace/00000000-0000-4000-8000-000000000002/0/x.png"));
+        assertThatThrownBy(() -> tools.invoke(reader, "get_conversion_window",
+                Map.of("conversion_id", CONVERSION, "window_ordinal", 1)))
+                .isInstanceOf(McpToolException.class).hasMessage("DEPENDENCY_UNAVAILABLE");
+        verify(storage, times(1)).getPresignedObjectUrl(any());
     }
 
     @Test
