@@ -52,3 +52,14 @@
 - **복원은 예약하지 않는다:** `restore_ingest`·`restore_lint`는 모델을 부르지 않고(자체 호스팅 임베딩, 사용량 원장에 호출이 남지 않는다) 비용이 0이다. `CreditService.reserve`·`checkAdmission`이 이 종류를 건너뛰므로 강제 모드에서 잔액이 0이어도 시작한다. 실행 추적(`ai_task_runs`)은 그대로 남긴다.
 - **실패·중단 호출도 받은 사용량은 청구한다:** `UsageChargeService`가 `failed`·`abandoned` 호출도 토큰·오디오 길이·글자 수가 있으면 청구한다(ADR-0027). 사용량이 없으면 0원이고 `needs_review`로 남는다. 예약 정산 금액이 그만큼 늘 수 있다.
 - **운영 배선:** Fruition-flatform이 `BILLING_ENFORCE=false`를 명시해 배선한다(Fruition-flatform PR #83). 켜려면 먼저 테스트 계정에 크레딧을 지급(`grant`)해야 한다.
+
+
+## 2026-11-09: 베타 전환과 기존 가입자 면제
+
+이 결정은 위의 모든 환경 `BILLING_ENFORCE=false` 유지 방침을 대체한다.
+AWS overlay는 true로 전환하되, 먼저 V117과 면제 검사 코드를 배포하고 access DB에서
+전환 시각 이전 가입자 전체를 내보내 `credit_accounts.limit_exempt=true`로 반영한다.
+신규 계정은 기본 false다. 일반 요청·renew·MCP의 잔액 검사만 면제하고 예약·정산은 유지한다. 일일 AI 토큰 한도는 기존 설정대로 적용한다.
+MCP는 면제 계정에서도 승인 상한 전액을 예약한다. 전역 enforce=false만으로 MCP 검사를 우회하지는 못한다.
+기존 사용자의 음수 잔액은 면제 기간 사용 기록으로 남으며 사용을 중단시키지 않는다.
+[실행·검증·복구 순서](../credit-beta-rollout.md)를 따른다. 운영 반영 여부는 별도로 확인한다.

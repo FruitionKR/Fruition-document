@@ -80,7 +80,7 @@ public class CreditService {
             if (!jdbc.queryForList("SELECT id FROM credit_entries WHERE idempotency_key = ?", Long.class,
                     "reserve:" + runId).isEmpty()) return;
             long available = ((Number) account.get("balance")).longValue() - ((Number) account.get("reserved")).longValue();
-            long amount = admit(kind, estimate, available, AiErrorMessages.INSUFFICIENT_CREDIT);
+            long amount = admit(userId, kind, estimate, available, AiErrorMessages.INSUFFICIENT_CREDIT);
             if (append(userId, "reserve", amount, runId, "reserve:" + runId, kind)) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
                         amount, userId);
@@ -88,7 +88,7 @@ public class CreditService {
         });
     }
 
-    /** MCP approval reserves its full configured cap; partial admission and billing enforce flags never apply. */
+    /** MCP reserves its full cap; only explicit account exemptions bypass the balance check. */
     public void reserveMcpApproval(String approvalId, String userId, long amountCreditMilli) {
         if (amountCreditMilli < 0) throw new IllegalArgumentException("MCP reservation must be non-negative.");
         String runId = mcpRunId(approvalId);
@@ -100,7 +100,7 @@ public class CreditService {
             }
             long available = Math.subtractExact(((Number) account.get("balance")).longValue(),
                     ((Number) account.get("reserved")).longValue());
-            if (available < amountCreditMilli) throw new InsufficientCreditException(AiErrorMessages.INSUFFICIENT_CREDIT);
+            if (!limitExempt(userId) && available < amountCreditMilli) throw new InsufficientCreditException(AiErrorMessages.INSUFFICIENT_CREDIT);
             if (append(userId, "reserve", amountCreditMilli, runId, key, "mcp_approval", "MCP_APPROVAL")) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
                         amountCreditMilli, userId);
@@ -148,7 +148,7 @@ public class CreditService {
         var rows = jdbc.queryForList("SELECT balance, reserved FROM credit_accounts WHERE user_id = ?", userId);
         long available = rows.isEmpty() ? 0
                 : ((Number) rows.getFirst().get("balance")).longValue() - ((Number) rows.getFirst().get("reserved")).longValue();
-        admit(kind, estimate(kind), available, AiErrorMessages.INSUFFICIENT_CREDIT);
+        admit(userId, kind, estimate(kind), available, AiErrorMessages.INSUFFICIENT_CREDIT);
     }
 
     /**
@@ -162,6 +162,13 @@ public class CreditService {
     /** 사전 승인으로 거절하는 환경인지({@code app.billing.enforce}). */
     public boolean enforcing() {
         return enforce;
+    }
+
+    /** 기존 가입자의 잔액 제한만 면제한다. 예약·사용량·정산 기록은 유지한다. */
+    private boolean limitExempt(String userId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM credit_accounts WHERE user_id = ? AND limit_exempt)",
+                Boolean.class, userId));
     }
 
     /** kind별 예상 상한(milli-KRW). */
@@ -189,8 +196,8 @@ public class CreditService {
      * 예약 금액을 정한다. enforce에서 가용 잔액이 최저 비용보다 작으면 거절하고, 아니면 상한과 가용 잔액 중 작은 쪽이다.
      * enforce가 꺼져 있으면 거절 없이 상한 전체다.
      */
-    private long admit(String kind, long estimate, long available, String rejection) {
-        if (!enforce) return estimate;
+    private long admit(String userId, String kind, long estimate, long available, String rejection) {
+        if (!enforce || limitExempt(userId)) return estimate;
         if (available < minimum(kind, estimate)) throw new InsufficientCreditException(rejection);
         return Math.min(estimate, available);
     }
@@ -241,7 +248,7 @@ public class CreditService {
             long balance = ((Number) account.get("balance")).longValue();
             long open = open(runId, userId);
             long othersReserved = ((Number) account.get("reserved")).longValue() - open;
-            long amount = admit(kind, estimate, balance - othersReserved,
+            long amount = admit(userId, kind, estimate, balance - othersReserved,
                     AiErrorMessages.INSUFFICIENT_CREDIT_STOPPED);
             if (open > 0 && append(userId, "release", -open, runId, "release:" + runId + ":" + seq, null)) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved - ?, updated_at = now() WHERE user_id = ?",
