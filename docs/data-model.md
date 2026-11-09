@@ -36,8 +36,11 @@ DB migration 원본은 `src/main/resources/db/migration/`입니다. 다른 서�
 | fx_rates | document-svc | USD→KRW 환율 이력 | PK `effective_from`, `krw_per_usd > 0`. 수정하지 않고 새 행 추가; V65. `FxRateService`가 평일 11:30(KST)과 기동 시 한국수출입은행 USD 매매기준율을 가져온 시각(초 단위, 소급 없음)을 `effective_from`으로 넣는다(직전과 같은 값이면 넣지 않음, advisory lock으로 여러 Pod 직렬화. 외부 호출은 `scheduler_leases`로 10분에 한 Pod만). V72 초기 행 1,339.20원(마이그레이션 시각 적용, 2026-10-08 시장평균환율) |
 | pricing_policies | document-svc | 마진·부가세율·환율 버퍼 이력 | PK `effective_from`, `margin_bp`·`vat_bp`·`fx_buffer_bp`(basis point, ≥ 0). 수정하지 않고 새 행 추가; V65. V72 `fx_buffer_bp`(기본 200 = 2%, 적용 환율 = `krw_per_usd` × (1 + 버퍼))와 시드 행(마진 5000 잠정, 부가세 1000, 버퍼 200, `effective_from`은 마이그레이션 시각이라 그 전 호출은 소급 청구하지 않음) |
 | usage_charges | document-svc | AI 호출 단위 청구 | `call_id`(AI 원장 행 id) UNIQUE, `user_id`(실행을 예약한 `ai_task_runs.user_id`, 실행 행이 없으면 AI 원장 값), `workspace_id`, `run_id`, `kind`, `provider`, `model`, `call_status`, 토큰 5종, `audio_seconds`, `tts_characters`, 적용 버전 `price_/fx_/policy_effective_from`, `cost_usd_micro`, `charge_krw_milli`, `status`(`charged`/`unpriced`/`needs_review`, `unpriced`면 `charge_krw_milli` NULL), `started_at`(버전 선택 기준). `charged` 행은 다시 계산하지 않는다. `(user_id, started_at)`·`(started_at)` 인덱스; V65. V69 `requested_model`(AI 원장 요청 모델), `price_model`(단가를 찾은 모델 이름: 응답 모델 → 요청 모델 순), `model_routing`(`same`/`snapshot`/`routed`), 재계산용 부분 인덱스 `(id) WHERE status <> 'charged'` |
-| credit_accounts | document-svc | 사용자 선불 크레딧 계정 | PK `user_id`, `balance`(음수 가능), `reserved ≥ 0`, `updated_at`. 원장 합계와 같아야 한다(`scripts/sql/credit-balance-check.sql`). 탈퇴 파기 대상 아님(결제 기록 5년 보관); V66 |
-| credit_entries | document-svc | 크레딧 원장(추가만) | `user_id`(FK credit_accounts), `type`(`purchase`/`grant`/`reserve`/`release`/`charge`/`refund`/`adjust`), `amount` milli-KRW(`charge`·`release`·`refund` ≤ 0, `adjust` ±, 나머지 ≥ 0), `run_id`, `idempotency_key` UNIQUE(run_id 기반 예약·차감·해제 멱등), `reason`(`adjust`면 필수), `created_at`. 탈퇴 파기 대상 아님; V66 |
+| credit_accounts | document-svc | 사용자 선불 크레딧 계정 | PK `user_id`, `balance`(음수 가능), `reserved ≥ 0`, `limit_exempt`(기본 false, 기존 가입자 잔액 검사 면제; V117), `updated_at`. 원장 합계와 같아야 한다(`scripts/sql/credit-balance-check.sql`). 탈퇴 파기 대상 아님(결제 기록 5년 보관); V66 |
+| credit_entries | document-svc | 크레딧 원장(추가만) | `user_id`(FK credit_accounts), `type`(`purchase`/`grant`/`reserve`/`release`/`charge`/`refund`/`adjust`), `amount` milli-KRW(`charge`·`release`·`refund` ≤ 0, `adjust` ±, 나머지 ≥ 0), `run_id`, `idempotency_key` UNIQUE(run_id 기반 예약·차감·해제 멱등), `reason`(`adjust`면 필수), reserve/release의 `reservation_type`(`MODEL_USAGE|MCP_APPROVAL`), `created_at`. MCP 예약은 model stale collector가 풀지 않는다. 탈퇴 파기 대상 아님; V66, V112 |
+| mcp_agent_approvals | document-svc | MCP explicit web approval·가격·예약 fence | UUIDv4 `approval_id` PK, `run_id` UNIQUE, actor/provenance, plan version/hash와 canonical plan-order operation JSON, 선택 operation IDs/hash, trusted `client_name`, exact KRW price snapshot, 선택 수·cap 기준 최대 예약, lifecycle/forward/settlement 상태. dependency-closed subset만 승인하고 cancel/admin halt/purge fence 뒤 지연 승인·실행을 거절한다; V112, V113 |
+| mcp_document_edit_attempts | document-svc | MCP operation receipt 전 실행 시도 | UUIDv4 `attempt_id` PK, approval/operation, `STARTED|FAILED|UNKNOWN`, 실패 code. timeout/ambiguous 결과를 receipt로 위장하지 않는다; V112, V113 |
+| mcp_document_edit_receipts | document-svc | MCP mutation과 같은 transaction의 body-free 효과 증거 | UUIDv4 `receipt_id`, `(approval_id,operation_id)` UNIQUE, attempt/actor/tool/resource/version, `COMMITTED changed=true|NO_CHANGE changed=false`, `committed_at`. create는 nullable before와 양수 after, 기존 resource는 양수 before/after를 강제한다. `publish_skill_definition`은 resource_type `SKILL`이고 ai DB의 Skill 저장 증거(새 버전)를 기록한다(생성은 before null, 수정은 after > before, 항상 COMMITTED). reconcile/정산은 이 행만 성공 증거로 사용한다; V112, V113, V116 |
 | credit_orders | document-svc | 크레딧 충전 주문(PG 결제) | PK `order_id`, `user_id`, `product_code`, `amount_krw > 0`, `credit_milli > 0`(서버 상품표 값), `status`(`created`/`paid`/`failed`/`refunded`/`partially_refunded`), `pg_payment_key` UNIQUE, `failure_code`, `refunded_krw`·`refunded_credit_milli`(누적, 주문 금액 이하), `created_at`, `paid_at`, `refunded_at`. 탈퇴 파기 대상 아님(결제 기록 5년 보관); V67, ADR-0026 |
 | payment_events | document-svc | 서명 검증한 PG webhook 수신 기록 | PK `event_id`(본문 `eventId`, 없으면 본문 SHA-256)로 멱등, `body_sha256`, `event_type`, `order_id`, `received_at`. 원문은 저장하지 않는다; V67 |
 | usage_collect_queue | document-svc | 호출 사용량 수집 대기열 | PK `run_id`, `attempts`, `available_at`. 실행 종료 시 넣고(AgentRun은 계획 승인 대기 진입 때도) worker가 SKIP LOCKED로 선점, 수집 후 삭제. 수집 중 다시 넣으면 `attempts`가 0으로 돌아가 그 수집이 지우지 않는다; V65 |
@@ -80,3 +83,22 @@ V45는 원문을 복제하지 않고 `agent_apply_projections`와 `chat_messages
 `agent_route_outcomes` view를 추가한다. 취소·재시도는 route 실패로 단정하지 않는다.
 
 `chat_messages.progress`는 실제 진행 이벤트의 JSONB 배열입니다. `event_id`로 중복 반영을 막고, 최종 상태 이후의 이벤트는 추가하지 않습니다. SSE 캐시 만료 후에도 대화와 함께 보존됩니다.
+## I9 MCP wiki approval and settlement
+
+`mcp_wiki_drafts` is the Document-owned immutable draft, quote, approval, reservation, publication, and settlement
+record. `draft_id` is the stable intent key; `approval_id` and `operation_id` are unique and are allocated once
+under the draft advisory lock. `source_snapshots` and `preview` retain the full internal source mapping and draft;
+purge may null only `preview` after fencing the approval, while the minimal body-free approval/result/fee proof is
+retained for late confirmed settlement.
+
+`mcp_wiki_ingest_handles` binds one AI run/draft/source snapshot to the verified actor and authoritative current
+Document version/hash. `mcp_wiki_ingest_windows` binds server window IDs, ordinals, hashes, accepted submission
+hashes, and full contributions. `mcp_wiki_lint_intents` binds `(workspace,user,grant,client,idempotency_key)` to the
+canonical external intent and the first server-created immutable source mappings, so retries cannot mint new
+snapshot identities.
+
+`mcp_wiki_publication_inbox` is the durable fee-proof inbox. It uniquely binds the canonical event and
+`(approval_id,operation_id)` pair and is written in the same transaction as full charge/release settlement.
+Migration V114 creates these rows and indexes; V115 permits a purged draft's internal preview to be scrubbed while
+preserving its fence and settlement evidence. Generic credit stale-release queries exclude the existing
+`MCP_RESERVATION` type.

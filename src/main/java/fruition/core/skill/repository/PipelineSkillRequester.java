@@ -141,6 +141,27 @@ public class PipelineSkillRequester {
         });
     }
 
+    /**
+     * 웹에서 승인된 MCP operation의 외부 AI Skill 정의를 ai에 저장한다(LLM·크레딧 없음). 같은 operation은 저장 증거를
+     * replayed로 돌려주므로 결과를 모르는 실행을 다시 불러도 안전하다.
+     */
+    public JsonNode acceptMcpDefinition(String runId, String operationId, String workspaceId, String userId,
+                                        JsonNode definition) {
+        var body = new java.util.LinkedHashMap<String, Object>();
+        body.put("run_id", runId);
+        body.put("operation_id", operationId);
+        body.put("workspace_id", workspaceId);
+        body.put("user_id", userId);
+        body.put("definition", definition);
+        return post("/mcp-acceptances", body);
+    }
+
+    /** 승인된 MCP operation의 Skill 저장 증거. 없으면 {@code {"status":"absent"}}다. */
+    public JsonNode lookupMcpAcceptance(String runId, String operationId, String userId) {
+        return post("/mcp-acceptances/lookup",
+                java.util.Map.of("run_id", runId, "operation_id", operationId, "user_id", userId));
+    }
+
     public JsonNode setEnabled(String workspaceId, String userId, String skillId, boolean enabled) {
         return post("/" + skillId + (enabled ? "/enable" : "/disable"),
                 new ActorPayload(workspaceId, userId));

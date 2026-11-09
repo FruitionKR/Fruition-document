@@ -23,6 +23,8 @@ final class PostHogLogPolicy {
     private static final Pattern KEY = Pattern.compile("(?<![\\p{L}\\p{N}_.-])([\\p{L}_][\\p{L}\\p{N}_.-]{0,40})=");
     private static final Pattern CODE_VALUE = Pattern.compile("[A-Za-z0-9_.:-]{1,64}");
     private static final Pattern FIELD_VALUE = Pattern.compile("[A-Za-z0-9_.:/-]{1,256}");
+    /** 쉼표로 이은 식별자 목록. 값 전체가 맞아야 받는다. */
+    private static final Pattern LIST_VALUE = Pattern.compile("[A-Za-z0-9_.:-]{1,64}(?:,[A-Za-z0-9_.:-]{1,64}){0,19}");
     private static final Pattern[] SECRETS = {
             Pattern.compile("(?i)bearer\\s+\\S+"),
             Pattern.compile("eyJ[\\w-]+\\.[\\w-]+\\.[\\w-]*"),
@@ -43,7 +45,9 @@ final class PostHogLogPolicy {
             "resourceId", "targetId", "parentFolderId", "fromFolderId", "toFolderId", "amountKrw", "refundKrw", "exportId", "itemCount", "totalBytes", "queued", "remaining", "messageCount", "reportedCreated", "reportedFailed", "reportedSkipped", "targetUserId", "actorId", "elapsedMs", "attempt", "attempts", "count", "size", "byteSize",
             "partCount", "totalPages", "startPage", "version", "baseVersion", "fromVersion", "toVersion", "newVersion",
             "revision", "baseRevision", "changedResources", "remainingChanges", "undoneChanges", "totalCount",
-            "suppressedCount", "batchCount", "segmentCount", "closeCode", "documents", "folders", "revokedSessions");
+            "suppressedCount", "batchCount", "segmentCount", "closeCode", "documents", "folders", "revokedSessions",
+            "auditId", "grantId", "clientIdHash", "targetCount");
+    private static final Set<String> LIST_FIELDS = Set.of("targetIds");
     private static final Map<String, String> TEXT_FIELDS = Map.of("원인", "cause", "설명", "description");
 
     private PostHogLogPolicy() {}
@@ -56,6 +60,8 @@ final class PostHogLogPolicy {
         Level level = event.getLevel();
         if (!logger.startsWith("fruition.")) return level.isGreaterOrEqual(Level.ERROR);
         if (level.isGreaterOrEqual(Level.WARN)) return true;
+        // MCP 감사 JSON에는 요청 입력이 섞인다. 같은 호출은 fruition.mcp.activity의 정화된 업무 로그로 보낸다.
+        if (logger.equals("fruition.mcp.audit")) return false;
         return level.equals(Level.INFO) && hasOperation(event.getFormattedMessage());
     }
 
@@ -113,6 +119,9 @@ final class PostHogLogPolicy {
             body.append(value).append(' ');
             attributes.putIfAbsent(TEXT_FIELDS.get(key), value);
         } else if (CODE_FIELDS.contains(key) && CODE_VALUE.matcher(value).matches()) {
+            body.append(value).append(' ');
+            attributes.putIfAbsent(key, value);
+        } else if (LIST_FIELDS.contains(key) && LIST_VALUE.matcher(value).matches()) {
             body.append(value).append(' ');
             attributes.putIfAbsent(key, value);
         } else if (VALUE_FIELDS.contains(key)) {

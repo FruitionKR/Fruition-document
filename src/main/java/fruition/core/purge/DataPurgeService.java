@@ -1,5 +1,6 @@
 package fruition.core.purge;
 
+import fruition.core.aihistory.service.WikiPublicationPurgeFence;
 import fruition.shared.util.StorageProperties;
 import io.minio.ListObjectsArgs;
 import io.minio.MinioClient;
@@ -60,6 +61,9 @@ public class DataPurgeService {
      * 문서에 딸린 본문·버전·잠금·asset 참조, 채팅 메시지, 회의 전사는 CASCADE로 함께 지워진다.
      */
     private static final List<Step> WORKSPACE_STEPS = List.of(
+            new Step("mcp_wiki_lint_intents", "DELETE FROM mcp_wiki_lint_intents WHERE workspace_id = ?", 1),
+            new Step("mcp_wiki_ingest_handles", "DELETE FROM mcp_wiki_ingest_handles WHERE workspace_id = ?", 1),
+            new Step("mcp_wiki_drafts", "DELETE FROM mcp_wiki_drafts WHERE workspace_id = ? AND approval_id IS NULL", 1),
             new Step("wiki_page_versions", "DELETE FROM wiki_page_versions WHERE operation_id IN (" + WORKSPACE_OPERATIONS
                     + ") OR page_id IN (SELECT c.page_id FROM wiki_page_contributions c"
                     + " JOIN ai_operation_logs l ON l.operation_id = c.ingest_operation_id WHERE l.workspace_id = ?)", 2),
@@ -88,6 +92,9 @@ public class DataPurgeService {
      * AI 실행 기록은 질문 원문과 변경 전후 값을 담고 있어 지운다.
      */
     private static final List<Step> USER_STEPS = List.of(
+            new Step("mcp_wiki_lint_intents", "DELETE FROM mcp_wiki_lint_intents WHERE user_id = ?", 1),
+            new Step("mcp_wiki_ingest_handles", "DELETE FROM mcp_wiki_ingest_handles WHERE user_id = ?", 1),
+            new Step("mcp_wiki_drafts", "DELETE FROM mcp_wiki_drafts WHERE user_id = ? AND approval_id IS NULL", 1),
             new Step("ai_task_result_receipts", "DELETE FROM ai_task_result_receipts WHERE run_id IN (" + USER_RUNS + ")", 1),
             new Step("ai_task_changes", "DELETE FROM ai_task_changes WHERE run_id IN (" + USER_RUNS + ")", 1),
             new Step("ai_command_outbox", "DELETE FROM ai_command_outbox WHERE payload::jsonb->>'user_id' = ?", 1),
@@ -103,16 +110,20 @@ public class DataPurgeService {
     private final TransactionTemplate transactionTemplate;
     private final MinioClient minio;
     private final String bucket;
+    private final WikiPublicationPurgeFence publicationPurgeFence;
 
     public DataPurgeService(JdbcTemplate jdbc, TransactionTemplate transactionTemplate,
-                            MinioClient minio, StorageProperties storage) {
+                            MinioClient minio, StorageProperties storage,
+                            WikiPublicationPurgeFence publicationPurgeFence) {
         this.jdbc = jdbc;
         this.transactionTemplate = transactionTemplate;
         this.minio = minio;
         this.bucket = storage.getBucket();
+        this.publicationPurgeFence = publicationPurgeFence;
     }
 
     public PurgeResult purgeWorkspace(String workspaceId) {
+        fence("workspace", workspaceId);
         List<String> keys = new ArrayList<>();
         keys.addAll(jdbc.queryForList("SELECT source_uri FROM documents WHERE workspace_id = ? AND source_uri IS NOT NULL"
                 + " UNION ALL SELECT extracted_text_uri FROM documents WHERE workspace_id = ? AND extracted_text_uri IS NOT NULL",
@@ -125,8 +136,27 @@ public class DataPurgeService {
     }
 
     public PurgeResult purgeUser(String userId) {
+        fence("user", userId);
         List<String> keys = new ArrayList<>(recordingKeys("created_by", userId));
         return purge("user", userId, keys, () -> lockedSpeechKeys(userId), USER_STEPS);
+    }
+
+    /** The fence commits before object/row deletion and remains if cleanup must be retried. */
+    private void fence(String scope, String id) {
+        transactionTemplate.executeWithoutResult(status -> {
+            publicationPurgeFence.markPurged(scope, id);
+            String column = "workspace".equals(scope) ? "workspace_id" : "user_id";
+            jdbc.update("UPDATE mcp_agent_approvals SET lifecycle_status = 'PURGED', purged_at = now(), "
+                    + "settlement_status = 'PENDING_RECONCILIATION', updated_at = now() "
+                    + "WHERE " + column + " = ? AND lifecycle_status <> 'PURGED'", id);
+            jdbc.update("UPDATE mcp_wiki_drafts SET approval_status='INVALIDATED',approval_reason='PURGED',"
+                            + "publication_status=CASE WHEN publication_status IN ('NOT_STARTED','APPLYING','UNKNOWN') "
+                            + "THEN 'HALTED' ELSE publication_status END,"
+                            + "settlement_status=CASE WHEN approval_id IS NULL THEN 'RELEASED' "
+                            + "WHEN settlement_status='SETTLED' THEN 'SETTLED' ELSE 'PENDING_RECONCILIATION' END,"
+                            + "preview=NULL,updated_at=now() WHERE " + column + " = ?",
+                    id);
+        });
     }
 
     /**

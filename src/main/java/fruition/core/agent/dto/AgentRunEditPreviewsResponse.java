@@ -25,8 +25,12 @@ public record AgentRunEditPreviewsResponse(
             @Schema(description = "계획 안의 작업 ID. 부분 승인의 operation_ids에 쓴다.")
             String operationId,
 
+            @JsonProperty("tool_name")
+            @Schema(description = "미리 보기 작업 종류", allowableValues = {"apply_document_edit", "create_document"})
+            String toolName,
+
             @JsonProperty("document_id")
-            @Schema(description = "수정할 문서 ID")
+            @Schema(description = "수정할 문서 ID. create_document는 null이다.", nullable = true)
             String documentId,
 
             @JsonProperty("display_name")
@@ -34,8 +38,8 @@ public record AgentRunEditPreviewsResponse(
             String displayName,
 
             @JsonProperty("base_version")
-            @Schema(description = "편집안의 기준 편집 revision", example = "3")
-            long baseVersion,
+            @Schema(description = "편집안의 기준 편집 revision. create_document는 null이다.", example = "3", nullable = true)
+            Long baseVersion,
 
             @Schema(description = "변경 요약")
             String summary,
@@ -51,8 +55,28 @@ public record AgentRunEditPreviewsResponse(
             @Schema(description = "변경 구간. 앞뒤 문맥 3줄을 포함한다.")
             List<Hunk> hunks
     ) {
+        public Item(String operationId, String documentId, String displayName, long baseVersion, String summary,
+                    int addedLines, int removedLines, List<Hunk> hunks) {
+            this(operationId, "apply_document_edit", documentId, displayName, baseVersion, summary,
+                    addedLines, removedLines, hunks);
+        }
+
+        public boolean isCreateDocument() {
+            return "create_document".equals(toolName);
+        }
+
+        public boolean isReadableEditShape() {
+            return (toolName == null || "apply_document_edit".equals(toolName))
+                    && documentId != null && baseVersion != null && baseVersion > 0;
+        }
+
+        public boolean isOwnedCreateShape() {
+            return isCreateDocument() && documentId == null && baseVersion == null;
+        }
+
         public Item withDisplayName(String currentDisplayName) {
-            return new Item(operationId, documentId, currentDisplayName, baseVersion, summary,
+            return new Item(operationId, toolName == null ? "apply_document_edit" : toolName,
+                    documentId, currentDisplayName, baseVersion, summary,
                     addedLines, removedLines, hunks);
         }
     }

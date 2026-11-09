@@ -22,6 +22,7 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Date;
+import java.util.Set;
 
 @Component
 public class JwtTokenProvider {
@@ -153,7 +154,8 @@ public class JwtTokenProvider {
 
     private Claims parseClaims(String token) {
         Claims claims = parseVerifiedClaims(token);
-        if (claims.getExpiration() == null || claims.getSubject() == null || claims.getSubject().isBlank()) {
+        if (!Set.of(audience).equals(claims.getAudience()) || claims.getExpiration() == null
+                || claims.getSubject() == null || claims.getSubject().isBlank()) {
             throw new MalformedJwtException("JWT requires expiration and a nonblank subject");
         }
         return claims;

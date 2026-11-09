@@ -1,6 +1,11 @@
 package fruition.core.wiki.service;
 
 import fruition.TestcontainersConfiguration;
+import fruition.core.aihistory.dto.OperationResultRequest;
+import fruition.core.aihistory.dto.WikiPublicationEvent;
+import fruition.core.aihistory.exception.OperationNotFoundException;
+import fruition.core.aihistory.service.OperationIngestService;
+import fruition.core.aihistory.service.WikiPublicationEventApplier;
 import fruition.core.wiki.repository.PipelineWikiStateRequester;
 import fruition.core.wiki.repository.PipelineWikiStateRequester.ManualEditResult;
 import fruition.core.wiki.dto.WikiPageDetailResponse;
@@ -23,6 +28,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -46,6 +55,9 @@ class WikiPageEditIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired StringRedisTemplate redisTemplate;
     @Autowired JwtTokenProvider jwtTokenProvider;
+    @Autowired fruition.core.aihistory.service.WikiObjectReader objectReader;
+    @Autowired WikiPublicationEventApplier publications;
+    @Autowired OperationIngestService operationResults;
     @MockBean PipelineWikiStateRequester wikiStateRequester;
 
     private String userId;
@@ -64,9 +76,10 @@ class WikiPageEditIntegrationTest {
         when(wikiStateRequester.manualEdit(eq(workspaceId), anyString(), eq(pageId), anyString(), anyString()))
                 .thenAnswer(invocation -> {
                     String operationId = invocation.getArgument(3);
+                    String markdown = invocation.getArgument(4);
                     String base = "wiki/" + workspaceId + "/pages/" + pageId + "/ops/" + operationId;
                     return Optional.of(new ManualEditResult(pageId, "concept", base + ".md", base + ".json",
-                            "sha256:" + "a".repeat(64)));
+                            objectReader.sha256(markdown)));
                 });
         // 이력 도입 뒤 AI가 만든 revision 2까지 있는 페이지
         jdbc.update("""
@@ -148,6 +161,78 @@ class WikiPageEditIntegrationTest {
         save("# 고침", 2, "w1").andExpect(status().isOk());
 
         assertThat(workspaceWikiVersion()).isEqualTo(1);
+    }
+
+    @Test
+    void actualSyncSaveRejectsEventBeforeCommitThenReceiptsTheExactRetry() throws Exception {
+        String markdown = "# event-before-commit";
+        String writeId = "event-write";
+        String operationId = operationId(writeId);
+        String base = "wiki/" + workspaceId + "/pages/" + pageId + "/ops/" + operationId;
+        OperationResultRequest result = manualResult(operationId, markdown, base);
+        WikiPublicationEvent event = publicationEvent("manual-event-" + UUID.randomUUID(), result);
+        var aiCalled = new CountDownLatch(1);
+        var returnAiResponse = new CountDownLatch(1);
+        when(wikiStateRequester.manualEdit(workspaceId, userId, pageId, operationId, markdown))
+                .thenAnswer(invocation -> {
+                    aiCalled.countDown();
+                    if (!returnAiResponse.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("AI response latch timeout");
+                    }
+                    return Optional.of(new ManualEditResult(pageId, "concept", base + ".md", base + ".json",
+                            objectReader.sha256(markdown)));
+                });
+
+        try (var pool = Executors.newSingleThreadExecutor()) {
+            var save = pool.submit(() -> {
+                try {
+                    return save(markdown, 2, writeId);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+            assertThat(aiCalled.await(10, TimeUnit.SECONDS)).isTrue();
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> publications.apply(event))
+                    .isInstanceOf(OperationNotFoundException.class);
+            returnAiResponse.countDown();
+            save.get(20, TimeUnit.SECONDS).andExpect(status().isOk());
+        }
+
+        assertThat(publications.apply(event).disposition())
+                .isEqualTo(fruition.core.aihistory.repository.WikiPublicationInboxRepository.Disposition.ACCEPTED);
+        // A lost HTTP response is recovered by the same user-authorized retry; it does not create another version.
+        save(markdown, 2, writeId).andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(3));
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM wiki_page_versions WHERE operation_id = ?", Integer.class,
+                operationId)).isOne();
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM wiki_page_contributions WHERE ingest_operation_id = ?", Integer.class,
+                operationId)).isOne();
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM wiki_publication_inbox WHERE operation_id = ?", Integer.class,
+                operationId)).isOne();
+    }
+
+    @Test
+    void badAiManualMetadataRollsBackBeforeAuthorityVersionOrLedgerIsPersisted() throws Exception {
+        String writeId = "bad-ai-result";
+        String operationId = operationId(writeId);
+        when(wikiStateRequester.manualEdit(eq(workspaceId), eq(userId), eq(pageId), eq(operationId), anyString()))
+                .thenReturn(Optional.of(new ManualEditResult(
+                        pageId, "concept", "wiki/foreign/pages/foreign/ops/foreign.md",
+                        "wiki/foreign/pages/foreign/ops/foreign.json", "sha256:" + "f".repeat(64))));
+
+        save("# rejected", 2, writeId).andExpect(status().isServiceUnavailable());
+
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM ai_operation_logs WHERE operation_id = ?", Integer.class,
+                operationId)).isZero();
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM wiki_page_versions WHERE operation_id = ?", Integer.class,
+                operationId)).isZero();
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM wiki_page_contributions WHERE ingest_operation_id = ?", Integer.class,
+                operationId)).isZero();
     }
 
     /** ai 저장은 끝났는데 document 기록이 빠진 뒤 다른 결과가 반영돼 revision이 올라간 경우의 재시도. */
@@ -246,6 +331,27 @@ class WikiPageEditIntegrationTest {
                 .header("Authorization", "Bearer " + jwtTokenProvider.generateAccessToken(userId, userId + "@example.com"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));
+    }
+
+    private OperationResultRequest manualResult(String operationId, String markdown, String base) {
+        String contributionKey = base + ".json";
+        return new OperationResultRequest(
+                operationId, "wiki_edit", "succeeded", workspaceId, userId, null,
+                "Wiki 페이지 본문을 직접 수정했습니다.",
+                List.of(new OperationResultRequest.ChangedPage(
+                        pageId, "concept", base + ".md", contributionKey,
+                        objectReader.sha256(markdown), true)),
+                List.of(), List.of(), null, null,
+                List.of(new OperationResultRequest.LedgerContribution(
+                        pageId, operationId, null, contributionKey, null)));
+    }
+
+    private WikiPublicationEvent publicationEvent(String eventId, OperationResultRequest result) {
+        return new WikiPublicationEvent(
+                eventId, WikiPublicationEvent.TYPE, "publication-" + eventId, result.operationId(),
+                workspaceId, userId, WikiPublicationEvent.Kind.MANUAL_EDIT,
+                WikiPublicationEvent.Outcome.PUBLISHED, result,
+                "sha256:" + operationResults.payloadHash(result), Instant.parse("2026-11-08T00:00:00Z"));
     }
 
     private void aiPage(String markdownUri, String markdown) {

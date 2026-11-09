@@ -282,6 +282,11 @@ public class Document {
         this.processedAt = this.uploadedAt;
     }
 
+    /** 외부 AI가 만든 PDF 변환본을 원본 PDF에 연결한다. */
+    public void linkSourceDocument(String sourceDocumentId) {
+        this.sourceDocumentId = sourceDocumentId;
+    }
+
     /** PDF → Markdown 변환 placeholder: 변환이 끝날 때까지 processing 상태를 유지하고 원본 문서를 연결한다. */
     public void initializeConvertPlaceholder(
             String sourceDocumentId,

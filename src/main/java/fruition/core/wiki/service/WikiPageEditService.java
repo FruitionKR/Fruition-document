@@ -8,6 +8,7 @@ import fruition.core.aihistory.domain.ResourceType;
 import fruition.core.aihistory.repository.OperationChangeRepository;
 import fruition.core.aihistory.repository.OperationLogRepository;
 import fruition.core.aihistory.service.LineCounter;
+import fruition.core.aihistory.service.WikiObjectReader;
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.authz.WorkspacePermissions;
 import fruition.core.document.exception.InvalidMarkdownContentException;
@@ -54,6 +55,7 @@ public class WikiPageEditService {
     private final OperationChangeRepository operationChangeRepository;
     private final WikiWorkspaceVersionRepository workspaceVersionRepository;
     private final LineCounter lineCounter;
+    private final WikiObjectReader objectReader;
 
     public WikiPageEditService(WorkspaceAccessGuard workspaceAccessGuard,
                                PipelineWikiStateRequester wikiStateRequester,
@@ -62,7 +64,8 @@ public class WikiPageEditService {
                                OperationLogRepository operationLogRepository,
                                OperationChangeRepository operationChangeRepository,
                                WikiWorkspaceVersionRepository workspaceVersionRepository,
-                               LineCounter lineCounter) {
+                               LineCounter lineCounter,
+                               WikiObjectReader objectReader) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.wikiStateRequester = wikiStateRequester;
         this.versionRepository = versionRepository;
@@ -71,6 +74,7 @@ public class WikiPageEditService {
         this.operationChangeRepository = operationChangeRepository;
         this.workspaceVersionRepository = workspaceVersionRepository;
         this.lineCounter = lineCounter;
+        this.objectReader = objectReader;
     }
 
     /**
@@ -124,6 +128,15 @@ public class WikiPageEditService {
                 .orElseThrow(() -> new WikiPageNotFoundException(pageId));
         if (!pageId.equals(result.pageId())) {
             throw new PipelineWikiPageException("Wiki 본문을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.", 503, null);
+        }
+        boolean exactResult = objectReader.markdownKey(workspaceId, pageId, operationId)
+                .equals(result.markdownKey())
+                && objectReader.contributionKey(workspaceId, pageId, operationId)
+                .equals(result.contributionKey())
+                && objectReader.sha256(markdown).equals(result.contentHash());
+        if (!exactResult) {
+            throw new PipelineWikiPageException(
+                    "Wiki 본문 저장 결과를 검증하지 못했습니다. 같은 요청으로 다시 시도해 주세요.", 503, null);
         }
 
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);

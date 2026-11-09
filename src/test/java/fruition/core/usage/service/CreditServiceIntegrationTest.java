@@ -60,6 +60,78 @@ class CreditServiceIntegrationTest {
     private final String user = "user-" + UUID.randomUUID();
 
     @Test
+    void exemptUserCanStartRenewAndSettleWithoutBalanceWhileNewUserIsRejected() {
+        CreditService credits = credits(true);
+        jdbc.update("INSERT INTO credit_accounts (user_id, limit_exempt) VALUES (?, true)", user);
+        var dailyLimit = new fruition.core.usage.limit.AiUsageLimiter(jdbc, true, 0);
+        assertThatThrownBy(() -> dailyLimit.check(user, "test_kind"))
+                .isInstanceOf(fruition.core.usage.limit.AiUsageLimitExceededException.class);
+        credits.checkAdmission(user, "meeting_transcription");
+        String runId = "run-" + UUID.randomUUID();
+        run(runId, "running");
+        credits.reserve(runId, user, "test_kind");
+        charge(runId, 900_000);
+        credits.renew(runId, user, "test_kind", 1);
+        credits.renew(runId, user, "test_kind", 1);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-900_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(ESTIMATE);
+        jdbc.update("UPDATE ai_task_runs SET status = 'completed' WHERE id = ?", runId);
+        credits.settle(runId);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertLedgerMatchesAccount();
+
+        String newcomer = "new-" + UUID.randomUUID();
+        assertThatThrownBy(() -> dailyLimit.check(newcomer, "test_kind"))
+                .isInstanceOf(fruition.core.usage.limit.AiUsageLimitExceededException.class);
+        assertThatThrownBy(() -> credits.checkAdmission(newcomer, "meeting_transcription"))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+        assertThatThrownBy(() -> credits.reserve("new-run-" + UUID.randomUUID(), newcomer, "test_kind"))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+        assertThatThrownBy(() -> credits.reserveMcpApproval(UUID.randomUUID().toString(), newcomer, 1_500))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+    }
+
+    @Test
+    void exemptMcpApprovalStillReservesAndSettlesExactlyOnce() {
+        CreditService credits = credits(true);
+        jdbc.update("INSERT INTO credit_accounts (user_id, limit_exempt) VALUES (?, true)", user);
+        String approval = UUID.randomUUID().toString();
+        credits.reserveMcpApproval(approval, user, 1_500);
+        credits.reserveMcpApproval(approval, user, 1_500);
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(1_500);
+        credits.settleMcpApproval(approval, user, 1_000, true);
+        credits.settleMcpApproval(approval, user, 1_000, true);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-1_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertLedgerMatchesAccount();
+    }
+
+    @Test
+    void mcpReservationIsAllOrNoneExcludedFromStaleReleaseAndSettlesCumulatively() {
+        CreditService credits = credits(false);
+        grant(1_500);
+        String denied = UUID.randomUUID().toString();
+        assertThatThrownBy(() -> credits.reserveMcpApproval(denied, user, 1_501))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+
+        String approval = UUID.randomUUID().toString();
+        credits.reserveMcpApproval(approval, user, 1_500);
+        jdbc.update("UPDATE credit_entries SET created_at = now() - interval '49 hours' "
+                + "WHERE idempotency_key = ?", "mcp-reserve:" + approval);
+        credits.releaseStale();
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(1_500);
+
+        credits.settleMcpApproval(approval, user, 1_000, true);
+        credits.settleMcpApproval(approval, user, 1_000, true);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(500);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE run_id = ? AND type = 'charge'",
+                Integer.class, "mcp:" + approval)).isOne();
+        assertLedgerMatchesAccount();
+    }
+
+    @Test
     void concurrentReservationsNeverExceedAvailableBalance() throws Exception {
         CreditService credits = credits(true);
         grant(1_000_000);
@@ -99,8 +171,9 @@ class CreditServiceIntegrationTest {
         for (int i = 0; i < 20; i++) {
             String runId = "run-" + UUID.randomUUID();
             jdbc.update("INSERT INTO credit_accounts (user_id) VALUES (?) ON CONFLICT DO NOTHING", user);
-            jdbc.update("INSERT INTO credit_entries (user_id, type, amount, run_id, idempotency_key, reason, created_at) "
-                    + "VALUES (?, 'reserve', 1000, ?, ?, 'test_kind', now() - interval '49 hours')", user, runId, "reserve:" + runId);
+            jdbc.update("INSERT INTO credit_entries (user_id, type, amount, run_id, idempotency_key, reason, "
+                    + "reservation_type, created_at) VALUES (?, 'reserve', 1000, ?, ?, 'test_kind', "
+                    + "'MODEL_USAGE', now() - interval '49 hours')", user, runId, "reserve:" + runId);
             jdbc.update("UPDATE credit_accounts SET reserved = reserved + 1000 WHERE user_id = ?", user);
         }
         var barrier = new java.util.concurrent.CyclicBarrier(2);

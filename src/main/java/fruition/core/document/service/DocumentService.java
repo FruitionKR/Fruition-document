@@ -561,6 +561,44 @@ public class DocumentService {
                 createMarkdownWithDraft(workspaceId, userId, idempotencyKey, request, UploadAccounting.NONE));
     }
 
+    /** MCP receipt is the idempotency boundary; the caller owns the surrounding DB transaction. */
+    public DocumentUploadResponse createAgentMarkdownInCurrentTransaction(
+            String workspaceId, String userId, MarkdownDocumentCreateRequest request) {
+        if (request == null) throw new InvalidMarkdownContentException("Markdown 생성 요청은 필수입니다.");
+        verifyFolder(workspaceId, request.folderId());
+        DocumentEditingRules.Filename filename = DocumentEditingRules.rename(request.displayName(), "document.md");
+        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(request.markdown());
+        return createMarkdownDocument(workspaceId, userId, null, null, filename.filename(), content,
+                "direct", request.folderId(), Document.AGENT_ORIGIN, true, UploadAccounting.NONE);
+    }
+
+    /**
+     * MCP 승인 계획의 PDF 변환본 생성. 외부 AI가 만든 Markdown을 웹 변환 결과와 같은 규칙(data: 이미지 asset 분리,
+     * 변환본 sanitize)으로 저장하고 원본 PDF를 연결한다. 내부 모델 변환이나 자동 편입은 시작하지 않는다.
+     * 실행 시점에 원본이 그대로 PDF이고 hash가 승인 때와 같으며 요청자가 아직 변환할 수 있어야 한다.
+     */
+    public DocumentUploadResponse createConvertedMarkdownInCurrentTransaction(
+            String workspaceId, String userId, String sourceDocumentId, String sourceContentHash,
+            MarkdownDocumentCreateRequest request) {
+        if (request == null) throw new InvalidMarkdownContentException("Markdown 생성 요청은 필수입니다.");
+        Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(sourceDocumentId, workspaceId)
+                .filter(DocumentAccessPolicy::isPdf)
+                .orElseThrow(() -> new DocumentNotFoundException(sourceDocumentId));
+        documentAccessPolicy.requireConvert(source, userId);
+        if (!McpDocumentDataGateway.pdfHash(source).equals(sourceContentHash)) {
+            throw new DocumentVersionConflictException("원본 PDF가 승인 뒤 바뀌었습니다.");
+        }
+        verifyFolder(workspaceId, request.folderId());
+        DocumentEditingRules.Filename filename = DocumentEditingRules.rename(request.displayName(), "document.md");
+        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(
+                AiMarkdownSanitizer.sanitizeConverted(externalizeConvertedImages(workspaceId, userId, request.markdown())));
+        DocumentUploadResponse created = createMarkdownDocument(workspaceId, userId, null, null, filename.filename(),
+                content, "direct", request.folderId(), Document.AGENT_ORIGIN, true, UploadAccounting.NONE);
+        documentRepository.findById(created.id()).orElseThrow().linkSourceDocument(source.getId());
+        assetReferenceSynchronizer.synchronize(created.id(), workspaceId, assetReferenceParser.parse(content.markdown()));
+        return created;
+    }
+
     /**
      * {@code POST /documents/markdown} 진입점. 사용자가 올린 문서로 보고 다른 업로드처럼 저장 용량 한도를 적용한다
      * (잠금 없는 사전 확인 → 원본 저장 → 사용자 잠금 아래 재확인).
@@ -1555,6 +1593,8 @@ public class DocumentService {
      * 모두 병합되면 정산하고 자동 ingest를 시작한다. 실패는 변환을 실패로 닫고 남은 batch를 취소한다.
      */
     public void applyConvertBatch(JsonNode event) {
+        // MCP 외부 AI 변환의 전처리 batch다. 세션은 AI가 갖고 문서는 승인 뒤에만 만든다.
+        if (event.path("run_id").asText("").startsWith("mcpconvert:")) return;
         var matcher = CONVERT_BATCH_RUN_ID.matcher(event.path("run_id").asText(""));
         if (!matcher.matches()) {
             log.warn("[문서 변환 이벤트 무시] runId={} reason=invalid_run_id", event.path("run_id").asText(""));
@@ -1824,7 +1864,7 @@ public class DocumentService {
         if (queue.getCompletedPages() >= pageEnd) return;
         // data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다.
         String markdown = ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitizeConverted(
-                externalizeConvertedImages(parent, batchMarkdown)), pageStart);
+                externalizeConvertedImages(parent.getWorkspaceId(), parent.getUserId(), batchMarkdown)), pageStart);
         // 변환 batch는 내부 처리 단위일 뿐이다. 크기와 관계없이 원본 PDF의 모든 쪽을 같은 문서에 저장한다.
         // JDBC 저장 직후에도 최신 본문을 읽도록 JPA 1차 캐시를 거치지 않는다.
         var state = postgresDocumentEditStore.findState(parent.getId()).orElseThrow();
@@ -1843,7 +1883,7 @@ public class DocumentService {
     }
 
     /** 변환 결과의 data: 이미지를 asset으로 저장하고 내부 주소로 바꾼다. */
-    private String externalizeConvertedImages(Document parent, String markdown) {
+    private String externalizeConvertedImages(String workspaceId, String userId, String markdown) {
         var pattern = java.util.regex.Pattern.compile("data:(image/(?:png|jpeg|gif));base64,([A-Za-z0-9+/=]+)");
         var matcher = pattern.matcher(markdown);
         StringBuilder output = new StringBuilder();
@@ -1854,8 +1894,8 @@ public class DocumentService {
                 continue;
             }
             String hash = sha256(bytes);
-            UUID id = UUID.nameUUIDFromBytes((parent.getWorkspaceId() + ":" + hash).getBytes(StandardCharsets.UTF_8));
-            String key = "assets/" + parent.getWorkspaceId() + "/" + id + "/content";
+            UUID id = UUID.nameUUIDFromBytes((workspaceId + ":" + hash).getBytes(StandardCharsets.UTF_8));
+            String key = "assets/" + workspaceId + "/" + id + "/content";
             if (!assetRepository.existsById(id)) {
                 try (var image = javax.imageio.ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
                     var readers = javax.imageio.ImageIO.getImageReaders(image);
@@ -1870,12 +1910,12 @@ public class DocumentService {
                     }
                     RetryingObjectPut.put(minioClient, storageProps.getBucket(), key, bytes, matcher.group(1));
                     registerMinioRollbackCleanup(key);
-                    assetRepository.save(new fruition.core.document.domain.DocumentAsset(id, parent.getWorkspaceId(),
-                            parent.getUserId(), "converted-" + id, matcher.group(1), bytes.length, width, height, hash, key, Instant.now()));
+                    assetRepository.save(new fruition.core.document.domain.DocumentAsset(id, workspaceId,
+                            userId, "converted-" + id, matcher.group(1), bytes.length, width, height, hash, key, Instant.now()));
                 } catch (Exception e) { throw new DocumentConvertException("변환 이미지 저장 실패", e); }
             }
             matcher.appendReplacement(output, java.util.regex.Matcher.quoteReplacement(
-                    "/api/workspaces/" + parent.getWorkspaceId() + "/assets/" + id + "/content"));
+                    "/api/workspaces/" + workspaceId + "/assets/" + id + "/content"));
         }
         matcher.appendTail(output);
         // 생략한 이미지는 이미지·링크 문법째 문구로 바꾸고, 문법 밖에 남은 표시는 지운다.
@@ -2316,6 +2356,23 @@ public class DocumentService {
     ) {
         return saveContentInCurrentTransaction(
                 workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId, versionSource, false);
+    }
+
+    /** MCP Agent edit plus its I5 receipt are committed by one caller-owned PostgreSQL transaction. */
+    public DocumentContentSaveResponse saveAgentContentInCurrentTransaction(
+            String workspaceId,
+            String userId,
+            String documentId,
+            String markdown,
+            Long baseRevision,
+            String revisionWriteId,
+            String applyOperationId
+    ) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("현재 PostgreSQL transaction 안에서 호출해야 합니다.");
+        }
+        return saveContentInTransaction(workspaceId, userId, documentId, markdown, baseRevision, revisionWriteId,
+                "agent", applyOperationId, false, null, StaleBasePolicy.MERGE_ONLY);
     }
 
     /**
@@ -2895,6 +2952,21 @@ public class DocumentService {
         Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
         documentAccessPolicy.requireEdit(document, userId);
+        return renameAuthorized(workspaceId, userId, documentId, request, document);
+    }
+
+    /** MCP caller supplies current authorization; mutation semantics stay identical to the web path. */
+    public DocumentRenameResponse renameAgentInCurrentTransaction(
+            String workspaceId, String userId, String documentId, DocumentRenameRequest request) {
+        if (request == null || request.baseVersion() == null || request.baseVersion() < 1)
+            throw new InvalidDocumentFilenameException("base_version은 1 이상이어야 합니다.");
+        Document document = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId)
+                .orElseThrow(() -> new DocumentNotFoundException(documentId));
+        return renameAuthorized(workspaceId, userId, documentId, request, document);
+    }
+
+    private DocumentRenameResponse renameAuthorized(String workspaceId, String userId, String documentId,
+                                                     DocumentRenameRequest request, Document document) {
         // 채팅에서 만든 문서는 이름도 문답 출처의 일부라 본문과 함께 잠근다. 이동·삭제는 그대로 허용한다.
         if ("chat_export".equals(document.getOrigin())) {
             throw new DocumentTitleLockedException("채팅에서 만든 문서는 이름을 바꿀 수 없습니다.");

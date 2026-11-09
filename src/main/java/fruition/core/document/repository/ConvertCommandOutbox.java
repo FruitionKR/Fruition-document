@@ -44,6 +44,38 @@ public class ConvertCommandOutbox {
         }
     }
 
+    /**
+     * MCP 외부 AI 변환의 전처리 batch. converter가 기존 batch·journal로 AnyDoc 전처리만 한다(공급사 호출 없음).
+     * 다음 batch는 AI 세션 상태가 알려 줄 때 다시 넣는다. 결과 이벤트는 문서 변환 대기열과 무관하다.
+     */
+    public void enqueueExternalPrepare(String conversionId, String workspaceId, String userId, String sourceDocumentId,
+                                       String sourceKey, int startPage, int pageCount, boolean describeFigures) {
+        String runId = "mcpconvert:" + conversionId + ":" + startPage;
+        try {
+            String payload = objectMapper.writeValueAsString(new ExternalPrepareCommand(
+                    runId, "mcpconvert:" + conversionId, "convert_batch", "external", conversionId, workspaceId,
+                    userId, sourceDocumentId, sourceKey, startPage, pageCount, describeFigures));
+            writer.enqueueJoined(runId, commandTopic, runId, payload);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("MCP PDF 전처리 command 직렬화 실패: runId=" + runId, e);
+        }
+    }
+
+    record ExternalPrepareCommand(
+            @JsonProperty("run_id") String runId,
+            @JsonProperty("parent_run_id") String parentRunId,
+            String kind,
+            String restoration,
+            @JsonProperty("conversion_id") String conversionId,
+            @JsonProperty("workspace_id") String workspaceId,
+            @JsonProperty("user_id") String userId,
+            @JsonProperty("document_id") String documentId,
+            @JsonProperty("source_key") String sourceKey,
+            @JsonProperty("start_page") int startPage,
+            @JsonProperty("page_count") int pageCount,
+            @JsonProperty("describe_figures") boolean describeFigures
+    ) {}
+
     record ConvertCommand(
             @JsonProperty("run_id") String runId,
             @JsonProperty("parent_run_id") String parentRunId,

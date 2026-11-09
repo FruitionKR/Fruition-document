@@ -42,6 +42,11 @@ class JwtTokenProviderTest {
         assertFalse(verifier.isValid(token(pair, "unknown", "fruition-access", "fruition-api", Instant.now().plusSeconds(60))));
         assertFalse(verifier.isValid(token(pair, "current", "wrong", "fruition-api", Instant.now().plusSeconds(60))));
         assertFalse(verifier.isValid(token(pair, "current", "fruition-access", "wrong", Instant.now().plusSeconds(60))));
+        String dualAudience = Jwts.builder().subject("audit-test-user").issuer("fruition-access")
+                .audience().add("fruition-api").add("https://mcp.example/mcp").and()
+                .expiration(Date.from(Instant.now().plusSeconds(60))).header().keyId("current").and()
+                .signWith(pair.getPrivate(), Jwts.SIG.RS256).compact();
+        assertFalse(verifier.isValid(dualAudience));
         assertFalse(verifier.isValid(token(pair, "current", "fruition-access", "fruition-api", Instant.now().minusSeconds(60))));
         assertFalse(verifier.isValid("not-a-jwt"));
         String confused = Jwts.builder().subject("audit-test-user").issuer("fruition-access")
@@ -59,6 +64,11 @@ class JwtTokenProviderTest {
         var old = new JwtTokenProvider(LEGACY, 900, "fruition-access", "fruition-api");
         String token = old.generateAccessToken("audit-test-user", "test@example.invalid");
         assertTrue(verifier(pair, null, LEGACY, Instant.now().plusSeconds(60).toString()).isValid(token));
+        String dualAudience = Jwts.builder().subject("audit-test-user").issuer("fruition-access")
+                .audience().add("fruition-api").add("https://mcp.example/mcp").and()
+                .expiration(Date.from(Instant.now().plusSeconds(60)))
+                .signWith(Keys.hmacShaKeyFor(LEGACY.getBytes(java.nio.charset.StandardCharsets.UTF_8))).compact();
+        assertFalse(verifier(pair, null, LEGACY, Instant.now().plusSeconds(60).toString()).isValid(dualAudience));
         assertFalse(verifier(pair, null, LEGACY, Instant.now().minusSeconds(1).toString()).isValid(token));
         assertFalse(verifier(pair, null, "", "").isValid(token));
         assertThrows(IllegalArgumentException.class, () -> verifier(pair, null, LEGACY, ""));

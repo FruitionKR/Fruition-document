@@ -68,6 +68,17 @@ class PipelineAgentRunStatusRequesterTest {
                 exchange.close();
                 return;
             }
+            if (exchange.getRequestURI().getPath().endsWith("/mcp-owned")) {
+                byte[] response = """
+                        {"items":[{"run_id":"run-mcp-1","status":"awaiting_approval"}],
+                         "next_cursor":"cursor-2"}
+                        """.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+                return;
+            }
             byte[] response = """
                     {"id":"run-1","workspace_id":"ws-1","action":"workspace_workflow",
                      "status":"completed","request_summary":"정식 요청","error_code":null,
@@ -200,6 +211,33 @@ class PipelineAgentRunStatusRequesterTest {
     }
 
     @Test
+    void mcpOwnedRunsUsesServiceTokenAndExactActorScope() {
+        var result = requester().getMcpOwnedRuns("ws-1", "user 1",
+                "00000000-0000-4000-8000-000000000001", "opaque cursor", 7);
+
+        assertThat(uri.get()).isEqualTo("/agent/runs/mcp-owned?workspace_id=ws-1&user_id=user%201"
+                + "&grant_id=00000000-0000-4000-8000-000000000001&cursor=opaque%20cursor&limit=7");
+        assertThat(token.get()).isEqualTo("agent-token");
+        assertThat(result.items()).containsExactly(
+                new fruition.core.agent.dto.McpOwnedRunsResponse.Item("run-mcp-1", "awaiting_approval"));
+        assertThat(result.nextCursor()).isEqualTo("cursor-2");
+    }
+
+    @Test
+    void mcpOwnedRunsDoesNotExposeUpstreamFailureBody() {
+        failureStatus.set(500);
+        failureBody.set("{\"detail\":\"provider secret\"}");
+
+        assertThatThrownBy(() -> requester().getMcpOwnedRuns("ws-1", "user-1",
+                "00000000-0000-4000-8000-000000000001", null, 20))
+                .isInstanceOfSatisfying(PipelineAgentException.class, exception -> {
+                    assertThat(exception.getHttpStatus()).isEqualTo(503);
+                    assertThat(exception.getResponseBody()).isNull();
+                    assertThat(exception.getMessage()).doesNotContain("provider secret");
+                });
+    }
+
+    @Test
     void lifecycleRequestsUseServiceTokenAndServerInjectedActorScope() {
         var client = requester();
 
@@ -247,6 +285,20 @@ class PipelineAgentRunStatusRequesterTest {
         assertThatThrownBy(() -> client.approve("ws-1", "user-1", "run-1", 1, "hash"))
                 .isInstanceOf(fruition.core.agent.exception.PipelineAgentException.class);
         assertThat(body.get()).doesNotContain("approved_by");
+    }
+
+    @Test
+    void mcpApprovalSendsExactPriceFreeContract() {
+        var client = requester();
+        assertThatThrownBy(() -> client.approveMcp("ws-1", "user-1", "run-1", 1, "h".repeat(64),
+                java.util.List.of("op-1"), "00000000-0000-4000-8000-000000000001",
+                "00000000-0000-4000-8000-000000000002", "https://client.example/metadata", 3))
+                .isInstanceOf(fruition.core.agent.exception.PipelineAgentException.class);
+        assertThat(body.get()).contains("\"schema_version\":\"mcp.agent-approval.v1\"")
+                .contains("\"approval_mode\":\"EXPLICIT_WEB\"")
+                .contains("\"operation_ids\":[\"op-1\"]")
+                .contains("\"policy_generation\":3")
+                .doesNotContain("price", "maximum_charge", "unit_price");
     }
 
     @Test

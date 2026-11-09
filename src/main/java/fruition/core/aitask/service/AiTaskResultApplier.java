@@ -21,6 +21,7 @@ import fruition.core.wikimaintenance.repository.PipelineWikiLintResponse;
 import fruition.core.wikimaintenance.service.WikiMaintenanceService;
 import fruition.core.aihistory.domain.OperationLog;
 import fruition.core.aihistory.domain.OperationStatus;
+import fruition.core.aihistory.domain.OperationType;
 import fruition.core.aihistory.repository.OperationLogRepository;
 import fruition.core.aihistory.service.RestoreApplier;
 import fruition.core.aihistory.service.RestoreExecuteService;
@@ -204,7 +205,7 @@ public class AiTaskResultApplier {
         }
         JsonNode request = required(event, "request");
         String operationId = text(request, "operation_id");
-        OperationLog operation = operationLogRepository.findById(operationId)
+        OperationLog operation = operationLogRepository.findByIdForUpdate(operationId)
                 .orElseThrow(() -> new IllegalArgumentException("Restore operation을 찾을 수 없습니다."));
         // restore_ingest·restore_lint 두 종류만 결과로 돌아온다. AI 편집 되돌리기는 동기로 끝난다.
         var targetType = "restore_lint".equals(event.path("kind").asText())
@@ -218,6 +219,19 @@ public class AiTaskResultApplier {
 
         OperationResultRequest result = objectMapper.convertValue(
                 required(event, "payload"), OperationResultRequest.class);
+        if (!applySuccessfulRestore(operation, result)) {
+            CommittedLog.warn(log, "[{} 되돌리기 충돌 확정] operation=operation_restore stage=conflict errorCode=RESTORE_CONFLICT retryable=false rollback=user_requested targetType={} restoreOperationId={} targetOperationId={} runId={} workspaceId={} 원인=접수 뒤 위키 기여가 바뀌어 반영하지 않았습니다.",
+                    targetType.logLabel(), targetType, operationId, operation.getRestoredFrom(), runId, operation.getWorkspaceId());
+        }
+    }
+
+    /** Shared by the legacy task event and the durable publication event. */
+    public boolean applySuccessfulRestore(OperationLog operation, OperationResultRequest result) {
+        if (operation.getOperationType() == OperationType.restore
+                && operation.getStatus() == OperationStatus.conflict
+                && operation.getPayloadHash() == null) {
+            return false;
+        }
         if (!operation.getStatus().isTerminal()) {
             RestoreExecuteService.RestoreManifest manifest = readRestoreManifest(operation);
             try {
@@ -227,22 +241,22 @@ public class AiTaskResultApplier {
                 operation.complete(OperationStatus.conflict, e.getMessage(),
                         operation.getChangedResourceCount(), null, java.time.Instant.now());
                 if (analytics != null) analytics.restored(operation, "internal_error");
-                CommittedLog.warn(log, "[{} 되돌리기 충돌 확정] operation=operation_restore stage=conflict errorCode=RESTORE_CONFLICT retryable=false rollback=user_requested targetType={} restoreOperationId={} targetOperationId={} runId={} workspaceId={} 원인=접수 뒤 위키 기여가 바뀌어 반영하지 않았습니다.",
-                        targetType.logLabel(), targetType, operationId, operation.getRestoredFrom(), runId, operation.getWorkspaceId());
-                return;
+                return false;
             }
         }
-        var applied = operationIngestService.accept(operationId, result);
+        var applied = operationIngestService.accept(operation.getOperationId(), result);
+        if (applied == null) return true;
         if ("succeeded".equals(applied.status())) {
-            CommittedLog.info(log, "[{} 되돌리기 완료] operation=operation_restore stage=completed rollback=user_requested targetType={} restoreOperationId={} targetOperationId={} runId={} workspaceId={} documentId={} changedResources={}",
-                    targetType.logLabel(), targetType, operationId, operation.getRestoredFrom(), runId, operation.getWorkspaceId(), operation.getTargetDocumentId(), applied.recordedChanges());
+            CommittedLog.info(log, "[되돌리기 완료] operation=operation_restore stage=completed rollback=user_requested restoreOperationId={} targetOperationId={} workspaceId={} documentId={} changedResources={}",
+                    operation.getOperationId(), operation.getRestoredFrom(), operation.getWorkspaceId(), operation.getTargetDocumentId(), applied.recordedChanges());
         } else if ("partially_succeeded".equals(applied.status())) {
-            CommittedLog.error(log, "[{} 되돌리기 일부 완료] operation=operation_restore stage=partial partial=true rollback=user_requested targetType={} restoreOperationId={} targetOperationId={} runId={} workspaceId={} changedResources={} 원인=일부 페이지만 되돌렸습니다. 남은 페이지는 작업 기록에서 확인해야 합니다.",
-                    targetType.logLabel(), targetType, operationId, operation.getRestoredFrom(), runId, operation.getWorkspaceId(), applied.recordedChanges());
+            CommittedLog.error(log, "[되돌리기 일부 완료] operation=operation_restore stage=partial partial=true rollback=user_requested restoreOperationId={} targetOperationId={} workspaceId={} changedResources={} 원인=일부 페이지만 되돌렸습니다. 남은 페이지는 작업 기록에서 확인해야 합니다.",
+                    operation.getOperationId(), operation.getRestoredFrom(), operation.getWorkspaceId(), applied.recordedChanges());
         } else {
-            CommittedLog.error(log, "[{} 되돌리기 실패 확정] operation=operation_restore stage=result errorCode=RESTORE_APPLY_FAILED rollback=user_requested targetType={} restoreOperationId={} targetOperationId={} runId={} status={} 원인=재조립 결과를 하나도 반영하지 못했습니다.",
-                    targetType.logLabel(), targetType, operationId, operation.getRestoredFrom(), runId, applied.status());
+            CommittedLog.error(log, "[되돌리기 실패 확정] operation=operation_restore stage=result errorCode=RESTORE_APPLY_FAILED rollback=user_requested restoreOperationId={} targetOperationId={} status={} 원인=재조립 결과를 하나도 반영하지 못했습니다.",
+                    operation.getOperationId(), operation.getRestoredFrom(), applied.status());
         }
+        return true;
     }
 
     @Transactional

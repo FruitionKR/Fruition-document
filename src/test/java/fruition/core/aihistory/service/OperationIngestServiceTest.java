@@ -114,7 +114,7 @@ class OperationIngestServiceTest {
     void routesLintOperationToLintApplier() {
         OperationLog lint = OperationLog.processing(
                 "op_lint_1", WORKSPACE_ID, USER_ID, OperationType.lint, null, Instant.now());
-        when(operationLogRepository.findById("op_lint_1")).thenReturn(Optional.of(lint));
+        when(operationLogRepository.findByIdForUpdate("op_lint_1")).thenReturn(Optional.of(lint));
         givenObject("# 정리된 개념", "sha256:lint");
         when(lintApplier.apply(anyString(), any(), anyList(), anyList(), anyString(), any()))
                 .thenReturn(new OperationResultResponse("op_lint_1", "succeeded", 1));
@@ -139,7 +139,7 @@ class OperationIngestServiceTest {
         OperationLog done = OperationLog.processing(
                 "op_lint_1", WORKSPACE_ID, USER_ID, OperationType.lint, null, Instant.now());
         done.complete(OperationStatus.succeeded, "요약", 2, payloadHashOf(request), Instant.now());
-        when(operationLogRepository.findById("op_lint_1")).thenReturn(Optional.of(done));
+        when(operationLogRepository.findByIdForUpdate("op_lint_1")).thenReturn(Optional.of(done));
 
         assertThat(service.accept("op_lint_1", request).recordedChanges()).isEqualTo(2);
         verify(lintApplier, never()).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
@@ -151,7 +151,7 @@ class OperationIngestServiceTest {
         OperationLog done = OperationLog.processing(
                 "op_lint_1", WORKSPACE_ID, USER_ID, OperationType.lint, null, Instant.now());
         done.complete(OperationStatus.succeeded, "요약", 2, "다른해시", Instant.now());
-        when(operationLogRepository.findById("op_lint_1")).thenReturn(Optional.of(done));
+        when(operationLogRepository.findByIdForUpdate("op_lint_1")).thenReturn(Optional.of(done));
 
         assertThatThrownBy(() -> service.accept("op_lint_1", lintRequest("sha256:lint")))
                 .isInstanceOf(OperationPayloadConflictException.class);
@@ -161,7 +161,7 @@ class OperationIngestServiceTest {
     @Test
     @DisplayName("등록되지 않은 작업은 404")
     void rejectsUnknownOperation() {
-        when(operationLogRepository.findById(OPERATION_ID)).thenReturn(Optional.empty());
+        when(operationLogRepository.findByIdForUpdate(OPERATION_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.accept(OPERATION_ID, request("sha256:aaa")))
                 .isInstanceOf(OperationNotFoundException.class);
@@ -194,7 +194,7 @@ class OperationIngestServiceTest {
         OperationResultRequest request = request("sha256:aaa");
         OperationLog done = processingOperation();
         done.complete(OperationStatus.succeeded, "요약", 3, payloadHashOf(request), Instant.now());
-        when(operationLogRepository.findById(OPERATION_ID)).thenReturn(Optional.of(done));
+        when(operationLogRepository.findByIdForUpdate(OPERATION_ID)).thenReturn(Optional.of(done));
 
         assertThat(service.accept(OPERATION_ID, request).recordedChanges()).isEqualTo(3);
         verify(applier, never()).apply(anyString(), any(), anyList(), anyList(), anyString(), any());
@@ -205,7 +205,7 @@ class OperationIngestServiceTest {
     void differentPayloadOnFinishedOperationConflicts() {
         OperationLog done = processingOperation();
         done.complete(OperationStatus.succeeded, "요약", 3, "다른해시", Instant.now());
-        when(operationLogRepository.findById(OPERATION_ID)).thenReturn(Optional.of(done));
+        when(operationLogRepository.findByIdForUpdate(OPERATION_ID)).thenReturn(Optional.of(done));
 
         assertThatThrownBy(() -> service.accept(OPERATION_ID, request("sha256:aaa")))
                 .isInstanceOf(OperationPayloadConflictException.class);
@@ -214,7 +214,7 @@ class OperationIngestServiceTest {
     @Test
     @DisplayName("복구 작업의 결과는 재조립 분기로 간다")
     void routesRestoreOperationToRebuild() {
-        when(operationLogRepository.findById(OPERATION_ID)).thenReturn(Optional.of(rebuildingRestore()));
+        when(operationLogRepository.findByIdForUpdate(OPERATION_ID)).thenReturn(Optional.of(rebuildingRestore()));
         givenObject("# 다시 만든 C1", "sha256:new");
         when(rebuildApplier.apply(anyString(), any(), anyList(), anyString(), any()))
                 .thenReturn(new OperationResultResponse(OPERATION_ID, "succeeded", 2));
@@ -231,7 +231,7 @@ class OperationIngestServiceTest {
     void rejectsRebuildOnUnexpectedStatus() {
         OperationLog restore = rebuildingRestore();
         restore.moveTo(OperationStatus.applying);
-        when(operationLogRepository.findById(OPERATION_ID)).thenReturn(Optional.of(restore));
+        when(operationLogRepository.findByIdForUpdate(OPERATION_ID)).thenReturn(Optional.of(restore));
 
         assertThatThrownBy(() -> service.accept(OPERATION_ID, restoreRequest("sha256:new")))
                 .isInstanceOf(InvalidCallbackPayloadException.class);
@@ -242,7 +242,7 @@ class OperationIngestServiceTest {
     @Test
     @DisplayName("재조립 본문 해시가 다르면 거절하고 반영하지 않는다")
     void rejectsRebuildHashMismatch() {
-        when(operationLogRepository.findById(OPERATION_ID)).thenReturn(Optional.of(rebuildingRestore()));
+        when(operationLogRepository.findByIdForUpdate(OPERATION_ID)).thenReturn(Optional.of(rebuildingRestore()));
         givenObject("# 다시 만든 C1", "sha256:actual");
 
         assertThatThrownBy(() -> service.accept(OPERATION_ID, restoreRequest("sha256:reported")))
@@ -267,7 +267,7 @@ class OperationIngestServiceTest {
     }
 
     private void givenProcessingOperation() {
-        when(operationLogRepository.findById(OPERATION_ID)).thenReturn(Optional.of(processingOperation()));
+        when(operationLogRepository.findByIdForUpdate(OPERATION_ID)).thenReturn(Optional.of(processingOperation()));
     }
 
     private OperationLog processingOperation() {

@@ -18,6 +18,7 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -79,12 +80,63 @@ public class CreditService {
             if (!jdbc.queryForList("SELECT id FROM credit_entries WHERE idempotency_key = ?", Long.class,
                     "reserve:" + runId).isEmpty()) return;
             long available = ((Number) account.get("balance")).longValue() - ((Number) account.get("reserved")).longValue();
-            long amount = admit(kind, estimate, available, AiErrorMessages.INSUFFICIENT_CREDIT);
+            long amount = admit(userId, kind, estimate, available, AiErrorMessages.INSUFFICIENT_CREDIT);
             if (append(userId, "reserve", amount, runId, "reserve:" + runId, kind)) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
                         amount, userId);
             }
         });
+    }
+
+    /** MCP reserves its full cap; only explicit account exemptions bypass the balance check. */
+    public void reserveMcpApproval(String approvalId, String userId, long amountCreditMilli) {
+        if (amountCreditMilli < 0) throw new IllegalArgumentException("MCP reservation must be non-negative.");
+        String runId = mcpRunId(approvalId);
+        transaction.executeWithoutResult(tx -> {
+            Map<String, Object> account = lock(userId);
+            String key = "mcp-reserve:" + approvalId;
+            if (!jdbc.queryForList("SELECT id FROM credit_entries WHERE idempotency_key = ?", Long.class, key).isEmpty()) {
+                return;
+            }
+            long available = Math.subtractExact(((Number) account.get("balance")).longValue(),
+                    ((Number) account.get("reserved")).longValue());
+            if (!limitExempt(userId) && available < amountCreditMilli) throw new InsufficientCreditException(AiErrorMessages.INSUFFICIENT_CREDIT);
+            if (append(userId, "reserve", amountCreditMilli, runId, key, "mcp_approval", "MCP_APPROVAL")) {
+                jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
+                        amountCreditMilli, userId);
+            }
+        });
+    }
+
+    /** Applies the cumulative proven MCP charge and releases only when the caller proves no future execute is possible. */
+    public void settleMcpApproval(String approvalId, String userId, long totalChargeCreditMilli,
+                                  boolean releaseUnused) {
+        if (totalChargeCreditMilli < 0) throw new IllegalArgumentException("MCP charge must be non-negative.");
+        String runId = mcpRunId(approvalId);
+        transaction.executeWithoutResult(tx -> {
+            lock(userId);
+            Long charged = jdbc.queryForObject("SELECT -coalesce(sum(amount), 0) FROM credit_entries "
+                    + "WHERE run_id = ? AND user_id = ? AND type = 'charge'", Long.class, runId, userId);
+            long delta = Math.subtractExact(totalChargeCreditMilli, charged == null ? 0 : charged);
+            if (delta < 0) throw new IllegalStateException("MCP cumulative charge cannot decrease.");
+            if (delta > 0 && append(userId, "charge", -delta, runId,
+                    "mcp-charge:" + approvalId + ":" + totalChargeCreditMilli, "mcp_approval", null)) {
+                jdbc.update("UPDATE credit_accounts SET balance = balance - ?, updated_at = now() WHERE user_id = ?",
+                        delta, userId);
+            }
+            long open = jdbc.queryForObject("SELECT coalesce(sum(amount), 0) FROM credit_entries "
+                    + "WHERE run_id = ? AND user_id = ? AND type IN ('reserve', 'release') "
+                    + "AND reservation_type = 'MCP_APPROVAL'", Long.class, runId, userId);
+            if (releaseUnused && open > 0 && append(userId, "release", -open, runId,
+                    "mcp-release:" + approvalId, "mcp_approval", "MCP_APPROVAL")) {
+                jdbc.update("UPDATE credit_accounts SET reserved = reserved - ?, updated_at = now() WHERE user_id = ?",
+                        open, userId);
+            }
+        });
+    }
+
+    private static String mcpRunId(String approvalId) {
+        return "mcp:" + approvalId;
     }
 
     /**
@@ -96,7 +148,7 @@ public class CreditService {
         var rows = jdbc.queryForList("SELECT balance, reserved FROM credit_accounts WHERE user_id = ?", userId);
         long available = rows.isEmpty() ? 0
                 : ((Number) rows.getFirst().get("balance")).longValue() - ((Number) rows.getFirst().get("reserved")).longValue();
-        admit(kind, estimate(kind), available, AiErrorMessages.INSUFFICIENT_CREDIT);
+        admit(userId, kind, estimate(kind), available, AiErrorMessages.INSUFFICIENT_CREDIT);
     }
 
     /**
@@ -110,6 +162,13 @@ public class CreditService {
     /** 사전 승인으로 거절하는 환경인지({@code app.billing.enforce}). */
     public boolean enforcing() {
         return enforce;
+    }
+
+    /** 기존 가입자의 잔액 제한만 면제한다. 예약·사용량·정산 기록은 유지한다. */
+    private boolean limitExempt(String userId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM credit_accounts WHERE user_id = ? AND limit_exempt)",
+                Boolean.class, userId));
     }
 
     /** kind별 예상 상한(milli-KRW). */
@@ -137,8 +196,8 @@ public class CreditService {
      * 예약 금액을 정한다. enforce에서 가용 잔액이 최저 비용보다 작으면 거절하고, 아니면 상한과 가용 잔액 중 작은 쪽이다.
      * enforce가 꺼져 있으면 거절 없이 상한 전체다.
      */
-    private long admit(String kind, long estimate, long available, String rejection) {
-        if (!enforce) return estimate;
+    private long admit(String userId, String kind, long estimate, long available, String rejection) {
+        if (!enforce || limitExempt(userId)) return estimate;
         if (available < minimum(kind, estimate)) throw new InsufficientCreditException(rejection);
         return Math.min(estimate, available);
     }
@@ -189,7 +248,7 @@ public class CreditService {
             long balance = ((Number) account.get("balance")).longValue();
             long open = open(runId, userId);
             long othersReserved = ((Number) account.get("reserved")).longValue() - open;
-            long amount = admit(kind, estimate, balance - othersReserved,
+            long amount = admit(userId, kind, estimate, balance - othersReserved,
                     AiErrorMessages.INSUFFICIENT_CREDIT_STOPPED);
             if (open > 0 && append(userId, "release", -open, runId, "release:" + runId + ":" + seq, null)) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved - ?, updated_at = now() WHERE user_id = ?",
@@ -261,7 +320,8 @@ public class CreditService {
     @Scheduled(initialDelay = 120_000, fixedDelayString = "${app.billing.release-interval-ms:3600000}")
     public void releaseStale() {
         for (String runId : jdbc.queryForList("SELECT r.run_id FROM credit_entries r "
-                + "WHERE r.type = 'reserve' AND r.created_at < now() - make_interval(hours => ?) "
+                + "WHERE r.type = 'reserve' AND r.reservation_type = 'MODEL_USAGE' "
+                + "AND r.created_at < now() - make_interval(hours => ?) "
                 + "AND (SELECT coalesce(sum(e.amount), 0) FROM credit_entries e WHERE e.run_id = r.run_id "
                 + "AND e.type IN ('reserve', 'release')) > 0 "
                 + "AND NOT EXISTS (SELECT 1 FROM ai_task_runs t WHERE t.id = r.run_id AND " + IN_PROGRESS + ") "
@@ -313,9 +373,16 @@ public class CreditService {
     }
 
     private boolean append(String userId, String type, long amount, String runId, String key, String reason) {
-        return jdbc.update("INSERT INTO credit_entries (user_id, type, amount, run_id, idempotency_key, reason) "
-                + "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING",
-                userId, type, amount, runId, key, reason) == 1;
+        String reservationType = Set.of("reserve", "release").contains(type) ? "MODEL_USAGE" : null;
+        return append(userId, type, amount, runId, key, reason, reservationType);
+    }
+
+    private boolean append(String userId, String type, long amount, String runId, String key, String reason,
+                           String reservationType) {
+        return jdbc.update("INSERT INTO credit_entries "
+                + "(user_id, type, amount, run_id, idempotency_key, reason, reservation_type) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING",
+                userId, type, amount, runId, key, reason, reservationType) == 1;
     }
 
     /** 금액은 milli-KRW다. available은 잔액 − 예약이며 음수일 수 있다. */
