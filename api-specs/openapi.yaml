@@ -8908,6 +8908,9 @@ components:
           format: date-time
           description: 업로드 시각(ISO-8601 UTC)
           example: 2026-08-13T04:25:24.371948Z
+        wiki_ingest:
+          $ref: "#/components/schemas/UploadWikiIngest"
+          description: "업로드 직후 자동 위키 편입 판정 결과. multipart 업로드(POST /documents)와 PDF 직접 업로드 확정(POST /documents/uploads/complete)에서만 채운다. 그 밖의 응답, 가져오기 세션 업로드, 같은 Idempotency-Key 재요청이 돌려받는 저장된 응답에는 없다. status가 SKIPPED면 업로드는 됐지만 편입은 시작되지 않았으니 안내한다. PDF는 NOT_APPLICABLE이며 변환 후 자동 편입은 별도 경로다(문서 status·error_code로 확인). 멱등 재생 응답에는 이 필드가 없으니 없음을 정상(편입됨)으로 해석하지 말 것."
     DocumentWikiPageRef:
       type: object
       description: 이 문서에서 생성된 Wiki 페이지 참조
@@ -11599,6 +11602,28 @@ components:
           type: boolean
           description: 이 경로가 실제 답변 생성에 쓰였는지 여부
           example: true
+    UploadWikiIngest:
+      type: object
+      description: "업로드 직후 자동 위키 편입 판정 결과. 편입 등록 여부만 나타내며, 등록 뒤 진행·성공은 문서 status로 본다. PDF는 NOT_APPLICABLE이며 변환 후 자동 편입은 별도 경로다(문서 status·error_code로 확인). 멱등 재생 응답에는 이 필드가 없으니 없음을 정상(편입됨)으로 해석하지 말 것."
+      properties:
+        reason:
+          type: string
+          description: "SKIPPED·NOT_APPLICABLE의 이유. QUEUED이거나 PDF·스킬 참고 문서처럼 처음부터 대상이 아니면 null이다. SKIPPED: INSUFFICIENT_CREDIT(크레딧 부족), AI_USAGE_LIMIT_EXCEEDED(AI 사용 한도 초과), ERROR(설정·권한 조회나 등록 실패). NOT_APPLICABLE: DISABLED(워크스페이스 업로드 자동 편입 꺼짐), PERMISSION(업로더에게 wiki.ingest 없음)."
+          enum:
+          - INSUFFICIENT_CREDIT
+          - AI_USAGE_LIMIT_EXCEEDED
+          - ERROR
+          - DISABLED
+          - PERMISSION
+          example: INSUFFICIENT_CREDIT
+        status:
+          type: string
+          description: "QUEUED=편입을 등록함, SKIPPED=자동 편입 대상이었지만 등록하지 못함(문서는 uploaded로 남아 수동 편입 가능), NOT_APPLICABLE=자동 편입 대상이 아님(PDF·스킬 참고 문서·설정 꺼짐·wiki.ingest 권한 없음)"
+          enum:
+          - QUEUED
+          - SKIPPED
+          - NOT_APPLICABLE
+          example: SKIPPED
     UserLine:
       type: object
       properties:
