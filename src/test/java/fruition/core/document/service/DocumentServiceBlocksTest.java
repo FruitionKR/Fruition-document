@@ -1494,6 +1494,7 @@ class DocumentServiceBlocksTest {
                 any(), any(), any(), eq(false), any(), anyLong(), any(), any());
         // 응답은 업로드 시점 상태이고, 편입은 이후 별도 트랜잭션에서 등록된다.
         assertThat(response.status()).isEqualTo(fruition.core.document.domain.DocumentStatus.uploaded);
+        assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.QUEUED);
     }
 
     @Test
@@ -1528,6 +1529,7 @@ class DocumentServiceBlocksTest {
 
         verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
         assertThat(response.status()).isEqualTo(fruition.core.document.domain.DocumentStatus.uploaded);
+        assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.notApplicable(fruition.core.document.dto.UploadWikiIngest.Reason.DISABLED));
     }
 
     @Test
@@ -1537,9 +1539,11 @@ class DocumentServiceBlocksTest {
         when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(false);
 
-        documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
+        DocumentUploadResponse response =
+                documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
 
         verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.notApplicable(fruition.core.document.dto.UploadWikiIngest.Reason.PERMISSION));
     }
 
     @Test
@@ -1555,6 +1559,7 @@ class DocumentServiceBlocksTest {
 
         verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
         assertThat(response.status()).isEqualTo(fruition.core.document.domain.DocumentStatus.uploaded);
+        assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.skipped(fruition.core.document.dto.UploadWikiIngest.Reason.ERROR));
     }
 
     @Test
@@ -1570,9 +1575,62 @@ class DocumentServiceBlocksTest {
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
 
         assertThat(response.status()).isEqualTo(fruition.core.document.domain.DocumentStatus.uploaded);
+        assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.skipped(fruition.core.document.dto.UploadWikiIngest.Reason.ERROR));
         verify(documentRepository).save(any(Document.class));
         // 편입 등록 트랜잭션만 롤백된다.
         verify(transactionManager).rollback(any());
+    }
+
+    @Test
+    @DisplayName("자동 편입: 크레딧이 부족하면 업로드는 성공하고 응답에 SKIPPED/INSUFFICIENT_CREDIT을 싣는다")
+    void uploadMarkdown_autoIngest_insufficientCredit_reportsSkipped() {
+        stubMarkdownUploadEnv();
+        when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
+        doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("크레딧 부족"))
+                .when(ingestCommandOutbox).begin(anyString(), anyString(), anyString());
+
+        DocumentUploadResponse response =
+                documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
+
+        assertThat(response.status()).isEqualTo(fruition.core.document.domain.DocumentStatus.uploaded);
+        assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.skipped(fruition.core.document.dto.UploadWikiIngest.Reason.INSUFFICIENT_CREDIT));
+        verify(ingestCommandOutbox, never()).enqueue(anyString(), anyString(), anyString(), anyString(),
+                any(), any(), any(), anyBoolean(), any(), anyLong(), any(), any());
+        verify(transactionManager).rollback(any());
+    }
+
+    @Test
+    @DisplayName("자동 편입: AI 사용 한도를 넘으면 응답에 SKIPPED/AI_USAGE_LIMIT_EXCEEDED를 싣는다")
+    void uploadMarkdown_autoIngest_usageLimit_reportsSkipped() {
+        stubMarkdownUploadEnv();
+        when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
+        when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
+        doThrow(new fruition.core.usage.limit.AiUsageLimitExceededException(
+                fruition.core.usage.limit.AiUsageLimitType.values()[0], Instant.now()))
+                .when(ingestCommandOutbox).begin(anyString(), anyString(), anyString());
+
+        DocumentUploadResponse response =
+                documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
+
+        assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.skipped(fruition.core.document.dto.UploadWikiIngest.Reason.AI_USAGE_LIMIT_EXCEEDED));
+    }
+
+    @Test
+    @DisplayName("자동 편입: 멱등 재요청 재생은 저장된 응답을 그대로 돌려주고 편입 판정을 싣지 않는다")
+    void uploadMarkdown_idempotentReplay_hasNoWikiIngest() {
+        stubOwnedWorkspace();
+        DocumentUploadResponse stored = new DocumentUploadResponse("doc_replayed", "a.md", "text/markdown", 3,
+                fruition.core.document.domain.DocumentStatus.uploaded, "sources/documents/doc_replayed/original",
+                Instant.now(), true, 1, DocumentRole.EDITABLE, null);
+        when(idempotencyService.replay(anyString(), anyString(), eq("upload-key"), anyString(), any()))
+                .thenReturn(Optional.of(stored));
+
+        DocumentUploadResponse response =
+                documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
+
+        assertThat(response.wikiIngest()).isNull();
+        verify(workspaceSettingsClient, never()).autoIngestMarkdownOnUpload(anyString());
     }
 
     @Test
@@ -1583,9 +1641,11 @@ class DocumentServiceBlocksTest {
         lenient().when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         lenient().when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
 
-        documentService.upload(WORKSPACE_ID, USER_ID, "ref-key", null, markdownUploadFile(), "skill_reference");
+        DocumentUploadResponse response = documentService.upload(
+                WORKSPACE_ID, USER_ID, "ref-key", null, markdownUploadFile(), "skill_reference");
 
         verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.NOT_APPLICABLE);
     }
 
     @Test
@@ -1599,9 +1659,10 @@ class DocumentServiceBlocksTest {
         MockMultipartFile file = new MockMultipartFile(
                 "file", "자료.pdf", "application/pdf", "%PDF-1.7".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 
-        documentService.upload(WORKSPACE_ID, USER_ID, "pdf-key", null, file);
+        DocumentUploadResponse response = documentService.upload(WORKSPACE_ID, USER_ID, "pdf-key", null, file);
 
         verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.NOT_APPLICABLE);
     }
 
     @Test

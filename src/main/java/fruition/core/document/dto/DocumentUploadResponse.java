@@ -50,5 +50,26 @@ public record DocumentUploadResponse(
         @JsonProperty("folder_id")
         @JsonInclude(JsonInclude.Include.ALWAYS)
         @Schema(description = "부모 폴더 ID. 루트면 null이다.", nullable = true)
-        UUID folderId
-) {}
+        UUID folderId,
+
+        @JsonProperty("wiki_ingest")
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        @Schema(description = "업로드 직후 자동 위키 편입 판정 결과. multipart 업로드(POST /documents)와 PDF 직접 업로드 확정"
+                + "(POST /documents/uploads/complete)에서만 채운다. 그 밖의 응답, 가져오기 세션 업로드, 같은 Idempotency-Key 재요청이 "
+                + "돌려받는 저장된 응답에는 없다. status가 SKIPPED면 업로드는 됐지만 편입은 시작되지 않았으니 안내한다.",
+                nullable = true)
+        UploadWikiIngest wikiIngest
+) {
+    /** 기존 생성자. 자동 편입 판정이 없는 응답이다. */
+    public DocumentUploadResponse(String id, String filename, String mimeType, long byteSize, DocumentStatus status,
+                                  String sourceUri, Instant uploadedAt, boolean editable, long currentVersion,
+                                  DocumentRole documentRole, UUID folderId) {
+        this(id, filename, mimeType, byteSize, status, sourceUri, uploadedAt, editable, currentVersion, documentRole,
+                folderId, null);
+    }
+
+    public DocumentUploadResponse withWikiIngest(UploadWikiIngest value) {
+        return new DocumentUploadResponse(id, filename, mimeType, byteSize, status, sourceUri, uploadedAt, editable,
+                currentVersion, documentRole, folderId, value);
+    }
+}
