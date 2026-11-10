@@ -54,6 +54,7 @@ import fruition.core.document.dto.DocumentRenameRequest;
 import fruition.core.document.dto.DocumentRenameResponse;
 import fruition.core.document.dto.InternalPipelineDocumentResponse;
 import fruition.core.document.dto.DocumentUploadResponse;
+import fruition.core.document.dto.UploadWikiIngest;
 import fruition.core.document.dto.DocumentTrashResponse;
 import fruition.core.document.dto.DocumentBlockResponse;
 import fruition.core.document.dto.DocumentBlocksResponse;
@@ -283,6 +284,9 @@ public class DocumentService {
      * 바깥 트랜잭션 없이 {@link IdempotencyService#execute}로 멱등 선점 → 실행 트랜잭션 순서로 연다.
      * 바깥 트랜잭션이 연결을 쥔 채 선점(REQUIRES_NEW)이 연결을 하나 더 잡으면, 풀 크기만큼 동시에 들어올 때
      * 모두가 두 번째 연결을 기다리며 풀이 교착한다. 폴더를 지정하면 {@link #inFolderLockTransaction}을 본다.
+     * <p>
+     * 자동 편입은 업로드 커밋 직후(afterCommit) 같은 스레드에서 판정·등록하므로 이 메서드가 돌아오기 전에 결과가 정해진다.
+     * 그 결과를 응답의 wiki_ingest로 싣는다. 멱등 재요청 재생은 저장된 응답을 그대로 돌려주므로 wiki_ingest가 없다.
      */
     public DocumentUploadResponse upload(
             String workspaceId,
@@ -292,8 +296,10 @@ public class DocumentService {
             MultipartFile file,
             String origin
     ) {
-        return inFolderLockTransaction(folderId,
-                () -> uploadOnce(workspaceId, userId, idempotencyKey, folderId, file, origin, UploadAccounting.UPLOAD));
+        AtomicReference<UploadWikiIngest> wikiIngest = new AtomicReference<>();
+        DocumentUploadResponse response = inFolderLockTransaction(folderId, () -> uploadOnce(workspaceId, userId,
+                idempotencyKey, folderId, file, origin, UploadAccounting.UPLOAD, wikiIngest));
+        return wikiIngest.get() == null ? response : response.withWikiIngest(wikiIngest.get());
     }
 
     /**
@@ -311,8 +317,9 @@ public class DocumentService {
     ) {
         return inFolderLockTransaction(folderId, () -> {
             var session = importSessions.requireOpen(workspaceId, userId, importId);
+            // 가져온 문서는 자동 편입하지 않으므로 응답에 편입 판정을 싣지 않는다.
             return uploadOnce(workspaceId, userId, idempotencyKey, folderId, file, null,
-                    new UploadAccounting(true, session));
+                    new UploadAccounting(true, session), new AtomicReference<>());
         });
     }
 
@@ -323,7 +330,8 @@ public class DocumentService {
             UUID folderId,
             MultipartFile file,
             String origin,
-            UploadAccounting accounting
+            UploadAccounting accounting,
+            AtomicReference<UploadWikiIngest> wikiIngest
     ) {
         verifyWorkspaceOwnership(workspaceId, userId);
         boolean skillReference = isSkillReferenceOrigin(origin);
@@ -366,7 +374,8 @@ public class DocumentService {
                     documentId -> {
                         registerStoredSourceCleanup("document_upload", storedKey);
                         return storeUpload(workspaceId, userId, folderId, file, skillReference, uploadFilename,
-                                mimeType, markdownContent, contentHash, documentId, storedKey.get(), accounting, startedAt);
+                                mimeType, markdownContent, contentHash, documentId, storedKey.get(), accounting, startedAt,
+                                wikiIngest);
                     }));
         } catch (Exception e) {
             if (isUploadRejection(e)) logUploadRejected(workspaceId, userId, e);
@@ -437,7 +446,8 @@ public class DocumentService {
             String documentId,
             String objectPath,
             UploadAccounting accounting,
-            long startedAt
+            long startedAt,
+            AtomicReference<UploadWikiIngest> wikiIngest
     ) {
         boolean markdownUpload = markdownContent != null;
         try {
@@ -490,7 +500,9 @@ public class DocumentService {
             // 스킬 참고 문서는 편입 대상이 아니다. 자동 편입은 업로드 커밋 뒤 별도 트랜잭션에서 한다.
             if (markdownUpload && !skillReference && accounting.importSession() == null) {
                 autoIngestAfterCommit(workspaceId, userId, documentId,
-                        markdownContent.contentHash(), markdownContent.bytes().length);
+                        markdownContent.contentHash(), markdownContent.bytes().length, wikiIngest);
+            } else {
+                wikiIngest.set(UploadWikiIngest.NOT_APPLICABLE);
             }
             CommittedLog.debug(log, "[문서 DB 저장 완료] documentId={} workspaceId={} userId={} filename={} status={} sourceUri={}",
                     document.getId(), document.getWorkspaceId(), document.getUserId(),
@@ -1933,16 +1945,25 @@ public class DocumentService {
      * 판정에 실패하면 업로드·변환을 막지 않고 편입하지 않는다.
      */
     private boolean autoIngestAllowed(String workspaceId, String requesterId, AutoIngestPath path) {
+        return autoIngestBlocker(workspaceId, requesterId, path) == null;
+    }
+
+    /**
+     * 자동 편입을 하지 않는 이유. 편입해야 하면 null이다. 설정이 꺼져 있으면 DISABLED, wiki.ingest가 없으면 PERMISSION,
+     * 판정에 실패하면 ERROR다.
+     */
+    private UploadWikiIngest.Reason autoIngestBlocker(String workspaceId, String requesterId, AutoIngestPath path) {
         try {
             boolean enabled = path == AutoIngestPath.MARKDOWN_UPLOAD
                     ? workspaceSettingsClient.autoIngestMarkdownOnUpload(workspaceId)
                     : workspaceSettingsClient.autoIngestPdfOnConvert(workspaceId);
-            return enabled
-                    && workspaceAccessGuard.hasPermission(workspaceId, requesterId, WorkspacePermissions.WIKI_INGEST);
+            if (!enabled) return UploadWikiIngest.Reason.DISABLED;
+            return workspaceAccessGuard.hasPermission(workspaceId, requesterId, WorkspacePermissions.WIKI_INGEST)
+                    ? null : UploadWikiIngest.Reason.PERMISSION;
         } catch (RuntimeException e) {
             log.warn("[자동 편입] 판정 실패 — 편입하지 않음 workspaceId={} userId={} path={} cause={}",
                     workspaceId, requesterId, path, e.toString());
-            return false;
+            return UploadWikiIngest.Reason.ERROR;
         }
     }
 
@@ -1973,29 +1994,11 @@ public class DocumentService {
     /**
      * 업로드 커밋 뒤 자동 편입을 판정하고 별도 트랜잭션에서 등록한다. 설정·권한 HTTP 조회는 DB 트랜잭션 밖이고,
      * 등록이 실패하면 그 트랜잭션만 롤백돼 문서는 uploaded(신규)로 남는다. 업로드 원본이 곧 본문이라 원본은 다시 쓰지 않는다.
+     * 판정·등록 결과는 {@code outcome}에 남겨 업로드 응답(wiki_ingest)으로 돌려준다. 크레딧 과금 규칙은 바꾸지 않는다.
      */
     private void autoIngestAfterCommit(String workspaceId, String userId, String documentId,
-                                       String contentHash, long byteSize) {
-        Runnable autoIngest = () -> {
-            try {
-                if (!autoIngestAllowed(workspaceId, userId, AutoIngestPath.MARKDOWN_UPLOAD)) return;
-                // 모델 설정(access) 조회도 트랜잭션 밖에서 한다. 실패는 편입 등록 자리에서 던진다.
-                Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel =
-                        Prefetched.of(() -> workspaceAiModelClient.get(workspaceId));
-                requiresNewSaveTransactionTemplate().execute(status -> {
-                    documentRepository.findByIdInActiveWorkspace(documentId)
-                            .filter(doc -> doc.getStatus() == DocumentStatus.uploaded)
-                            .ifPresent(doc -> {
-                                doc.reopenForReingest(contentHash, byteSize);
-                                enqueueIngest(doc, userId, "auto", aiModel);
-                            });
-                    return null;
-                });
-            } catch (RuntimeException e) {
-                log.warn("[자동 편입] 업로드 직후 편입 등록 실패 — 문서는 신규로 남음 documentId={} cause={}",
-                        documentId, e.toString());
-            }
-        };
+                                       String contentHash, long byteSize, AtomicReference<UploadWikiIngest> outcome) {
+        Runnable autoIngest = () -> outcome.set(registerUploadAutoIngest(workspaceId, userId, documentId, contentHash, byteSize));
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             autoIngest.run();
             return;
@@ -2006,6 +2009,41 @@ public class DocumentService {
                 autoIngest.run();
             }
         });
+    }
+
+    private UploadWikiIngest registerUploadAutoIngest(String workspaceId, String userId, String documentId,
+                                                      String contentHash, long byteSize) {
+        UploadWikiIngest.Reason blocker = autoIngestBlocker(workspaceId, userId, AutoIngestPath.MARKDOWN_UPLOAD);
+        if (blocker == UploadWikiIngest.Reason.ERROR) return UploadWikiIngest.skipped(blocker);
+        if (blocker != null) return UploadWikiIngest.notApplicable(blocker);
+        try {
+            // 모델 설정(access) 조회도 트랜잭션 밖에서 한다. 실패는 편입 등록 자리에서 던진다.
+            Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel =
+                    Prefetched.of(() -> workspaceAiModelClient.get(workspaceId));
+            Boolean enqueued = requiresNewSaveTransactionTemplate().execute(status ->
+                    documentRepository.findByIdInActiveWorkspace(documentId)
+                            .filter(doc -> doc.getStatus() == DocumentStatus.uploaded)
+                            .map(doc -> {
+                                doc.reopenForReingest(contentHash, byteSize);
+                                enqueueIngest(doc, userId, "auto", aiModel);
+                                return true;
+                            })
+                            .orElse(false));
+            if (Boolean.TRUE.equals(enqueued)) return UploadWikiIngest.QUEUED;
+            return skippedUploadAutoIngest(documentId, UploadWikiIngest.Reason.ERROR, "document_not_uploaded");
+        } catch (fruition.core.usage.service.CreditService.InsufficientCreditException e) {
+            return skippedUploadAutoIngest(documentId, UploadWikiIngest.Reason.INSUFFICIENT_CREDIT, e.toString());
+        } catch (fruition.core.usage.limit.AiUsageLimitExceededException e) {
+            return skippedUploadAutoIngest(documentId, UploadWikiIngest.Reason.AI_USAGE_LIMIT_EXCEEDED, e.toString());
+        } catch (RuntimeException e) {
+            return skippedUploadAutoIngest(documentId, UploadWikiIngest.Reason.ERROR, e.toString());
+        }
+    }
+
+    private static UploadWikiIngest skippedUploadAutoIngest(String documentId, UploadWikiIngest.Reason reason, String cause) {
+        log.warn("[자동 편입] 업로드 직후 편입 등록 실패 — 문서는 신규로 남음 documentId={} reason={} cause={}",
+                documentId, reason, cause);
+        return UploadWikiIngest.skipped(reason);
     }
 
     String enqueueIngest(Document document) {
