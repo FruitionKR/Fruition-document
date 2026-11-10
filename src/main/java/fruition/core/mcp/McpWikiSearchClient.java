@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.core.document.service.DocumentAccessPolicy;
 import fruition.core.document.service.McpDocumentDataGateway;
+import fruition.core.usage.service.CreditService;
 import fruition.shared.http.PipelineClientFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
@@ -29,12 +30,13 @@ public class McpWikiSearchClient {
     private final ObjectMapper mapper;
     private final McpProperties properties;
     private final McpDocumentDataGateway documents;
+    private final CreditService credits;
 
     public McpWikiSearchClient(PipelineClientFactory factory, ObjectMapper mapper, McpProperties properties,
-                               McpDocumentDataGateway documents) {
+                               McpDocumentDataGateway documents, CreditService credits) {
         this.client = factory.restClient(properties.dependencyTimeoutSeconds());
         this.mapper = mapper.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-        this.properties = properties; this.documents = documents;
+        this.properties = properties; this.documents = documents; this.credits = credits;
     }
 
     public Response search(McpIdentity id, String query, String cursor, int pageSize) {
@@ -45,7 +47,7 @@ public class McpWikiSearchClient {
                 throw new McpToolException("INVALID_INPUT");
             Request request = new Request("mcp.wiki-search.v1", new Actor(UUID.randomUUID().toString(), id.grantId(),
                     id.userId(), id.workspaceId(), id.clientId(), id.policyGeneration(), "MCP_CLIENT", "2025-11-25",
-                    "search_wiki"), query, cursor, pageSize);
+                    "search_wiki"), query, cursor, pageSize, credits.paidAssistAllowed(id.userId()));
             byte[] payload = mapper.writeValueAsBytes(request);
             String raw = client.post().uri(properties.wikiSearchUri()).contentType(MediaType.APPLICATION_JSON)
                     .contentLength(payload.length).body(payload).retrieve().body(String.class);
@@ -92,7 +94,8 @@ public class McpWikiSearchClient {
     }
     private static boolean blank(String s) { return s == null || s.isBlank(); }
     record Request(@JsonProperty("schema_version") String schemaVersion, Actor actor, String query,
-                   String cursor, @JsonProperty("page_size") int pageSize) {}
+                   String cursor, @JsonProperty("page_size") int pageSize,
+                   @JsonProperty("jev_allowed") boolean jevAllowed) {}
     record Actor(@JsonProperty("invocation_id") String invocationId, @JsonProperty("grant_id") String grantId,
                  @JsonProperty("user_id") String userId, @JsonProperty("workspace_id") String workspaceId,
                  @JsonProperty("client_id") String clientId, @JsonProperty("policy_generation") long policyGeneration,

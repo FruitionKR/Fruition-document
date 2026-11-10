@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.core.document.domain.Document;
 import fruition.core.document.service.DocumentAccessPolicy;
 import fruition.core.document.service.McpDocumentDataGateway;
+import fruition.core.usage.service.CreditService;
 import fruition.shared.http.PipelineClientFactory;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -31,7 +32,7 @@ class McpWikiSearchClientTest {
                     """));
             server.start();
             var client = new McpWikiSearchClient(new PipelineClientFactory("internal"), new ObjectMapper(),
-                    props(server, 64), mock(McpDocumentDataGateway.class));
+                    props(server, 64), mock(McpDocumentDataGateway.class), credits(true));
 
             client.search(new McpIdentity("user", "workspace", "https://client.example/client.json",
                     "00000000-0000-4000-8000-000000000001", 3, Set.of("read"), "OWNER", Set.of()),
@@ -42,7 +43,9 @@ class McpWikiSearchClientTest {
             assertThat(request.getHeader("Transfer-Encoding")).isNull();
             var root = new ObjectMapper().readTree(request.getBody().readUtf8());
             assertThat(root.fieldNames()).toIterable()
-                    .containsExactlyInAnyOrder("schema_version", "actor", "query", "cursor", "page_size");
+                    .containsExactlyInAnyOrder("schema_version", "actor", "query", "cursor", "page_size", "jev_allowed");
+            assertThat(root.path("jev_allowed").isBoolean()).isTrue();
+            assertThat(root.path("jev_allowed").booleanValue()).isTrue();
             assertThat(root.path("schema_version").asText()).isEqualTo("mcp.wiki-search.v1");
             assertThat(root.path("query").asText()).isEqualTo("Aurora release");
             assertThat(root.path("cursor").isNull()).isTrue();
@@ -78,7 +81,7 @@ class McpWikiSearchClientTest {
             when(documents.viewer("workspace", "user", true, false)).thenReturn(viewer);
             when(documents.find("workspace", "doc_a")).thenReturn(Optional.of(advanced));
             var client = new McpWikiSearchClient(new PipelineClientFactory("internal"), new ObjectMapper(),
-                    props(server, 64), documents);
+                    props(server, 64), documents, credits(true));
 
             var result = client.search(identity(), "query", null, 1).results().getFirst();
 
@@ -101,7 +104,7 @@ class McpWikiSearchClientTest {
             when(documents.find("workspace", "doc_a")).thenReturn(Optional.of(new Document(
                     "doc_a", "workspace", "other", "a.md", "text/markdown", 1, null, "a".repeat(64))));
             var client = new McpWikiSearchClient(new PipelineClientFactory("internal"), new ObjectMapper(),
-                    props(server, 64), documents);
+                    props(server, 64), documents, credits(true));
 
             assertThat(client.search(identity(), "query", null, 1).nextCursor()
                     .getBytes(StandardCharsets.UTF_8)).hasSize(64);
@@ -122,6 +125,30 @@ class McpWikiSearchClientTest {
                         "evidence", List.of(Map.of("document_id", "doc_a", "block_id", "B0001")))),
                 "next_cursor", cursor == null ? com.fasterxml.jackson.databind.node.NullNode.getInstance() : cursor,
                 "truncated", cursor != null, "data_boundary", "UNTRUSTED_WORKSPACE_CONTENT"));
+    }
+
+    @Test void sendsJevAllowedFalseWhenUserHasNoUsableCredit() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(json("""
+                    {"schema_version":"mcp.wiki-search.v1","results":[],"next_cursor":null,
+                     "truncated":false,"data_boundary":"UNTRUSTED_WORKSPACE_CONTENT"}
+                    """));
+            server.start();
+            var client = new McpWikiSearchClient(new PipelineClientFactory("internal"), new ObjectMapper(),
+                    props(server, 64), mock(McpDocumentDataGateway.class), credits(false));
+
+            client.search(identity(), "Aurora release", null, 20);
+
+            var root = new ObjectMapper().readTree(server.takeRequest().getBody().readUtf8());
+            assertThat(root.path("jev_allowed").isBoolean()).isTrue();
+            assertThat(root.path("jev_allowed").booleanValue()).isFalse();
+        }
+    }
+
+    private static CreditService credits(boolean allowed) {
+        CreditService credits = mock(CreditService.class);
+        when(credits.paidAssistAllowed("user")).thenReturn(allowed);
+        return credits;
     }
 
     private static McpIdentity identity() {

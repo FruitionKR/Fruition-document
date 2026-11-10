@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import fruition.core.usage.service.CreditService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -35,6 +36,7 @@ public class McpWikiProposalService {
     private final McpWikiSourceService sourceService;
     private final McpWikiDraftClient ai;
     private final McpWikiApprovalService approvals;
+    private final CreditService credits;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final ObjectMapper mapper;
@@ -43,12 +45,12 @@ public class McpWikiProposalService {
     private final long maxTotalSourceBytes;
 
     public McpWikiProposalService(McpAccessClient access, McpWikiSourceService sourceService,
-                                  McpWikiDraftClient ai, McpWikiApprovalService approvals,
+                                  McpWikiDraftClient ai, McpWikiApprovalService approvals, CreditService credits,
                                   JdbcTemplate jdbc, TransactionTemplate transaction, ObjectMapper mapper,
                                   @Value("${app.mcp.review-origin:}") String reviewOrigin,
                                   @Value("${app.mcp.wiki.max-source-documents:}") String maxSourceDocuments,
                                   @Value("${app.mcp.wiki.max-total-source-bytes:}") String maxTotalSourceBytes) {
-        this.access=access; this.sourceService=sourceService; this.ai=ai; this.approvals=approvals;
+        this.access=access; this.sourceService=sourceService; this.ai=ai; this.approvals=approvals; this.credits=credits;
         this.jdbc=jdbc; this.transaction=transaction; this.mapper=mapper;
         this.reviewOrigin=reviewOrigin.isBlank()?null:reviewOrigin(reviewOrigin);
         this.maxSourceDocuments=configuredInt(maxSourceDocuments);
@@ -167,7 +169,7 @@ public class McpWikiProposalService {
                 "snapshot_id",snapshot,"expected_submitted_window_count",count,"source_snapshots",mapping,"submissions",submissions);
         Map<String,Object> body=linked("schema_version",SCHEMA,"actor",actorMap(actor),"idempotency_key",
                 text(args.get("idempotency_key"),255),"request_hash",hash(canonical),"snapshot_id",snapshot,
-                "expected_submitted_window_count",count);
+                "expected_submitted_window_count",count,"jev_allowed",credits.paidAssistAllowed(id.userId()));
         JsonNode result=ai.post("/internal/mcp/wiki/ingest-runs/"+run+"/finalize",body);
         validateDraftResult(result,"INGEST");
         JsonNode preview=ai.getPreview(result.path("draft_id").asText(),result.path("draft_version").asLong(),id.workspaceId(),id.userId());
@@ -193,7 +195,8 @@ public class McpWikiProposalService {
                 "source_snapshots",mappings.stream().sorted(Comparator.comparing(v->(String)v.get("snapshot_id"))).toList(),
                 "operations",internalOps);
         Map<String,Object> body=linked("schema_version",SCHEMA,"actor",actorMap(actor),"idempotency_key",key,
-                "request_hash",hash(canonical),"target_snapshot",targets,"source_snapshots",mappings,"operations",internalOps);
+                "request_hash",hash(canonical),"target_snapshot",targets,"source_snapshots",mappings,"operations",internalOps,
+                "jev_allowed",credits.paidAssistAllowed(id.userId()));
         JsonNode result=ai.post("/internal/mcp/wiki/lint-drafts",body);validateDraftResult(result,"LINT");
         jdbc.update("UPDATE mcp_wiki_lint_intents SET draft_id=?::uuid WHERE workspace_id=? AND user_id=? AND grant_id=?::uuid "
                         +"AND client_id=? AND idempotency_key=?",

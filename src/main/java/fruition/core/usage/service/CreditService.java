@@ -108,6 +108,23 @@ public class CreditService {
         });
     }
 
+    /**
+     * MCP 호출 중 유료 외부 보조(Jev)를 써도 되는지. 잠그지 않는 읽기이고 MCP 승인과 같게 enforce와 무관하게 적용한다:
+     * 한도 면제 계정이거나 가용 잔액(잔액 − 예약)이 0보다 클 때만 true. 계정 행이 없으면 false.
+     * MCP 호출을 막지 않도록 읽기에 실패해도 예외 대신 false를 돌려준다.
+     */
+    public boolean paidAssistAllowed(String userId) {
+        if (userId == null || userId.isBlank()) return false;
+        try {
+            List<Boolean> rows = jdbc.queryForList("SELECT limit_exempt OR balance - reserved > 0 "
+                    + "FROM credit_accounts WHERE user_id = ?", Boolean.class, userId);
+            return !rows.isEmpty() && Boolean.TRUE.equals(rows.get(0));
+        } catch (RuntimeException e) {
+            log.warn("유료 보조 허용 여부를 읽지 못해 끈다: userId={}", userId, e);
+            return false;
+        }
+    }
+
     /** Applies the cumulative proven MCP charge and releases only when the caller proves no future execute is possible. */
     public void settleMcpApproval(String approvalId, String userId, long totalChargeCreditMilli,
                                   boolean releaseUnused) {
