@@ -7,7 +7,9 @@ import io.swagger.v3.oas.annotations.media.Schema;
  * 업로드 직후 자동 위키 편입 결과. 업로드는 성공했지만 편입이 시작되지 않았음을 화면이 알릴 수 있게 응답에 싣는다.
  * 편입 자체의 성공 여부가 아니라 "편입 요청을 등록했는가"다. 등록 뒤 진행은 문서 status로 본다.
  */
-@Schema(description = "업로드 직후 자동 위키 편입 판정 결과. 편입 등록 여부만 나타내며, 등록 뒤 진행·성공은 문서 status로 본다.")
+@Schema(description = "업로드 직후 자동 위키 편입 판정 결과. 편입 등록 여부만 나타내며, 등록 뒤 진행·성공은 문서 status로 본다. "
+        + "PDF는 NOT_APPLICABLE이며 변환 후 자동 편입은 별도 경로다(문서 status·error_code로 확인). "
+        + "멱등 재생 응답에는 이 필드가 없으니 없음을 정상(편입됨)으로 해석하지 말 것.")
 public record UploadWikiIngest(
         @Schema(description = "QUEUED=편입을 등록함, SKIPPED=자동 편입 대상이었지만 등록하지 못함(문서는 uploaded로 남아 수동 편입 가능), "
                 + "NOT_APPLICABLE=자동 편입 대상이 아님(PDF·스킬 참고 문서·설정 꺼짐·wiki.ingest 권한 없음)",

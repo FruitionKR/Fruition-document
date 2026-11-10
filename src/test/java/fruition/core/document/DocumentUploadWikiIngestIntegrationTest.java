@@ -120,6 +120,34 @@ class DocumentUploadWikiIngestIntegrationTest {
     }
 
     @Test
+    void folderUpload_insufficientCredit_reportsSkipped() throws Exception {
+        // 폴더를 지정하면 바깥 트랜잭션(폴더 잠금)이 커밋될 때 자동 편입이 돈다.
+        UUID folderId = insertFolder();
+
+        JsonNode body = upload("a.md", UUID.randomUUID().toString(), folderId);
+
+        assertThat(body.path("folder_id").asText()).isEqualTo(folderId.toString());
+        assertThat(body.path("wiki_ingest").path("status").asText()).isEqualTo("SKIPPED");
+        assertThat(body.path("wiki_ingest").path("reason").asText()).isEqualTo("INSUFFICIENT_CREDIT");
+        assertThat(documentStatus(body)).isEqualTo("uploaded");
+        assertThat(ingestCommands()).isZero();
+    }
+
+    @Test
+    void folderUpload_sufficientCredit_reportsQueued() throws Exception {
+        UUID folderId = insertFolder();
+        credit(100_000_000L, false);
+
+        JsonNode body = upload("a.md", UUID.randomUUID().toString(), folderId);
+
+        assertThat(body.path("folder_id").asText()).isEqualTo(folderId.toString());
+        assertThat(body.path("wiki_ingest").path("status").asText()).isEqualTo("QUEUED");
+        assertThat(body.path("wiki_ingest").path("reason").isNull()).isTrue();
+        assertThat(documentStatus(body)).isEqualTo("processing");
+        assertThat(ingestCommands()).isEqualTo(1);
+    }
+
+    @Test
     void idempotentReplay_returnsStoredResponseWithoutWikiIngest() throws Exception {
         String key = UUID.randomUUID().toString();
         upload("a.md", key);
@@ -134,7 +162,13 @@ class DocumentUploadWikiIngestIntegrationTest {
     }
 
     private JsonNode upload(String filename, String idempotencyKey) throws Exception {
-        String response = mockMvc.perform(multipart("/api/workspaces/" + workspaceId + "/documents")
+        return upload(filename, idempotencyKey, null);
+    }
+
+    private JsonNode upload(String filename, String idempotencyKey, UUID folderId) throws Exception {
+        var request = multipart("/api/workspaces/" + workspaceId + "/documents");
+        if (folderId != null) request.param("folder_id", folderId.toString());
+        String response = mockMvc.perform(request
                         .file(new MockMultipartFile("file", filename, "text/markdown",
                                 "# 제목\n\n본문".getBytes(StandardCharsets.UTF_8)))
                         .header("Authorization", "Bearer " + jwt.generateAccessToken(userId, userId + "@example.com"))
@@ -142,6 +176,13 @@ class DocumentUploadWikiIngestIntegrationTest {
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         return objectMapper.readTree(response);
+    }
+
+    private UUID insertFolder() {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO folders(id, workspace_id, name, sort_order, created_at, updated_at) VALUES (?, ?, ?, 0, now(), now())",
+                id, workspaceId, "폴더-" + id);
+        return id;
     }
 
     private void credit(long balanceMilli, boolean limitExempt) {
