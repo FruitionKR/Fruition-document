@@ -107,6 +107,44 @@ class CreditServiceIntegrationTest {
     }
 
     @Test
+    void paidAssistAllowedOnlyForExemptOrPositiveAvailableRegardlessOfEnforce() {
+        for (boolean enforce : new boolean[]{false, true}) {
+            CreditService credits = credits(enforce);
+            String exempt = "user-" + UUID.randomUUID(), positive = "user-" + UUID.randomUUID();
+            String zero = "user-" + UUID.randomUUID(), negative = "user-" + UUID.randomUUID();
+            String missing = "user-" + UUID.randomUUID();
+            account(exempt, -900_000, 100_000, true);
+            account(positive, 500_000, 499_999, false);
+            account(zero, 500_000, 500_000, false);
+            account(negative, -1, 0, false);
+
+            assertThat(credits.paidAssistAllowed(exempt)).isTrue();
+            assertThat(credits.paidAssistAllowed(positive)).isTrue();
+            assertThat(credits.paidAssistAllowed(zero)).isFalse();
+            assertThat(credits.paidAssistAllowed(negative)).isFalse();
+            assertThat(credits.paidAssistAllowed(missing)).isFalse();
+            assertThat(credits.paidAssistAllowed(null)).isFalse();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_accounts WHERE user_id = ?", Integer.class,
+                    missing)).isZero();
+        }
+    }
+
+    @Test
+    void paidAssistAllowedFallsBackToFalseWhenCreditReadFails() {
+        JdbcTemplate failing = org.mockito.Mockito.mock(JdbcTemplate.class);
+        org.mockito.Mockito.when(failing.queryForList(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq(Boolean.class), org.mockito.ArgumentMatchers.any(Object[].class)))
+                .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("down"));
+        CreditService credits = new CreditService(failing, manager, environment, true, ESTIMATE, 48);
+        assertThat(credits.paidAssistAllowed(user)).isFalse();
+    }
+
+    private void account(String userId, long balance, long reserved, boolean exempt) {
+        jdbc.update("INSERT INTO credit_accounts (user_id, balance, reserved, limit_exempt) VALUES (?, ?, ?, ?)",
+                userId, balance, reserved, exempt);
+    }
+
+    @Test
     void mcpReservationIsAllOrNoneExcludedFromStaleReleaseAndSettlesCumulatively() {
         CreditService credits = credits(false);
         grant(1_500);

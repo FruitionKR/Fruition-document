@@ -3,6 +3,7 @@ package fruition.core.mcp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fruition.TestcontainersConfiguration;
+import fruition.core.usage.service.CreditService;
 import fruition.shared.http.PipelineClientFactory;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -44,6 +45,7 @@ class McpWikiProposalServiceIntegrationTest {
     private McpAccessClient access;
     private McpWikiSourceService sources;
     private McpWikiApprovalService approvals;
+    private CreditService credits;
     private McpWikiProposalService service;
     private final McpIdentity identity = new McpIdentity("user_i9_proposal", "workspace_i9_proposal",
             "https://client.example/i9-proposal.json", "00000000-0000-4000-8000-000000000041", 2,
@@ -56,10 +58,11 @@ class McpWikiProposalServiceIntegrationTest {
         access = mock(McpAccessClient.class);
         sources = mock(McpWikiSourceService.class);
         approvals = mock(McpWikiApprovalService.class);
+        credits = mock(CreditService.class);
         when(access.authorizeWikiProposal(any(), anyString())).thenReturn(identity);
         McpWikiDraftClient client = new McpWikiDraftClient(new PipelineClientFactory("internal-test"), mapper,
                 McpTokenVerifierTest.props(), aiServer.url("/agent/runs").toString(), "i9-agent-token");
-        service = new McpWikiProposalService(access, sources, client, approvals, jdbc,
+        service = new McpWikiProposalService(access, sources, client, approvals, credits, jdbc,
                 new TransactionTemplate(manager), mapper, "https://review.example", "8", "100000");
     }
 
@@ -100,6 +103,7 @@ class McpWikiProposalServiceIntegrationTest {
                  "draft_hash":"sha256:%s","public_state_hash":"sha256:%s","state":"AWAITING_WEB_APPROVAL"}
                 """.formatted(run, draft, "c".repeat(64), "d".repeat(64))));
         aiServer.enqueue(json(preview(draft, "INGEST", snapshot, "doc_i9", "a".repeat(64))));
+        when(credits.paidAssistAllowed(identity.userId())).thenReturn(true);
 
         service.invoke(identity, "start_ingest", Map.of("idempotency_key", "start-1", "document_id", "doc_i9"));
         service.invoke(identity, "resume_ingest", Map.of("run_id", run));
@@ -135,6 +139,13 @@ class McpWikiProposalServiceIntegrationTest {
                 .path("evidence").get(0);
         assertThat(internalEvidence.path("snapshot_id").asText()).isEqualTo(snapshot);
         assertThat(internalEvidence.has("document_id")).isFalse();
+        for (int i = 0; i < 4; i++) {
+            assertThat(mapper.readTree(requests.get(i).getBody().readUtf8()).has("jev_allowed")).isFalse();
+        }
+        JsonNode finalizeBody = mapper.readTree(requests.get(4).getBody().readUtf8());
+        assertThat(requests.get(4).getPath()).endsWith("/finalize");
+        assertThat(finalizeBody.path("jev_allowed").isBoolean()).isTrue();
+        assertThat(finalizeBody.path("jev_allowed").booleanValue()).isTrue();
         assertThat(requests.get(5).getMethod()).isEqualTo("GET");
         assertThat(requests.get(5).getHeader("X-MCP-Workspace-Id")).isEqualTo(identity.workspaceId());
         verify(approvals).registerDraft(identity, run, mapper.readTree(preview(draft, "INGEST", snapshot,
@@ -166,6 +177,7 @@ class McpWikiProposalServiceIntegrationTest {
                                 "evidence", List.of(Map.of("document_id", "doc_i9", "block_id", "B0001",
                                         "quote", "quote"))), "depends_on", List.of())));
 
+        when(credits.paidAssistAllowed(identity.userId())).thenReturn(false, true);
         service.invoke(identity, "submit_lint_changes", args);
         service.invoke(identity, "submit_lint_changes", args);
 
@@ -176,6 +188,9 @@ class McpWikiProposalServiceIntegrationTest {
         String firstSnapshot = first.path("source_snapshots").get(0).path("snapshot_id").asText();
         assertThat(second.path("source_snapshots").get(0).path("snapshot_id").asText()).isEqualTo(firstSnapshot);
         assertThat(second.path("request_hash").asText()).isEqualTo(first.path("request_hash").asText());
+        assertThat(first.path("jev_allowed").isBoolean()).isTrue();
+        assertThat(first.path("jev_allowed").booleanValue()).isFalse();
+        assertThat(second.path("jev_allowed").booleanValue()).isTrue();
         JsonNode internalEvidence = first.path("operations").get(0).path("arguments").path("evidence").get(0);
         assertThat(internalEvidence.path("snapshot_id").asText()).isEqualTo(firstSnapshot);
         assertThat(internalEvidence.has("document_id")).isFalse();

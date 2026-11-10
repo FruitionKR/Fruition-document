@@ -34,7 +34,7 @@ public record McpProperties(
             @Value("${app.mcp.max-document-content-bytes}") int maxDocumentContentBytes,
             @Value("${app.mcp.dependency-timeout-seconds}") int dependencyTimeoutSeconds) {
         this(parseHttps(resourceUri, true), parseHttps(authorizationServerUri, false),
-                origins.stream().map(o -> parseOrigin(o.trim())).toList(), parseHttps(wikiSearchUri, false),
+                origins.stream().map(o -> parseOrigin(o.trim())).toList(), parseInternal(wikiSearchUri),
                 cursorSecret.getBytes(StandardCharsets.UTF_8), maxPageSize, maxCandidates, maxResponseBytes,
                 maxCursorBytes, maxSourceBlocks, maxSourceBytes, maxDocumentBlocksPerPage,
                 maxDocumentContentBytes, dependencyTimeoutSeconds);
@@ -48,14 +48,24 @@ public record McpProperties(
     }
 
     private static URI parseHttps(String value, boolean resource) {
+        return parse(value, resource, false, "MCP URIs must be canonical HTTPS URIs");
+    }
+
+    /** 위키 검색은 클러스터 내부 ai 서비스(http://pipeline-api:8000)로만 닿으므로 http도 허용한다. */
+    private static URI parseInternal(String value) {
+        return parse(value, false, true, "MCP wiki search URI must be a canonical HTTP(S) URI");
+    }
+
+    private static URI parse(String value, boolean resource, boolean allowHttp, String message) {
         try {
             URI uri = URI.create(value);
-            if (!"https".equals(uri.getScheme()) || uri.getHost() == null || uri.getUserInfo() != null
+            boolean scheme = "https".equals(uri.getScheme()) || (allowHttp && "http".equals(uri.getScheme()));
+            if (!scheme || uri.getHost() == null || uri.getUserInfo() != null
                     || uri.getQuery() != null || uri.getFragment() != null
                     || (resource && !"/mcp".equals(uri.getPath()))) throw new IllegalArgumentException();
             return uri;
         } catch (RuntimeException e) {
-            throw new IllegalArgumentException("MCP URIs must be canonical HTTPS URIs");
+            throw new IllegalArgumentException(message);
         }
     }
 
