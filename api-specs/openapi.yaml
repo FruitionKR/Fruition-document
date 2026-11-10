@@ -6303,6 +6303,30 @@ paths:
           description: OK
       tags:
       - ai-task-cancellation-controller
+  /internal/credits/beta-signup:
+    post:
+      operationId: grant
+      parameters:
+      - in: header
+        name: X-Internal-Token
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrantRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/GrantResponse"
+          description: OK
+      tags:
+      - internal-beta-credit-controller
   /internal/documents/{document_id}/mcp-wiki-source:
     post:
       operationId: readMcpWikiSource
@@ -9240,6 +9264,30 @@ components:
           format: date-time
           description: 마지막 변경 시각(ISO-8601 UTC)
           example: 2026-08-13T04:25:24.371948Z
+    GrantRequest:
+      type: object
+      properties:
+        email_hash:
+          type: string
+          minLength: 1
+          pattern: "[0-9a-f]{64}"
+        slot:
+          type: integer
+          format: int32
+          maximum: 50
+          minimum: 1
+        user_id:
+          type: string
+          minLength: 1
+      required:
+      - email_hash
+      - user_id
+    GrantResponse:
+      type: object
+      properties:
+        amount_krw_milli:
+          type: integer
+          format: int64
     GraphContext:
       type: object
       description: 답변에 쓰인 Wiki 그래프의 부분 그래프
