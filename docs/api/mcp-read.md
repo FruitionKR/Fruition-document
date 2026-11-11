@@ -18,7 +18,7 @@ decompression to select the required `read`, `write_propose` (`propose_document_
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-## 공개 카탈로그 (`mcp-tools.v7`)
+## 공개 카탈로그 (`mcp-tools.v8`)
 
 `McpToolCatalog.tools()`는 2026-11-09부터 다음 24개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
 `find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
@@ -46,6 +46,8 @@ statement 단어 대부분이 quote에 있어야 하므로 번역·의역 금지
 길이·개수 상한)을 적었다. 임계값 수치는 설정값이라 적지 않으며, 설명에는 workspace·사용자 내용을 넣지 않는다.
 
 도구 추가 기록(2026-11-11, `mcp-tools.v6` → `mcp-tools.v7`; v6 기록이 예약한 `v5`는 쓰지 않았다): 웹 직접 업로드 API를 감싸는 문서 업로드 3개 도구를 더했다(아래 절, ADR Fruition-ai 0048).
+
+정적 설명 변경 기록(2026-11-11, `mcp-tools.v7` → `mcp-tools.v8`, schema 변경 없음): `start_ingest` 설명에 현재 문서 내용이 이미 위키에 편입돼 있으면 `ALREADY_INGESTED`로 거절되며 재시도하지 말고 문서를 고친 뒤 다시 시작한다는 안내를 더했다. AI는 마지막 성공 편입(웹·MCP)의 입력 Markdown 해시(`source_block_snapshots`)가 현재 문서 해시와 같으면 run을 만들지 않고 `409 ALREADY_INGESTED`를 돌려주며, `McpWikiDraftClient`가 이 코드를 그대로 전달한다.
 
 The read tools are:
 

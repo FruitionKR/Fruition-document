@@ -22,6 +22,7 @@ import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.exception.DocumentOriginalNotFoundException;
 import fruition.core.document.exception.DocumentUploadException;
 import fruition.core.document.exception.InvalidDocumentOriginException;
+import fruition.core.document.exception.DocumentAlreadyIngestedException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentVersionConflictException;
 import fruition.core.document.exception.TrashRetentionExpiredException;
@@ -2971,11 +2972,29 @@ public class DocumentService {
         workspaceAccessGuard.requirePermission(workspaceId, userId, WorkspacePermissions.WIKI_INGEST);
         Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel =
                 Prefetched.of(() -> workspaceAiModelClient.get(workspaceId));
-        return transactionTemplate.execute(status -> ingestInTransaction(workspaceId, userId, documentId, aiModel));
+        String lastIngestedHash = lastIngestedSourceHash(workspaceId, documentId);
+        return transactionTemplate.execute(status ->
+                ingestInTransaction(workspaceId, userId, documentId, aiModel, lastIngestedHash));
+    }
+
+    /**
+     * 마지막으로 성공한 편입(웹·MCP)의 입력 Markdown 해시. AI가 발행과 같은 트랜잭션에서 남기는 블록 스냅샷 값이며
+     * {@link #blocks}의 stale 판정과 MCP {@code start_ingest}의 같은 내용 거절이 같은 값을 쓴다. 조회 실패는 편입을 막지 않는다.
+     */
+    private String lastIngestedSourceHash(String workspaceId, String documentId) {
+        try {
+            PipelineWikiStateRequester.DocumentWikiContext context =
+                    pipelineWikiStateRequester.documentContext(workspaceId, documentId);
+            return context == null ? null : context.sourceContentHash();
+        } catch (RuntimeException e) {
+            log.warn("[편입 중복 확인 건너뜀] documentId={} 원인={}", documentId, e.toString());
+            return null;
+        }
     }
 
     private DocumentIngestResponse ingestInTransaction(String workspaceId, String userId, String documentId,
-                                                       Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel) {
+                                                       Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel,
+                                                       String lastIngestedHash) {
         Document document = documentRepository.findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .filter(value -> value.getDeletedAt() == null)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
@@ -3001,13 +3020,14 @@ public class DocumentService {
             throw new DocumentAlreadyProcessingException("이미 처리 중인 문서입니다.");
         }
 
-        return new DocumentIngestResponse(documentId, promoteAndEnqueueIngest(document, userId, aiModel),
-                document.getStatus());
+        return new DocumentIngestResponse(documentId,
+                promoteAndEnqueueIngest(document, userId, aiModel, lastIngestedHash), document.getStatus());
     }
 
     /** 최신 편집본을 원본으로 승격하고 ingest outbox에 등록한다(수동 편입). 자동 편입은 업로드 본문이 곧 원본이라 승격 없이 등록한다. */
     private String promoteAndEnqueueIngest(Document document, String userId,
-                                           Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel) {
+                                           Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel,
+                                           String lastIngestedHash) {
         String documentId = document.getId();
         editStateInitializer.initializeIfNeeded(document);
         DocumentEditState editState = editStateRepository.findById(documentId)
@@ -3016,6 +3036,10 @@ public class DocumentService {
         // 최신 편집본은 PostgreSQL 편집 상태가 canonical이다.
         String currentMarkdown = editState.getMarkdown();
         String currentContentHash = editState.getContentHash();
+        if (currentContentHash != null && currentContentHash.equals(lastIngestedHash)) {
+            // 같은 내용을 다시 편입하면 같은 위키를 다시 써 비용만 든다. 편집하면 해시가 바뀌어 다시 편입할 수 있다.
+            throw new DocumentAlreadyIngestedException("현재 내용은 이미 위키에 편입되어 있습니다. 문서를 수정한 뒤 다시 편입해 주세요.");
+        }
 
         // 원본 경로가 없으면 빈 키로 putObject가 나가 원인을 알기 어려운 500이 된다.
         // 문서 생성 시점에 원본을 만들지 않던 시절의 행이 여기로 들어온다.
