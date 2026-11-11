@@ -54,7 +54,7 @@ public record DocumentUploadResponse(
 
         @JsonProperty("wiki_ingest")
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        @Schema(description = "업로드 직후 자동 위키 편입 판정 결과. multipart 업로드(POST /documents)와 PDF 직접 업로드 확정"
+        @Schema(description = "업로드 직후 자동 위키 편입 판정 결과. multipart 업로드(POST /documents)와 직접 업로드 확정"
                 + "(POST /documents/uploads/complete)에서만 채운다. 그 밖의 응답, 가져오기 세션 업로드, 같은 Idempotency-Key 재요청이 "
                 + "돌려받는 저장된 응답에는 없다. status가 SKIPPED면 업로드는 됐지만 편입은 시작되지 않았으니 안내한다. "
                 + "PDF는 NOT_APPLICABLE이며 변환 후 자동 편입은 별도 경로다(문서 status·error_code로 확인). "

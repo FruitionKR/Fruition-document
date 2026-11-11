@@ -50,6 +50,7 @@ public class McpToolCatalog {
     private final McpSkillTools skillTools;
     private final McpMeetingTools meetingTools;
     private final McpPdfTools pdfTools;
+    private final McpDocumentUploadTools uploadTools;
     private final McpAuditLogger audit;
     private final ObjectMapper mapper;
     private final McpProperties properties;
@@ -57,16 +58,18 @@ public class McpToolCatalog {
     public McpToolCatalog(McpWikiSearchClient wiki, McpWikiPageService wikiPages, McpDocumentReadService documents,
                           McpDocumentProposalService proposals, McpPlanProposalService planProposals,
                           McpWikiProposalService wikiProposals, McpSkillTools skillTools,
-                          McpMeetingTools meetingTools, McpPdfTools pdfTools, McpAuditLogger audit, ObjectMapper mapper,
+                          McpMeetingTools meetingTools, McpPdfTools pdfTools,
+                          McpDocumentUploadTools uploadTools, McpAuditLogger audit, ObjectMapper mapper,
                           McpProperties properties) {
         this.wiki = wiki; this.wikiPages = wikiPages; this.documents = documents;
         this.proposals = proposals; this.planProposals = planProposals; this.wikiProposals = wikiProposals;
         this.skillTools = skillTools; this.meetingTools = meetingTools;
         this.pdfTools = pdfTools;
+        this.uploadTools = uploadTools;
         this.audit = audit; this.mapper = mapper; this.properties = properties;
     }
 
-    /** 읽기 4개 + 제안 8개 + Skill 3개(읽기 2·정의 제안 1) + 회의 읽기 2개 + PDF 변환 4개. 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
+    /** 읽기 4개 + 제안 8개 + Skill 3개(읽기 2·정의 제안 1) + 회의 읽기 2개 + PDF 변환 4개 + 웹 직접 업로드 3개(업로드는 웹과 같이 승인 없이 문서가 된다). 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
     public List<io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification> tools() {
         var tools = new java.util.ArrayList<>(List.of(
                 spec(tool("search_wiki", "Search published workspace wiki pages", searchSchema()),
@@ -92,6 +95,8 @@ public class McpToolCatalog {
             tools.add(spec(tool, (id, args) -> meetingTools.invoke(id, tool.name(), args)));
         for (McpSchema.Tool tool : pdfTools.tools())
             tools.add(spec(tool, (id, args) -> pdfTools.invoke(id, tool.name(), args)));
+        for (McpSchema.Tool tool : uploadTools.tools())
+            tools.add(spec(tool, (id, args) -> uploadTools.invoke(id, tool.name(), args)));
         return List.copyOf(tools);
     }
 
@@ -116,6 +121,7 @@ public class McpToolCatalog {
             if (McpSkillTools.PROPOSE.equals(tool)) targets = skillDefinitionTargets(request.arguments());
             if (McpSkillTools.GET.equals(tool)) targets = List.of(McpSkillTools.skillId(request.arguments()));
             if (WIKI_TOOLS.contains(tool)) targets = wikiTargets(request.arguments());
+            if (McpDocumentUploadTools.NAMES.contains(tool)) targets = McpDocumentUploadTools.targets(tool, request.arguments());
             Object result = handler.call(id, request.arguments());
             byte[] bytes = mapper.writeValueAsBytes(result);
             if (bytes.length > properties.maxResponseBytes()) throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");

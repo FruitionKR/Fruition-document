@@ -142,10 +142,14 @@ public class DocumentService {
     /**
      * 생성 경로의 업로드 한도 적용 방식. 내부 생성(AI 도구·회의록·초기 노트)은 {@link #NONE}으로 저장 용량을 보지 않는다.
      * 가져오기 쓰기도 저장 용량을 그대로 보고, 만든 문서를 그 세션으로 표시한다.
+     * {@code autoIngest}는 Markdown 업로드 직후 서버 자동 편입 판정을 할지다. 가져오기와 MCP 업로드는 하지 않는다.
      */
-    private record UploadAccounting(boolean limited, fruition.core.imports.ImportSessionStore.OpenSession importSession) {
-        static final UploadAccounting NONE = new UploadAccounting(false, null);
-        static final UploadAccounting UPLOAD = new UploadAccounting(true, null);
+    private record UploadAccounting(boolean limited, fruition.core.imports.ImportSessionStore.OpenSession importSession,
+                                    boolean autoIngest) {
+        static final UploadAccounting NONE = new UploadAccounting(false, null, true);
+        static final UploadAccounting UPLOAD = new UploadAccounting(true, null, true);
+        /** MCP 업로드: 편입·변환은 사용자 AI가 start_ingest·start_pdf_conversion으로 한다. */
+        static final UploadAccounting MCP_UPLOAD = new UploadAccounting(true, null, false);
     }
 
     private static final int MAX_SAVE_ATTEMPTS = 3;
@@ -320,8 +324,25 @@ public class DocumentService {
             var session = importSessions.requireOpen(workspaceId, userId, importId);
             // 가져온 문서는 자동 편입하지 않으므로 응답에 편입 판정을 싣지 않는다.
             return uploadOnce(workspaceId, userId, idempotencyKey, folderId, file, null,
-                    new UploadAccounting(true, session), new AtomicReference<>());
+                    new UploadAccounting(true, session, false), new AtomicReference<>());
         });
+    }
+
+    /**
+     * MCP 클라이언트의 업로드(웹 직접 업로드 확정과 같은 경로). 일반 업로드와 모두 같고, 서버 자동 편입만 하지 않는다
+     * (가져오기와 같은 분기). 응답의 wiki_ingest는 NOT_APPLICABLE이다.
+     */
+    public DocumentUploadResponse uploadWithoutAutoIngest(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            UUID folderId,
+            MultipartFile file
+    ) {
+        AtomicReference<UploadWikiIngest> wikiIngest = new AtomicReference<>();
+        DocumentUploadResponse response = inFolderLockTransaction(folderId, () -> uploadOnce(workspaceId, userId,
+                idempotencyKey, folderId, file, null, UploadAccounting.MCP_UPLOAD, wikiIngest));
+        return wikiIngest.get() == null ? response : response.withWikiIngest(wikiIngest.get());
     }
 
     private DocumentUploadResponse uploadOnce(
@@ -340,11 +361,9 @@ public class DocumentService {
         verifyFolder(workspaceId, folderId);
         validateIdempotencyKey(idempotencyKey);
         try {
-            String filename = file.getOriginalFilename();
-            validateFilename(filename);
-            // txt는 내용상 Markdown이므로 .md 이름의 편집 문서로 받는다.
-            filename = filename.trim().replaceFirst("(?i)\\.txt$", ".md");
-            String mimeType = resolveMimeType(filename);
+            UploadType type = uploadType(file.getOriginalFilename());
+            String filename = type.filename();
+            String mimeType = type.mimeType();
             boolean markdownUpload = MARKDOWN_MIME_TYPE.equals(mimeType);
             if (skillReference && !markdownUpload) {
                 throw new UnsupportedDocumentFileException("스킬 참고 문서는 Markdown 또는 txt 파일만 업로드할 수 있습니다.");
@@ -499,7 +518,7 @@ public class DocumentService {
             }
             DocumentUploadResponse response = toUploadResponse(document, markdownUpload);
             // 스킬 참고 문서는 편입 대상이 아니다. 자동 편입은 업로드 커밋 뒤 별도 트랜잭션에서 한다.
-            if (markdownUpload && !skillReference && accounting.importSession() == null) {
+            if (markdownUpload && !skillReference && accounting.autoIngest()) {
                 autoIngestAfterCommit(workspaceId, userId, documentId,
                         markdownContent.contentHash(), markdownContent.bytes().length, wikiIngest);
             } else {
@@ -663,7 +682,7 @@ public class DocumentService {
             throw new InvalidDocumentOriginException("가져오기 문서에는 origin·agent_run_id를 지정할 수 없습니다.");
         }
         return createMarkdown(workspaceId, userId, idempotencyKey, request, null,
-                new UploadAccounting(true, session));
+                new UploadAccounting(true, session, false));
     }
 
     /** 가져오기 세션으로 기존 문서 본문을 저장할 때: 열린 세션이고 그 세션이 만든 문서여야 한다. 아니면 400 IMPORT_INVALID. */
@@ -911,9 +930,7 @@ public class DocumentService {
 
     private DocumentEditingRules.MarkdownContent readUploadedMarkdown(MultipartFile file) throws IOException {
         // 직접 업로드하는 Markdown 파일의 크기는 읽기 전에 검사한다.
-        if (file.getSize() > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
-            throw new MarkdownContentTooLargeException("Markdown 본문은 UTF-8 기준 5MB 이하여야 합니다.");
-        }
+        requireMarkdownUploadSize(file.getSize());
         try (InputStream stream = file.getInputStream()) {
             return DocumentEditingRules.markdown(stream.readNBytes(DocumentEditingRules.MAX_MARKDOWN_BYTES + 1));
         }
@@ -932,8 +949,27 @@ public class DocumentService {
         }
     }
 
+    /** 업로드 파일 이름 검사와 형식 판정 결과. txt는 내용상 Markdown이므로 .md 이름의 편집 문서로 받는다. */
+    record UploadType(String filename, String mimeType) {
+        boolean markdown() { return MARKDOWN_MIME_TYPE.equals(mimeType); }
+    }
+
+    /** 일반 업로드와 직접 업로드가 같이 쓰는 파일 이름 검사·형식 판정. */
+    static UploadType uploadType(String originalFilename) {
+        validateFilename(originalFilename);
+        String filename = originalFilename.trim().replaceFirst("(?i)\\.txt$", ".md");
+        return new UploadType(filename, resolveMimeType(filename));
+    }
+
+    /** Markdown·txt 업로드 크기 상한(UTF-8 5MB). */
+    static void requireMarkdownUploadSize(long size) {
+        if (size > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
+            throw new MarkdownContentTooLargeException("Markdown 본문은 UTF-8 기준 5MB 이하여야 합니다.");
+        }
+    }
+
     /** 클라이언트가 보낸 Content-Type은 믿지 않고, 확장자로 서버가 정한 MIME만 저장한다. */
-    private String resolveMimeType(String filename) {
+    private static String resolveMimeType(String filename) {
         String normalizedFilename = filename.trim().toLowerCase(java.util.Locale.ROOT);
         if (normalizedFilename.endsWith(".pdf")) {
             return PDF_MIME_TYPE;
@@ -3345,7 +3381,7 @@ public class DocumentService {
         return sourceUri;
     }
 
-    private void validateFilename(String filename) {
+    private static void validateFilename(String filename) {
         if (filename == null) {
             throw new InvalidDocumentFilenameException("문서 이름은 1자 이상 255자 이하여야 합니다.");
         }
