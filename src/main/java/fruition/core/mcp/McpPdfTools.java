@@ -120,8 +120,7 @@ public class McpPdfTools {
                         + "blocks may be resubmitted until max_attempts, otherwise they stay marked as not restored.",
                         submitSchema(), submitOutputSchema(), PROPOSAL_ONLY),
                 tool(FINALIZE, "After every window is submitted, assemble the converted document with Fruition's existing "
-                        + "assembly and propose saving it, linked to the PDF. Nothing is saved until a person approves it "
-                        + "in Fruition web.", finalizeSchema(), finalizeOutputSchema(), PROPOSAL_ONLY));
+                        + "assembly and propose saving it, linked to the PDF." + McpToolCatalog.REVIEW_APPROVAL, finalizeSchema(), finalizeOutputSchema(), PROPOSAL_ONLY));
     }
 
     public Object invoke(McpIdentity identity, String tool, Map<String, Object> args) {

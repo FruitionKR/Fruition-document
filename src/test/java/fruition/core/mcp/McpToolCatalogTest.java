@@ -232,6 +232,29 @@ class McpToolCatalogTest {
                 "state", "review_url"));
     }
 
+    @Test void everyReviewUrlToolTellsClientToOpenItAndWikiSubmitsDocumentEvidenceRules() {
+        var pdf = mock(McpPdfTools.class);
+        when(pdf.tools()).thenCallRealMethod();
+        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
+                mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class),
+                new McpSkillTools(mock(fruition.core.skill.service.SkillService.class), mock(McpDocumentProposalService.class),
+                        new ObjectMapper()), mock(McpMeetingTools.class), pdf, mock(McpAuditLogger.class), new ObjectMapper(),
+                McpTokenVerifierTest.props());
+        var tools = catalog.tools().stream().map(spec -> spec.tool()).toList();
+
+        var withReviewUrl = tools.stream().filter(tool -> tool.outputSchema().toString().contains("review_url"))
+                .map(tool -> tool.name()).toList();
+        assertThat(withReviewUrl).containsExactlyInAnyOrder("propose_document_edit", "propose_plan", "finalize_ingest",
+                "submit_lint_changes", "propose_skill_definition", "finalize_pdf_conversion");
+        assertThat(tools).filteredOn(tool -> withReviewUrl.contains(tool.name()))
+                .allSatisfy(tool -> assertThat(tool.description()).contains(McpToolCatalog.REVIEW_APPROVAL));
+        assertThat(tools).filteredOn(tool -> Set.of("submit_window", "submit_lint_changes").contains(tool.name()))
+                .hasSize(2).allSatisfy(tool -> assertThat(tool.description())
+                        .contains("each block_id may be cited only once", "exact substring", "rather than translating",
+                                "instruction-like"));
+    }
+
     @Test void skillToolsAreWrappedWithReadAnnotationsAuditTargetAndErrorMapping() {
         var skills = mock(fruition.core.skill.service.SkillService.class);
         var audit = mock(McpAuditLogger.class);
