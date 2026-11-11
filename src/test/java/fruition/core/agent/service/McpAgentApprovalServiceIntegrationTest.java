@@ -164,6 +164,11 @@ class McpAgentApprovalServiceIntegrationTest {
         doThrow(new IllegalStateException("secret upstream body")).when(access).authorizeWebApproval(any());
         assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("unavailable_reason")
                 .asText()).isEqualTo("QUOTE_UNAVAILABLE");
+
+        doThrow(new McpAgentApprovalService.McpApprovalException(org.springframework.http.HttpStatus.FORBIDDEN,
+                "not a code: secret")).when(access).authorizeWebApproval(any());
+        assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("unavailable_reason")
+                .asText()).isEqualTo("QUOTE_UNAVAILABLE");
     }
 
     @AfterEach

@@ -139,10 +139,9 @@ public class McpAgentApprovalService {
 
     /** 견적 실패를 화면에 보여도 되는 고정 코드로 줄인다. 예외 메시지·본문은 싣지 않는다. */
     private static String quoteUnavailableReason(RuntimeException failure) {
-        if (failure instanceof McpAuthorizationException denied && denied.code() != null
-                && denied.code().matches("[A-Z][A-Z0-9_]{0,63}")) return denied.code();
-        if (failure instanceof McpApprovalException approval) return approval.getMessage();
-        return "QUOTE_UNAVAILABLE";
+        String code = failure instanceof McpAuthorizationException denied ? denied.code()
+                : failure instanceof McpApprovalException ? failure.getMessage() : null;
+        return code != null && code.matches("[A-Z][A-Z0-9_]{0,63}") ? code : "QUOTE_UNAVAILABLE";
     }
 
     public void cancelRun(String runId) {
