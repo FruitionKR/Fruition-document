@@ -20,7 +20,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
                 mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var tools = catalog.tools();
         assertThat(tools).extracting(s -> s.tool().name()).containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page",
                         "propose_document_edit", "propose_plan", "start_ingest", "resume_ingest", "get_window",
@@ -85,7 +85,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
                 mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var pageTool = catalog.tools().get(3);
         var id = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
                 Set.of("read"), "MEMBER", Set.of());
@@ -117,7 +117,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), proposals, mock(McpPlanProposalService.class),
-                mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
+                mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json",
                 "00000000-0000-4000-8000-000000000001", 2, Set.of("write_propose"), "OWNER", Set.of());
         Map<String,Object> arguments = proposalArguments();
@@ -158,7 +158,7 @@ class McpToolCatalogTest {
         var planProposals = mock(McpPlanProposalService.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class), planProposals,
-                mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
+                mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props());
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json",
                 "00000000-0000-4000-8000-000000000001", 2, Set.of("write_propose"), "OWNER", Set.of());
@@ -197,7 +197,7 @@ class McpToolCatalogTest {
         var wikiProposals = mock(McpWikiProposalService.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), wikiProposals, mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
+                mock(McpPlanProposalService.class), wikiProposals, mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props());
 
         var staged = catalog.tools().subList(6, 12);
@@ -240,7 +240,7 @@ class McpToolCatalogTest {
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), mock(McpWikiProposalService.class),
                 new McpSkillTools(mock(fruition.core.skill.service.SkillService.class), mock(McpDocumentProposalService.class),
-                        new ObjectMapper()), mock(McpMeetingTools.class), pdf, mock(McpAuditLogger.class), new ObjectMapper(),
+                        new ObjectMapper()), mock(McpMeetingTools.class), pdf, mock(McpDocumentUploadTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props());
         var tools = catalog.tools().stream().map(spec -> spec.tool()).toList();
 
@@ -261,7 +261,7 @@ class McpToolCatalogTest {
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
-                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), new McpSkillTools(skills, mock(McpDocumentProposalService.class), new ObjectMapper()), mock(McpMeetingTools.class), mock(McpPdfTools.class),
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), new McpSkillTools(skills, mock(McpDocumentProposalService.class), new ObjectMapper()), mock(McpMeetingTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class),
                 audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var tools = catalog.tools();
         assertThat(tools).extracting(spec -> spec.tool().name()).hasSize(15).endsWith("list_skills", "get_skill", "propose_skill_definition");
@@ -292,5 +292,46 @@ class McpToolCatalogTest {
                 "target", Map.of("type", "selection", "start_line", 1, "end_line", 1),
                 "instruction", "Fix title",
                 "replacement_markdown", "x");
+    }
+
+    @Test void uploadToolsWrapWebDirectUploadWithAuditAndStableErrors() throws Exception {
+        var uploads = mock(fruition.core.document.service.DocumentDirectUploadService.class);
+        var audit = mock(McpAuditLogger.class);
+        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
+                mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class),
+                mock(McpMeetingTools.class), mock(McpPdfTools.class),
+                new McpDocumentUploadTools(uploads, mock(fruition.core.document.service.McpDocumentDataGateway.class), new ObjectMapper()),
+                audit, new ObjectMapper(), McpTokenVerifierTest.props());
+        var tools = catalog.tools();
+        assertThat(tools).extracting(spec -> spec.tool().name())
+                .endsWith("start_document_upload", "get_upload_part_urls", "complete_document_upload");
+        assertThat(tools.subList(tools.size() - 3, tools.size())).allSatisfy(spec -> {
+            assertThat(spec.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
+            assertThat(spec.tool().annotations().readOnlyHint()).isFalse();
+            assertThat(spec.tool().annotations().destructiveHint()).isFalse();
+            assertThat(spec.tool().annotations().openWorldHint()).isFalse();
+            assertThat(spec.tool().description()).contains("upload the file in the Fruition web app");
+        });
+        assertThat(tools.subList(tools.size() - 3, tools.size()))
+                .extracting(spec -> spec.tool().annotations().idempotentHint()).containsExactly(false, true, true);
+        assertThat(tools.get(tools.size() - 3).tool().description()).contains("confirm with the user before uploading");
+        assertThat(tools.get(tools.size() - 1).tool().description()).contains("confirm with the user before uploading");
+        assertThat(tools.get(tools.size() - 3).tool().description()).contains("PUT the raw bytes of each part");
+
+        String folder = "00000000-0000-4000-8000-000000000001";
+        when(uploads.start(org.mockito.ArgumentMatchers.eq("workspace"), org.mockito.ArgumentMatchers.eq("user"),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.isNull()))
+                .thenThrow(new fruition.core.document.exception.UnsupportedDocumentFileException("x"));
+        var id = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
+                Set.of("write_propose"), "MEMBER", Set.of());
+        var args = new java.util.HashMap<String, Object>();
+        args.put("filename", "a.docx"); args.put("size", 5); args.put("folder_id", folder);
+        var result = tools.get(tools.size() - 3).callHandler().apply(
+                McpTransportContext.create(Map.of(McpSecurityFilter.IDENTITY, id)),
+                new io.modelcontextprotocol.spec.McpSchema.CallToolRequest("start_document_upload", args, null));
+        assertThat(result.isError()).isTrue();
+        assertThat(result.content().toString()).contains("UNSUPPORTED_FILE_TYPE");
+        verify(audit).log(id, "start_document_upload", java.util.List.of(folder), "ERROR", "UNSUPPORTED_FILE_TYPE");
     }
 }

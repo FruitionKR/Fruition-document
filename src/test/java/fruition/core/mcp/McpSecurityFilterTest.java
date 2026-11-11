@@ -124,7 +124,7 @@ class McpSecurityFilterTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"start_pdf_conversion", "submit_conversion_window", "finalize_pdf_conversion",
-            "propose_skill_definition"})
+            "propose_skill_definition", "start_document_upload", "get_upload_part_urls", "complete_document_upload"})
     void externalResultProposalsPreflightWriteProposeScope(String toolName) throws Exception {
         var verifier = mock(McpTokenVerifier.class); var access = mock(McpAccessClient.class);
         var token = new McpTokenVerifier.Token("user", "workspace", "https://client.example/client.json",
