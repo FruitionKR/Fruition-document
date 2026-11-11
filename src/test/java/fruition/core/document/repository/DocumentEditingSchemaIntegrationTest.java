@@ -40,6 +40,8 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
@@ -1500,10 +1502,14 @@ class DocumentEditingSchemaIntegrationTest {
         assertThat(documentRepository.findVisibleByWorkspaceId(workspaceId))
                 .extracting(fruition.core.document.domain.Document::getId)
                 .containsExactly("doc_chat_" + suffix, "doc_visible_" + suffix);
-        assertThat(documentRepository.searchVisibleByWorkspaceId(workspaceId, "보고서"))
+        assertThat(documentRepository.searchVisibleByWorkspaceId(workspaceId, "보고서", Pageable.unpaged()))
                 .extracting(fruition.core.document.domain.Document::getId)
                 .containsExactly("doc_chat_" + suffix, "doc_visible_" + suffix);
-        assertThat(documentRepository.searchVisibleByWorkspaceId(workspaceId, "본문에만 있는 검색어"))
+        // MCP find_documents는 같은 쿼리를 상한만 붙여 쓴다.
+        assertThat(documentRepository.searchVisibleByWorkspaceId(workspaceId, "보고서", PageRequest.of(0, 1)))
+                .extracting(fruition.core.document.domain.Document::getId)
+                .containsExactly("doc_chat_" + suffix);
+        assertThat(documentRepository.searchVisibleByWorkspaceId(workspaceId, "본문에만 있는 검색어", Pageable.unpaged()))
                 .isEmpty();
         assertThat(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(
                 "doc_deleted_" + suffix, workspaceId)).isEmpty();

@@ -48,7 +48,7 @@ class McpWikiSourceControllerTest {
         var actor = new McpProposalActor("00000000-0000-4000-8000-000000000002",
                 "00000000-0000-4000-8000-000000000001", "user", "workspace",
                 "https://client.example", 2, "MCP_CLIENT", "2025-11-25", "submit_lint_changes");
-        var expected = new McpWikiSourceService.Response("mcp.wiki-source.v1", "doc_1", "workspace", 4,
+        var expected = new McpWikiSourceService.Response("mcp.wiki-source.v1", "doc_1", "Source", "workspace", 4,
                 "sha256:" + "a".repeat(64), "text/markdown", java.util.List.of());
         when(service.read(actor, "doc_1")).thenReturn(expected);
 

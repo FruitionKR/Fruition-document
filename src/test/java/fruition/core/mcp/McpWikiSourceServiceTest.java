@@ -37,6 +37,11 @@ class McpWikiSourceServiceTest {
 
         assertThat(response.schemaVersion()).isEqualTo("mcp.wiki-source.v1");
         assertThat(response.documentId()).isEqualTo("doc_1");
+        assertThat(response.displayName()).isEqualTo("Source");
+        // AI reader는 정확한 필드 집합만 받는다.
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().convertValue(response, Map.class).keySet())
+                .containsExactlyInAnyOrder("schema_version", "document_id", "display_name",
+                "workspace_id", "source_version", "source_content_hash", "mime_type", "blocks");
         assertThat(response.workspaceId()).isEqualTo("workspace");
         assertThat(response.sourceVersion()).isEqualTo(7);
         assertThat(response.sourceContentHash()).isEqualTo("sha256:" + sha256(markdown));

@@ -49,6 +49,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.Pageable;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -664,12 +665,12 @@ class DocumentServiceBlocksTest {
     @DisplayName("검색어는 앞뒤 공백을 제거해 파일명 검색 repository에 전달한다")
     void findAll_withQuery_usesFilenameSearch() {
         stubOwnedWorkspace();
-        when(documentRepository.searchVisibleByWorkspaceId(WORKSPACE_ID, "보고서")).thenReturn(List.of());
+        when(documentRepository.searchVisibleByWorkspaceId(WORKSPACE_ID, "보고서", Pageable.unpaged())).thenReturn(List.of());
 
         DocumentListResponse response = documentService.findAll(WORKSPACE_ID, USER_ID, "  보고서  ");
 
         assertThat(response.documents()).isEmpty();
-        verify(documentRepository).searchVisibleByWorkspaceId(WORKSPACE_ID, "보고서");
+        verify(documentRepository).searchVisibleByWorkspaceId(WORKSPACE_ID, "보고서", Pageable.unpaged());
     }
 
     @Test
@@ -1457,6 +1458,55 @@ class DocumentServiceBlocksTest {
         verify(ingestCommandOutbox).enqueue(
                 eq(response.runId()), eq(document.getId()), eq(USER_ID), eq(WORKSPACE_ID),
                 any(), any(), any(), eq(false), eq("op_ingest_1"), anyLong(), any(), any());
+    }
+
+    @Test
+    @DisplayName("재ingest는 현재 편집본이 마지막 성공 편입과 같은 내용이면 거절하고 아무것도 바꾸지 않는다")
+    void ingest_refusesContentAlreadyIngested() {
+        stubOwnedWorkspace();
+        Document document = new Document(
+                "doc_same", WORKSPACE_ID, USER_ID, "문서.md", "text/markdown", 4,
+                "sources/documents/doc_same/original", "old-hash");
+        document.updateStatus(fruition.core.document.domain.DocumentStatus.completed, null, java.time.Instant.now(), null);
+        DocumentEditState editState = new DocumentEditState(
+                document.getId(), "# 같은 본문\n", DocumentEditingRules.markdown("# 같은 본문\n").contentHash(), 1);
+        doReturn(Optional.of(document)).when(documentRepository)
+                .findByIdAndWorkspaceIdForUpdate(document.getId(), WORKSPACE_ID);
+        when(editStateRepository.findById(document.getId())).thenReturn(Optional.of(editState));
+        when(pipelineWikiStateRequester.documentContext(WORKSPACE_ID, document.getId()))
+                .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(
+                        List.of(), List.of(), editState.getContentHash()));
+
+        assertThatThrownBy(() -> documentService.ingest(WORKSPACE_ID, USER_ID, document.getId()))
+                .isInstanceOf(fruition.core.document.exception.DocumentAlreadyIngestedException.class);
+        assertThat(document.getStatus()).isEqualTo(fruition.core.document.domain.DocumentStatus.completed);
+        verifyNoInteractions(ingestCommandOutbox, minioClient);
+    }
+
+    @Test
+    @DisplayName("재ingest는 마지막 성공 편입 뒤 편집한 문서를 다시 편입한다")
+    void ingest_allowsEditedContentAfterIngest() {
+        stubOwnedWorkspace();
+        Document document = new Document(
+                "doc_edited", WORKSPACE_ID, USER_ID, "문서.md", "text/markdown", 4,
+                "sources/documents/doc_edited/original", "old-hash");
+        document.updateStatus(fruition.core.document.domain.DocumentStatus.completed, null, java.time.Instant.now(), null);
+        DocumentEditState editState = new DocumentEditState(
+                document.getId(), "# 고친 본문\n", DocumentEditingRules.markdown("# 고친 본문\n").contentHash(), 2);
+        doReturn(Optional.of(document)).when(documentRepository)
+                .findByIdAndWorkspaceIdForUpdate(document.getId(), WORKSPACE_ID);
+        when(editStateRepository.findById(document.getId())).thenReturn(Optional.of(editState));
+        when(pipelineWikiStateRequester.documentContext(WORKSPACE_ID, document.getId()))
+                .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(), "old-hash"));
+        when(storageProps.getBucket()).thenReturn("bucket");
+        when(ingestOperationStarter.start(eq(WORKSPACE_ID), eq(USER_ID), eq(document.getId()),
+                anyString(), any(Instant.class)))
+                .thenReturn("op_ingest_2");
+
+        documentService.ingest(WORKSPACE_ID, USER_ID, document.getId());
+
+        assertThat(document.getStatus()).isEqualTo(fruition.core.document.domain.DocumentStatus.processing);
+        assertThat(document.getContentHash()).isEqualTo(editState.getContentHash());
     }
 
     private MockMultipartFile markdownUploadFile() {

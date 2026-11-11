@@ -1110,7 +1110,7 @@ curl -X POST "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/docum
 | 입력 | **Path** — `workspace_id`: `string`, `document_id`: `string` |
 | 출력 | `202` 재처리 큐 등록됨 — `DocumentIngestResponse` |
 | 조건 | 인증 필요<br>`Authorization: Bearer <access_token>`을 검증한다.<br>인증된 사용자만 호출할 수 있다.<br>path의 `workspace_id`에 대한 활성 멤버십을 검증한다. |
-| 주요 오류 | `400` 편집 가능한 Markdown 문서가 아님 — `ErrorResponse`<br>`403` `wiki.ingest` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능) 또는 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 이미 처리 중인 문서 — `ErrorResponse` |
+| 주요 오류 | `400` 편집 가능한 Markdown 문서가 아님 — `ErrorResponse`<br>`403` `wiki.ingest` 권한 없음(`WORKSPACE_PERMISSION_REQUIRED`, OWNER는 항상 가능) 또는 편집 권한 없음(문서·폴더 권한이 view이고 문서 소유자·OWNER가 아님) — `ErrorResponse`<br>`404` 문서 또는 워크스페이스를 찾을 수 없음 — `ErrorResponse`<br>`409` 이미 처리 중인 문서(`DOCUMENT_ALREADY_PROCESSING`) 또는 현재 편집본이 마지막 성공 편입(웹·MCP 공통, AI 블록 스냅샷 해시)과 같은 내용(`DOCUMENT_ALREADY_INGESTED`, 편집하면 다시 편입할 수 있다) — `ErrorResponse` |
 
 <details>
 <summary>상세 계약 보기</summary>

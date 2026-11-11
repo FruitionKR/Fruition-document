@@ -78,14 +78,16 @@ public class McpWikiSearchClient {
                     || result.version < 1 || !HASH.matcher(result.contentHash).matches() || result.evidence == null)
                 throw new McpToolException("DEPENDENCY_UNAVAILABLE");
             Set<String> locators = new HashSet<>();
+            boolean readable = true;
             for (Evidence evidence : result.evidence) {
                 if (blank(evidence.documentId) || !DOCUMENT_ID.matcher(evidence.documentId).matches()
                         || blank(evidence.blockId) || !BLOCK_ID.matcher(evidence.blockId).matches()
                         || !locators.add(evidence.documentId + "\u0000" + evidence.blockId))
                     throw new McpToolException("DEPENDENCY_UNAVAILABLE");
-                documents.find(id.workspaceId(), evidence.documentId)
-                        .filter(viewer::canRead).orElseThrow(() -> new McpToolException("DEPENDENCY_UNAVAILABLE"));
+                readable &= documents.find(id.workspaceId(), evidence.documentId).filter(viewer::canRead).isPresent();
             }
+            // snippet·제목은 모든 근거 문서에서 나올 수 있으므로, 읽을 수 없는 근거가 하나라도 있으면 결과째 뺀다.
+            if (!readable) continue;
             sanitized.add(new Result(result.pageId, result.pageType,
                     AiMarkdownSanitizer.sanitize(result.title), result.version, result.contentHash,
                     AiMarkdownSanitizer.sanitize(result.snippet), result.evidence));

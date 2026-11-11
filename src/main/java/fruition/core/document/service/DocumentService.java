@@ -22,6 +22,7 @@ import fruition.core.document.exception.DocumentTitleLockedException;
 import fruition.core.document.exception.DocumentOriginalNotFoundException;
 import fruition.core.document.exception.DocumentUploadException;
 import fruition.core.document.exception.InvalidDocumentOriginException;
+import fruition.core.document.exception.DocumentAlreadyIngestedException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentVersionConflictException;
 import fruition.core.document.exception.TrashRetentionExpiredException;
@@ -89,6 +90,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.CannotSerializeTransactionException;
 import org.springframework.dao.DeadlockLoserDataAccessException;
+import org.springframework.data.domain.Pageable;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.TransactionDefinition;
@@ -141,10 +143,14 @@ public class DocumentService {
     /**
      * 생성 경로의 업로드 한도 적용 방식. 내부 생성(AI 도구·회의록·초기 노트)은 {@link #NONE}으로 저장 용량을 보지 않는다.
      * 가져오기 쓰기도 저장 용량을 그대로 보고, 만든 문서를 그 세션으로 표시한다.
+     * {@code autoIngest}는 Markdown 업로드 직후 서버 자동 편입 판정을 할지다. 가져오기와 MCP 업로드는 하지 않는다.
      */
-    private record UploadAccounting(boolean limited, fruition.core.imports.ImportSessionStore.OpenSession importSession) {
-        static final UploadAccounting NONE = new UploadAccounting(false, null);
-        static final UploadAccounting UPLOAD = new UploadAccounting(true, null);
+    private record UploadAccounting(boolean limited, fruition.core.imports.ImportSessionStore.OpenSession importSession,
+                                    boolean autoIngest) {
+        static final UploadAccounting NONE = new UploadAccounting(false, null, true);
+        static final UploadAccounting UPLOAD = new UploadAccounting(true, null, true);
+        /** MCP 업로드: 편입·변환은 사용자 AI가 start_ingest·start_pdf_conversion으로 한다. */
+        static final UploadAccounting MCP_UPLOAD = new UploadAccounting(true, null, false);
     }
 
     private static final int MAX_SAVE_ATTEMPTS = 3;
@@ -319,8 +325,25 @@ public class DocumentService {
             var session = importSessions.requireOpen(workspaceId, userId, importId);
             // 가져온 문서는 자동 편입하지 않으므로 응답에 편입 판정을 싣지 않는다.
             return uploadOnce(workspaceId, userId, idempotencyKey, folderId, file, null,
-                    new UploadAccounting(true, session), new AtomicReference<>());
+                    new UploadAccounting(true, session, false), new AtomicReference<>());
         });
+    }
+
+    /**
+     * MCP 클라이언트의 업로드(웹 직접 업로드 확정과 같은 경로). 일반 업로드와 모두 같고, 서버 자동 편입만 하지 않는다
+     * (가져오기와 같은 분기). 응답의 wiki_ingest는 NOT_APPLICABLE이다.
+     */
+    public DocumentUploadResponse uploadWithoutAutoIngest(
+            String workspaceId,
+            String userId,
+            String idempotencyKey,
+            UUID folderId,
+            MultipartFile file
+    ) {
+        AtomicReference<UploadWikiIngest> wikiIngest = new AtomicReference<>();
+        DocumentUploadResponse response = inFolderLockTransaction(folderId, () -> uploadOnce(workspaceId, userId,
+                idempotencyKey, folderId, file, null, UploadAccounting.MCP_UPLOAD, wikiIngest));
+        return wikiIngest.get() == null ? response : response.withWikiIngest(wikiIngest.get());
     }
 
     private DocumentUploadResponse uploadOnce(
@@ -339,11 +362,9 @@ public class DocumentService {
         verifyFolder(workspaceId, folderId);
         validateIdempotencyKey(idempotencyKey);
         try {
-            String filename = file.getOriginalFilename();
-            validateFilename(filename);
-            // txt는 내용상 Markdown이므로 .md 이름의 편집 문서로 받는다.
-            filename = filename.trim().replaceFirst("(?i)\\.txt$", ".md");
-            String mimeType = resolveMimeType(filename);
+            UploadType type = uploadType(file.getOriginalFilename());
+            String filename = type.filename();
+            String mimeType = type.mimeType();
             boolean markdownUpload = MARKDOWN_MIME_TYPE.equals(mimeType);
             if (skillReference && !markdownUpload) {
                 throw new UnsupportedDocumentFileException("스킬 참고 문서는 Markdown 또는 txt 파일만 업로드할 수 있습니다.");
@@ -498,7 +519,7 @@ public class DocumentService {
             }
             DocumentUploadResponse response = toUploadResponse(document, markdownUpload);
             // 스킬 참고 문서는 편입 대상이 아니다. 자동 편입은 업로드 커밋 뒤 별도 트랜잭션에서 한다.
-            if (markdownUpload && !skillReference && accounting.importSession() == null) {
+            if (markdownUpload && !skillReference && accounting.autoIngest()) {
                 autoIngestAfterCommit(workspaceId, userId, documentId,
                         markdownContent.contentHash(), markdownContent.bytes().length, wikiIngest);
             } else {
@@ -585,14 +606,15 @@ public class DocumentService {
     }
 
     /**
-     * MCP 승인 계획의 PDF 변환본 생성. 외부 AI가 만든 Markdown을 웹 변환 결과와 같은 규칙(data: 이미지 asset 분리,
-     * 변환본 sanitize)으로 저장하고 원본 PDF를 연결한다. 내부 모델 변환이나 자동 편입은 시작하지 않는다.
-     * 실행 시점에 원본이 그대로 PDF이고 hash가 승인 때와 같으며 요청자가 아직 변환할 수 있어야 한다.
+     * MCP 승인 계획의 PDF 변환본 생성. ai MCP 변환 세션이 {@code tmp/convert/}에 둔 조립 결과({@code [{page_start, markdown}]}
+     * JSON)를 웹 변환처럼 저장소에서 읽어 승인된 hash와 대조하고, 묶음마다 웹 변환 batch와 같은 코드
+     * ({@link #convertedBatchMarkdown})로 이어 붙여 원본 PDF 폴더에 저장한다. 웹 변환처럼 크기와 관계없이 저장한다.
+     * 내부 모델 변환이나 자동 편입은 시작하지 않는다. 실행 시점에 원본이 그대로 PDF이고 hash·폴더가 승인 때와 같으며
+     * 요청자가 아직 변환할 수 있어야 한다.
      */
     public DocumentUploadResponse createConvertedMarkdownInCurrentTransaction(
             String workspaceId, String userId, String sourceDocumentId, String sourceContentHash,
-            MarkdownDocumentCreateRequest request) {
-        if (request == null) throw new InvalidMarkdownContentException("Markdown 생성 요청은 필수입니다.");
+            String displayName, UUID folderId, String resultKey, String resultHash) {
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(sourceDocumentId, workspaceId)
                 .filter(DocumentAccessPolicy::isPdf)
                 .orElseThrow(() -> new DocumentNotFoundException(sourceDocumentId));
@@ -600,12 +622,29 @@ public class DocumentService {
         if (!McpDocumentDataGateway.pdfHash(source).equals(sourceContentHash)) {
             throw new DocumentVersionConflictException("원본 PDF가 승인 뒤 바뀌었습니다.");
         }
-        verifyFolder(workspaceId, request.folderId());
-        DocumentEditingRules.Filename filename = DocumentEditingRules.rename(request.displayName(), "document.md");
-        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(
-                AiMarkdownSanitizer.sanitizeConverted(externalizeConvertedImages(workspaceId, userId, request.markdown())));
+        // 변환본은 원본과 같은 폴더에 새 문서로 들어간다(웹 변환과 같음).
+        if (!java.util.Objects.equals(folderId, source.getFolderId())) {
+            throw new DocumentVersionConflictException("원본 PDF가 승인 뒤 다른 폴더로 옮겨졌습니다.");
+        }
+        verifyFolder(workspaceId, folderId);
+        String result = readConvertResult(resultKey);
+        if (!("sha256:" + sha256(result.getBytes(StandardCharsets.UTF_8))).equals(resultHash)) {
+            throw new DocumentVersionConflictException("PDF 변환 결과가 승인 때와 다릅니다.");
+        }
+        String merged = "";
+        try {
+            for (JsonNode batch : objectMapper.readTree(result)) {
+                String markdown = convertedBatchMarkdown(workspaceId, userId, batch.path("markdown").textValue(),
+                        batch.path("page_start").intValue());
+                merged = merged.isEmpty() ? markdown : merged.stripTrailing() + "\n\n" + markdown;
+            }
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new DocumentConvertException("변환 결과 형식이 올바르지 않습니다: " + resultKey, e);
+        }
+        DocumentEditingRules.Filename filename = DocumentEditingRules.rename(displayName, "document.md");
+        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(merged);
         DocumentUploadResponse created = createMarkdownDocument(workspaceId, userId, null, null, filename.filename(),
-                content, "direct", request.folderId(), Document.AGENT_ORIGIN, true, UploadAccounting.NONE);
+                content, "direct", folderId, Document.AGENT_ORIGIN, true, UploadAccounting.NONE);
         documentRepository.findById(created.id()).orElseThrow().linkSourceDocument(source.getId());
         assetReferenceSynchronizer.synchronize(created.id(), workspaceId, assetReferenceParser.parse(content.markdown()));
         return created;
@@ -644,7 +683,7 @@ public class DocumentService {
             throw new InvalidDocumentOriginException("가져오기 문서에는 origin·agent_run_id를 지정할 수 없습니다.");
         }
         return createMarkdown(workspaceId, userId, idempotencyKey, request, null,
-                new UploadAccounting(true, session));
+                new UploadAccounting(true, session, false));
     }
 
     /** 가져오기 세션으로 기존 문서 본문을 저장할 때: 열린 세션이고 그 세션이 만든 문서여야 한다. 아니면 400 IMPORT_INVALID. */
@@ -892,9 +931,7 @@ public class DocumentService {
 
     private DocumentEditingRules.MarkdownContent readUploadedMarkdown(MultipartFile file) throws IOException {
         // 직접 업로드하는 Markdown 파일의 크기는 읽기 전에 검사한다.
-        if (file.getSize() > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
-            throw new MarkdownContentTooLargeException("Markdown 본문은 UTF-8 기준 5MB 이하여야 합니다.");
-        }
+        requireMarkdownUploadSize(file.getSize());
         try (InputStream stream = file.getInputStream()) {
             return DocumentEditingRules.markdown(stream.readNBytes(DocumentEditingRules.MAX_MARKDOWN_BYTES + 1));
         }
@@ -913,8 +950,27 @@ public class DocumentService {
         }
     }
 
+    /** 업로드 파일 이름 검사와 형식 판정 결과. txt는 내용상 Markdown이므로 .md 이름의 편집 문서로 받는다. */
+    record UploadType(String filename, String mimeType) {
+        boolean markdown() { return MARKDOWN_MIME_TYPE.equals(mimeType); }
+    }
+
+    /** 일반 업로드와 직접 업로드가 같이 쓰는 파일 이름 검사·형식 판정. */
+    static UploadType uploadType(String originalFilename) {
+        validateFilename(originalFilename);
+        String filename = originalFilename.trim().replaceFirst("(?i)\\.txt$", ".md");
+        return new UploadType(filename, resolveMimeType(filename));
+    }
+
+    /** Markdown·txt 업로드 크기 상한(UTF-8 5MB). */
+    static void requireMarkdownUploadSize(long size) {
+        if (size > DocumentEditingRules.MAX_MARKDOWN_BYTES) {
+            throw new MarkdownContentTooLargeException("Markdown 본문은 UTF-8 기준 5MB 이하여야 합니다.");
+        }
+    }
+
     /** 클라이언트가 보낸 Content-Type은 믿지 않고, 확장자로 서버가 정한 MIME만 저장한다. */
-    private String resolveMimeType(String filename) {
+    private static String resolveMimeType(String filename) {
         String normalizedFilename = filename.trim().toLowerCase(java.util.Locale.ROOT);
         if (normalizedFilename.endsWith(".pdf")) {
             return PDF_MIME_TYPE;
@@ -1810,7 +1866,7 @@ public class DocumentService {
         }
     }
 
-    /** converter worker가 쓴 batch 결과(Markdown, 이미지는 data: URI)를 읽는다. */
+    /** converter worker가 쓴 batch 결과(Markdown, 이미지는 data: URI)나 MCP 변환 조립 결과(JSON)를 읽는다. */
     private String readConvertResult(String resultKey) {
         try (InputStream stream = minioClient.getObject(GetObjectArgs.builder()
                 .bucket(storageProps.getBucket()).object(resultKey).build())) {
@@ -1874,9 +1930,7 @@ public class DocumentService {
     private void mergeConvertedBatch(DocumentConvertQueue queue, Document parent, String batchMarkdown,
                                      int pageStart, int pageEnd, int totalPages) {
         if (queue.getCompletedPages() >= pageEnd) return;
-        // data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다.
-        String markdown = ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitizeConverted(
-                externalizeConvertedImages(parent.getWorkspaceId(), parent.getUserId(), batchMarkdown)), pageStart);
+        String markdown = convertedBatchMarkdown(parent.getWorkspaceId(), parent.getUserId(), batchMarkdown, pageStart);
         // 변환 batch는 내부 처리 단위일 뿐이다. 크기와 관계없이 원본 PDF의 모든 쪽을 같은 문서에 저장한다.
         // JDBC 저장 직후에도 최신 본문을 읽도록 JPA 1차 캐시를 거치지 않는다.
         var state = postgresDocumentEditStore.findState(parent.getId()).orElseThrow();
@@ -1892,6 +1946,16 @@ public class DocumentService {
         queue.checkpoint(pageEnd, totalPages);
         documentRepository.findById(parent.getId()).ifPresent(doc -> doc.markProcessingHeartbeat(
                 "PDF " + pageEnd + "/" + totalPages + "페이지 변환 완료", Instant.now()));
+    }
+
+    /**
+     * 변환 batch 하나를 저장할 Markdown으로 바꾼다. 웹 변환과 MCP 외부 AI 변환본 저장이 함께 쓴다.
+     * data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다. 쪽 번호는 batch 안 번호(1부터)를
+     * 원본 PDF 기준으로 바꾼다.
+     */
+    private String convertedBatchMarkdown(String workspaceId, String userId, String batchMarkdown, int pageStart) {
+        return ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitizeConverted(
+                externalizeConvertedImages(workspaceId, userId, batchMarkdown)), pageStart);
     }
 
     /** 변환 결과의 data: 이미지를 asset으로 저장하고 내부 주소로 바꾼다. */
@@ -2137,7 +2201,7 @@ public class DocumentService {
                 ? documentRepository.findSkillReferences(workspaceId)
                 : query == null || query.isBlank()
                 ? documentRepository.findVisibleByWorkspaceId(workspaceId)
-                : documentRepository.searchVisibleByWorkspaceId(workspaceId, query.trim());
+                : documentRepository.searchVisibleByWorkspaceId(workspaceId, query.trim(), Pageable.unpaged());
 
         return new DocumentListResponse(documentItemAssembler.assemble(workspaceId, userId, documents));
     }
@@ -2908,11 +2972,29 @@ public class DocumentService {
         workspaceAccessGuard.requirePermission(workspaceId, userId, WorkspacePermissions.WIKI_INGEST);
         Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel =
                 Prefetched.of(() -> workspaceAiModelClient.get(workspaceId));
-        return transactionTemplate.execute(status -> ingestInTransaction(workspaceId, userId, documentId, aiModel));
+        String lastIngestedHash = lastIngestedSourceHash(workspaceId, documentId);
+        return transactionTemplate.execute(status ->
+                ingestInTransaction(workspaceId, userId, documentId, aiModel, lastIngestedHash));
+    }
+
+    /**
+     * 마지막으로 성공한 편입(웹·MCP)의 입력 Markdown 해시. AI가 발행과 같은 트랜잭션에서 남기는 블록 스냅샷 값이며
+     * {@link #blocks}의 stale 판정과 MCP {@code start_ingest}의 같은 내용 거절이 같은 값을 쓴다. 조회 실패는 편입을 막지 않는다.
+     */
+    private String lastIngestedSourceHash(String workspaceId, String documentId) {
+        try {
+            PipelineWikiStateRequester.DocumentWikiContext context =
+                    pipelineWikiStateRequester.documentContext(workspaceId, documentId);
+            return context == null ? null : context.sourceContentHash();
+        } catch (RuntimeException e) {
+            log.warn("[편입 중복 확인 건너뜀] documentId={} 원인={}", documentId, e.toString());
+            return null;
+        }
     }
 
     private DocumentIngestResponse ingestInTransaction(String workspaceId, String userId, String documentId,
-                                                       Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel) {
+                                                       Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel,
+                                                       String lastIngestedHash) {
         Document document = documentRepository.findByIdAndWorkspaceIdForUpdate(documentId, workspaceId)
                 .filter(value -> value.getDeletedAt() == null)
                 .orElseThrow(() -> new DocumentNotFoundException(documentId));
@@ -2938,13 +3020,14 @@ public class DocumentService {
             throw new DocumentAlreadyProcessingException("이미 처리 중인 문서입니다.");
         }
 
-        return new DocumentIngestResponse(documentId, promoteAndEnqueueIngest(document, userId, aiModel),
-                document.getStatus());
+        return new DocumentIngestResponse(documentId,
+                promoteAndEnqueueIngest(document, userId, aiModel, lastIngestedHash), document.getStatus());
     }
 
     /** 최신 편집본을 원본으로 승격하고 ingest outbox에 등록한다(수동 편입). 자동 편입은 업로드 본문이 곧 원본이라 승격 없이 등록한다. */
     private String promoteAndEnqueueIngest(Document document, String userId,
-                                           Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel) {
+                                           Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel,
+                                           String lastIngestedHash) {
         String documentId = document.getId();
         editStateInitializer.initializeIfNeeded(document);
         DocumentEditState editState = editStateRepository.findById(documentId)
@@ -2953,6 +3036,10 @@ public class DocumentService {
         // 최신 편집본은 PostgreSQL 편집 상태가 canonical이다.
         String currentMarkdown = editState.getMarkdown();
         String currentContentHash = editState.getContentHash();
+        if (currentContentHash != null && currentContentHash.equals(lastIngestedHash)) {
+            // 같은 내용을 다시 편입하면 같은 위키를 다시 써 비용만 든다. 편집하면 해시가 바뀌어 다시 편입할 수 있다.
+            throw new DocumentAlreadyIngestedException("현재 내용은 이미 위키에 편입되어 있습니다. 문서를 수정한 뒤 다시 편입해 주세요.");
+        }
 
         // 원본 경로가 없으면 빈 키로 putObject가 나가 원인을 알기 어려운 500이 된다.
         // 문서 생성 시점에 원본을 만들지 않던 시절의 행이 여기로 들어온다.
@@ -3318,7 +3405,7 @@ public class DocumentService {
         return sourceUri;
     }
 
-    private void validateFilename(String filename) {
+    private static void validateFilename(String filename) {
         if (filename == null) {
             throw new InvalidDocumentFilenameException("문서 이름은 1자 이상 255자 이하여야 합니다.");
         }

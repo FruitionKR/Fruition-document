@@ -77,8 +77,40 @@ class DocumentDirectUploadServiceTest {
         });
         assertThatThrownBy(() -> uploads.start("ws_test", "user_test",
                 new DocumentDirectUploadService.StartRequest("../large.pdf", 5, null)))
-                .isInstanceOf(ResponseStatusException.class);
+                .isInstanceOf(fruition.core.document.exception.InvalidDocumentFilenameException.class);
+        assertThatThrownBy(() -> uploads.start("ws_test", "user_test",
+                new DocumentDirectUploadService.StartRequest("a.docx", 5, null)))
+                .isInstanceOf(fruition.core.document.exception.UnsupportedDocumentFileException.class);
+        assertThatThrownBy(() -> uploads.start("ws_test", "user_test",
+                new DocumentDirectUploadService.StartRequest("big.md", 5 * MB + 1, null)))
+                .isInstanceOf(fruition.core.document.exception.MarkdownContentTooLargeException.class);
         verify(multipart, never()).start(anyString(), anyString());
+    }
+    @Test void markdownAndTxtStartWithServerResolvedMarkdownType() throws Exception {
+        for (String name : new String[]{"note.md", "note.markdown", "memo.txt", "MEMO.TXT"}) {
+            uploads.start("ws_test", "user_test", new DocumentDirectUploadService.StartRequest(name, 5 * MB, null));
+        }
+        verify(multipart, times(4)).start(startsWith("tmp/document-uploads/ws_test/user_test/"), eq("text/markdown"));
+    }
+    @Test void markdownCompletionSkipsPdfSignatureAndRegistersThroughRegularUpload() throws Exception {
+        var ticket = new DocumentDirectUploadService.CompleteRequest(uploads.start("ws_test", "user_test",
+                new DocumentDirectUploadService.StartRequest("memo.txt", 5, null)).ticket());
+        StatObjectResponse stat = mock(StatObjectResponse.class);
+        when(stat.size()).thenReturn(5L);
+        when(stat.contentType()).thenReturn("text/markdown");
+        when(storage.statObject(any())).thenReturn(stat);
+        uploads.complete("ws_test", "user_test", "key", ticket);
+        verify(storage, never()).getObject(any());
+        verify(documents).upload(eq("ws_test"), eq("user_test"), eq("key"), isNull(), argThat(file ->
+                file.getContentType().equals("text/markdown") && "memo.txt".equals(file.getOriginalFilename())));
+    }
+    @Test void mcpCompletionUsesUploadWithoutAutoIngest() throws Exception {
+        var ticket = new DocumentDirectUploadService.CompleteRequest(start(5).ticket());
+        storedPdf();
+        uploads.completeWithoutAutoIngest("ws_test", "user_test", "key", ticket);
+        verify(documents).uploadWithoutAutoIngest(eq("ws_test"), eq("user_test"), eq("key"), isNull(),
+                argThat(file -> file.getSize() == 5));
+        verify(documents, never()).upload(any(), any(), any(), any(), any());
     }
     @Test void quotaPrecheckRejectsBeforeStartingMultipart() throws Exception {
         UploadLimitService limits = mock(UploadLimitService.class);

@@ -156,7 +156,7 @@ class McpWikiProposalServiceIntegrationTest {
     void lintRetryRetainsServerSnapshotMappingAndNeverSendsExternalDocumentEvidenceToAi() throws Exception {
         String draft = UUID.randomUUID().toString();
         when(sources.read(any(McpProposalActor.class), anyString())).thenReturn(new McpWikiSourceService.Response(
-                "mcp.wiki-source.v1", "doc_i9", identity.workspaceId(), 4, "sha256:" + "a".repeat(64),
+                "mcp.wiki-source.v1", "doc_i9", "Source", identity.workspaceId(), 4, "sha256:" + "a".repeat(64),
                 "text/markdown", List.of(new McpWikiSourceService.Block("B0001", 1, "quote",
                 "sha256:" + "b".repeat(64)))));
         for (int i = 0; i < 2; i++) {

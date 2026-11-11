@@ -464,7 +464,7 @@ curl -X PUT "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/p
 - 서비스: `src/main/java/fruition/core/wiki/service/WikiPageEditService.java`
 - 기계 판독 계약: `api-specs/openapi.yaml` (`operationId: saveWikiPageContent`)
 - 호출자: 없음 — 맥 데스크톱 앱이 연동할 예정
-- 하위 호출: ai-svc `GET ${WIKI_STATE_ENDPOINT}/pages/{pageId}?workspace_id`(현재 본문·표시 이름), `PUT ${WIKI_STATE_ENDPOINT}/pages/{pageId}/manual-edit`(`X-Internal-Token`, FruitionKR/Fruition-ai#64), `wiki_workspace_versions` 갱신
+- 하위 호출: ai-svc `GET ${WIKI_STATE_ENDPOINT}/pages/{pageId}?workspace_id`(현재 본문·표시 이름), `PUT ${WIKI_STATE_ENDPOINT}/pages/{pageId}/manual-edit`(`X-Internal-Token`, FruitionKR/Fruition-ai#64), `wiki_workspace_versions` 갱신. 새 revision을 기록한 같은 트랜잭션에서 `ai_command_outbox`에 `{kind:"embedding_recovery", run_id:"wiki-edit-index:<operation_id>", workspace_id}`를 쌓아 `ai.maintenance.command`로 보낸다. ai는 편집 본문을 발행만 하고(ai ADR-0026) 이 command로 깨운 maintenance worker가 임베딩한다. MCP 위키 발행(`McpWikiApprovalService.acceptPublication`)도 같은 command를 쓴다
 - 배선 상태: **미배선 — 호출자 없음**. ai의 manual-edit API(Fruition-ai#64)가 배포돼야 동작한다
 
 [↑ 요약으로 돌아가기](#summary-put-api-workspaces-workspace-id-wiki-pages-wiki-page-id-content)

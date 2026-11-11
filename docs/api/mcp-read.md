@@ -11,37 +11,69 @@ leaving it blank keeps the four read tools available but makes proposal invocati
 The transport is the stateless servlet transport from the official Java SDK 2.1.0. It does not issue or
 accept MCP session IDs. Every HTTP request verifies an RS256 MCP-audience token, reads at most 4 MiB after
 decompression to select the required `read`, `write_propose` (`propose_document_edit`, `propose_plan`,
-`start_pdf_conversion`, `submit_conversion_window`, `finalize_pdf_conversion`, `propose_skill_definition`) or
+`start_pdf_conversion`, `submit_conversion_window`, `finalize_pdf_conversion`, `propose_skill_definition`,
+`start_document_upload`, `get_upload_part_urls`, `complete_document_upload`) or
 `wiki_write` (six wiki tools) scope, and calls Access's current
 `POST /internal/mcp/grants/{grant_id}/authorize` contract before SDK protocol parsing. A missing Origin is
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-## 공개 카탈로그 (`mcp-tools.v3`)
+## 공개 카탈로그 (`mcp-tools.v8`)
 
-`McpToolCatalog.tools()`는 2026-11-09부터 다음 21개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
+`McpToolCatalog.tools()`는 2026-11-09부터 다음 24개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
 `find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
 (`start_ingest`, `resume_ingest`, `get_window`, `submit_window`, `finalize_ingest`, `submit_lint_changes`), Skill 3개
 (`list_skills`, `get_skill` `read`, `propose_skill_definition` `write_propose`, 계약은 [mcp-skills.md](mcp-skills.md)), 회의 읽기 2개(`list_meetings`,
 `get_meeting_transcript`, `read` scope, 아래 절), PDF 변환 4개(`start_pdf_conversion`·`submit_conversion_window`·`finalize_pdf_conversion` `write_propose`,
-`get_conversion_window` `read`, AnyDoc 전처리 결과의 복원만 외부 AI가 맡는다. 계약은 [mcp-pdf.md](mcp-pdf.md)). 다른 MCP 도구 bean(`McpSkillTools`, `McpMeetingTools`, `McpPdfTools`)은
+`get_conversion_window` `read`, AnyDoc 전처리 결과의 복원만 외부 AI가 맡는다. 계약은 [mcp-pdf.md](mcp-pdf.md)), 문서 업로드 3개(`start_document_upload`·`get_upload_part_urls`·`complete_document_upload` `write_propose`, 아래 절). 다른 MCP 도구 bean(`McpSkillTools`, `McpMeetingTools`, `McpPdfTools`, `McpDocumentUploadTools`)은
 `tools()`와 `invoke(identity, tool, args)`만 제공하고, 카탈로그가 같은 wrapper로 감싼다. 별도 enable
 플래그나 숨은 등록 경로는 없다. 제안·위키 도구는 승인 대기 run/draft와 `review_url`만 만들며, 승인·크레딧 예약·실행·정산은
 아래 각 절의 웹 승인 경로에서만 일어난다. 도구 인자로 승인이나 실행을 대신할 수 없다. 모든 도구는 같은 spec wrapper로
 감사 로그·오류 코드·응답 크기 제한을 공유한다. 이 카탈로그는 Document `f9882a4`와 AI `6bc6a6d`의 semantic merge 계약을
 전제로 하므로 두 서비스를 함께 배포해야 한다.
 
+schema 변경 기록(2026-11-11, `mcp-tools.v4` → `mcp-tools.v6`; `v5`는 병행 중인 MCP 문서 업로드 변경이 쓴다):
+PDF 변환을 웹 변환 코드 경로에 맞췄다([mcp-pdf.md](mcp-pdf.md)). `finalize_pdf_conversion` 입력에서 `target_folder_id`를 뺐다
+(변환본은 원본 PDF 폴더). `submit_conversion_window` 출력에 `new_window_ordinals`를 더했고 창마다 한 번만 제출한다(`max_attempts` 1,
+떨어진 블록은 재시도 창). `propose_plan` 인자 스키마에서 원본 연결 `create_document` 변형을 뺐다.
+
+정적 설명 변경 기록(2026-11-11, `mcp-tools.v3` → `mcp-tools.v4`, schema 변경 없음): `review_url`을 돌려주는 6개 도구
+(`propose_document_edit`, `propose_plan`, `finalize_ingest`, `submit_lint_changes`, `propose_skill_definition`,
+`finalize_pdf_conversion`)의 설명에 공통 문구 `McpToolCatalog.REVIEW_APPROVAL`(사람이 승인하기 전에는 저장되지 않으니
+`review_url`을 바로 사용자에게 열어 주고 승인이 필요하다고 알릴 것)을 붙였다. `submit_window`·`submit_lint_changes` 설명에는
+AI `mcp_wiki_draft` 검증 규칙(한 statement 안에서 같은 `block_id` 근거는 한 번만, quote는 그 블록의 정확한 부분 문자열,
+statement 단어 대부분이 quote에 있어야 하므로 번역·의역 금지, 앞뒤 공백·URL·이미지·안전하지 않은 markup·지시문 형태 금지,
+길이·개수 상한)을 적었다. 임계값 수치는 설정값이라 적지 않으며, 설명에는 workspace·사용자 내용을 넣지 않는다.
+
+도구 추가 기록(2026-11-11, `mcp-tools.v6` → `mcp-tools.v7`; v6 기록이 예약한 `v5`는 쓰지 않았다): 웹 직접 업로드 API를 감싸는 문서 업로드 3개 도구를 더했다(아래 절, ADR Fruition-ai 0048).
+
+정적 설명 변경 기록(2026-11-11, `mcp-tools.v7` → `mcp-tools.v8`, schema 변경 없음): `start_ingest` 설명에 현재 문서 내용이 이미 위키에 편입돼 있으면 `ALREADY_INGESTED`로 거절되며 재시도하지 말고 문서를 고친 뒤 다시 시작한다는 안내를 더했다. AI는 마지막 성공 편입(웹·MCP)의 입력 Markdown 해시(`source_block_snapshots`)가 현재 문서 해시와 같으면 run을 만들지 않고 `409 ALREADY_INGESTED`를 돌려주며, `McpWikiDraftClient`가 이 코드를 그대로 전달한다.
+
 The read tools are:
 
 - `search_wiki` → AI `POST /internal/mcp/wiki/search`, with a server-created actor and only
   `X-Internal-Token`; each stored document/block locator is shape-checked and its document is rechecked for
-  current workspace/read access. Published historical evidence is not invalidated by a later source edit.
-- `find_documents` → bounded workspace/document-policy candidates and a stateless owner-bound cursor.
+  current workspace/read access. A malformed locator fails the whole search with `DEPENDENCY_UNAVAILABLE`, but a
+  result whose evidence includes a document the caller cannot read (or that no longer exists) is dropped from the
+  page instead of failing the search; its title, snippet, and locators are never returned. The page may then hold
+  fewer than `page_size` results while `next_cursor` stays valid. AI ranks candidates with the web evidence search
+  path (Fruition-ai `docs/api/mcp-wiki.md`). Published historical evidence is not invalidated by a later source edit.
+- `find_documents` → the web document-list search (`DocumentRepository.searchVisibleByWorkspaceId`, the same query
+  as `GET /documents?query=`) bounded by the candidate limit, then document-policy filtering and a stateless
+  owner-bound cursor.
 - `get_document` → bounded block-boundary chunks from the document-owned current edit state (or the immutable
   chat-export pipeline input), tied to that body version, source hash, and sanitized presentation snapshot. It does
   not require a wiki ingest snapshot.
-- `get_wiki_page` → one bounded published workspace page with the seven `mcp.wiki-page.v1` fields and a
-  body hash over the exact UTF-8 body returned by the tool.
+- `get_wiki_page` → the web page detail (`WikiService.read`, the same path as
+  `GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}`), so the body is resolved in the web order
+  (AI body → latest `wiki_page_versions.markdown` → stored object). The MCP boundary adds the ADR 0046 contract:
+  a stored but empty body is returned as an empty `body` (the web detail still omits `markdown`); after the body is
+  resolved the page metadata (`page_type`, `title`, `markdown_uri`, `status`, `updated_at`, via AI
+  `POST /wiki/pages/lookup`) and the latest revision are read again, and any difference or a non-active page is
+  retryable `PAGE_CHANGED`; the whole read must finish within `app.mcp.wiki-page-deadline-ms`
+  (`MCP_WIKI_PAGE_DEADLINE_MS`, default 5000) or it is `DEPENDENCY_UNAVAILABLE`. It also applies the body size limit,
+  sanitizing, and the seven `mcp.wiki-page.v1` fields with a body hash over the exact UTF-8 body returned by the tool.
+  A missing page is `PAGE_NOT_FOUND`; a page whose body the web cannot resolve is `DEPENDENCY_UNAVAILABLE`.
 
 Request bodies are capped at 4 MiB after gzip decompression. Candidate counts, source block counts/bytes,
 page sizes, response bytes, cursor bytes, and document chunk blocks/bytes use explicit deployment settings.
@@ -57,6 +89,24 @@ MCP 도구 호출 로그: 감사 JSON(`fruition.mcp.audit`)은 형식을 그대�
 DB 이력으로만 남는다.
 Markdown-like document and wiki fields are passed through the existing AI Markdown sanitizer before final response
 sizing, so external links/images and raw HTML are neutralized while relative links, anchors, and code remain data.
+
+## 문서 업로드 (`McpDocumentUploadTools`)
+
+MCP 전용 업로드 경로는 없다. 세 도구는 웹 직접 업로드 API([documents/management.md](documents/management.md)의 `POST .../documents/uploads`·`/parts`·`/complete`)가 쓰는 `DocumentDirectUploadService` 메서드를 MCP 신원(검증된 user·workspace)으로 그대로 부른다. 형식(PDF·Markdown·txt, txt는 `.md`로 받음), 크기(PDF 100MB, Markdown·txt 5MB), UTF-8·`%PDF-` 검사, 용량, 멤버십·폴더 배치 권한, ticket 소유 대조, 멱등성, `content_hash` 의미가 웹과 같다. 업로드는 AI 결과가 아니므로 웹 승인 없이 complete에서 바로 문서(origin `upload`)가 된다.
+
+| 도구 | 웹 API | 입력 | 출력 |
+|---|---|---|---|
+| `start_document_upload` | `POST .../uploads` | `{filename, size, folder_id\|null}` | `{ticket, part_size, part_count, next_step}` |
+| `get_upload_part_urls` | `POST .../uploads/parts` | `{ticket, first_part, count(1~32)}` | `{parts:[{part_number, url}]}` (15분 presigned PUT) |
+| `complete_document_upload` | `POST .../uploads/complete` | `{idempotency_key, ticket}` | 웹 `DocumentUploadResponse` 필드 + `content_hash` + `next_step` |
+
+- MCP에만 있는 필드: `idempotency_key`(웹은 `Idempotency-Key` 헤더), `next_step`(코드 고정 안내), `content_hash`(웹 응답에 없지만 `start_pdf_conversion`의 `source_content_hash`로 필요하다. `documents.content_hash`의 `sha256:` 형식).
+- 노출하지 않는 것: 웹 `abort`(버려진 multipart는 버킷 lifecycle이 정리), 가져오기 세션 헤더.
+- 클라이언트는 각 part URL에 인증 헤더 없이 원본 바이트 구간을 PUT한다. 객체 Content-Type은 시작 때 서버가 정하므로 PUT에 필요 없다. HTTP를 보낼 수 없는 클라이언트에게 설명은 웹에서 올리라고 안내한다. base64 인자는 없다.
+- 서버 자동 편입은 하지 않는다(`wiki_ingest.status=NOT_APPLICABLE`). 가져오기 세션과 같은 `DocumentService` 분기(`UploadAccounting.autoIngest=false`)를 탄다. 편입은 사용자 AI가 `start_ingest`, PDF 변환은 `start_pdf_conversion`으로 한다.
+- 오류 코드: `UNSUPPORTED_FILE_TYPE`, `INVALID_DOCUMENT_FILENAME`, `MARKDOWN_CONTENT_TOO_LARGE`, `INVALID_MARKDOWN_CONTENT`, `INVALID_PDF`, `FILE_TOO_LARGE`, `STORAGE_QUOTA_EXCEEDED`, `DOCUMENT_WRITE_FORBIDDEN`, `UPLOAD_PARTS_INCOMPLETE`, `IDEMPOTENCY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS`, 다른 사용자·워크스페이스 ticket은 `HANDLE_NOT_FOUND`, 그 밖의 형식 오류는 `INVALID_INPUT`.
+- 감사: `target_ids`는 `start_document_upload`의 `folder_id`(있으면)뿐이다. ticket·URL·파일 이름은 남기지 않는다.
+- 승인: 새 scope나 웹 승인은 없다. 업로드 확인은 MCP 클라이언트의 도구 실행 확인(예: Claude Code의 도구별 확인 창)이 맡는다. 그래서 세 도구는 `readOnlyHint=false`, `destructiveHint=false`, `openWorldHint=false`로 쓰기임을 알리고, `idempotentHint`는 start `false`(호출마다 새 ticket), part URL·complete `true`(같은 인자·같은 key는 같은 결과)다. start·complete 설명은 업로드 전에 사용자에게 확인하라고 적는다. 서버는 확인 창이 실제로 떴는지 알 수 없다(자동 승인 모드 클라이언트 등). 신뢰 수준은 사용자가 웹 업로드 버튼을 누르는 것과 같다.
 
 ## 회의 전사 읽기 (`McpMeetingTools`)
 
@@ -173,9 +223,10 @@ The strict `propose_plan` tool (`write_propose`) accepts only
 It supports at most 20 closed-set operations (`create_folder`, `rename_folder`, `move_folder`, `create_document`,
 `rename_document`, `move_document`, `apply_document_edit`) plus exact result references and artifact shapes. Its
 validated response remains `{run_id,status,review_url}`. It never approves, reserves credit, or executes.
-`create_document` arguments may additionally carry the pair `{source_document_id,source_content_hash}` for a PDF
-conversion result; the catalog schema advertises it as a separate strict variant, and the pair is revalidated at
-proposal, approval, and save.
+A PDF conversion result is proposed only by `finalize_pdf_conversion` (the public `propose_plan` schema does not
+advertise it): its `create_document` arguments are exactly `{display_name,folder_id,content_result_key,content_hash,
+source_document_id,source_content_hash}` with no artifact. The source pair is revalidated at proposal, approval, and
+save, and the save reads the result from `content_result_key` and checks `content_hash` ([mcp-pdf.md](mcp-pdf.md)).
 
 ## Internal I9 source snapshot callback
 
@@ -191,8 +242,10 @@ existing `PROPOSAL_CREATE` phase with `ACTIVE_GRANT` rather than `TOOL_CALL`: to
 `wiki_write`, required permission is exactly `wiki.ingest`, and approved policy generation is null. The callback
 does not reuse that phase for resume, finalize, generic source reads, or approved execution.
 
-The response contains only `schema_version`, `document_id`, `workspace_id`, `source_version`,
-`source_content_hash`, `mime_type`, and ordered blocks `{block_id, ordinal, text, content_hash}`. Document reads
+The response contains only `schema_version`, `document_id`, `display_name`, `workspace_id`, `source_version`,
+`source_content_hash`, `mime_type`, and ordered blocks `{block_id, ordinal, text, content_hash}`. `display_name` is
+the document's current display name from the same read, unsanitized; AI treats it as untrusted text and uses it as the
+SOURCE wiki page title. Document reads
 one read-only current Markdown/text revision with a version/hash-coherent body, uses the existing Markdown block segmentation, assigns
 server block IDs `B0001` onward, and hashes the exact UTF-8 source and each block as `sha256:<lowercase hex>`.
 Existing configured MCP source byte/block limits apply. PDF, client-supplied source bytes/version/URLs, storage
@@ -221,6 +274,16 @@ No caller may supply source bytes, snapshot mappings, URLs, paths, or identity. 
 only the validated AI draft fields plus a review URL built from configured `MCP_REVIEW_ORIGIN` and the route
 `/mcp/workspaces/{workspace_id}/wiki-drafts/{draft_id}`.
 
+AI wiki draft/PDF conversion API rejections reach the tool result as `{"error":"<code>"}` with the AI `error.code`
+unchanged when it is in the allowlist in `McpWikiDraftClient`: the AI `McpWikiDraftError`/`McpPdfConversionError`
+codes (e.g. `INVALID_EVIDENCE`, `LEXICAL_OVERLAP_REJECTED`, `INSTRUCTION_PATTERN_REJECTED`, `UNSAFE_CONTENT`,
+`MERGE_TARGET_CHANGED`, `WINDOW_OUT_OF_ORDER`, `INCOMPLETE_WINDOWS`, `SNAPSHOT_MISMATCH`, `NOT_FOUND`, `EXPIRED`,
+`REQUEST_TOO_LARGE`), the run/draft state name the AI returns when a run no longer accepts the command
+(`READY_TO_FINALIZE`, `AWAITING_WEB_APPROVAL`, `APPLYING`, `PUBLISHED`, `NO_CHANGE`, `CONFLICTED`, `HALTED`,
+`UNKNOWN`, `EXPIRED`, `CANCELLED`, `INVALIDATED`), and the relayed source callback `INVALID_SOURCE_TYPE`. Unknown
+codes, non-JSON bodies, and bodies without `error.code` (including FastAPI's default 422, which only a
+Document-built header/query contract bug can cause) become `DEPENDENCY_UNAVAILABLE`.
+
 The owner web API is:
 
 - `GET /api/workspaces/{workspace_id}/mcp/wiki-drafts/{draft_id}`
@@ -248,6 +311,9 @@ security/admin/client/policy-generation fences do.
 AI delivers the body-free durable `mcp.wiki.publication.v1` event to
 `POST /internal/mcp/wiki/publications/receipt`. Document validates the exact approval/operation/actor/kind tuple,
 deduplicates by event and stable pair, and settles event persistence plus fee decision in one transaction.
+For `changed:true` the same transaction queues `{kind:"embedding_recovery", run_id:"mcp-index:<event_id>", workspace_id}`
+in `ai_command_outbox` for `ai.maintenance.command`, waking the maintenance worker that embeds the published pages
+(AI only publishes, ai ADR-0026). Web manual wiki edits queue the same command.
 `PUBLISHED` with `changed:true` charges the frozen fixed maximum once; `NO_CHANGE` with `changed:false` is free.
 The scheduler repairs lost/reordered delivery from AI's authenticated
 `GET /internal/mcp/wiki/publication-results/{approval_id}/{operation_id}` without treating unknown work as free.

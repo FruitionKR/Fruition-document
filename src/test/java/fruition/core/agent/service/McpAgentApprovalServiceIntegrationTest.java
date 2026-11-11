@@ -42,6 +42,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -140,6 +141,34 @@ class McpAgentApprovalServiceIntegrationTest {
                 .hasMessage("MCP_PRICE_CHANGED");
         assertThat(jdbc.queryForObject("SELECT count(*) FROM mcp_agent_approvals WHERE user_id = ?",
                 Integer.class, user)).isZero();
+    }
+
+    @Test
+    void unavailableQuoteCarriesSafeReasonAndStaysUnapprovable() throws Exception {
+        JsonNode run = run("agent_" + "e".repeat(32));
+        var unpriced = new McpAgentApprovalService(jdbc, new TransactionTemplate(manager), mapper, access, documents,
+                credits, requester, "", "", "", "");
+        JsonNode quote = unpriced.projectRun(workspace, user, run).path("mcp_approval_quote");
+        assertThat(quote.path("unavailable_reason").asText()).isEqualTo("MCP_PRICE_UNCONFIGURED");
+        assertThat(quote.has("price_snapshot")).isFalse();
+        assertThat(quote.has("client_name")).isFalse();
+
+        doThrow(new McpAuthorizationException(403, "GRANT_INACTIVE")).when(access).authorizeWebApproval(any());
+        assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("unavailable_reason")
+                .asText()).isEqualTo("GRANT_INACTIVE");
+
+        doThrow(new McpAuthorizationException(503, "AUTHZ_UNAVAILABLE")).when(access).authorizeWebApproval(any());
+        assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("unavailable_reason")
+                .asText()).isEqualTo("AUTHZ_UNAVAILABLE");
+
+        doThrow(new IllegalStateException("secret upstream body")).when(access).authorizeWebApproval(any());
+        assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("unavailable_reason")
+                .asText()).isEqualTo("QUOTE_UNAVAILABLE");
+
+        doThrow(new McpAgentApprovalService.McpApprovalException(org.springframework.http.HttpStatus.FORBIDDEN,
+                "not a code: secret")).when(access).authorizeWebApproval(any());
+        assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("unavailable_reason")
+                .asText()).isEqualTo("QUOTE_UNAVAILABLE");
     }
 
     @AfterEach
@@ -421,7 +450,8 @@ class McpAgentApprovalServiceIntegrationTest {
                  "plan":{"id":"plan-1","version":1,"operation_hash":"%s","status":"awaiting_approval",
                    "operations":[{"id":"op-1","tool_name":"create_document","depends_on":[],
                      "target_id":null,"base_version":null,
-                     "arguments":{"display_name":"보고서","folder_id":null,"content_artifact_id":"converted-markdown",
+                     "arguments":{"display_name":"보고서","folder_id":null,
+                       "content_result_key":"tmp/mcp-convert/ws/00000000-0000-4000-8000-0000000000aa/final.json",
                        "content_hash":"%s","source_document_id":"doc_pdf","source_content_hash":"%s"}}]}}
                 """.formatted("agent_" + "6".repeat(32), workspace, grant, client, UUID.randomUUID(),
                 "c".repeat(64), hash, hash));

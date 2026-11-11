@@ -137,6 +137,26 @@ public class PipelineWikiStateRequester {
 
     private record LastUpdated(@JsonProperty("updated_at") Instant updatedAt) {}
 
+    /** MCP get_wiki_page가 본문을 읽은 뒤 페이지가 그대로인지 확인할 때 쓴다. 상태와 관계없이 돌려준다. */
+    public Optional<PageState> state(String workspaceId, String pageId) {
+        List<PageState> response = restClient.post()
+                .uri(endpoint + "/pages/lookup")
+                .body(new LookupRequest(List.of(pageId), workspaceId))
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+        return response == null ? Optional.empty()
+                : response.stream().filter(state -> pageId.equals(state.id())).findFirst();
+    }
+
+    public record PageState(
+            String id,
+            @JsonProperty("page_type") String pageType,
+            String title,
+            @JsonProperty("markdown_uri") String markdownUri,
+            String status,
+            @JsonProperty("updated_at") java.time.Instant updatedAt
+    ) {}
+
     public record WikiPageSnapshot(
             String id,
             @JsonProperty("page_type") String pageType,

@@ -97,7 +97,19 @@ public class McpWikiDraftClient {
                 "CANCELLED", "PURGED", "AUTHZ_UNAVAILABLE",
                 // MCP PDF 변환 세션(/internal/mcp/pdf-conversions)
                 "CONVERSION_NOT_READY", "STALE_WINDOW", "ATTEMPTS_EXHAUSTED", "WINDOWS_NOT_SUBMITTED",
-                "CONVERSION_FINALIZED", "SOURCE_LIMIT_EXCEEDED");
+                "CONVERSION_FINALIZED", "SOURCE_LIMIT_EXCEEDED",
+                // MCP wiki draft 거절 코드(pipeline mcp_wiki_draft의 McpWikiDraftError). 클라이언트가 고쳐 다시 보낼 수 있다.
+                "INVALID_EVIDENCE", "LEXICAL_OVERLAP_REJECTED", "INSTRUCTION_PATTERN_REJECTED", "UNSAFE_CONTENT",
+                "INVALID_LINT_OPERATION", "NOT_FOUND", "EXPIRED", "MERGE_TARGET_CHANGED", "TARGET_CHANGED",
+                "SNAPSHOT_MISMATCH", "WINDOW_OUT_OF_ORDER", "WINDOW_ALREADY_SUBMITTED", "INCOMPLETE_WINDOWS",
+                "NO_WINDOW_AVAILABLE", "ACTIVE_LIMIT_EXCEEDED", "REQUEST_TOO_LARGE", "RESPONSE_LIMIT_EXCEEDED",
+                // 현재 문서 내용이 이미 편입됨(웹·MCP 공통 마지막 성공 편입 해시). 문서를 고친 뒤 다시 시작한다.
+                "ALREADY_INGESTED",
+                // 실행이 더 이상 받을 수 없는 상태면 pipeline은 run/draft 상태 이름을 code로 돌려준다.
+                "READY_TO_FINALIZE", "AWAITING_WEB_APPROVAL", "APPLYING", "PUBLISHED", "NO_CHANGE", "CONFLICTED",
+                "HALTED", "UNKNOWN", "INVALIDATED",
+                // pipeline이 그대로 전달하는 Document source callback 거절
+                "INVALID_SOURCE_TYPE");
         return new McpToolException(allowed.contains(code) ? code : "DEPENDENCY_UNAVAILABLE");
     }
 }
