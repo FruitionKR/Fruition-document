@@ -36,7 +36,7 @@ class BetaSignupCreditIntegrationTest {
             var tasks = IntStream.range(0, 12).<Callable<Long>>mapToObj(i -> () -> service.grant("beta-test-one", HASH, 1)).toList();
             var results = pool.invokeAll(tasks);
             long amount = results.getFirst().get();
-            assertThat(amount).isPositive();
+            assertThat(amount).isEqualTo(500_000L);
             for (var result : results) assertThat(result.get()).isEqualTo(amount);
             assertThat(credits.credits("beta-test-one").balanceKrwMilli()).isEqualTo(amount);
             assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE idempotency_key='beta-signup:1'", Integer.class)).isEqualTo(1);
@@ -45,15 +45,26 @@ class BetaSignupCreditIntegrationTest {
             finally { jdbc.update("DELETE FROM fx_rates WHERE krw_per_usd=9999"); }
         }
     }
-    @Test void fiveDollarsUsesMilliKrwAndLedgerFailureRollsBackGrant() {
+    @Test void fixedFiveHundredWonUsesMilliKrwAndLedgerFailureRollsBackGrant() {
         var rateTime = jdbc.queryForObject("INSERT INTO fx_rates(effective_from, krw_per_usd) VALUES (now(), 1400) RETURNING effective_from", java.sql.Timestamp.class);
         try {
-            assertThat(service.grant("beta-test-one", HASH, 1)).isEqualTo(7_000_000L);
+            assertThat(service.grant("beta-test-one", HASH, 1)).isEqualTo(500_000L);
             credits.post("beta-test-other", "grant", 100, "beta-signup:2", "conflicting test ledger");
             assertThatThrownBy(() -> service.grant("beta-test-other", "b".repeat(64), 2)).isInstanceOf(IllegalStateException.class);
             assertThat(jdbc.queryForObject("SELECT count(*) FROM beta_signup_credit_grants WHERE slot=2", Integer.class)).isZero();
             assertThat(credits.credits("beta-test-other").balanceKrwMilli()).isEqualTo(100);
         } finally { jdbc.update("DELETE FROM fx_rates WHERE effective_from=?", rateTime); }
+    }
+
+    @Test void retryPreservesPreviouslyGrantedFiveDollarAmountAndLedger() {
+        jdbc.update("INSERT INTO beta_signup_credit_grants(slot,user_id,email_hash,amount_krw_milli) VALUES (1,?,?,7000000)",
+                "beta-test-legacy", HASH);
+        credits.post("beta-test-legacy", "grant", 7_000_000L, "beta-signup:1", "베타 선착순 50명 · $5 상당 크레딧");
+        assertThat(service.grant("beta-test-legacy", HASH, 1)).isEqualTo(7_000_000L);
+        assertThat(credits.credits("beta-test-legacy").balanceKrwMilli()).isEqualTo(7_000_000L);
+        assertThat(credits.credits("beta-test-legacy").entries()).singleElement()
+                .satisfies(entry -> assertThat(entry.reason()).contains("$5"));
+        assertThat(service.grant("beta-test-new", "b".repeat(64), 2)).isEqualTo(500_000L);
     }
 
     @Test void slotEmailAndUserCannotBeReused() {

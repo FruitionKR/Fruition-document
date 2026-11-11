@@ -173,6 +173,36 @@ class McpEnabledIntegrationTest {
         }
     }
 
+    @Test void creditBalanceReadsOnlyCallerAndNeverWritesAccounts() throws Exception {
+        String request = """
+                {"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"get_credit_balance","arguments":{}}}
+                """;
+        jdbc.update("DELETE FROM credit_entries WHERE user_id IN (?, ?)", USER, "user_i2_credit_other");
+        jdbc.update("DELETE FROM credit_accounts WHERE user_id IN (?, ?)", USER, "user_i2_credit_other");
+        try {
+            var empty = rpc(request).path("result");
+            assertThat(empty.path("isError").asBoolean()).isFalse();
+            assertThat(empty.path("structuredContent").path("available_krw_milli").asLong()).isZero();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_accounts WHERE user_id = ?", Long.class, USER)).isZero();
+            jdbc.update("INSERT INTO credit_accounts(user_id,balance,reserved) VALUES (?,123450,23450), (?,999999,0)",
+                    USER, "user_i2_credit_other");
+            var result = rpc(request).path("result");
+            var balance = result.path("structuredContent");
+            assertThat(balance).isEqualTo(mapper.readTree("""
+                    {"schema_version":"mcp.credit-balance.v1","currency":"KRW",
+                     "balance_krw_milli":123450,"reserved_krw_milli":23450,"available_krw_milli":100000}
+                    """));
+            assertThat(mapper.readTree(result.path("content").get(0).path("text").asText())).isEqualTo(balance);
+            jdbc.update("UPDATE credit_accounts SET balance=-1000, reserved=2000 WHERE user_id=?", USER);
+            var negative = rpc(request).path("result").path("structuredContent");
+            assertThat(negative.path("available_krw_milli").asLong()).isEqualTo(-3000);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE user_id=?", Long.class, USER)).isZero();
+        } finally {
+            jdbc.update("DELETE FROM credit_entries WHERE user_id IN (?, ?)", USER, "user_i2_credit_other");
+            jdbc.update("DELETE FROM credit_accounts WHERE user_id IN (?, ?)", USER, "user_i2_credit_other");
+        }
+    }
+
     @Test void enabledSpringRegistersFilterServletServerAndRunsSdkProtocol() throws Exception {
         insertDocument("doc_i2_transport", "Transport proof", "a".repeat(64), 1,
                 "EDITABLE", null, null, null, 1);
@@ -192,7 +222,7 @@ class McpEnabledIntegrationTest {
                 """);
         assertThat(initialized.path("result").path("protocolVersion").asText()).isEqualTo("2025-11-25");
 
-        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v9");
+        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v10");
 
         JsonNode tools = rpc("""
                 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
@@ -203,7 +233,7 @@ class McpEnabledIntegrationTest {
                         "submit_window", "finalize_ingest", "submit_lint_changes", "list_skills", "get_skill", "propose_skill_definition",
                         "list_meetings", "get_meeting_transcript", "start_pdf_conversion",
                         "get_conversion_window", "submit_conversion_window", "finalize_pdf_conversion",
-                        "start_document_upload", "get_upload_part_urls", "complete_document_upload");
+                        "start_document_upload", "get_upload_part_urls", "complete_document_upload", "get_credit_balance");
 
         JsonNode call = rpc("""
                 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_documents",
