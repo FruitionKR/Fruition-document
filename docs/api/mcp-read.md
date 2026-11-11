@@ -43,7 +43,11 @@ The read tools are:
 
 - `search_wiki` → AI `POST /internal/mcp/wiki/search`, with a server-created actor and only
   `X-Internal-Token`; each stored document/block locator is shape-checked and its document is rechecked for
-  current workspace/read access. Published historical evidence is not invalidated by a later source edit.
+  current workspace/read access. A malformed locator fails the whole search with `DEPENDENCY_UNAVAILABLE`, but a
+  result whose evidence includes a document the caller cannot read (or that no longer exists) is dropped from the
+  page instead of failing the search; its title, snippet, and locators are never returned. The page may then hold
+  fewer than `page_size` results while `next_cursor` stays valid. AI ranks candidates with the web evidence search
+  path (Fruition-ai `docs/api/mcp-wiki.md`). Published historical evidence is not invalidated by a later source edit.
 - `find_documents` → the web document-list search (`DocumentRepository.searchVisibleByWorkspaceId`, the same query
   as `GET /documents?query=`) bounded by the candidate limit, then document-policy filtering and a stateless
   owner-bound cursor.

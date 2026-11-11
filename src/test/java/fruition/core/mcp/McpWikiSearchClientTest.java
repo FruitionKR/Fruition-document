@@ -113,6 +113,44 @@ class McpWikiSearchClientTest {
         }
     }
 
+    @Test void dropsResultsWithUnreadableEvidenceInsteadOfFailingTheSearch() throws Exception {
+        try (var server = new MockWebServer()) {
+            server.enqueue(json(new ObjectMapper().writeValueAsString(Map.of(
+                    "schema_version", "mcp.wiki-search.v1",
+                    "results", List.of(
+                            result("page_readable", List.of("doc_a")),
+                            result("page_hidden", List.of("doc_hidden")),
+                            result("page_missing", List.of("doc_missing")),
+                            // 읽을 수 있는 근거가 있어도 snippet이 읽을 수 없는 문서에서 나올 수 있으므로 뺀다.
+                            result("page_mixed", List.of("doc_a", "doc_hidden"))),
+                    "next_cursor", com.fasterxml.jackson.databind.node.NullNode.getInstance(),
+                    "truncated", false, "data_boundary", "UNTRUSTED_WORKSPACE_CONTENT"))));
+            server.start();
+            var documents = mock(McpDocumentDataGateway.class);
+            var viewer = new DocumentAccessPolicy.Viewer("user", false, false, Map.of("doc_hidden", "none"), Map.of(), Map.of());
+            when(documents.viewer("workspace", "user", true, false)).thenReturn(viewer);
+            when(documents.find("workspace", "doc_a")).thenReturn(Optional.of(new Document(
+                    "doc_a", "workspace", "user", "a.md", "text/markdown", 1, null, "a".repeat(64))));
+            when(documents.find("workspace", "doc_hidden")).thenReturn(Optional.of(new Document(
+                    "doc_hidden", "workspace", "other", "b.md", "text/markdown", 1, null, "b".repeat(64))));
+            when(documents.find("workspace", "doc_missing")).thenReturn(Optional.empty());
+            var client = new McpWikiSearchClient(new PipelineClientFactory("internal"), new ObjectMapper(),
+                    props(server, 64), documents, credits(true));
+
+            var response = client.search(identity(), "query", null, 4);
+
+            assertThat(response.results()).extracting(McpWikiSearchClient.Result::pageId)
+                    .containsExactly("page_readable");
+            assertThat(response.toString()).doesNotContain("doc_hidden", "doc_missing");
+        }
+    }
+
+    private static Map<String, Object> result(String pageId, List<String> documentIds) {
+        return Map.of("page_id", pageId, "page_type", "CONCEPT", "title", "Title " + pageId, "version", 1,
+                "content_hash", "sha256:" + "c".repeat(64), "snippet", "snippet " + pageId,
+                "evidence", documentIds.stream().map(id -> Map.of("document_id", id, "block_id", "B0001")).toList());
+    }
+
     private static MockResponse json(String body) {
         return new MockResponse().setHeader("Content-Type", "application/json").setBody(body);
     }
