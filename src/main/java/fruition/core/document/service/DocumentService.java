@@ -2128,7 +2128,7 @@ public class DocumentService {
         String runId = UUID.randomUUID().toString();
         // access HTTP 조회는 크레딧 예약(계정 행 잠금) 전에 한다. 잠금을 쥔 채 기다리면 같은 사용자의 AI 요청이 줄을 선다.
         var aiModel = prefetchedModel.get();
-        ingestCommandOutbox.begin(runId, document.getWorkspaceId(), requesterId);
+        ingestCommandOutbox.begin(runId, document.getWorkspaceId(), requesterId, document.getByteSize());
         String documentId = document.getId();
         Instant startedAt = Instant.now();
         document.markPipelineStarted(runId, startedAt);

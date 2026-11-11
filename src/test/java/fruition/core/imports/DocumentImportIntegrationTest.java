@@ -299,9 +299,11 @@ class DocumentImportIntegrationTest {
     // ---------- 편입
 
     @Test
-    void ingestEstimate_isPerDocumentEstimateTimesCount() throws Exception {
+    void ingestEstimate_sumsDocumentLengthReservations() throws Exception {
         String importId = openImport();
-        createMarkdown("1.md", importId).andExpect(status().isCreated());
+        String first = json(createMarkdown("1.md", importId), 201).path("id").asText();
+        String edited = "한글 본문".repeat(1000);
+        jdbc.update("UPDATE document_edit_states SET markdown=? WHERE document_id=?", edited, first);
         createMarkdown("2.md", importId).andExpect(status().isCreated());
         String trashed = json(createMarkdown("3.md", importId), 201).path("id").asText();
         jdbc.update("UPDATE documents SET deleted_at = now() WHERE id = ?", trashed);
@@ -309,9 +311,12 @@ class DocumentImportIntegrationTest {
         JsonNode body = json(mockMvc.perform(get(imports() + "/" + importId + "/ingest-estimate")
                 .header("Authorization", bearer(userId))), 200);
         assertThat(body.path("document_count").asInt()).isEqualTo(2);
-        assertThat(body.path("estimated_credits").asLong()).isEqualTo(2 * credits.estimate("document"));
+        long estimate = jdbc.queryForList("SELECT byte_size FROM documents WHERE import_id=?::uuid AND deleted_at IS NULL AND id<>?",
+                Long.class, importId, first).stream().mapToLong(credits::estimateDocument).sum()
+                + credits.estimateDocument(edited.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        assertThat(body.path("estimated_credits").asLong()).isEqualTo(estimate);
         assertThat(body.path("estimated_cost_usd").decimalValue()).isEqualByComparingTo(
-                BigDecimal.valueOf(credits.estimateUsdMicro("document") * 2).movePointLeft(6));
+                BigDecimal.valueOf(credits.estimateUsdMicro(estimate)).movePointLeft(6));
     }
 
     @Test

@@ -85,8 +85,8 @@ class DocumentUploadWikiIngestIntegrationTest {
 
     @Test
     void multipleUploads_laterFileIsSkippedOnceReservationsUseTheBalance() throws Exception {
-        // 첫 예약이 가용 잔액을 다 쓰면(상한 1,000원보다 적은 잔액이라 잔액만큼 예약) 다음 파일은 최저 비용을 못 맞춘다.
-        credit(150_000L, false);
+        // 16바이트 본문의 예약액은 203 milli-KRW다. 잔액 100을 모두 예약하면 다음 편입은 거절된다.
+        credit(100L, false);
 
         JsonNode first = upload("first.md");
         JsonNode second = upload("second.txt");

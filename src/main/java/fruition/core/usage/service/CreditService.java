@@ -69,12 +69,16 @@ public class CreditService {
      * 작은 쪽을 예약한다. 사용자가 없는 요청은 enforce에서 거절한다(시스템 정리 작업은 사용자 없는 command라 여기까지 오지 않는다).
      */
     public void reserve(String runId, String userId, String kind) {
+        reserve(runId, userId, kind, estimate(kind));
+    }
+
+    public void reserve(String runId, String userId, String kind, long estimate) {
+        if (estimate < 0) throw new IllegalArgumentException("Credit estimate must be non-negative.");
         if (isFree(kind)) return;
         if (userId == null || userId.isBlank()) {
             if (enforce) throw new IllegalArgumentException("AI 요청에 사용자가 없어 크레딧을 예약할 수 없습니다: runId=" + runId);
             return;
         }
-        long estimate = estimate(kind);
         transaction.executeWithoutResult(tx -> {
             Map<String, Object> account = lock(userId);
             if (!jdbc.queryForList("SELECT id FROM credit_entries WHERE idempotency_key = ?", Long.class,
@@ -193,15 +197,31 @@ public class CreditService {
         return environment.getProperty("app.billing.estimate." + kind, Long.class, defaultEstimate);
     }
 
+    /** UTF-8 본문 길이에 비례한 편입 예약액. 기준 보고서 5,537바이트의 실사용 33원에 70원을 예약한다. */
+    public long estimateDocument(long sourceBytes) {
+        long referenceBytes = environment.getProperty("app.billing.document-reference-bytes", Long.class, 5537L);
+        long referenceAmount = estimate("document");
+        if (sourceBytes < 0 || referenceBytes <= 0 || referenceAmount <= 0) {
+            throw new IllegalArgumentException("Document reservation sizes and rate must be positive.");
+        }
+        return Math.max(1, BigDecimal.valueOf(sourceBytes).multiply(BigDecimal.valueOf(referenceAmount))
+                .divide(BigDecimal.valueOf(referenceBytes), 0, RoundingMode.CEILING).longValueExact());
+    }
+
     /**
      * kind 실행 한 건의 예상 비용(USD micro). 예상 상한(milli-KRW)을 최신 환율로 바꾼다: KRW = milli/1000, USD = KRW/환율,
      * micro = USD×10^6. 마진·부가세가 포함된 값이라 실제 원가보다 크게 잡힌다. 환율 행은 V72가 기본값을 넣는다.
      */
     public long estimateUsdMicro(String kind) {
+        return estimateUsdMicro(estimate(kind));
+    }
+
+    public long estimateUsdMicro(long krwMilli) {
         BigDecimal rate = jdbc.queryForObject("SELECT krw_per_usd FROM fx_rates WHERE effective_from <= now() "
                 + "ORDER BY effective_from DESC LIMIT 1", BigDecimal.class);
         long krwPerUsdMilli = rate.movePointRight(3).setScale(0, RoundingMode.UP).longValueExact();
-        return Math.ceilDiv(estimate(kind) * 1_000_000L, krwPerUsdMilli);
+        return BigDecimal.valueOf(krwMilli).multiply(BigDecimal.valueOf(1_000_000L))
+                .divide(BigDecimal.valueOf(krwPerUsdMilli), 0, RoundingMode.CEILING).longValueExact();
     }
 
     /** kind별 최저 비용. 설정이 없으면 예상 상한의 10%이고 최소 1이다(0이면 가용 잔액 0도 통과해 버린다). */
