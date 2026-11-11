@@ -6,9 +6,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
-
 @Service
 public class BetaSignupCreditService {
     private final JdbcTemplate jdbc;
@@ -34,14 +31,10 @@ public class BetaSignupCreditService {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Beta credit recipient conflicts with an existing grant");
             return ((Number) row.get("amount_krw_milli")).longValue();
         }
-        var rates = jdbc.queryForList("SELECT krw_per_usd FROM fx_rates WHERE effective_from <= now() "
-                + "ORDER BY effective_from DESC LIMIT 1", BigDecimal.class);
-        if (rates.isEmpty()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Beta credit exchange rate unavailable");
-        // $5 상당을 최초 지급 때 원화로 고정한다. 재전송 때 환율이 달라도 같은 금액을 돌려준다.
-        long amount = rates.getFirst().multiply(new BigDecimal("5000")).setScale(0, RoundingMode.HALF_UP).longValueExact();
+        long amount = 500_000L; // 500 KRW in milli-KRW; existing grants keep their stored amount.
         jdbc.update("INSERT INTO beta_signup_credit_grants(slot, user_id, email_hash, amount_krw_milli) VALUES (?, ?, ?, ?)",
                 slot, userId, emailHash, amount);
-        if (!credits.post(userId, "grant", amount, "beta-signup:" + slot, "베타 선착순 50명 · $5 상당 크레딧"))
+        if (!credits.post(userId, "grant", amount, "beta-signup:" + slot, "베타 선착순 50명 · 500원 크레딧"))
             throw new IllegalStateException("Beta credit ledger already exists without a grant record");
         return amount;
     }
