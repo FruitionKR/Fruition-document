@@ -3,6 +3,7 @@ package fruition.core.mcp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import fruition.core.usage.service.CreditService;
 import io.modelcontextprotocol.common.McpTransportContext;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.springframework.beans.factory.annotation.Value;
@@ -69,23 +70,26 @@ public class McpToolCatalog {
     private final ObjectMapper mapper;
     private final McpProperties properties;
     private final URI sourceOrigin;
+    private final CreditService credits;
 
     public McpToolCatalog(McpWikiSearchClient wiki, McpWikiPageService wikiPages, McpDocumentReadService documents,
                           McpDocumentProposalService proposals, McpPlanProposalService planProposals,
                           McpWikiProposalService wikiProposals, McpSkillTools skillTools,
                           McpMeetingTools meetingTools, McpPdfTools pdfTools,
                           McpDocumentUploadTools uploadTools, McpAuditLogger audit, ObjectMapper mapper,
-                          McpProperties properties, @Value("${app.mcp.review-origin:}") String sourceOrigin) {
+                          McpProperties properties, @Value("${app.mcp.review-origin:}") String sourceOrigin,
+                          CreditService credits) {
         this.wiki = wiki; this.wikiPages = wikiPages; this.documents = documents;
         this.proposals = proposals; this.planProposals = planProposals; this.wikiProposals = wikiProposals;
         this.skillTools = skillTools; this.meetingTools = meetingTools;
         this.pdfTools = pdfTools;
         this.uploadTools = uploadTools;
         this.sourceOrigin = sourceOrigin.isBlank() ? null : McpProperties.parseOrigin(sourceOrigin);
+        this.credits = credits;
         this.audit = audit; this.mapper = mapper; this.properties = properties;
     }
 
-    /** 읽기 4개 + 제안 8개 + Skill 3개(읽기 2·정의 제안 1) + 회의 읽기 2개 + PDF 변환 4개 + 웹 직접 업로드 3개(업로드는 웹과 같이 승인 없이 문서가 된다). 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
+    /** 읽기 4개 + 제안 8개 + Skill 3개(읽기 2·정의 제안 1) + 회의 읽기 2개 + PDF 변환 4개 + 크레딧 읽기 1개 + 웹 직접 업로드 3개(업로드는 웹과 같이 승인 없이 문서가 된다). 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
     public List<io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification> tools() {
         var tools = new java.util.ArrayList<>(List.of(
                 spec(tool("search_wiki", "Search published workspace wiki pages", searchSchema()),
@@ -113,7 +117,22 @@ public class McpToolCatalog {
             tools.add(spec(tool, (id, args) -> pdfTools.invoke(id, tool.name(), args)));
         for (McpSchema.Tool tool : uploadTools.tools())
             tools.add(spec(tool, (id, args) -> uploadTools.invoke(id, tool.name(), args)));
+        tools.add(spec(tool("get_credit_balance", "Read the authenticated user's personal credit balance across all"
+                        + " workspaces. No arguments. Amounts are integer milli-KRW: divide by 1000 for KRW."
+                        + " Report available_krw_milli as spendable balance, and distinguish balance from reserved funds."
+                        + " Amounts may be negative. This is a current snapshot, not a guarantee that a future action"
+                        + " will be approved; this tool does not reserve, charge, or change credits.",
+                Map.of("type", "object", "properties", Map.of(), "additionalProperties", false)),
+                (id, args) -> creditBalance(id, args)));
         return List.copyOf(tools);
+    }
+
+    private Object creditBalance(McpIdentity identity, Map<String, Object> args) {
+        if (args != null && !args.isEmpty()) throw new McpToolException("INVALID_INPUT");
+        var balance = credits.credits(identity.userId());
+        return Map.of("schema_version", "mcp.credit-balance.v1", "currency", balance.currency(),
+                "balance_krw_milli", balance.balanceKrwMilli(), "reserved_krw_milli", balance.reservedKrwMilli(),
+                "available_krw_milli", balance.availableKrwMilli());
     }
 
     private io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification spec(
@@ -199,6 +218,14 @@ public class McpToolCatalog {
                 .annotations(annotations).build();
     }
     private static Map<String,Object> outputSchema(String name) {
+        if ("get_credit_balance".equals(name)) {
+            var amount = Map.of("type", "integer");
+            var fields = Map.of("schema_version", Map.of("type", "string", "const", "mcp.credit-balance.v1"),
+                    "currency", Map.of("type", "string", "const", "KRW"),
+                    "balance_krw_milli", amount, "reserved_krw_milli", amount, "available_krw_milli", amount);
+            return Map.of("type", "object", "additionalProperties", false, "properties", fields,
+                    "required", List.copyOf(fields.keySet()));
+        }
         if (Set.of("start_ingest", "resume_ingest", "get_window", "submit_window", "finalize_ingest",
                 "submit_lint_changes").contains(name)) return wikiOutputSchema(name);
         Map<String,Object> string = Map.of("type", "string");
