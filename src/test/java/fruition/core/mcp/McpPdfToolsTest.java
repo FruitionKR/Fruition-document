@@ -7,17 +7,11 @@ import fruition.core.document.domain.Document;
 import fruition.core.document.service.McpDocumentDataGateway;
 import fruition.shared.util.StorageProperties;
 import io.minio.GetObjectArgs;
-import io.minio.GetObjectResponse;
 import io.minio.MinioClient;
-import okhttp3.Headers;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.io.ByteArrayInputStream;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +36,7 @@ import static org.mockito.Mockito.when;
 class McpPdfToolsTest {
     private static final String PDF_HASH = "sha256:" + "a".repeat(64);
     private static final String CONVERSION = "0f6f3d1e-2b7a-4c8e-9d5f-1a2b3c4d5e6f";
+    private static final String RESULT_KEY = "tmp/mcp-convert/workspace/" + CONVERSION + "/final.json";
     private final ObjectMapper mapper = new ObjectMapper();
     private final McpDocumentDataGateway documents = mock(McpDocumentDataGateway.class);
     private final McpPlanProposalService plans = mock(McpPlanProposalService.class);
@@ -58,7 +53,7 @@ class McpPdfToolsTest {
     McpPdfToolsTest() {
         StorageProperties properties = new StorageProperties();
         properties.setBucket("bucket");
-        tools = new McpPdfTools(documents, plans, access, ai, transaction, settings, storage, storage,
+        tools = new McpPdfTools(documents, plans, access, ai, transaction, settings, storage,
                 properties, mapper, 10);
         when(access.authorizeProposal(any())).thenReturn(identity);
         doAnswer(invocation -> {
@@ -188,11 +183,10 @@ class McpPdfToolsTest {
     }
 
     @Test
-    void finalizeProposesOnlyTheServerAssembledMarkdownLinkedToTheUnchangedPdf() throws Exception {
-        String markdown = "<!-- page 1 -->\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n";
+    void finalizeProposesOnlyTheStoredResultKeyInThePdfFolder() throws Exception {
+        String contentHash = "sha256:" + "c".repeat(64);
         when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/finalize"), any()))
-                .thenReturn(finalized("sha256:" + sha256(markdown)));
-        when(storage.getObject(any(GetObjectArgs.class))).thenAnswer(invocation -> object(markdown));
+                .thenReturn(finalized(contentHash, RESULT_KEY));
         Document pdf = pdf();
         when(documents.convertSource(identity, "doc_pdf", PDF_HASH))
                 .thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, true));
@@ -208,29 +202,69 @@ class McpPdfToolsTest {
         verify(plans).propose(eq(identity), plan.capture());
         var validated = McpPlanProposalService.input(plan.getValue());
         Map<?, ?> arguments = (Map<?, ?>) validated.operations().getFirst().get("arguments");
+        // 조립 결과는 계획에 싣지 않는다. 승인 뒤 document가 key에서 읽어 hash를 확인하고 저장한다.
+        assertThat(arguments.get("content_result_key")).isEqualTo(RESULT_KEY);
+        assertThat(arguments.get("content_hash")).isEqualTo(contentHash);
         assertThat(arguments.get("source_document_id")).isEqualTo("doc_pdf");
         assertThat(arguments.get("source_content_hash")).isEqualTo(PDF_HASH);
+        // 웹 변환처럼 원본 PDF와 같은 폴더에 만든다.
         assertThat(arguments.get("folder_id")).isEqualTo(folder.toString());
         assertThat(arguments.get("display_name")).isEqualTo("보고서");
-        assertThat(validated.artifacts().getFirst().get("markdown")).isEqualTo(markdown);
+        assertThat(validated.artifacts()).isEmpty();
+        verify(storage, never()).getObject(any(GetObjectArgs.class));
     }
 
     @Test
-    void finalizeRefusesTamperedResultOrChangedSourceWithoutProposing() throws Exception {
+    void finalizeNoLongerAcceptsAClientChosenFolder() {
+        Map<String, Object> args = finalizeArgs();
+        args.put("target_folder_id", UUID.randomUUID().toString());
+        assertThatThrownBy(() -> tools.invoke(identity, "finalize_pdf_conversion", args))
+                .isInstanceOf(McpToolException.class).hasMessage("INVALID_INPUT");
+        var schema = tools.tools().stream().filter(tool -> tool.name().equals("finalize_pdf_conversion"))
+                .findFirst().orElseThrow().inputSchema();
+        assertThat(((Map<?, ?>) schema.get("properties")).keySet().stream().map(Object::toString).toList())
+                .containsExactly("idempotency_key", "conversion_id", "display_name");
+        verify(ai, never()).post(anyString(), any());
+    }
+
+    @Test
+    void finalizeRefusesForeignResultKeyOrChangedSourceWithoutProposing() {
         when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/finalize"), any()))
-                .thenReturn(finalized("sha256:" + "0".repeat(64)));
-        when(storage.getObject(any(GetObjectArgs.class))).thenAnswer(invocation -> object("# 다른 본문\n"));
+                .thenReturn(finalized(PDF_HASH, "tmp/mcp-convert/other/" + CONVERSION + "/final.json"));
         Document pdf = pdf();
         when(documents.convertSource(identity, "doc_pdf", PDF_HASH))
                 .thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, true));
         assertThatThrownBy(() -> tools.invoke(identity, "finalize_pdf_conversion", finalizeArgs()))
                 .isInstanceOf(McpToolException.class).hasMessage("DEPENDENCY_UNAVAILABLE");
 
+        when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/finalize"), any()))
+                .thenReturn(finalized(PDF_HASH, RESULT_KEY));
         when(documents.convertSource(identity, "doc_pdf", PDF_HASH))
                 .thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, false));
         assertThatThrownBy(() -> tools.invoke(identity, "finalize_pdf_conversion", finalizeArgs()))
                 .isInstanceOf(McpToolException.class).hasMessage("SOURCE_CHANGED");
         verify(plans, never()).propose(any(), any());
+    }
+
+    @Test
+    void submitReportsFollowUpWindowsFromTheSharedRetryRule() {
+        String windowId = UUID.randomUUID().toString();
+        ObjectNode response = mapper.createObjectNode().put("schema_version", "mcp.pdf-conversion.v1")
+                .put("conversion_id", CONVERSION).put("window_id", windowId).put("attempt", 1).put("max_attempts", 1)
+                .put("accepted", false).put("submitted_window_count", 1).put("window_count", 3);
+        response.putArray("rejected_block_ids").add("table-a");
+        response.putArray("followup_block_ids").add("table-a").add("table-b");
+        response.putArray("new_window_ordinals").add(2).add(3);
+        when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/windows/" + windowId + "/submissions"),
+                any())).thenReturn(response);
+
+        @SuppressWarnings("unchecked")
+        var view = (Map<String, Object>) tools.invoke(identity, "submit_conversion_window", Map.of(
+                "idempotency_key", "submit-1", "conversion_id", CONVERSION, "window_id", windowId,
+                "window_hash", PDF_HASH, "result", Map.of("results", List.of())));
+
+        assertThat(view.get("new_window_ordinals")).isEqualTo(List.of(2, 3));
+        assertThat(view).doesNotContainKey("followup_block_ids");
     }
 
     @Test
@@ -250,7 +284,6 @@ class McpPdfToolsTest {
         Map<String, Object> args = new LinkedHashMap<>();
         args.put("idempotency_key", "finalize-1");
         args.put("conversion_id", CONVERSION);
-        args.put("target_folder_id", null);
         args.put("display_name", null);
         return args;
     }
@@ -278,18 +311,12 @@ class McpPdfToolsTest {
         return node;
     }
 
-    private ObjectNode finalized(String contentHash) {
+    private ObjectNode finalized(String contentHash, String resultKey) {
         ObjectNode node = mapper.createObjectNode().put("conversion_id", CONVERSION).put("source_document_id", "doc_pdf")
-                .put("source_content_hash", PDF_HASH).put("content_hash", contentHash)
-                .put("result_key", "tmp/convert/mcp/workspace/" + CONVERSION + "/final.md");
+                .put("source_content_hash", PDF_HASH).put("content_hash", contentHash).put("result_key", resultKey);
         node.putObject("restoration_summary").put("broken_pages", 0).put("repaired_pages", 0)
                 .putArray("fallback_pages");
         return node;
-    }
-
-    private static GetObjectResponse object(String markdown) {
-        return new GetObjectResponse(Headers.of(), "bucket", null, "final.md",
-                new ByteArrayInputStream(markdown.getBytes(StandardCharsets.UTF_8)));
     }
 
     private Document pdf() {
@@ -299,9 +326,5 @@ class McpPdfToolsTest {
         when(pdf.getFolderId()).thenReturn(folder);
         when(pdf.getSourceUri()).thenReturn("s3://bucket/sources/documents/doc_pdf/original");
         return pdf;
-    }
-
-    private static String sha256(String value) throws Exception {
-        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
     }
 }

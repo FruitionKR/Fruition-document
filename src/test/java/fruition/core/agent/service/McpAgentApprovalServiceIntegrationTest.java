@@ -450,7 +450,8 @@ class McpAgentApprovalServiceIntegrationTest {
                  "plan":{"id":"plan-1","version":1,"operation_hash":"%s","status":"awaiting_approval",
                    "operations":[{"id":"op-1","tool_name":"create_document","depends_on":[],
                      "target_id":null,"base_version":null,
-                     "arguments":{"display_name":"보고서","folder_id":null,"content_artifact_id":"converted-markdown",
+                     "arguments":{"display_name":"보고서","folder_id":null,
+                       "content_result_key":"tmp/mcp-convert/ws/00000000-0000-4000-8000-0000000000aa/final.json",
                        "content_hash":"%s","source_document_id":"doc_pdf","source_content_hash":"%s"}}]}}
                 """.formatted("agent_" + "6".repeat(32), workspace, grant, client, UUID.randomUUID(),
                 "c".repeat(64), hash, hash));

@@ -180,7 +180,8 @@ class McpToolCatalogTest {
         var specification = catalog.tools().get(5);
         var variants = new ObjectMapper().valueToTree(specification.tool().inputSchema())
                 .path("properties").path("operations").path("items").path("properties").path("arguments").path("oneOf");
-        assertThat(variants.toString()).contains("source_document_id", "source_content_hash");
+        // PDF 변환본 저장은 finalize_pdf_conversion만 제안한다. 클라이언트용 propose_plan 스키마에는 없다.
+        assertThat(variants.toString()).doesNotContain("source_document_id", "content_result_key");
         assertThat(specification.tool().name()).isEqualTo("propose_plan");
         assertThat(specification.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
         assertThat(specification.tool().annotations().readOnlyHint()).isFalse();
