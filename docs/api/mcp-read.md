@@ -5,8 +5,8 @@ The document service owns the protected MCP resource at `POST /mcp` and its RFC 
 `["read","write_propose","wiki_write"]`와 같다. 광고만 할 뿐 자동 부여는 없다). The boundary is disabled unless `MCP_ENABLED=true`;
 enabling it also requires canonical HTTPS resource/authorization/AI URIs, an exact Origin allowlist,
 RSA verification keys, a cursor secret, and every positive deployment limit in `application.properties`.
-`MCP_REVIEW_ORIGIN` is an explicit canonical HTTPS frontend origin used only by the proposal tools;
-leaving it blank keeps the four read tools available but makes proposal invocation fail closed.
+`MCP_REVIEW_ORIGIN` is an explicit canonical HTTPS frontend origin used by proposal review links and read source links.
+Leaving it blank keeps the four read tools available with `source_url: null`, but makes proposal invocation fail closed.
 
 The transport is the stateless servlet transport from the official Java SDK 2.1.0. It does not issue or
 accept MCP session IDs. Every HTTP request verifies an RS256 MCP-audience token, reads at most 4 MiB after
@@ -18,7 +18,30 @@ decompression to select the required `read`, `write_propose` (`propose_document_
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-## 공개 카탈로그 (`mcp-tools.v8`)
+## 공개 카탈로그 (`mcp-tools.v9`)
+
+출처 링크 변경 기록(2026-11-11, `mcp-tools.v8` → `mcp-tools.v9`):
+
+- 공개 읽기 도구 네 개의 응답에 서버가 인가한 `workspace_id`를 추가한다.
+- 위키 페이지는 내부 지식이며 사용자가 여는 출처가 아니다. `search_wiki` 결과와 `get_wiki_page`에는
+  페이지 URL을 제공하지 않는다. 위키 기반 답변은 `search_wiki.results[].evidence[]`의
+  `{document_id, block_id, source_url}`을 사용해 원문 블록을 인용한다.
+- 근거 `source_url`은 `<MCP_REVIEW_ORIGIN>/home?doc=<encoded document_id>&blocks=<encoded block_id>`다.
+  프런트엔드는 `blocks`를 기존 원문 미리보기의 하이라이트·스크롤 경로에 전달한다.
+  현재 본문에서 블록을 못 찾거나 문서가 바뀐 경우에도 기존 위치 검증·안내를 사용한다.
+- `find_documents.results[]`와 `get_document`의 `source_url`은 문서 전체를 여는 `/home?doc=...`다.
+  이 도구들의 block 번호를 위키 영구 source block ID로 추측해 링크를 만들지 않는다.
+- `get_wiki_page`는 맥락 조회용이며, 도구 설명은 인용 전에 `search_wiki`에서 일치하는 원문 근거를
+  얻도록 명시한다. 근거 없는 페이지에는 출처 URL을 만들어 붙이지 않는다.
+- 모든 `source_url`은 필수 nullable string이다. origin 미설정이면 null로 반환하고 문서·블록 ID로 인용한다.
+  정적 도구 설명은 주장 옆에 반환된 원문 링크로 Markdown 인용을 달고 위키 페이지 링크는 만들지 않도록 지시한다.
+- URL은 인가·무해화가 끝난 결과에 document 서비스의 공개 MCP 경계에서 붙인다.
+  AI 내부 DTO, 본문, `content_hash`, 커서 및 권한 판정은 바꾸지 않으며 링크를 붙인 전체 응답에도 크기 제한을 적용한다.
+- 기존 `/home` 링크는 브라우저가 선택한 워크스페이스에서 열린다. 도구 설명에 반환된 `workspace_id`와
+  다르면 먼저 해당 워크스페이스를 선택하도록 명시한다. 링크는 공개 공유 URL이나 권한 우회 수단이 아니다.
+
+공개 output schema에 위 필드를 추가하고 카탈로그 버전을 올린다. 기존 `schema_version` v1은 유지하며,
+AI↔document 내부 strict 계약에는 이 표시용 필드를 보내지 않는다.
 
 `McpToolCatalog.tools()`는 2026-11-09부터 다음 24개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
 `find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
