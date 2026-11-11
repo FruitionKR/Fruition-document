@@ -144,7 +144,8 @@ public class DocumentImportService {
     public IngestEstimateResponse estimate(String workspaceId, String userId, String importId) {
         access.requireMember(workspaceId, userId);
         UUID id = find(workspaceId, userId, importId, false).id();
-        List<Long> sizes = jdbc.queryForList("SELECT byte_size FROM documents WHERE " + NOT_INGESTED,
+        List<Long> sizes = jdbc.queryForList("SELECT coalesce((SELECT octet_length(markdown) FROM document_edit_states "
+                + "WHERE document_id = documents.id), byte_size) FROM documents WHERE " + NOT_INGESTED,
                 Long.class, id, workspaceId);
         long estimate = sizes.stream().mapToLong(credits::estimateDocument).reduce(0, Math::addExact);
         int pdfs = count(UNCONVERTED_PDF, id, workspaceId);

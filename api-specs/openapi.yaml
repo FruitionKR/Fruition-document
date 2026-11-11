@@ -8303,7 +8303,7 @@ components:
           description: "아직 편입하지 않은(편입 요청한 적 없는) 휴지통 밖 가져온 Markdown 문서 수. PDF 원본은 빼고, PDF 변환본은 변환이 끝난 것만 센다"
         estimated_cost_usd:
           type: number
-          description: 예상 비용(USD) = 문서 편입 1건 예상 비용 × document_count. 환율을 못 읽으면 null
+          description: 예상 비용(USD) = 본문 길이별 예약액 합계를 최신 환율로 환산. 환율을 못 읽으면 null
         estimated_credits:
           type: integer
           format: int64
