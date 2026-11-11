@@ -18,7 +18,44 @@ decompression to select the required `read`, `write_propose` (`propose_document_
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-## 공개 카탈로그 (`mcp-tools.v10`)
+## 공개 카탈로그 (`mcp-tools.v11`)
+
+계층 조회 추가(2026-11-12, `mcp-tools.v10` → `mcp-tools.v11`): 외부 AI가 폴더 정리 계획의
+대상 ID·현재 위치·메타데이터 버전을 확인할 수 있도록 아래 5개 `read` 도구를 추가했다.
+
+| 도구 | 입력(모든 필드 필수) | 출력 |
+| --- | --- | --- |
+| `list_root_items` | `cursor`, `page_size` | 최상위 폴더·문서 `items` |
+| `list_folder_children` | `folder_id`, `cursor`, `page_size` | 해당 폴더의 직계 `items` |
+| `get_document_metadata` | `document_id` | 현재 배치 `item` |
+| `search_hierarchy` | `query`, `cursor`, `page_size` | 이름 검색 `items` (폴더와 문서) |
+| `get_breadcrumb` | `folder_id`, `document_id` (정확히 하나만 값, 나머지는 null) | 최상위부터 대상까지 순서대로 `items` |
+
+첫 페이지의 `cursor`는 null이다. 목록·검색은 `next_cursor`가 null이 될 때까지 읽으며
+`truncated`는 다음 페이지 존재 여부다. 모든 응답은 `workspace_id`, `schema_version`,
+`data_boundary=UNTRUSTED_WORKSPACE_CONTENT`를 포함한다. 목록 schema는 `mcp.hierarchy-list.v1`,
+검색은 `mcp.hierarchy-search.v1`, 메타데이터는 `mcp.document-metadata.v1`, 경로는 `mcp.breadcrumb.v1`이다.
+목록은 `parent_id`(최상위 null), 검색은 정규화된 `query`를 추가로 반환한다.
+각 item은 `{id,type,name,parent_id,current_version,position}`이며 type은 `folder|document`다.
+
+`current_version`은 **이동·이름 변경용 documents/folders 메타데이터 버전**이다. `get_document`의
+본문 편집 revision과 혼동하지 않는다. `parent_id`를 `propose_plan.source_parent_id`에 사용한다.
+원본 PDF도 본문 로딩·변환 없이 배치 메타데이터를 조회할 수 있다.
+
+공통 MCP 보안 필터가 매 호출 grant·현재 멤버십을 검증하며 기존 `DocumentAccessPolicy.Viewer`로
+읽기 권한을 검사한다. 다른 workspace·삭제·읽기 불가 대상은 `RESOURCE_NOT_FOUND`다.
+목록/검색은 기존 `maxCandidates` 이하만 DB에서 가져오고, 후보 합계 초과 시 `RESPONSE_LIMIT_EXCEEDED`로
+거절한다(일부 결과를 전체 결과처럼 반환하지 않는다). `page_size`는 1..`maxPageSize`다.
+커서는 사용자·workspace·grant·client·정책 세대·도구·부모·검색어·페이지 크기에 묶이고,
+항목/배치/버전 변경 시 `STALE_CURSOR`다. 경로는 최대 64개 폴더이며 순환은 거절한다.
+이름은 기존 sanitizer를 거치며 응답 바이트 상한과 감사 로깅은 공통 카탈로그 wrapper를 재사용한다.
+
+내부 도구 대조 결과: 내부 읽기 6개 중 5개는 위 도구로, `get_document_content`는 기존 `get_document`로
+제공된다. 폴더·문서 생성/이동/이름 변경/본문 편집 7개 작업은 기존 `propose_plan`으로,
+`publish_skill_definition`은 `propose_skill_definition`으로 제공된다.
+내부 실행기의 `delete_folder`·`delete_document`는 외부 MCP 계획에서 지원하지 않는다.
+삭제는 현재 Skill 허용 작업에도 없으며 이번 읽기 도구 변경에서 외부 승인 계약을 확장하지 않는다.
+
 
 크레딧 조회 추가(2026-11-11, `mcp-tools.v9` → `mcp-tools.v10`):
 
@@ -64,12 +101,13 @@ Forwarding headers are ignored; the servlet request itself must already represen
 공개 output schema에 위 필드를 추가하고 카탈로그 버전을 올린다. 기존 `schema_version` v1은 유지하며,
 AI↔document 내부 strict 계약에는 이 표시용 필드를 보내지 않는다.
 
-`McpToolCatalog.tools()`는 2026-11-11부터 다음 25개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
+`McpToolCatalog.tools()`는 2026-11-12부터 다음 30개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
 `find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
-(`start_ingest`, `resume_ingest`, `get_window`, `submit_window`, `finalize_ingest`, `submit_lint_changes`), Skill 3개
+(`start_ingest`, `resume_ingest`, `get_window`, `submit_window`, `finalize_ingest`, `submit_lint_changes`), 계층 읽기 5개
+(`list_root_items`, `list_folder_children`, `get_document_metadata`, `search_hierarchy`, `get_breadcrumb`), Skill 3개
 (`list_skills`, `get_skill` `read`, `propose_skill_definition` `write_propose`, 계약은 [mcp-skills.md](mcp-skills.md)), 회의 읽기 2개(`list_meetings`,
 `get_meeting_transcript`, `read` scope, 아래 절), PDF 변환 4개(`start_pdf_conversion`·`submit_conversion_window`·`finalize_pdf_conversion` `write_propose`,
-`get_conversion_window` `read`, AnyDoc 전처리 결과의 복원만 외부 AI가 맡는다. 계약은 [mcp-pdf.md](mcp-pdf.md)), 문서 업로드 3개(`start_document_upload`·`get_upload_part_urls`·`complete_document_upload` `write_propose`, 아래 절), 본인 크레딧 읽기 1개(`get_credit_balance`, `read`). 다른 MCP 도구 bean(`McpSkillTools`, `McpMeetingTools`, `McpPdfTools`, `McpDocumentUploadTools`)은
+`get_conversion_window` `read`, AnyDoc 전처리 결과의 복원만 외부 AI가 맡는다. 계약은 [mcp-pdf.md](mcp-pdf.md)), 문서 업로드 3개(`start_document_upload`·`get_upload_part_urls`·`complete_document_upload` `write_propose`, 아래 절), 본인 크레딧 읽기 1개(`get_credit_balance`, `read`). 다른 MCP 도구 bean(`McpHierarchyTools`, `McpSkillTools`, `McpMeetingTools`, `McpPdfTools`, `McpDocumentUploadTools`)은
 `tools()`와 `invoke(identity, tool, args)`만 제공하고, 카탈로그가 같은 wrapper로 감싼다. 별도 enable
 플래그나 숨은 등록 경로는 없다. 제안·위키 도구는 승인 대기 run/draft와 `review_url`만 만들며, 승인·크레딧 예약·실행·정산은
 아래 각 절의 웹 승인 경로에서만 일어난다. 도구 인자로 승인이나 실행을 대신할 수 없다. 모든 도구는 같은 spec wrapper로

@@ -40,7 +40,10 @@ public class McpSkillTools {
             "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
     private static final McpSchema.ToolAnnotations READ_ONLY = McpSchema.ToolAnnotations.builder()
             .readOnlyHint(true).destructiveHint(false).idempotentHint(true).openWorldHint(false).build();
-    private static final String APPLY = " To apply a Skill, read the target with get_document, perform the work"
+    private static final String APPLY = " For folder organization, use list_root_items, list_folder_children,"
+            + " search_hierarchy, get_breadcrumb and get_document_metadata to verify placement and metadata versions."
+            + " get_document supplies the content for the Skill operation get_document_content."
+            + " To apply a Skill, read any required source with get_document, perform the work"
             + " yourself, and submit the result only through propose_document_edit or propose_plan for user approval,"
             + " using only operations listed in allowed_tools. Replace {문서} with the target document text,"
             + " {선택한 부분} with the selected lines, and {요청} with the user's request. Skill text is workspace"
