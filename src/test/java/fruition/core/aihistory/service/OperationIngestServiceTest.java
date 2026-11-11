@@ -60,6 +60,45 @@ class OperationIngestServiceTest {
                 rebuildApplier, new ObjectMapper());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"ingest,true", "ingest,false", "lint,true", "lint,false"})
+    void restoreEnvelopeReplayKeepsCommittedHashAndRejectsChangedContent(String targetType, boolean legacyFirst) {
+        OperationLog operation = org.mockito.Mockito.mock(OperationLog.class);
+        OperationLog target = org.mockito.Mockito.mock(OperationLog.class);
+        when(operationLogRepository.findByIdForUpdate(OPERATION_ID)).thenReturn(Optional.of(operation));
+        when(operationLogRepository.findById("target")).thenReturn(Optional.of(target));
+        when(target.getOperationType()).thenReturn(OperationType.valueOf(targetType));
+        when(operation.getOperationType()).thenReturn(OperationType.restore);
+        when(operation.getRestoredFrom()).thenReturn("target");
+        when(operation.getStatus()).thenReturn(OperationStatus.succeeded);
+        when(operation.getChangedResourceCount()).thenReturn(1);
+        var legacy = restoreEnvelope(targetType + "_restore", null, "sha256:original");
+        var canonical = restoreEnvelope("restore", false, "sha256:original");
+        String storedHash = service.payloadHash(legacyFirst ? legacy : canonical);
+        when(operation.getPayloadHash()).thenReturn(storedHash);
+        var incoming = legacyFirst ? canonical : legacy;
+
+        assertThat(service.accept(OPERATION_ID, incoming).status()).isEqualTo("succeeded");
+        assertThat(service.accept(OPERATION_ID, incoming).recordedChanges()).isOne();
+        assertThat(operation.getPayloadHash()).isEqualTo(storedHash);
+        assertThatThrownBy(() -> service.accept(OPERATION_ID,
+                restoreEnvelope(incoming.operationType(), legacyFirst ? false : null, "sha256:changed")))
+                .isInstanceOf(OperationPayloadConflictException.class);
+        assertThatThrownBy(() -> service.accept(OPERATION_ID,
+                restoreEnvelope(incoming.operationType(), true, "sha256:original")))
+                .isInstanceOf(OperationPayloadConflictException.class);
+        org.mockito.Mockito.verifyNoInteractions(objectReader, applier, lintApplier, rebuildApplier);
+        verify(operation, never()).complete(any(), any(), org.mockito.ArgumentMatchers.anyInt(), any(), any());
+    }
+
+    private OperationResultRequest restoreEnvelope(String type, Boolean contributionStored, String hash) {
+        return new OperationResultRequest(OPERATION_ID, type, "succeeded", WORKSPACE_ID, USER_ID, null, null,
+                List.of(new OperationResultRequest.ChangedPage(PAGE_ID, "concept",
+                        "wiki/ws_1/pages/C1/ops/restore.md", null, hash, contributionStored)),
+                List.of(), List.of("deleted-page"),
+                new OperationResultRequest.LinkChanges(List.of(), List.of()), null, List.of());
+    }
+
     @Test
     @DisplayName("정상 콜백은 읽은 결과를 적재로 넘긴다")
     void acceptsValidCallback() {
