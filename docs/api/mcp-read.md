@@ -44,12 +44,17 @@ The read tools are:
 - `search_wiki` → AI `POST /internal/mcp/wiki/search`, with a server-created actor and only
   `X-Internal-Token`; each stored document/block locator is shape-checked and its document is rechecked for
   current workspace/read access. Published historical evidence is not invalidated by a later source edit.
-- `find_documents` → bounded workspace/document-policy candidates and a stateless owner-bound cursor.
+- `find_documents` → the web document-list search (`DocumentRepository.searchVisibleByWorkspaceId`, the same query
+  as `GET /documents?query=`) bounded by the candidate limit, then document-policy filtering and a stateless
+  owner-bound cursor.
 - `get_document` → bounded block-boundary chunks from the document-owned current edit state (or the immutable
   chat-export pipeline input), tied to that body version, source hash, and sanitized presentation snapshot. It does
   not require a wiki ingest snapshot.
-- `get_wiki_page` → one bounded published workspace page with the seven `mcp.wiki-page.v1` fields and a
-  body hash over the exact UTF-8 body returned by the tool.
+- `get_wiki_page` → the web page detail (`WikiService.findById`, the same path as
+  `GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}`), so the body is resolved in the web order
+  (AI body → latest `wiki_page_versions.markdown` → stored object). The MCP boundary only adds the body size limit,
+  sanitizing, and the seven `mcp.wiki-page.v1` fields with a body hash over the exact UTF-8 body returned by the tool.
+  A missing page is `PAGE_NOT_FOUND`; a page whose body the web cannot resolve either is `DEPENDENCY_UNAVAILABLE`.
 
 Request bodies are capped at 4 MiB after gzip decompression. Candidate counts, source block counts/bytes,
 page sizes, response bytes, cursor bytes, and document chunk blocks/bytes use explicit deployment settings.

@@ -89,6 +89,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.CannotSerializeTransactionException;
 import org.springframework.dao.DeadlockLoserDataAccessException;
+import org.springframework.data.domain.Pageable;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.TransactionDefinition;
@@ -2137,7 +2138,7 @@ public class DocumentService {
                 ? documentRepository.findSkillReferences(workspaceId)
                 : query == null || query.isBlank()
                 ? documentRepository.findVisibleByWorkspaceId(workspaceId)
-                : documentRepository.searchVisibleByWorkspaceId(workspaceId, query.trim());
+                : documentRepository.searchVisibleByWorkspaceId(workspaceId, query.trim(), Pageable.unpaged());
 
         return new DocumentListResponse(documentItemAssembler.assemble(workspaceId, userId, documents));
     }

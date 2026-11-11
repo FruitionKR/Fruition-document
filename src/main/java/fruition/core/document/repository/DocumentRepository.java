@@ -118,7 +118,7 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
     String findTreeFingerprint(@Param("workspaceId") String workspaceId,
                                @Param("stalledBefore") Instant stalledBefore);
 
-    /** 파일명 검색은 본문을 조회하지 않는다. */
+    /** 파일명 검색은 본문을 조회하지 않는다. 웹 목록은 {@code Pageable.unpaged()}, MCP find_documents는 후보 상한을 넘긴다. */
     @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
             + "AND d.deletedAt IS NULL "
             + "AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
@@ -127,7 +127,8 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             + "ORDER BY d.sortOrder ASC, d.id ASC")
     List<Document> searchVisibleByWorkspaceId(
             @Param("workspaceId") String workspaceId,
-            @Param("query") String query
+            @Param("query") String query,
+            Pageable pageable
     );
 
     /** MCP candidate reads are deployment-bounded before rows leave PostgreSQL. */
@@ -135,14 +136,6 @@ public interface DocumentRepository extends JpaRepository<Document, String> {
             + "AND d.deletedAt IS NULL AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
             + "ORDER BY d.sortOrder ASC, d.id ASC")
     List<Document> findMcpCandidates(@Param("workspaceId") String workspaceId, Pageable pageable);
-
-    @Query("SELECT d FROM Document d WHERE d.workspaceId = :workspaceId "
-            + "AND d.deletedAt IS NULL AND (d.origin IS NULL OR d.origin <> 'skill_reference') "
-            + "AND (LOWER(d.displayName) LIKE LOWER(CONCAT('%', :query, '%')) "
-            + "OR LOWER(d.filename) LIKE LOWER(CONCAT('%', :query, '%'))) "
-            + "ORDER BY d.sortOrder ASC, d.id ASC")
-    List<Document> searchMcpCandidates(@Param("workspaceId") String workspaceId,
-                                       @Param("query") String query, Pageable pageable);
 
     /** Hashes a bounded chat-export source inside PostgreSQL without returning its body. */
     @Query(value = """

@@ -42,7 +42,7 @@ public class McpToolCatalog {
             + " returned get_document pages, not block ordinals. whole_document requires start_line 1 and end_line"
             + " equal to the full current line count.";
     private final McpWikiSearchClient wiki;
-    private final McpWikiPageClient wikiPages;
+    private final McpWikiPageService wikiPages;
     private final McpDocumentReadService documents;
     private final McpDocumentProposalService proposals;
     private final McpPlanProposalService planProposals;
@@ -54,7 +54,7 @@ public class McpToolCatalog {
     private final ObjectMapper mapper;
     private final McpProperties properties;
 
-    public McpToolCatalog(McpWikiSearchClient wiki, McpWikiPageClient wikiPages, McpDocumentReadService documents,
+    public McpToolCatalog(McpWikiSearchClient wiki, McpWikiPageService wikiPages, McpDocumentReadService documents,
                           McpDocumentProposalService proposals, McpPlanProposalService planProposals,
                           McpWikiProposalService wikiProposals, McpSkillTools skillTools,
                           McpMeetingTools meetingTools, McpPdfTools pdfTools, McpAuditLogger audit, ObjectMapper mapper,
@@ -485,7 +485,7 @@ public class McpToolCatalog {
     private static String pageId(Map<String,Object> args) {
         if (args == null || !args.keySet().equals(Set.of("page_id"))) throw new IllegalArgumentException();
         Object value = args.get("page_id");
-        if (!(value instanceof String id) || !McpWikiPageClient.validPageId(id)) throw new IllegalArgumentException();
+        if (!(value instanceof String id) || !McpWikiPageService.validPageId(id)) throw new IllegalArgumentException();
         return id;
     }
     /** Skill 정의 제안의 감사 대상. 수정이면 definition.skill_id, 새로 만들면 없다. */

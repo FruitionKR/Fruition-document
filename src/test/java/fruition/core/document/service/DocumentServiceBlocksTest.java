@@ -49,6 +49,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.Pageable;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -664,12 +665,12 @@ class DocumentServiceBlocksTest {
     @DisplayName("검색어는 앞뒤 공백을 제거해 파일명 검색 repository에 전달한다")
     void findAll_withQuery_usesFilenameSearch() {
         stubOwnedWorkspace();
-        when(documentRepository.searchVisibleByWorkspaceId(WORKSPACE_ID, "보고서")).thenReturn(List.of());
+        when(documentRepository.searchVisibleByWorkspaceId(WORKSPACE_ID, "보고서", Pageable.unpaged())).thenReturn(List.of());
 
         DocumentListResponse response = documentService.findAll(WORKSPACE_ID, USER_ID, "  보고서  ");
 
         assertThat(response.documents()).isEmpty();
-        verify(documentRepository).searchVisibleByWorkspaceId(WORKSPACE_ID, "보고서");
+        verify(documentRepository).searchVisibleByWorkspaceId(WORKSPACE_ID, "보고서", Pageable.unpaged());
     }
 
     @Test
