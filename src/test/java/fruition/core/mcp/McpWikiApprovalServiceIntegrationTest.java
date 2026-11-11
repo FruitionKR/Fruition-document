@@ -37,13 +37,14 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-@SpringBootTest(properties = "test.isolated-database=i9_mcp_wiki_approval")
+@SpringBootTest(properties = {"test.isolated-database=i9_mcp_wiki_approval", "app.billing.enforce=true"})
 @Import(TestcontainersConfiguration.class)
 class McpWikiApprovalServiceIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager manager;
     @Autowired ObjectMapper mapper;
     @Autowired CreditService credits;
+    @Autowired org.springframework.core.env.Environment environment;
     @Autowired DataPurgeService purge;
     @Autowired OperationLogRepository operations;
 
@@ -147,6 +148,32 @@ class McpWikiApprovalServiceIntegrationTest {
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
         assertThat(jdbc.queryForObject("SELECT charged_minor FROM mcp_wiki_drafts WHERE draft_id=?::uuid",
                 Long.class, draft)).isEqualTo(3);
+    }
+
+    @Test
+    void enforcementOffApprovesWithZeroBalanceWithoutReservationAndStillChargesLikeWeb() throws Exception {
+        McpWikiApprovalService off = new McpWikiApprovalService(jdbc, new TransactionTemplate(manager), mapper, access,
+                sources, ai, mock(McpWikiStateGateway.class), mock(WorkspaceAccessGuard.class),
+                new CreditService(jdbc, manager, environment, false, 500_000, 48),
+                new McpWikiOperationRegistrar(operations), "ai.maintenance.command",
+                "KRW", "", "", "", "", "", "3", "apply", "fixed 3 KRW per apply", "i9-test-v1");
+        when(ai.getPreview(draft, 1, workspace, user)).thenReturn(preview);
+        when(ai.post(anyString(), any())).thenReturn(mapper.readTree("""
+                {"schema_version":"mcp.wiki-result.v1","approval_id":"ignored","operation_id":"ignored",
+                 "draft_id":"%s","state":"APPLYING","changed":false,"event_id":null,
+                 "published_reference_hash":null,"committed_at":null,"error_code":null}
+                """.formatted(draft)));
+
+        assertThatThrownBy(() -> off.approve(workspace, user, approval())).isInstanceOf(McpToolException.class);
+        String approvalId = approvalId(), operationId = operationId();
+        assertThat(jdbc.queryForObject("SELECT reserved_credit_milli FROM mcp_wiki_drafts WHERE draft_id=?::uuid",
+                Long.class, draft)).isZero();
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertThat(off.lookup(lookup(approvalId, operationId)).status()).isEqualTo("VALID");
+
+        off.acceptPublication(event(approvalId, operationId, "PUBLISHED", true));
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-3_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
     }
 
     @Test

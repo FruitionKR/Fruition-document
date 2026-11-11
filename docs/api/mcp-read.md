@@ -267,8 +267,11 @@ The GET response is exact `mcp.wiki-web-draft.v1`: trusted client name, frozen q
 preview, approval/publication/settlement status, and the original hashes. External source/evidence contains only
 document IDs, block IDs, and sanitized quotes; immutable snapshot IDs stay internal. Approval rechecks the
 current source versions/hashes and AI target `updated_at` microsecond versions/body hashes, then atomically
-creates one stable approval/operation and reserves the full configured maximum in existing KRW-milli credits.
-Insufficient credit returns the existing 402 path and never creates a partial reservation. INGEST prices bind
+creates one stable approval/operation. Credits use the same `CreditService` path as web Agent approval: with
+`app.billing.enforce` off nothing is reserved or rejected; with it on, the quoted maximum is the estimate for the web
+admission rule (exempt accounts pass; available below `app.billing.minimum.mcp_approval`, default 10% of the maximum,
+returns the existing 402; otherwise `min(maximum, available)` is reserved). The actual reserved amount is stored and
+checked by lookup. Settlement charges the confirmed price regardless of enforce, as the web does. INGEST prices bind
 source UTF-8 byte quantity, configured unit size/unit price/formula/version; LINT binds one configured fixed apply.
 Blank price settings fail closed rather than inventing a rate.
 

@@ -145,27 +145,47 @@ class CreditServiceIntegrationTest {
     }
 
     @Test
-    void mcpReservationIsAllOrNoneExcludedFromStaleReleaseAndSettlesCumulatively() {
+    void mcpApprovalWithoutEnforceSkipsReservationButStillChargesLikeWebAgentRun() {
         CreditService credits = credits(false);
-        grant(1_500);
-        String denied = UUID.randomUUID().toString();
-        assertThatThrownBy(() -> credits.reserveMcpApproval(denied, user, 1_501))
+        String approval = UUID.randomUUID().toString();
+
+        assertThat(credits.reserveMcpApproval(approval, user, 1_500)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE run_id = ? AND type = 'reserve'",
+                Integer.class, "mcp:" + approval)).isZero();
+
+        credits.settleMcpApproval(approval, user, 1_000, true);
+        credits.settleMcpApproval(approval, user, 1_000, true);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-1_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertLedgerMatchesAccount();
+    }
+
+    @Test
+    void mcpApprovalUnderEnforceUsesWebAdmissionExcludedFromStaleReleaseAndSettlesCumulatively() {
+        CreditService credits = credits(true);
+        grant(1_000);
+        // 웹 사전 승인과 같다: 최저 비용(상한의 10%) 미만이면 거절, 아니면 min(상한, 가용 잔액)을 예약한다.
+        assertThatThrownBy(() -> credits.reserveMcpApproval(UUID.randomUUID().toString(), user, 20_000))
                 .isInstanceOf(CreditService.InsufficientCreditException.class);
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
 
         String approval = UUID.randomUUID().toString();
-        credits.reserveMcpApproval(approval, user, 1_500);
+        assertThat(credits.reserveMcpApproval(approval, user, 1_500)).isEqualTo(1_000);
+        assertThat(credits.reserveMcpApproval(approval, user, 1_500)).isEqualTo(1_000);
+        assertThat(credits.reserveMcpApproval(UUID.randomUUID().toString(), user, 0)).isZero();
         jdbc.update("UPDATE credit_entries SET created_at = now() - interval '49 hours' "
-                + "WHERE idempotency_key = ?", "mcp-reserve:" + approval);
+                + "WHERE run_id = ? AND type = 'reserve'", "mcp:" + approval);
         credits.releaseStale();
-        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(1_500);
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(1_000);
 
-        credits.settleMcpApproval(approval, user, 1_000, true);
-        credits.settleMcpApproval(approval, user, 1_000, true);
-        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(500);
+        credits.settleMcpApproval(approval, user, 1_000, false);
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(1_000);
+        credits.settleMcpApproval(approval, user, 1_500, true);
+        credits.settleMcpApproval(approval, user, 1_500, true);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-500);
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE run_id = ? AND type = 'charge'",
-                Integer.class, "mcp:" + approval)).isOne();
+        assertThatThrownBy(() -> credits.settleMcpApproval(approval, user, 1_000, true))
+                .isInstanceOf(IllegalStateException.class);
         assertLedgerMatchesAccount();
     }
 

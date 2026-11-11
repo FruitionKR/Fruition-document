@@ -74,42 +74,42 @@ public class CreditService {
             if (enforce) throw new IllegalArgumentException("AI 요청에 사용자가 없어 크레딧을 예약할 수 없습니다: runId=" + runId);
             return;
         }
-        long estimate = estimate(kind);
-        transaction.executeWithoutResult(tx -> {
+        reserve(runId, userId, kind, estimate(kind), "MODEL_USAGE");
+    }
+
+    /**
+     * MCP 승인 예약. 웹 Agent 승인({@link UsageChargeService#reserveAutonomousRun})과 같게 enforce가 꺼져 있으면 예약하지
+     * 않고, 켜져 있으면 {@link #reserve}와 같은 사전 승인으로 승인 최대 청구액을 상한 삼아 예약한다. 최대 청구액이 0이면
+     * 예약할 것이 없다. 호출자는 돌려받은 실제 예약액을 승인 행에 저장해 예약 확인에 쓴다.
+     *
+     * @return 이번 승인에 예약된 금액(milli-KRW). 이미 예약했으면 그 금액
+     */
+    public long reserveMcpApproval(String approvalId, String userId, long maximumCreditMilli) {
+        if (maximumCreditMilli < 0) throw new IllegalArgumentException("MCP reservation must be non-negative.");
+        if (!enforce || maximumCreditMilli == 0) return 0;
+        return reserve(mcpRunId(approvalId), userId, "mcp_approval", maximumCreditMilli, "MCP_APPROVAL");
+    }
+
+    /** 계정 행을 잠그고 같은 실행은 한 번만 {@link #admit} 금액을 예약한다. 이미 예약했으면 그 금액을 돌려준다. */
+    private long reserve(String runId, String userId, String kind, long estimate, String reservationType) {
+        return transaction.execute(tx -> {
             Map<String, Object> account = lock(userId);
-            if (!jdbc.queryForList("SELECT id FROM credit_entries WHERE idempotency_key = ?", Long.class,
-                    "reserve:" + runId).isEmpty()) return;
+            String key = "reserve:" + runId;
+            List<Long> reserved = jdbc.queryForList("SELECT amount FROM credit_entries WHERE idempotency_key = ?",
+                    Long.class, key);
+            if (!reserved.isEmpty()) return reserved.getFirst();
             long available = ((Number) account.get("balance")).longValue() - ((Number) account.get("reserved")).longValue();
             long amount = admit(userId, kind, estimate, available, AiErrorMessages.INSUFFICIENT_CREDIT);
-            if (append(userId, "reserve", amount, runId, "reserve:" + runId, kind)) {
+            if (append(userId, "reserve", amount, runId, key, kind, reservationType)) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
                         amount, userId);
             }
-        });
-    }
-
-    /** MCP reserves its full cap; only explicit account exemptions bypass the balance check. */
-    public void reserveMcpApproval(String approvalId, String userId, long amountCreditMilli) {
-        if (amountCreditMilli < 0) throw new IllegalArgumentException("MCP reservation must be non-negative.");
-        String runId = mcpRunId(approvalId);
-        transaction.executeWithoutResult(tx -> {
-            Map<String, Object> account = lock(userId);
-            String key = "mcp-reserve:" + approvalId;
-            if (!jdbc.queryForList("SELECT id FROM credit_entries WHERE idempotency_key = ?", Long.class, key).isEmpty()) {
-                return;
-            }
-            long available = Math.subtractExact(((Number) account.get("balance")).longValue(),
-                    ((Number) account.get("reserved")).longValue());
-            if (!limitExempt(userId) && available < amountCreditMilli) throw new InsufficientCreditException(AiErrorMessages.INSUFFICIENT_CREDIT);
-            if (append(userId, "reserve", amountCreditMilli, runId, key, "mcp_approval", "MCP_APPROVAL")) {
-                jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
-                        amountCreditMilli, userId);
-            }
+            return amount;
         });
     }
 
     /**
-     * MCP 호출 중 유료 외부 보조(Jev)를 써도 되는지. 잠그지 않는 읽기이고 MCP 승인과 같게 enforce와 무관하게 적용한다:
+     * MCP 호출 중 유료 외부 보조(Jev)를 써도 되는지. 잠그지 않는 읽기이고 enforce와 무관하게 적용한다:
      * 한도 면제 계정이거나 가용 잔액(잔액 − 예약)이 0보다 클 때만 true. 계정 행이 없으면 false.
      * MCP 호출을 막지 않도록 읽기에 실패해도 예외 대신 false를 돌려준다.
      */
@@ -125,27 +125,23 @@ public class CreditService {
         }
     }
 
-    /** Applies the cumulative proven MCP charge and releases only when the caller proves no future execute is possible. */
+    /**
+     * MCP 승인의 누적 확정 청구액을 웹 정산과 같은 차감({@link #charge})으로 반영한다. enforce와 무관하게 차감한다(웹도
+     * enforce가 꺼져 있을 때 거절·예약만 하지 않고 쓴 만큼은 차감한다). 누적액은 줄 수 없다. 남은 예약은 호출자가
+     * 더 실행될 수 없음을 증명했을 때(releaseUnused)만 푼다.
+     */
     public void settleMcpApproval(String approvalId, String userId, long totalChargeCreditMilli,
                                   boolean releaseUnused) {
         if (totalChargeCreditMilli < 0) throw new IllegalArgumentException("MCP charge must be non-negative.");
         String runId = mcpRunId(approvalId);
         transaction.executeWithoutResult(tx -> {
             lock(userId);
-            Long charged = jdbc.queryForObject("SELECT -coalesce(sum(amount), 0) FROM credit_entries "
-                    + "WHERE run_id = ? AND user_id = ? AND type = 'charge'", Long.class, runId, userId);
-            long delta = Math.subtractExact(totalChargeCreditMilli, charged == null ? 0 : charged);
-            if (delta < 0) throw new IllegalStateException("MCP cumulative charge cannot decrease.");
-            if (delta > 0 && append(userId, "charge", -delta, runId,
-                    "mcp-charge:" + approvalId + ":" + totalChargeCreditMilli, "mcp_approval", null)) {
-                jdbc.update("UPDATE credit_accounts SET balance = balance - ?, updated_at = now() WHERE user_id = ?",
-                        delta, userId);
+            if (charge(runId, userId, totalChargeCreditMilli) < 0) {
+                throw new IllegalStateException("MCP cumulative charge cannot decrease.");
             }
-            long open = jdbc.queryForObject("SELECT coalesce(sum(amount), 0) FROM credit_entries "
-                    + "WHERE run_id = ? AND user_id = ? AND type IN ('reserve', 'release') "
-                    + "AND reservation_type = 'MCP_APPROVAL'", Long.class, runId, userId);
-            if (releaseUnused && open > 0 && append(userId, "release", -open, runId,
-                    "mcp-release:" + approvalId, "mcp_approval", "MCP_APPROVAL")) {
+            long open = open(runId, userId);
+            if (releaseUnused && open > 0
+                    && append(userId, "release", -open, runId, releaseKey(runId), null, "MCP_APPROVAL")) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved - ?, updated_at = now() WHERE user_id = ?",
                         open, userId);
             }
@@ -278,8 +274,12 @@ public class CreditService {
         });
     }
 
-    /** 실행의 청구 합계 중 아직 차감하지 않은 만큼 차감한다. 키가 누적 청구액이라 같은 합계로는 한 번만 차감한다. */
-    private void charge(String runId, String userId, long total) {
+    /**
+     * 실행의 청구 합계 중 아직 차감하지 않은 만큼 차감한다. 키가 누적 청구액이라 같은 합계로는 한 번만 차감한다.
+     *
+     * @return 합계 − 이미 차감한 금액. 음수면 아무것도 하지 않았다
+     */
+    private long charge(String runId, String userId, long total) {
         Long charged = jdbc.queryForObject("SELECT -coalesce(sum(amount), 0) FROM credit_entries "
                 + "WHERE run_id = ? AND user_id = ? AND type = 'charge'", Long.class, runId, userId);
         long delta = total - charged;
@@ -287,6 +287,7 @@ public class CreditService {
             jdbc.update("UPDATE credit_accounts SET balance = balance - ?, updated_at = now() WHERE user_id = ?",
                     delta, userId);
         }
+        return delta;
     }
 
     /**

@@ -46,13 +46,14 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-@SpringBootTest(properties = "test.isolated-database=i5_mcp_approval")
+@SpringBootTest(properties = {"test.isolated-database=i5_mcp_approval", "app.billing.enforce=true"})
 @Import(TestcontainersConfiguration.class)
 class McpAgentApprovalServiceIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager manager;
     @Autowired ObjectMapper mapper;
     @Autowired CreditService credits;
+    @Autowired org.springframework.core.env.Environment environment;
     @Autowired DocumentService documentService;
     @Autowired FolderService folderService;
     @Autowired StringRedisTemplate redis;
@@ -193,6 +194,33 @@ class McpAgentApprovalServiceIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM mcp_agent_approvals WHERE user_id = ?",
                 Integer.class, user)).isZero();
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+    }
+
+    @Test
+    void enforcementOffApprovesWithZeroBalanceWithoutReservationAndStillChargesLikeWeb() throws Exception {
+        McpAgentApprovalService off = new McpAgentApprovalService(jdbc, new TransactionTemplate(manager), mapper,
+                access, documents, new CreditService(jdbc, manager, environment, false, 500_000, 48), requester,
+                "1", "1", "KRW", "i5-test-v1");
+        JsonNode run = run("agent_" + "e".repeat(32));
+        when(requester.approveMcp(anyString(), anyString(), anyString(), anyInt(), anyString(), anyList(),
+                anyString(), anyString(), anyString(), anyLong())).thenReturn(run);
+
+        JsonNode accepted = off.approve(workspace, user, run.path("id").asText(), request(), run);
+        assertThat(accepted.path("mcp_settlement").path("forward_status").asText()).isEqualTo("ACCEPTED");
+        String approvalId = approvalId(run.path("id").asText());
+        assertThat(jdbc.queryForObject("SELECT reserved_credit_milli FROM mcp_agent_approvals "
+                + "WHERE approval_id = ?::uuid", Long.class, approvalId)).isZero();
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertThat(off.lookupApproval(approvalLookup(run, approvalId, "op-1")).status()).isEqualTo("VALID");
+
+        var execution = off.authorizeExecution(execute(run, approvalId, "op-1", 1), "apply_document_edit");
+        new TransactionTemplate(manager).executeWithoutResult(status -> off.recordReceipt(execution, "op-1", "doc_i5",
+                new DocumentContentSaveResponse("doc_i5", 2, "hash", Instant.now(), true)));
+        off.executionFinished(execution);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-1_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertThat(jdbc.queryForObject("SELECT settlement_status FROM mcp_agent_approvals WHERE approval_id = ?::uuid",
+                String.class, approvalId)).isEqualTo("SETTLED");
     }
 
     @Test

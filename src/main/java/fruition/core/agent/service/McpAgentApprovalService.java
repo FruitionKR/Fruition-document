@@ -401,6 +401,7 @@ public class McpAgentApprovalService {
             requireReviewedPrice(proposal.expectedPrice(), price);
             String approvalId = UUID.randomUUID().toString();
             String canonical = canonicalHash(approvalId, proposal, price);
+            long reserved = credits.reserveMcpApproval(approvalId, proposal.userId(), price.reservedCreditMilli());
             jdbc.update("INSERT INTO mcp_agent_approvals (approval_id, run_id, workspace_id, user_id, plan_version, "
                             + "operation_hash, operation_ids, canonical_hash, grant_id, client_id, client_name, policy_generation, origin, "
                             + "approval_mode, unit_price_minor, plan_cap_minor, currency, price_version, maximum_charge_minor, "
@@ -411,8 +412,7 @@ public class McpAgentApprovalService {
                     proposal.planVersion(), proposal.operationHash(), json(proposal.operationIds()), canonical,
                     UUID.fromString(proposal.actor().grantId()), proposal.actor().clientId(), clientName,
                     proposal.actor().policyGeneration(), price.unitPriceMinor(), price.planCapMinor(), price.priceVersion(),
-                    price.maximumChargeMinor(), price.reservedCreditMilli());
-            credits.reserveMcpApproval(approvalId, proposal.userId(), price.reservedCreditMilli());
+                    price.maximumChargeMinor(), reserved);
             return findById(approvalId);
         });
     }

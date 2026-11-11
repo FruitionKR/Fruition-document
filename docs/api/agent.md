@@ -30,7 +30,7 @@
 | [`POST /internal/agent/tools/execute/{tool_name}`](#summary-post-internal-agent-tools-execute-tool-name) | 승인된 Agent Tool 변경 작업을 실행합니다. |
 | [`POST /internal/agent/tools/read/{tool_name}`](#summary-post-internal-agent-tools-read-tool-name) | 승인된 Agent Tool 읽기 작업을 실행합니다. |
 | `POST /internal/agent/mcp/receipts/lookup` | MCP 문서 편집의 body-free receipt/attempt 상태를 actor 범위로 조회합니다. |
-| `POST /internal/agent/mcp/approvals/lookup` | MCP 승인 scope와 남은 전액 예약/fence를 first enqueue 전에 조회합니다. |
+| `POST /internal/agent/mcp/approvals/lookup` | MCP 승인 scope와 남은 예약/fence를 first enqueue 전에 조회합니다. |
 
 ## MCP 다중 작업 승인·정산(I6 Document 경계)
 
@@ -55,11 +55,17 @@ Access 장애 `AUTHZ_UNAVAILABLE`, 그 밖의 실패 `QUOTE_UNAVAILABLE` 중 하
 
 MCP 승인 body는 기존 필드에 위 다섯 필드와 정확히 같은 `expected_price_snapshot`을 필수로 보낸다. 값은 가격을
 지정하는 입력이 아니라 사용자가 본 가격의 조건부 승인이다. 누락·설정 변경은 예약 전에 `409 MCP_PRICE_CHANGED`,
-가격 미설정은 `503 MCP_PRICE_UNCONFIGURED`, 전액 부족은 원장 변화 없이 `402 INSUFFICIENT_CREDIT`이다. 성공하면
-Document가 UUIDv4 `approval_id`, 선택 scope, grant/client/policy generation, client 이름과 가격을 고정하고 전액을
-예약한 뒤 ai-svc로 가격을 제외한 exact `mcp.agent-approval.v1`을 보낸다. 응답 소실/5xx는 새 승인이나 예약을 만들지
+가격 미설정은 `503 MCP_PRICE_UNCONFIGURED`이다. 크레딧은 웹 Agent 승인과 같은 공통 경로(`CreditService`)를 쓴다.
+enforce(`app.billing.enforce`)가 꺼져 있으면 잔액을 보지 않고 예약하지 않는다. 켜져 있으면 최대 청구액을 예상 상한으로
+삼아 웹 사전 승인과 같은 규칙(면제 계정 통과, 가용 잔액이 최저 비용 `app.billing.minimum.mcp_approval`(없으면 최대
+청구액의 10%)보다 작으면 원장 변화 없이 `402 INSUFFICIENT_CREDIT`, 아니면 `min(최대 청구액, 가용 잔액)` 예약)을
+적용한다. 최대 청구액이 0이면 예약하지 않는다. 성공하면 Document가 UUIDv4 `approval_id`, 선택 scope,
+grant/client/policy generation, client 이름과 가격, 실제 예약액(`reserved_credit_milli`)을 고정하고 ai-svc로 가격을
+제외한 exact `mcp.agent-approval.v1`을 보낸다. 정산은 enforce와 무관하게 확정 성공 operation 수 × 단가(cap 이내)를
+차감한다(웹도 enforce가 꺼져 있을 때 쓴 만큼은 차감한다). 예약보다 큰 금액은 그대로 차감해 잔액이 음수가 될 수
+있다. 그래서 `price_snapshot`은 enforce와 관계없이 실제 청구 상한을 그대로 보여 준다. 응답 소실/5xx는 새 승인이나 예약을 만들지
 않고 같은 body retry가 같은 approval을 재사용한다. 선택 작업은 canonical plan 순서와 dependency closure를 만족해야
-하며, 전체 계획이 아니라 선택한 작업 수와 cap으로 계산한 최대액을 예약한다. 공개 write tool은 별도 출시 gate가
+하며, 전체 계획이 아니라 선택한 작업 수와 cap으로 계산한 최대액을 예약 상한으로 쓴다. 공개 write tool은 별도 출시 gate가
 끝날 때까지 계속 비활성화한다.
 
 승인 행이 있으면 run 응답에 `mcp_settlement`을 덧붙인다. `execution_status`(`RESERVED|FORWARDED|CANCELLED|HALTED|PURGED`),
@@ -76,7 +82,7 @@ receipt를 같은 Document transaction에 저장한다.
 
 `POST /internal/agent/mcp/approvals/lookup`은 service token과 exact
 `{approval_id,run_id,workspace_id,user_id,plan_version,operation_hash,operation_ids,grant_id,client_id,policy_generation}`를
-요구한다. actor mismatch는 `NOT_FOUND`, plan/scope mismatch는 `MISMATCH`, 남은 전액 MCP 예약과 live fence가 맞으면
+요구한다. actor mismatch는 `NOT_FOUND`, plan/scope mismatch는 `MISMATCH`, 남은 MCP 예약이 승인 행의 실제 예약액과 같고 live fence가 맞으면
 `VALID`, cancel/admin/security/purge는 reason이 있는 `FENCED`, 이미 끝난 승인은 `SETTLED`, 원장 결과를 확정할 수 없으면
 `UNKNOWN`이다. 응답은 `status,reason,lifecycle_status,forward_status,settlement_status`만 싣는다. 이 조회와 AI enqueue
 사이에는 분산 transaction이 없으므로 AI도 persistent local cancel lock으로 check/enqueue를 직렬화해야 하며,

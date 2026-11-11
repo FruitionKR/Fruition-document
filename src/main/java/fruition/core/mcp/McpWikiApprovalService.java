@@ -303,7 +303,8 @@ public class McpWikiApprovalService {
         }
         String approvalId = UUID.randomUUID().toString();
         String operationId = UUID.randomUUID().toString();
-        long reserved = Math.multiplyExact(current.quote().maximumMinor(), 1000L);
+        long reserved = credits.reserveMcpApproval(approvalId, current.userId(),
+                Math.multiplyExact(current.quote().maximumMinor(), 1000L));
         OperationType operationType = "INGEST".equals(current.kind()) ? OperationType.ingest : OperationType.lint;
         String targetDocumentId = operationType == OperationType.ingest
                 ? current.sources().getFirst().documentId() : null;
@@ -313,7 +314,6 @@ public class McpWikiApprovalService {
                         + "approval_status='EXECUTING',publication_status='APPLYING',settlement_status='RESERVED',"
                         + "reserved_credit_milli=?,updated_at=now() WHERE draft_id=?::uuid AND approval_id IS NULL",
                 approvalId, operationId, canonical, clientName, reserved, current.draftId());
-        credits.reserveMcpApproval(approvalId, current.userId(), reserved);
         return new ApprovalReservation(find(current.draftId()), true);
     }
 
