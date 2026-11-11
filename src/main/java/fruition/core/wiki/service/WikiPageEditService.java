@@ -27,12 +27,16 @@ import fruition.core.wiki.repository.WikiPageVersionRepository;
 import fruition.core.wiki.repository.WikiWorkspaceVersionRepository;
 import fruition.shared.idempotency.IdempotencyConflictException;
 import fruition.shared.idempotency.InvalidIdempotencyKeyException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.LinkedHashMap;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -56,6 +60,9 @@ public class WikiPageEditService {
     private final WikiWorkspaceVersionRepository workspaceVersionRepository;
     private final LineCounter lineCounter;
     private final WikiObjectReader objectReader;
+    private final JdbcTemplate jdbc;
+    private final ObjectMapper mapper;
+    private final String maintenanceTopic;
 
     public WikiPageEditService(WorkspaceAccessGuard workspaceAccessGuard,
                                PipelineWikiStateRequester wikiStateRequester,
@@ -65,7 +72,10 @@ public class WikiPageEditService {
                                OperationChangeRepository operationChangeRepository,
                                WikiWorkspaceVersionRepository workspaceVersionRepository,
                                LineCounter lineCounter,
-                               WikiObjectReader objectReader) {
+                               WikiObjectReader objectReader,
+                               JdbcTemplate jdbc,
+                               ObjectMapper mapper,
+                               @Value("${app.maintenance.command-topic}") String maintenanceTopic) {
         this.workspaceAccessGuard = workspaceAccessGuard;
         this.wikiStateRequester = wikiStateRequester;
         this.versionRepository = versionRepository;
@@ -75,6 +85,9 @@ public class WikiPageEditService {
         this.workspaceVersionRepository = workspaceVersionRepository;
         this.lineCounter = lineCounter;
         this.objectReader = objectReader;
+        this.jdbc = jdbc;
+        this.mapper = mapper;
+        this.maintenanceTopic = maintenanceTopic;
     }
 
     /**
@@ -163,7 +176,23 @@ public class WikiPageEditService {
                 ChangeType.updated, null, lines.additions(), lines.deletions()));
         // 위키를 바꿨으므로 wiki/graph의 ETag 기준 버전을 올린다(#68).
         workspaceVersionRepository.bump(workspaceId);
+        enqueueEmbeddingRecovery(workspaceId, operationId);
         return response(version);
+    }
+
+    /**
+     * ai는 직접 편집 본문을 발행만 하고 임베딩하지 않는다(ai ADR-0026). 0대로 줄어든 maintenance worker를 깨워 임베딩하게 한다.
+     * MCP 발행(McpWikiApprovalService.acceptPublication)과 같은 저장이며, 같은 트랜잭션이라 롤백되면 함께 사라진다.
+     */
+    private void enqueueEmbeddingRecovery(String workspaceId, String operationId) {
+        String runId = "wiki-edit-index:" + operationId;
+        var payload = new LinkedHashMap<String, Object>();
+        payload.put("kind", "embedding_recovery");
+        payload.put("run_id", runId);
+        payload.put("workspace_id", workspaceId);
+        jdbc.update("INSERT INTO ai_command_outbox(id,run_id,topic,message_key,payload,created_at) "
+                + "VALUES (gen_random_uuid()::text,?,?,?,?,now())", runId, maintenanceTopic, workspaceId,
+                mapper.valueToTree(payload).toString());
     }
 
     /** ai가 이 작업의 본문(`ops/{operation_id}.md`)을 현재 본문으로 가리키면 이미 저장한 작업이다. */

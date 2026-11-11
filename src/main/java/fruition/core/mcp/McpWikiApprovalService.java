@@ -240,7 +240,7 @@ public class McpWikiApprovalService {
                 String runId = "mcp-index:" + event.eventId();
                 jdbc.update("INSERT INTO ai_command_outbox(id,run_id,topic,message_key,payload,created_at) "
                                 + "VALUES (gen_random_uuid()::text,?,?,?,?,now())", runId, maintenanceTopic,
-                        event.workspaceId(), mapper.valueToTree(linked("kind", "mcp_publication_index", "run_id", runId,
+                        event.workspaceId(), mapper.valueToTree(linked("kind", "embedding_recovery", "run_id", runId,
                                 "workspace_id", event.workspaceId())).toString());
             }
             long chargeMinor = event.changed() ? draft.quote().maximumMinor() : 0;

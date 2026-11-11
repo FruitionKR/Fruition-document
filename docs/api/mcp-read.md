@@ -311,6 +311,9 @@ security/admin/client/policy-generation fences do.
 AI delivers the body-free durable `mcp.wiki.publication.v1` event to
 `POST /internal/mcp/wiki/publications/receipt`. Document validates the exact approval/operation/actor/kind tuple,
 deduplicates by event and stable pair, and settles event persistence plus fee decision in one transaction.
+For `changed:true` the same transaction queues `{kind:"embedding_recovery", run_id:"mcp-index:<event_id>", workspace_id}`
+in `ai_command_outbox` for `ai.maintenance.command`, waking the maintenance worker that embeds the published pages
+(AI only publishes, ai ADR-0026). Web manual wiki edits queue the same command.
 `PUBLISHED` with `changed:true` charges the frozen fixed maximum once; `NO_CHANGE` with `changed:false` is free.
 The scheduler repairs lost/reordered delivery from AI's authenticated
 `GET /internal/mcp/wiki/publication-results/{approval_id}/{operation_id}` without treating unknown work as free.

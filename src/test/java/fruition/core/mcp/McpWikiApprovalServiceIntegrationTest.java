@@ -139,7 +139,7 @@ class McpWikiApprovalServiceIntegrationTest {
         assertThat(jdbc.queryForList("SELECT topic,message_key,payload FROM ai_command_outbox WHERE run_id=?",
                 "mcp-index:" + event.eventId())).singleElement().satisfies(row -> {
             assertThat(row).containsEntry("topic", "ai.maintenance.command").containsEntry("message_key", workspace);
-            assertThat(mapper.readTree((String) row.get("payload")).path("kind").asText()).isEqualTo("mcp_publication_index");
+            assertThat(mapper.readTree((String) row.get("payload")).path("kind").asText()).isEqualTo("embedding_recovery");
         });
         assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE id=?", Integer.class,
                 "mcp-index:" + event.eventId())).isZero();
