@@ -25,7 +25,7 @@ class McpWikiDraftClientTest {
             "409,MERGE_TARGET_CHANGED", "409,TARGET_CHANGED", "409,SNAPSHOT_MISMATCH", "409,WINDOW_OUT_OF_ORDER",
             "409,WINDOW_ALREADY_SUBMITTED", "409,INCOMPLETE_WINDOWS", "409,NO_WINDOW_AVAILABLE",
             "409,ACTIVE_LIMIT_EXCEEDED", "413,REQUEST_TOO_LARGE", "413,RESPONSE_LIMIT_EXCEEDED",
-            "409,READY_TO_FINALIZE", "409,AWAITING_WEB_APPROVAL", "410,INVALIDATED", "400,INVALID_SOURCE_TYPE"})
+            "409,READY_TO_FINALIZE", "409,AWAITING_WEB_APPROVAL", "410,INVALIDATED", "400,INVALID_SOURCE_TYPE", "409,ALREADY_INGESTED"})
     void passesPipelineRejectionCodesThrough(int status, String code) throws Exception {
         try (var server = new MockWebServer()) {
             server.enqueue(error(status, code));

@@ -103,6 +103,8 @@ public class McpWikiDraftClient {
                 "INVALID_LINT_OPERATION", "NOT_FOUND", "EXPIRED", "MERGE_TARGET_CHANGED", "TARGET_CHANGED",
                 "SNAPSHOT_MISMATCH", "WINDOW_OUT_OF_ORDER", "WINDOW_ALREADY_SUBMITTED", "INCOMPLETE_WINDOWS",
                 "NO_WINDOW_AVAILABLE", "ACTIVE_LIMIT_EXCEEDED", "REQUEST_TOO_LARGE", "RESPONSE_LIMIT_EXCEEDED",
+                // 현재 문서 내용이 이미 편입됨(웹·MCP 공통 마지막 성공 편입 해시). 문서를 고친 뒤 다시 시작한다.
+                "ALREADY_INGESTED",
                 // 실행이 더 이상 받을 수 없는 상태면 pipeline은 run/draft 상태 이름을 code로 돌려준다.
                 "READY_TO_FINALIZE", "AWAITING_WEB_APPROVAL", "APPLYING", "PUBLISHED", "NO_CHANGE", "CONFLICTED",
                 "HALTED", "UNKNOWN", "INVALIDATED",

@@ -230,7 +230,10 @@ public class McpToolCatalog {
 
     private static String wikiDescription(String name) {
         return switch (name) {
-            case "start_ingest" -> "Start a staged wiki ingest from one readable document snapshot." + SEMANTIC_CONCEPT_INSTRUCTIONS;
+            case "start_ingest" -> "Start a staged wiki ingest from one readable document snapshot."
+                    + " If the document's current content is already in the wiki, this fails with ALREADY_INGESTED;"
+                    + " do not retry, the document must be edited before it can be ingested again."
+                    + SEMANTIC_CONCEPT_INSTRUCTIONS;
             case "resume_ingest" -> "Resume an owned staged wiki ingest";
             case "get_window" -> "Read one bounded window from a staged wiki ingest snapshot." + SEMANTIC_CONCEPT_INSTRUCTIONS;
             case "submit_window" -> "Submit structured, evidenced contributions for one ingest window." + EVIDENCE_RULES

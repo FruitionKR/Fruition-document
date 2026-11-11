@@ -18,6 +18,7 @@ import fruition.core.skill.exception.SkillReferenceDocumentTooLargeException;
 import fruition.core.skill.exception.SkillFolderSourceForbiddenException;
 import fruition.core.wikimaintenance.exception.PipelineWikiMaintenanceException;
 import fruition.core.document.exception.ConflictAlreadyResolvedException;
+import fruition.core.document.exception.DocumentAlreadyIngestedException;
 import fruition.core.document.exception.DocumentAlreadyProcessingException;
 import fruition.core.document.exception.DocumentContentVersionNotFoundException;
 import fruition.core.document.exception.DocumentLockedException;
@@ -320,6 +321,14 @@ public class CoreExceptionHandler extends BaseExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of("DOCUMENT_ALREADY_PROCESSING", e.getMessage()));
+    }
+
+    @ExceptionHandler(DocumentAlreadyIngestedException.class)
+    public ResponseEntity<ErrorResponse> handleDocumentAlreadyIngested(DocumentAlreadyIngestedException e) {
+        logHandled(e, HttpStatus.CONFLICT, "DOCUMENT_ALREADY_INGESTED");
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("DOCUMENT_ALREADY_INGESTED", e.getMessage()));
     }
 
     @ExceptionHandler(DocumentContentVersionNotFoundException.class)
