@@ -67,8 +67,7 @@ public class McpSkillTools {
                         .outputSchema(skillOutput()).annotations(READ_ONLY).build(),
                 McpSchema.Tool.builder(PROPOSE, proposeInput())
                         .description("Propose creating or updating one Skill definition you wrote, for later review"
-                                + " and approval in the web app. Nothing is saved until the user approves. For an"
-                                + " update, send skill_id with expected_version equal to get_skill version; null"
+                                + " and approval in the web app." + McpToolCatalog.REVIEW_APPROVAL + " For an update, send skill_id with expected_version equal to get_skill version; null"
                                 + " fields keep current values. Only team Skills require the skill.author permission.")
                         .outputSchema(proposeOutput()).annotations(PROPOSAL_ONLY).build());
     }

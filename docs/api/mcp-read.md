@@ -17,7 +17,7 @@ decompression to select the required `read`, `write_propose` (`propose_document_
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-## 공개 카탈로그 (`mcp-tools.v3`)
+## 공개 카탈로그 (`mcp-tools.v4`)
 
 `McpToolCatalog.tools()`는 2026-11-09부터 다음 21개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
 `find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
@@ -30,6 +30,14 @@ Forwarding headers are ignored; the servlet request itself must already represen
 아래 각 절의 웹 승인 경로에서만 일어난다. 도구 인자로 승인이나 실행을 대신할 수 없다. 모든 도구는 같은 spec wrapper로
 감사 로그·오류 코드·응답 크기 제한을 공유한다. 이 카탈로그는 Document `f9882a4`와 AI `6bc6a6d`의 semantic merge 계약을
 전제로 하므로 두 서비스를 함께 배포해야 한다.
+
+정적 설명 변경 기록(2026-11-11, `mcp-tools.v3` → `mcp-tools.v4`, schema 변경 없음): `review_url`을 돌려주는 6개 도구
+(`propose_document_edit`, `propose_plan`, `finalize_ingest`, `submit_lint_changes`, `propose_skill_definition`,
+`finalize_pdf_conversion`)의 설명에 공통 문구 `McpToolCatalog.REVIEW_APPROVAL`(사람이 승인하기 전에는 저장되지 않으니
+`review_url`을 바로 사용자에게 열어 주고 승인이 필요하다고 알릴 것)을 붙였다. `submit_window`·`submit_lint_changes` 설명에는
+AI `mcp_wiki_draft` 검증 규칙(한 statement 안에서 같은 `block_id` 근거는 한 번만, quote는 그 블록의 정확한 부분 문자열,
+statement 단어 대부분이 quote에 있어야 하므로 번역·의역 금지, 앞뒤 공백·URL·이미지·안전하지 않은 markup·지시문 형태 금지,
+길이·개수 상한)을 적었다. 임계값 수치는 설정값이라 적지 않으며, 설명에는 workspace·사용자 내용을 넣지 않는다.
 
 The read tools are:
 
