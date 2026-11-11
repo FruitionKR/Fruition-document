@@ -123,6 +123,13 @@ class WikiPageEditIntegrationTest {
                 .containsEntry("before_revision", 2L)
                 .containsEntry("after_revision", 3L)
                 .containsEntry("change_type", "updated");
+        // ai는 발행만 하므로 같은 트랜잭션에서 maintenance worker를 깨우는 command를 쌓는다.
+        Map<String, Object> wake = jdbc.queryForMap(
+                "SELECT topic, message_key, payload FROM ai_command_outbox WHERE run_id = ?",
+                "wiki-edit-index:" + operationId);
+        assertThat(wake).containsEntry("topic", "ai.maintenance.command").containsEntry("message_key", workspaceId);
+        assertThat((String) wake.get("payload")).contains("\"kind\":\"embedding_recovery\"")
+                .contains("\"workspace_id\":\"" + workspaceId + "\"");
     }
 
     @Test
@@ -146,6 +153,9 @@ class WikiPageEditIntegrationTest {
 
         verify(wikiStateRequester, times(1)).manualEdit(any(), any(), any(), any(), any());
         assertThat(maxRevision()).isEqualTo(3);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM ai_command_outbox WHERE run_id LIKE 'wiki-edit-index:%' AND message_key = ?",
+                Integer.class, workspaceId)).isOne();
     }
 
     @Test
