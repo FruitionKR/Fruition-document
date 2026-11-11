@@ -75,7 +75,7 @@ class McpWikiApprovalServiceIntegrationTest {
                  "target_pages":[],"public_state_hash":"sha256:%s","changes":[],"complete":true}
                 """.formatted(draft, "a".repeat(64), "b".repeat(64), "c".repeat(64)));
         when(sources.read(any(McpIdentity.class), anyString())).thenReturn(new McpWikiSourceService.Response(
-                "mcp.wiki-source.v1", "doc_i9", workspace, 4, "sha256:" + "b".repeat(64),
+                "mcp.wiki-source.v1", "doc_i9", "Source", workspace, 4, "sha256:" + "b".repeat(64),
                 "text/markdown", List.of(new McpWikiSourceService.Block("B0001", 1, "body",
                 "sha256:" + "d".repeat(64)))));
         when(access.authorizeWikiWebApproval(any(), anyString())).thenReturn(identity);
@@ -202,7 +202,7 @@ class McpWikiApprovalServiceIntegrationTest {
         credits.post(user, "grant", 10_000, "i9-drift:" + user, "test");
         reserveDirectly();
         when(sources.read(any(McpIdentity.class), anyString())).thenReturn(new McpWikiSourceService.Response(
-                "mcp.wiki-source.v1", "doc_i9", workspace, 5, "sha256:" + "e".repeat(64),
+                "mcp.wiki-source.v1", "doc_i9", "Source", workspace, 5, "sha256:" + "e".repeat(64),
                 "text/markdown", List.of(new McpWikiSourceService.Block("B0001", 1, "changed",
                 "sha256:" + "f".repeat(64)))));
         assertThat(service.lookup(lookup(approvalId(), operationId())))
