@@ -69,7 +69,7 @@ public record McpProperties(
         }
     }
 
-    private static URI parseOrigin(String value) {
+    static URI parseOrigin(String value) {
         URI uri = parseHttps(value, false);
         if (!uri.getPath().isEmpty() && !"/".equals(uri.getPath()))
             throw new IllegalArgumentException("MCP origins cannot contain paths");
