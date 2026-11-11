@@ -299,7 +299,7 @@ class DocumentImportIntegrationTest {
     // ---------- 편입
 
     @Test
-    void ingestEstimate_isPerDocumentEstimateTimesCount() throws Exception {
+    void ingestEstimate_sumsDocumentLengthReservations() throws Exception {
         String importId = openImport();
         createMarkdown("1.md", importId).andExpect(status().isCreated());
         createMarkdown("2.md", importId).andExpect(status().isCreated());
@@ -309,9 +309,11 @@ class DocumentImportIntegrationTest {
         JsonNode body = json(mockMvc.perform(get(imports() + "/" + importId + "/ingest-estimate")
                 .header("Authorization", bearer(userId))), 200);
         assertThat(body.path("document_count").asInt()).isEqualTo(2);
-        assertThat(body.path("estimated_credits").asLong()).isEqualTo(2 * credits.estimate("document"));
+        long estimate = jdbc.queryForList("SELECT byte_size FROM documents WHERE import_id=?::uuid AND deleted_at IS NULL",
+                Long.class, importId).stream().mapToLong(credits::estimateDocument).sum();
+        assertThat(body.path("estimated_credits").asLong()).isEqualTo(estimate);
         assertThat(body.path("estimated_cost_usd").decimalValue()).isEqualByComparingTo(
-                BigDecimal.valueOf(credits.estimateUsdMicro("document") * 2).movePointLeft(6));
+                BigDecimal.valueOf(credits.estimateUsdMicro(estimate)).movePointLeft(6));
     }
 
     @Test

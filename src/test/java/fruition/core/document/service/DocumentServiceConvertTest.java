@@ -194,7 +194,7 @@ class DocumentServiceConvertTest {
 
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
     }
 
@@ -208,7 +208,7 @@ class DocumentServiceConvertTest {
 
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
     }
 
@@ -271,7 +271,7 @@ class DocumentServiceConvertTest {
 
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
-        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID), anyLong());
         verify(workspaceSettingsClient, never()).autoIngestPdfOnConvert(anyString());
         assertThat(parent.getAutoIngestScheduled()).isFalse();
         assertThat(parent.isAutoIngestScheduled()).isFalse();
@@ -287,7 +287,7 @@ class DocumentServiceConvertTest {
 
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
         verify(workspaceSettingsClient, never()).autoIngestPdfOnConvert(anyString());
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
         assertThat(parent.isAutoIngestScheduled()).isFalse();
@@ -304,7 +304,7 @@ class DocumentServiceConvertTest {
 
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
         assertThat(parent.getAutoIngestScheduled()).isFalse();
     }
@@ -331,7 +331,7 @@ class DocumentServiceConvertTest {
         seedDispatched(0);
         stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
         org.mockito.Mockito.doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("부족"))
-                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID), anyLong());
 
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
@@ -348,7 +348,7 @@ class DocumentServiceConvertTest {
         seedDispatched(0);
         stubResult(0, "<!-- page 1 -->\n\n# 본문\n");
         org.mockito.Mockito.doThrow(new IllegalStateException("outbox down"))
-                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID), anyLong());
 
         assertThatThrownBy(() -> documentService.applyConvertBatch(succeeded(0, 3, 3)))
                 .isInstanceOf(IllegalStateException.class);
@@ -983,7 +983,7 @@ class DocumentServiceConvertTest {
         verify(convertQueueRepository).delete(queue);
         var order = org.mockito.Mockito.inOrder(taskWriter, ingestCommandOutbox);
         order.verify(taskWriter).completeAndSettle("convert:doc_placeholder");
-        order.verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+        order.verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID), anyLong());
         verify(taskWriter, never()).enqueueJoined(anyString(), anyString(), anyString(), anyString());
     }
 
@@ -1002,7 +1002,7 @@ class DocumentServiceConvertTest {
         assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 1 -->\n\n# 본문\n");
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
         verify(taskWriter).completeAndSettle("convert:doc_placeholder");
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString());
+        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
     }
 
     @Test
@@ -1032,7 +1032,7 @@ class DocumentServiceConvertTest {
         seedDispatched(10);
         stubResult(10, "<!-- page 1 -->\n\n# next pages\n");
         org.mockito.Mockito.doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("부족"))
-                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID), anyLong());
 
         documentService.applyConvertBatch(succeeded(10, 20, 20));
 
@@ -1043,7 +1043,7 @@ class DocumentServiceConvertTest {
         // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 풀었다.
         var order = org.mockito.Mockito.inOrder(taskWriter, ingestCommandOutbox);
         order.verify(taskWriter).completeAndSettle("convert:" + parent.getId());
-        order.verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+        order.verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID), anyLong());
     }
 
     @Test
@@ -1056,7 +1056,7 @@ class DocumentServiceConvertTest {
         stubResult(10, "<!-- page 1 -->\n\n# next pages\n");
         org.mockito.Mockito.doThrow(new fruition.core.usage.limit.AiUsageLimitExceededException(
                         fruition.core.usage.limit.AiUsageLimitType.DAILY_TOKENS, java.time.Instant.now()))
-                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+                .when(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID), anyLong());
 
         documentService.applyConvertBatch(succeeded(10, 20, 20));
 
@@ -1115,7 +1115,7 @@ class DocumentServiceConvertTest {
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
         assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 1 -->\n\n# 본문\n");
-        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID), anyLong());
     }
 
     @Test
@@ -1172,7 +1172,7 @@ class DocumentServiceConvertTest {
         assertThat(states).hasSize(1);
         assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo(
                 nearlyFull + "\n\n<!-- page 11 -->\n\n" + "나".repeat(100) + "\n");
-        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID));
+        verify(ingestCommandOutbox, times(1)).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID), anyLong());
     }
 
     @Test

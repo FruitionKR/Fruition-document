@@ -8307,7 +8307,7 @@ components:
         estimated_credits:
           type: integer
           format: int64
-          description: "예상 크레딧(milli-KRW, /users/me/credits의 *_krw_milli와 같은 단위) = app.billing.estimate.document × document_count"
+          description: "예상 크레딧(milli-KRW, /users/me/credits의 *_krw_milli와 같은 단위) = 각 Markdown 본문의 UTF-8 바이트 길이별 예약액 합계"
         pdf_unconverted_count:
           type: integer
           format: int32

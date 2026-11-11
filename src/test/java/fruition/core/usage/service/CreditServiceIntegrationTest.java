@@ -43,6 +43,29 @@ class CreditServiceIntegrationTest {
 
     private static final long ESTIMATE = 300_000;
 
+    @Test
+    void documentLengthReservationLeavesRoomForAnotherTaskAndSettlesActualUsage() {
+        CreditService credits = credits(true);
+        grant(498_000);
+        String runId = "run-" + UUID.randomUUID();
+        run(runId, "running");
+        long estimate = credits.estimateDocument(5537);
+        assertThat(estimate).isEqualTo(70_000);
+        credits.reserve(runId, user, "document", estimate);
+        // enqueue calls the ordinary reservation again; it must not replace the size-based reservation.
+        credits.reserve(runId, user, "document");
+        assertThat(credits.credits(user).availableKrwMilli()).isEqualTo(428_000);
+        credits.reserve("query-" + UUID.randomUUID(), user, "query");
+        assertThat(credits.credits(user).availableKrwMilli()).isEqualTo(128_000);
+        charge(runId, 33_000);
+        jdbc.update("UPDATE ai_task_runs SET status='completed' WHERE id=?", runId);
+        credits.settle(runId);
+        credits.settle(runId);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(465_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(300_000);
+        assertLedgerMatchesAccount();
+    }
+
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager manager;
     @Autowired Environment environment;
@@ -702,20 +725,20 @@ class CreditServiceIntegrationTest {
         var writer = new fruition.core.document.repository.AiCommandOutboxWriter(outboxRepository, mapper, jdbc,
                 entityManager, credits, limits);
         var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
-        grant(550_000);
+        grant(505_000);
         String convert = "convert:" + UUID.randomUUID();
-        transaction.executeWithoutResult(tx -> writer.begin(convert, "ws-1", user, "convert"));  // 500,000 예약, 가용 50,000
+        transaction.executeWithoutResult(tx -> writer.begin(convert, "ws-1", user, "convert"));  // 500,000 예약, 가용 5,000
 
-        // 변환 예약이 남은 채로는 ingest(최저 100,000)가 거절된다.
+        // 변환 예약이 남은 채로는 기준 길이 ingest(최저 7,000)가 거절된다.
         assertThatThrownBy(() -> transaction.executeWithoutResult(tx ->
-                writer.begin("run-" + UUID.randomUUID(), "ws-1", user, "document")))
+                writer.beginDocument("run-" + UUID.randomUUID(), "ws-1", user, 5537)))
                 .isInstanceOf(CreditService.InsufficientCreditException.class);
 
-        // 변환을 닫으면서 바로 정산하면 가용 550,000이 되어 ingest가 통과하고 그만큼 예약한다.
+        // 변환을 정산하면 기준 길이 ingest가 통과하고 70,000을 예약한다.
         transaction.executeWithoutResult(tx -> writer.completeAndSettle(convert));
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
-        transaction.executeWithoutResult(tx -> writer.begin("run-" + UUID.randomUUID(), "ws-1", user, "document"));
-        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(550_000);
+        transaction.executeWithoutResult(tx -> writer.beginDocument("run-" + UUID.randomUUID(), "ws-1", user, 5537));
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(70_000);
         assertLedgerMatchesAccount();
     }
 
@@ -755,7 +778,7 @@ class CreditServiceIntegrationTest {
             charges.releasePostIngestHold("post-y-" + UUID.randomUUID(), null, "ws-1", user);
             charges.releasePostIngestHold("post-z-" + UUID.randomUUID(), ingest, "ws-1", "intruder");
             assertThat(queueWaiting(ingest)).isTrue();
-            assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(1_000_000);  // document 상한
+            assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(credits.estimate("document"));  // post_ingest 종료 전 예약 유지
 
             // 해당 post_ingest가 끝났다는 이벤트가 오면 앞당겨 정산하고, post_ingest의 사용량도 차감한다.
             charge(post, 40_000);

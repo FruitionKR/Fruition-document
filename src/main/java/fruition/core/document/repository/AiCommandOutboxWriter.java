@@ -34,6 +34,14 @@ public class AiCommandOutboxWriter {
     }
 
     public void begin(String runId, String workspaceId, String userId, String kind) {
+        begin(runId, workspaceId, userId, kind, null);
+    }
+
+    public void beginDocument(String runId, String workspaceId, String userId, long sourceBytes) {
+        begin(runId, workspaceId, userId, "document", credits.estimateDocument(sourceBytes));
+    }
+
+    private void begin(String runId, String workspaceId, String userId, String kind, Long estimate) {
         // 작업 시작 전에 대기 중이던 사용자 변경을 이번 작업의 변경으로 잘못 기록하지 않는다.
         entityManager.flush();
         int inserted = jdbcTemplate.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind) VALUES (?, ?, ?, ?) "
@@ -41,7 +49,8 @@ public class AiCommandOutboxWriter {
         // 새로 등록한 실행만 사용자별 사용 한도를 본다(enqueue가 같은 run으로 begin을 다시 부른다). 넘으면 등록과 함께 롤백된다.
         if (inserted == 1) limits.check(userId, kind);
         // outbox 발행 전에 같은 트랜잭션에서 크레딧을 예약한다. 잔액이 모자라면 작업 등록과 함께 롤백된다(#79).
-        credits.reserve(runId, userId, kind);
+        if (estimate == null) credits.reserve(runId, userId, kind);
+        else credits.reserve(runId, userId, kind, estimate);
         jdbcTemplate.queryForObject("SELECT set_config('app.ai_task_run_id', ?, true)", String.class, runId);
     }
 
