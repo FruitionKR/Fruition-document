@@ -105,6 +105,18 @@ public class WikiService {
      */
     public record PageRead(WikiPageDetailResponse detail, Optional<String> body) {}
 
+    /** 지금 페이지 metadata와 최신 revision. 없으면 비어 있다. MCP get_wiki_page가 읽은 뒤 변경 여부를 볼 때 쓴다. */
+    public record PageState(String pageType, String title, String markdownUri, String status,
+                            java.time.Instant updatedAt, Long revision) {}
+
+    public Optional<PageState> currentState(String workspaceId, String userId, String id) {
+        verifyWorkspaceOwnership(workspaceId, userId);
+        Long revision = versionRepository.findTopByIdPageIdOrderByIdRevisionDesc(id)
+                .map(WikiPageVersion::getRevision).orElse(null);
+        return pipelineWikiStateRequester.state(workspaceId, id).map(state -> new PageState(
+                state.pageType(), state.title(), state.markdownUri(), state.status(), state.updatedAt(), revision));
+    }
+
     public PageRead read(String workspaceId, String userId, String id) {
         verifyWorkspaceOwnership(workspaceId, userId);
         WikiPageDetailResponse page = pipelineWikiStateRequester.page(workspaceId, id)

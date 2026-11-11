@@ -62,7 +62,7 @@ class McpWikiPageServiceTest {
         assertThat(page.pageType()).isEqualTo("SOURCE");
         assertThat(page.schemaVersion()).isEqualTo("mcp.wiki-page.v1");
         assertThat(page.dataBoundary()).isEqualTo("UNTRUSTED_WORKSPACE_CONTENT");
-        verify(guard).requireMember("workspace-a", "user-a");
+        verify(guard, org.mockito.Mockito.atLeastOnce()).requireMember("workspace-a", "user-a");
         verifyNoInteractions(objects);
     }
 
@@ -147,7 +147,7 @@ class McpWikiPageServiceTest {
                 p.wikiSearchUri(), p.cursorSecret(), p.maxPageSize(), p.maxCandidates(), p.maxResponseBytes(),
                 p.maxCursorBytes(), p.maxSourceBlocks(), p.maxSourceBytes(), p.maxDocumentBlocksPerPage(),
                 bodyBytes, p.dependencyTimeoutSeconds());
-        return new McpWikiPageService(web, ai, versions, properties, deadlineMs);
+        return new McpWikiPageService(web, properties, deadlineMs);
     }
 
     private static WikiPageDetailResponse page(String markdown, String markdownUri) {

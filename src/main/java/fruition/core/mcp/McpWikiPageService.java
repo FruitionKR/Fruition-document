@@ -5,9 +5,6 @@ import fruition.core.authz.WorkspaceNotFoundException;
 import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.core.wiki.dto.WikiPageDetailResponse;
 import fruition.core.wiki.exception.WikiPageNotFoundException;
-import fruition.core.wiki.domain.WikiPageVersion;
-import fruition.core.wiki.repository.PipelineWikiStateRequester;
-import fruition.core.wiki.repository.WikiPageVersionRepository;
 import fruition.core.wiki.service.WikiService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -39,18 +36,13 @@ public class McpWikiPageService {
     // ponytail: deadline이 지나면 응답은 끝내지만 작업 스레드는 하위 호출의 자체 timeout까지 남을 수 있다(가상 스레드라 비용은 작다).
     private static final ExecutorService READS = Executors.newVirtualThreadPerTaskExecutor();
     private final WikiService wiki;
-    private final PipelineWikiStateRequester pages;
-    private final WikiPageVersionRepository versions;
     private final McpProperties properties;
     private final long deadlineMs;
 
-    public McpWikiPageService(WikiService wiki, PipelineWikiStateRequester pages, WikiPageVersionRepository versions,
-                              McpProperties properties,
+    public McpWikiPageService(WikiService wiki, McpProperties properties,
                               @Value("${app.mcp.wiki-page-deadline-ms}") long deadlineMs) {
         if (deadlineMs < 1) throw new IllegalArgumentException("MCP wiki page deadline must be positive");
         this.wiki = wiki;
-        this.pages = pages;
-        this.versions = versions;
         this.properties = properties;
         this.deadlineMs = deadlineMs;
     }
@@ -86,7 +78,7 @@ public class McpWikiPageService {
                 || !("SOURCE".equals(pageType) || "CONCEPT".equals(pageType))) {
             throw new McpToolException("DEPENDENCY_UNAVAILABLE");
         }
-        requireUnchanged(identity.workspaceId(), page);
+        requireUnchanged(identity, page);
         String raw = read.body().get();
         String body = AiMarkdownSanitizer.sanitize(raw);
         byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
@@ -99,17 +91,16 @@ public class McpWikiPageService {
     }
 
     /** 본문을 고른 뒤 페이지 metadata와 최신 revision이 읽기 시작 때와 같고 아직 active인지 본다. */
-    private void requireUnchanged(String workspaceId, WikiPageDetailResponse before) {
-        PipelineWikiStateRequester.PageState after = pages.state(workspaceId, before.id()).orElse(null);
-        Long revision = versions.findTopByIdPageIdOrderByIdRevisionDesc(before.id())
-                .map(WikiPageVersion::getRevision).orElse(null);
+    private void requireUnchanged(McpIdentity identity, WikiPageDetailResponse before) {
+        WikiService.PageState after = wiki.currentState(identity.workspaceId(), identity.userId(), before.id())
+                .orElse(null);
         if (after == null || !"active".equals(after.status())
                 || !Objects.equals(after.pageType(), before.pageType())
                 || !Objects.equals(after.title(), before.title())
                 || !Objects.equals(after.markdownUri(), before.markdownUri())
                 || !Objects.equals(after.status(), before.status())
                 || !Objects.equals(after.updatedAt(), before.updatedAt())
-                || !Objects.equals(revision, before.revision())) {
+                || !Objects.equals(after.revision(), before.revision())) {
             throw new McpToolException("PAGE_CHANGED");
         }
     }
