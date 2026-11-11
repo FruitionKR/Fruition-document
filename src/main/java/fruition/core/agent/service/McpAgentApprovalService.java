@@ -15,6 +15,8 @@ import fruition.core.mcp.McpAuthorizationException;
 import fruition.core.mcp.McpIdentity;
 import fruition.core.mcp.McpProposalActor;
 import fruition.core.usage.service.CreditService;
+import fruition.shared.logging.RepeatedFailureLogger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
@@ -39,6 +41,8 @@ import java.util.UUID;
 public class McpAgentApprovalService {
     private static final String SCHEMA = "mcp.agent-approval.v1";
     static final String SKILL_TOOL = "publish_skill_definition";
+    private static final RepeatedFailureLogger QUOTE_FAILURES =
+            new RepeatedFailureLogger(LoggerFactory.getLogger(McpAgentApprovalService.class));
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
@@ -121,8 +125,23 @@ public class McpAgentApprovalService {
             return quote(workspaceId, userId, run);
         } catch (RuntimeException unavailable) {
             // History and recovery stay readable when current grant authorization or price config is unavailable.
-            return run;
+            // 가격 없이 사유 코드만 실어 승인은 계속 막고, 화면과 로그가 원인을 구분하게 한다.
+            String runId = run.path("id").asText();
+            String reason = quoteUnavailableReason(unavailable);
+            QUOTE_FAILURES.warn("mcp_approval_quote:" + runId + ":" + reason, "[MCP 승인 견적 실패] operation=mcp_approval stage=quote "
+                    + "runId=" + runId + " unavailableReason=" + reason + " errorType="
+                    + unavailable.getClass().getSimpleName() + " 원인=권한·가격 설정·대상 확인 중 하나가 실패해 승인할 수 없습니다.", null);
+            ObjectNode projected = ((ObjectNode) run).deepCopy();
+            projected.putObject("mcp_approval_quote").put("unavailable_reason", reason);
+            return projected;
         }
+    }
+
+    /** 견적 실패를 화면에 보여도 되는 고정 코드로 줄인다. 예외 메시지·본문은 싣지 않는다. */
+    private static String quoteUnavailableReason(RuntimeException failure) {
+        String code = failure instanceof McpAuthorizationException denied ? denied.code()
+                : failure instanceof McpApprovalException ? failure.getMessage() : null;
+        return code != null && code.matches("[A-Z][A-Z0-9_]{0,63}") ? code : "QUOTE_UNAVAILABLE";
     }
 
     public void cancelRun(String runId) {

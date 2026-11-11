@@ -229,6 +229,16 @@ No caller may supply source bytes, snapshot mappings, URLs, paths, or identity. 
 only the validated AI draft fields plus a review URL built from configured `MCP_REVIEW_ORIGIN` and the route
 `/mcp/workspaces/{workspace_id}/wiki-drafts/{draft_id}`.
 
+AI wiki draft/PDF conversion API rejections reach the tool result as `{"error":"<code>"}` with the AI `error.code`
+unchanged when it is in the allowlist in `McpWikiDraftClient`: the AI `McpWikiDraftError`/`McpPdfConversionError`
+codes (e.g. `INVALID_EVIDENCE`, `LEXICAL_OVERLAP_REJECTED`, `INSTRUCTION_PATTERN_REJECTED`, `UNSAFE_CONTENT`,
+`MERGE_TARGET_CHANGED`, `WINDOW_OUT_OF_ORDER`, `INCOMPLETE_WINDOWS`, `SNAPSHOT_MISMATCH`, `NOT_FOUND`, `EXPIRED`,
+`REQUEST_TOO_LARGE`), the run/draft state name the AI returns when a run no longer accepts the command
+(`READY_TO_FINALIZE`, `AWAITING_WEB_APPROVAL`, `APPLYING`, `PUBLISHED`, `NO_CHANGE`, `CONFLICTED`, `HALTED`,
+`UNKNOWN`, `EXPIRED`, `CANCELLED`, `INVALIDATED`), and the relayed source callback `INVALID_SOURCE_TYPE`. Unknown
+codes, non-JSON bodies, and bodies without `error.code` (including FastAPI's default 422, which only a
+Document-built header/query contract bug can cause) become `DEPENDENCY_UNAVAILABLE`.
+
 The owner web API is:
 
 - `GET /api/workspaces/{workspace_id}/mcp/wiki-drafts/{draft_id}`
