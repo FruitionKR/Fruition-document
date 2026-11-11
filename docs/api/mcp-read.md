@@ -62,11 +62,16 @@ The read tools are:
 - `get_document` → bounded block-boundary chunks from the document-owned current edit state (or the immutable
   chat-export pipeline input), tied to that body version, source hash, and sanitized presentation snapshot. It does
   not require a wiki ingest snapshot.
-- `get_wiki_page` → the web page detail (`WikiService.findById`, the same path as
+- `get_wiki_page` → the web page detail (`WikiService.read`, the same path as
   `GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}`), so the body is resolved in the web order
-  (AI body → latest `wiki_page_versions.markdown` → stored object). The MCP boundary only adds the body size limit,
+  (AI body → latest `wiki_page_versions.markdown` → stored object). The MCP boundary adds the ADR 0046 contract:
+  a stored but empty body is returned as an empty `body` (the web detail still omits `markdown`); after the body is
+  resolved the page metadata (`page_type`, `title`, `markdown_uri`, `status`, `updated_at`, via AI
+  `POST /wiki/pages/lookup`) and the latest revision are read again, and any difference or a non-active page is
+  retryable `PAGE_CHANGED`; the whole read must finish within `app.mcp.wiki-page-deadline-ms`
+  (`MCP_WIKI_PAGE_DEADLINE_MS`, default 5000) or it is `DEPENDENCY_UNAVAILABLE`. It also applies the body size limit,
   sanitizing, and the seven `mcp.wiki-page.v1` fields with a body hash over the exact UTF-8 body returned by the tool.
-  A missing page is `PAGE_NOT_FOUND`; a page whose body the web cannot resolve either is `DEPENDENCY_UNAVAILABLE`.
+  A missing page is `PAGE_NOT_FOUND`; a page whose body the web cannot resolve is `DEPENDENCY_UNAVAILABLE`.
 
 Request bodies are capped at 4 MiB after gzip decompression. Candidate counts, source block counts/bytes,
 page sizes, response bytes, cursor bytes, and document chunk blocks/bytes use explicit deployment settings.

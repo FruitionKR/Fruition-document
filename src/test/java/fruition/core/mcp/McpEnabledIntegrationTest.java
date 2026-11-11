@@ -214,6 +214,11 @@ class McpEnabledIntegrationTest {
                 mapper.writeValueAsString(Map.of("id", "wiki_page_i2", "page_type", "source", "title", rawTitle,
                         "markdown_uri", "wiki/ws_i2_mcp/pages/wiki_page_i2/missing.md", "status", "active",
                         "source_documents", List.of(), "related_pages", List.of()))));
+        // 본문을 고른 뒤 페이지가 그대로인지 다시 본다(ADR 0046 PAGE_CHANGED).
+        ai.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody(
+                mapper.writeValueAsString(List.of(Map.of("id", "wiki_page_i2", "page_type", "source",
+                        "title", rawTitle, "markdown_uri", "wiki/ws_i2_mcp/pages/wiki_page_i2/missing.md",
+                        "status", "active", "workspace_id", WORKSPACE)))));
         jdbc.update("""
                 INSERT INTO wiki_page_versions(page_id, revision, contribution_count, markdown, markdown_key,
                     content_hash, created_at)
@@ -241,6 +246,10 @@ class McpEnabledIntegrationTest {
         assertThat(pageRequest.getRequestUrl().queryParameter("workspace_id")).isEqualTo(WORKSPACE);
         assertThat(pageRequest.getRequestUrl().queryParameter("mcp_read")).isNull();
         assertThat(pageRequest.getHeader("X-Internal-Token")).isEqualTo("internal-test");
+        RecordedRequest stateRequest = ai.takeRequest(5, TimeUnit.SECONDS);
+        assertThat(stateRequest).isNotNull();
+        assertThat(stateRequest.getMethod()).isEqualTo("POST");
+        assertThat(stateRequest.getRequestUrl().encodedPath()).isEqualTo("/wiki/pages/lookup");
     }
 
     @Test void readsNeverIngestedChatAndEditedDocumentsFromCurrentDocumentState() throws Exception {
