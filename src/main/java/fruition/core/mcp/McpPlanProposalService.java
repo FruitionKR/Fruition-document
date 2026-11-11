@@ -50,7 +50,7 @@ public class McpPlanProposalService {
             "display_name", "folder_id", "content_result_key", "content_hash",
             "source_document_id", "source_content_hash");
     private static final Pattern CONVERSION_RESULT_KEY = Pattern.compile(
-            "tmp/convert/mcp/[A-Za-z0-9_-]{1,255}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/final\\.json");
+            "tmp/mcp-convert/[A-Za-z0-9_-]{1,255}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/final\\.json");
 
     private final McpPlanContextService contexts;
     private final McpDocumentProposalService proposals;

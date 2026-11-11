@@ -185,7 +185,7 @@ public class AgentToolService {
             requireArguments(request.arguments(), CONVERTED_CREATE_DOCUMENT_ARGUMENTS);
             // MCP PDF 변환 조립 결과는 이 워크스페이스의 변환 결과 위치에서만 읽는다.
             String key = text(request.arguments(), "content_result_key");
-            if (!key.startsWith("tmp/convert/mcp/" + request.workspaceId() + "/") || key.contains(".."))
+            if (!key.startsWith("tmp/mcp-convert/" + request.workspaceId() + "/") || key.contains(".."))
                 throw badRequest("PDF 변환 결과 위치가 올바르지 않습니다.");
         } else requireToolArguments(EXECUTE_TOOL_ARGUMENTS, toolName, request.arguments());
         authorizationClient.authorizeExecute(toolName, request);

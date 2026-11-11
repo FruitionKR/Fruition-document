@@ -82,15 +82,36 @@ class McpPlanProposalServiceTest {
 
     @Test
     void convertedPdfCreateCarriesOnlyTheConversionResultKeyWithoutArtifact() {
-        String key = "tmp/convert/mcp/workspace/0f6f3d1e-2b7a-4c8e-9d5f-1a2b3c4d5e6f/final.json";
+        String key = "tmp/mcp-convert/workspace/0f6f3d1e-2b7a-4c8e-9d5f-1a2b3c4d5e6f/final.json";
         var input = McpPlanProposalService.input(convertedPlan(key));
         assertThat(input.artifacts()).isEmpty();
 
         for (String foreign : List.of("sources/documents/doc_pdf/original",
-                "tmp/convert/mcp/workspace/../other/final.json", "tmp/convert/mcp/workspace/x/final.md")) {
+                "tmp/mcp-convert/workspace/../other/final.json", "tmp/mcp-convert/workspace/x/final.md",
+                "tmp/convert/mcp/workspace/0f6f3d1e-2b7a-4c8e-9d5f-1a2b3c4d5e6f/final.json")) {
             assertThatThrownBy(() -> McpPlanProposalService.input(convertedPlan(foreign)))
                     .isInstanceOf(IllegalArgumentException.class);
         }
+    }
+
+    @Test
+    void publicProposePlanRejectsTheOldArtifactBackedPdfConversionForm() {
+        // 옛 PDF 변환본 형태(artifact 본문 + 원본 쌍)는 호환 경로 없이 거절한다.
+        String markdown = "# 보고서\n";
+        Map<String, Object> operation = linked(
+                "id", "convert-pdf", "sequence", 1, "tool_name", "create_document", "target_type", "document",
+                "target_id", null, "base_version", null, "source_parent_id", null, "destination_parent_id", null,
+                "arguments", linked("display_name", "보고서", "folder_id", null, "content_artifact_id", "converted-markdown",
+                        "content_hash", hash(markdown), "source_document_id", "doc_pdf", "source_content_hash", hash("pdf")),
+                "reason", "PDF 변환본 저장", "depends_on", List.of());
+        Map<String, Object> artifact = linked(
+                "id", "converted-markdown", "content_hash", hash(markdown), "purpose", "create_document",
+                "document_id", null, "base_version", null, "target", null, "markdown", markdown);
+        Map<String, Object> plan = linked("idempotency_key", "key-1", "request_summary", "PDF 변환본 저장",
+                "target_folder_id", null, "operations", List.of(operation), "artifacts", List.of(artifact));
+
+        assertThatThrownBy(() -> service.propose(identity, plan))
+                .isInstanceOf(McpToolException.class).hasMessage("INVALID_INPUT");
     }
 
     private static Map<String, Object> convertedPlan(String resultKey) {

@@ -62,7 +62,7 @@ class DocumentConvertedMarkdownIntegrationTest {
         byte[] result = new ObjectMapper().writeValueAsBytes(List.of(
                 Map.of("page_start", 1, "markdown", "<!-- page 1 -->\n\n# 보고서\n\n![그림](data:image/png;base64," + PNG + ")\n"),
                 Map.of("page_start", 3, "markdown", "<!-- page 1 -->\n\n둘째 묶음\n\n<!-- page 2 -->\n\n" + large + "\n")));
-        String key = "tmp/convert/mcp/" + workspace + "/" + UUID.randomUUID() + "/final.json";
+        String key = "tmp/mcp-convert/" + workspace + "/" + UUID.randomUUID() + "/final.json";
         minio.putObject(PutObjectArgs.builder().bucket(storage.getBucket()).object(key)
                 .stream(new ByteArrayInputStream(result), result.length, -1).build());
         String resultHash = "sha256:" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(result));

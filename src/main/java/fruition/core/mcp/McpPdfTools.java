@@ -213,9 +213,9 @@ public class McpPdfTools {
                 linked("schema_version", SCHEMA, "actor", actorMap(actor)));
         String sourceId = documentId(result.path("source_document_id").asText());
         String sourceHash = hash(result.path("source_content_hash").asText());
-        // 조립 결과는 AI가 기존 변환 결과처럼 tmp/convert/에 둔다. 계획에는 그 key와 hash만 싣고 승인 뒤 저장 때 읽는다.
+        // 조립 결과는 AI가 tmp/mcp-convert/(tmp/ 7일 lifecycle)에 둔다. 계획에는 그 key와 hash만 싣고 승인 뒤 저장 때 읽는다.
         String resultKey = result.path("result_key").asText();
-        if (!resultKey.equals("tmp/convert/mcp/" + identity.workspaceId() + "/" + conversionId + "/final.json")
+        if (!resultKey.equals("tmp/mcp-convert/" + identity.workspaceId() + "/" + conversionId + "/final.json")
                 || !HASH.matcher(result.path("content_hash").asText()).matches())
             throw new McpToolException("DEPENDENCY_UNAVAILABLE");
         // 전처리 뒤 원본이 바뀌었거나 변환 권한이 없어졌으면 제안하지 않는다. 승인·실행 때도 다시 본다.

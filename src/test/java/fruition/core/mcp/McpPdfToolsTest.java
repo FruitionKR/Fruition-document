@@ -36,7 +36,7 @@ import static org.mockito.Mockito.when;
 class McpPdfToolsTest {
     private static final String PDF_HASH = "sha256:" + "a".repeat(64);
     private static final String CONVERSION = "0f6f3d1e-2b7a-4c8e-9d5f-1a2b3c4d5e6f";
-    private static final String RESULT_KEY = "tmp/convert/mcp/workspace/" + CONVERSION + "/final.json";
+    private static final String RESULT_KEY = "tmp/mcp-convert/workspace/" + CONVERSION + "/final.json";
     private final ObjectMapper mapper = new ObjectMapper();
     private final McpDocumentDataGateway documents = mock(McpDocumentDataGateway.class);
     private final McpPlanProposalService plans = mock(McpPlanProposalService.class);
@@ -230,7 +230,7 @@ class McpPdfToolsTest {
     @Test
     void finalizeRefusesForeignResultKeyOrChangedSourceWithoutProposing() {
         when(ai.post(eq("/internal/mcp/pdf-conversions/" + CONVERSION + "/finalize"), any()))
-                .thenReturn(finalized(PDF_HASH, "tmp/convert/mcp/other/" + CONVERSION + "/final.json"));
+                .thenReturn(finalized(PDF_HASH, "tmp/mcp-convert/other/" + CONVERSION + "/final.json"));
         Document pdf = pdf();
         when(documents.convertSource(identity, "doc_pdf", PDF_HASH))
                 .thenReturn(new McpDocumentDataGateway.ConvertSource(pdf, true));

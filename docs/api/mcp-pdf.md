@@ -61,11 +61,13 @@ command를 발행하지 않는다. 같은 인자로 다시 부르면 같은 세�
 입력 `{idempotency_key, conversion_id, display_name|null(=PDF 이름 - .pdf)}`. 저장 폴더는 고를 수 없다. 웹 변환처럼 원본 PDF와
 같은 폴더다. 재시도 창까지 모든 창이 제출돼야 한다(아니면 `WINDOWS_NOT_SUBMITTED`). AI가 묶음마다 기존 조립(`assemble`)과 이미지
 내장을 하고 AnyDoc 원문에 있던 링크만 남기고 sanitize한 결과를, 쪽 번호는 묶음 안 번호 그대로 `[{page_start, markdown}]` JSON으로
-`tmp/convert/mcp/<workspace>/<conversion>/final.json`에 둔다. 여기서는 그 key가 이 세션 위치인지와 원본 변환 권한·hash를 다시 본
+`tmp/mcp-convert/<workspace>/<conversion>/final.json`에 둔다. 여기서는 그 key가 이 세션 위치인지와 원본 변환 권한·hash를 다시 본
 다음, `create_document` 한 작업짜리 `propose_plan`을 제출한다. 작업 인자는
 `{display_name, folder_id(=PDF 폴더), content_result_key, content_hash, source_document_id, source_content_hash}`이고 artifact는 없다.
-AI는 key·hash가 같은 사용자의 조립 결과와 같을 때만 받는다. 본문을 승인 요청에 싣지 않으므로 크기 상한이 없고, 대신 승인 화면에
-본문 미리보기가 없다. 결과 object는 `tmp/convert/` lifecycle(1일)이 지우므로 그 뒤 승인하면 저장이 실패한다.
+AI는 key·hash가 같은 사용자의 조립 결과이고 finalize 뒤 6일 안일 때만 받는다. 본문을 승인 요청에 싣지 않으므로 크기 상한이 없다.
+승인 화면 미리 보기(AI `edit-previews`)는 다른 수정안과 같은 모양으로 AI가 이 결과를 읽어 hash를 확인하고 만든다(이미지 바이트는
+줄여 보여 준다). 계획은 다른 MCP 수정안처럼 run 생성 + 1일에 만료한다. 결과 object는 `tmp/` lifecycle(7일)이 지우므로 승인할 수
+있는 동안에는 항상 남아 있다.
 
 응답 `{run_id, status:"awaiting_approval", review_url, conversion_id, restoration_summary, next_step}`.
 `restoration_summary`는 `broken_pages`, `repaired_pages`, `fallback_pages`, `rejected_block_ids`다.
@@ -74,7 +76,7 @@ AI는 key·hash가 같은 사용자의 조립 결과와 같을 때만 받는다.
 
 - 승인 견적·승인·실행마다 `McpAgentApprovalService`가 원본을 다시 본다. 권한이 없어졌으면 `PERMISSION_REVOKED`(403),
   hash가 바뀌었으면 409다.
-- 실행(`AgentToolService`, MCP 승인 경로만)은 `content_result_key`가 이 워크스페이스의 `tmp/convert/mcp/` 아래인지 보고
+- 실행(`AgentToolService`, MCP 승인 경로만)은 `content_result_key`가 이 워크스페이스의 `tmp/mcp-convert/` 아래인지 보고
   `DocumentService.createConvertedMarkdownInCurrentTransaction`으로 같은 트랜잭션에서 원본(hash·폴더)을 다시 확인한다. 웹 변환의
   `readConvertResult`로 결과를 읽어 승인된 `content_hash`와 대조하고(다르면 409), 묶음마다 웹 변환 batch와 같은 코드(data: 이미지
   asset 분리 → 변환본 sanitize → `ConvertedMarkdownChunks.renumberPages`)로 이어 붙여 크기와 관계없이 새 Markdown 문서

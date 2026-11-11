@@ -499,7 +499,7 @@ class AgentToolServiceTest {
 
     @Test
     void execute_routesApprovedMcpPdfConversionToLinkedConvertedCreateOnly() throws Exception {
-        String resultKey = "tmp/convert/mcp/workspace-1/00000000-0000-4000-8000-0000000000aa/final.json";
+        String resultKey = "tmp/mcp-convert/workspace-1/00000000-0000-4000-8000-0000000000aa/final.json";
         var arguments = objectMapper.readTree(
                 "{\"display_name\":\"보고서\",\"folder_id\":null,"
                         + "\"content_result_key\":\"" + resultKey + "\",\"content_hash\":\"sha256:abc\","
@@ -533,7 +533,7 @@ class AgentToolServiceTest {
     void execute_rejectsMcpPdfConversionResultOutsideTheWorkspace() throws Exception {
         var arguments = objectMapper.readTree(
                 "{\"display_name\":\"보고서\",\"folder_id\":null,"
-                        + "\"content_result_key\":\"tmp/convert/mcp/other/00000000-0000-4000-8000-0000000000aa/final.json\","
+                        + "\"content_result_key\":\"tmp/mcp-convert/other/00000000-0000-4000-8000-0000000000aa/final.json\","
                         + "\"content_hash\":\"sha256:abc\","
                         + "\"source_document_id\":\"doc_pdf\",\"source_content_hash\":\"sha256:pdf\"}");
         service.setMcpApprovals(mock(McpAgentApprovalService.class));
