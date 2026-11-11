@@ -42,6 +42,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -140,6 +141,29 @@ class McpAgentApprovalServiceIntegrationTest {
                 .hasMessage("MCP_PRICE_CHANGED");
         assertThat(jdbc.queryForObject("SELECT count(*) FROM mcp_agent_approvals WHERE user_id = ?",
                 Integer.class, user)).isZero();
+    }
+
+    @Test
+    void unavailableQuoteCarriesSafeReasonAndStaysUnapprovable() throws Exception {
+        JsonNode run = run("agent_" + "e".repeat(32));
+        var unpriced = new McpAgentApprovalService(jdbc, new TransactionTemplate(manager), mapper, access, documents,
+                credits, requester, "", "", "", "");
+        JsonNode quote = unpriced.projectRun(workspace, user, run).path("mcp_approval_quote");
+        assertThat(quote.path("unavailable_reason").asText()).isEqualTo("MCP_PRICE_UNCONFIGURED");
+        assertThat(quote.has("price_snapshot")).isFalse();
+        assertThat(quote.has("client_name")).isFalse();
+
+        doThrow(new McpAuthorizationException(403, "GRANT_INACTIVE")).when(access).authorizeWebApproval(any());
+        assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("unavailable_reason")
+                .asText()).isEqualTo("GRANT_INACTIVE");
+
+        doThrow(new McpAuthorizationException(503, "AUTHZ_UNAVAILABLE")).when(access).authorizeWebApproval(any());
+        assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("unavailable_reason")
+                .asText()).isEqualTo("AUTHZ_UNAVAILABLE");
+
+        doThrow(new IllegalStateException("secret upstream body")).when(access).authorizeWebApproval(any());
+        assertThat(service.projectRun(workspace, user, run).path("mcp_approval_quote").path("unavailable_reason")
+                .asText()).isEqualTo("QUOTE_UNAVAILABLE");
     }
 
     @AfterEach
