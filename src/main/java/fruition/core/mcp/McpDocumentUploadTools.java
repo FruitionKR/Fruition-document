@@ -37,8 +37,14 @@ public class McpDocumentUploadTools {
     static final String PARTS = "get_upload_part_urls";
     static final String COMPLETE = "complete_document_upload";
     static final Set<String> NAMES = Set.of(START, PARTS, COMPLETE);
-    private static final McpSchema.ToolAnnotations WRITE = McpSchema.ToolAnnotations.builder()
-            .readOnlyHint(false).destructiveHint(false).idempotentHint(false).openWorldHint(false).build();
+    /**
+     * 승인은 웹이 아니라 MCP 클라이언트의 도구 실행 확인이 맡는다(ADR 0048). 쓰기로 표시해 클라이언트가 확인을 묻게 한다.
+     * start는 부를 때마다 새 multipart·ticket을 만들고, part URL 재발급과 같은 key의 complete는 같은 결과다.
+     */
+    private static final McpSchema.ToolAnnotations WRITE = write(false);
+    private static final McpSchema.ToolAnnotations IDEMPOTENT_WRITE = write(true);
+    private static final String CONFIRM = " This saves the user's file into the workspace without a separate approval"
+            + " step, so confirm with the user before uploading.";
     private static final String NO_HTTP = " If you cannot send HTTP requests yourself, do not use these tools and do not"
             + " paste file contents into other tools; ask the user to upload the file in the Fruition web app instead.";
     private static final String PUT_PARTS = "PUT the raw bytes of each part to its URL with no auth header (Content-Type is"
@@ -84,20 +90,20 @@ public class McpDocumentUploadTools {
                                 + " the same direct-upload API as Fruition web. Send the exact file name and byte size;"
                                 + " folder_id null means the top level. PDF up to 100MB, Markdown/txt up to 5MB (UTF-8)."
                                 + " Then call get_upload_part_urls and upload the parts. " + PUT_PARTS
-                                + " The document is created on completion, like a web upload." + NO_HTTP)
+                                + " The document is created on completion, like a web upload." + CONFIRM + NO_HTTP)
                         .outputSchema(strict(startOutput)).annotations(WRITE).build(),
                 McpSchema.Tool.builder(PARTS, strict(partsInput))
                         .description("Get presigned PUT URLs (valid 15 minutes) for parts first_part.."
                                 + "first_part+count-1 of a started upload, at most 32 per call. " + PUT_PARTS + NO_HTTP)
                         .outputSchema(strict(Map.of("parts", Map.of("type", "array", "items", strict(part)))))
-                        .annotations(WRITE).build(),
+                        .annotations(IDEMPOTENT_WRITE).build(),
                 McpSchema.Tool.builder(COMPLETE, strict(completeInput))
                         .description("Finish an upload after every part was PUT. Fruition checks size, type and content"
                                 + " the same way as web upload and creates the document immediately (no approval)."
                                 + " Reuse the same idempotency_key when retrying. Fruition does not add the file to the"
                                 + " wiki automatically: call start_ingest with the returned id for Markdown, or"
-                                + " start_pdf_conversion with id and content_hash for a PDF." + NO_HTTP)
-                        .outputSchema(Map.of("type", "object")).annotations(WRITE).build());
+                                + " start_pdf_conversion with id and content_hash for a PDF." + CONFIRM + NO_HTTP)
+                        .outputSchema(Map.of("type", "object")).annotations(IDEMPOTENT_WRITE).build());
     }
 
     public Object invoke(McpIdentity identity, String tool, Map<String, Object> args) {
@@ -204,6 +210,11 @@ public class McpDocumentUploadTools {
         if (folder == null) return null;
         if (!(folder instanceof String value)) throw new IllegalArgumentException();
         return UUID.fromString(value);
+    }
+
+    private static McpSchema.ToolAnnotations write(boolean idempotent) {
+        return McpSchema.ToolAnnotations.builder().readOnlyHint(false).destructiveHint(false)
+                .idempotentHint(idempotent).openWorldHint(false).build();
     }
 
     private static Map<String, Object> strict(Map<String, Object> fields) {

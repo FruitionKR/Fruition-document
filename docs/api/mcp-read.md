@@ -99,6 +99,7 @@ MCP 전용 업로드 경로는 없다. 세 도구는 웹 직접 업로드 API([d
 - 서버 자동 편입은 하지 않는다(`wiki_ingest.status=NOT_APPLICABLE`). 가져오기 세션과 같은 `DocumentService` 분기(`UploadAccounting.autoIngest=false`)를 탄다. 편입은 사용자 AI가 `start_ingest`, PDF 변환은 `start_pdf_conversion`으로 한다.
 - 오류 코드: `UNSUPPORTED_FILE_TYPE`, `INVALID_DOCUMENT_FILENAME`, `MARKDOWN_CONTENT_TOO_LARGE`, `INVALID_MARKDOWN_CONTENT`, `INVALID_PDF`, `FILE_TOO_LARGE`, `STORAGE_QUOTA_EXCEEDED`, `DOCUMENT_WRITE_FORBIDDEN`, `UPLOAD_PARTS_INCOMPLETE`, `IDEMPOTENCY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS`, 다른 사용자·워크스페이스 ticket은 `HANDLE_NOT_FOUND`, 그 밖의 형식 오류는 `INVALID_INPUT`.
 - 감사: `target_ids`는 `start_document_upload`의 `folder_id`(있으면)뿐이다. ticket·URL·파일 이름은 남기지 않는다.
+- 승인: 새 scope나 웹 승인은 없다. 업로드 확인은 MCP 클라이언트의 도구 실행 확인(예: Claude Code의 도구별 확인 창)이 맡는다. 그래서 세 도구는 `readOnlyHint=false`, `destructiveHint=false`, `openWorldHint=false`로 쓰기임을 알리고, `idempotentHint`는 start `false`(호출마다 새 ticket), part URL·complete `true`(같은 인자·같은 key는 같은 결과)다. start·complete 설명은 업로드 전에 사용자에게 확인하라고 적는다. 서버는 확인 창이 실제로 떴는지 알 수 없다(자동 승인 모드 클라이언트 등). 신뢰 수준은 사용자가 웹 업로드 버튼을 누르는 것과 같다.
 
 ## 회의 전사 읽기 (`McpMeetingTools`)
 
