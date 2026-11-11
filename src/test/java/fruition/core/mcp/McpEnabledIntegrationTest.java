@@ -69,6 +69,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.mcp.resource-uri=https://mcp.example/mcp",
         "app.mcp.authorization-server-uri=https://auth.example",
         "app.mcp.allowed-origins=https://client.example",
+        "app.mcp.review-origin=https://app.example",
         "app.mcp.wiki-search-uri=https://ai.example/internal/mcp/wiki/search",
         "app.mcp.cursor-secret=01234567890123456789012345678901",
         "app.mcp.max-page-size=10",
@@ -131,6 +132,10 @@ class McpEnabledIntegrationTest {
         }
     }
 
+    // The chat fixture must not let background reconciliation consume the queued wiki-read responses.
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    fruition.core.chat.service.ChatWikiExportReconciler chatWikiExportReconciler;
+
     @Autowired MockMvc mvc;
     @Autowired FilterChainProxy springSecurityFilterChain;
     @Autowired @Qualifier("mcpServlet") ServletRegistrationBean<HttpServletStatelessServerTransport> registration;
@@ -187,6 +192,8 @@ class McpEnabledIntegrationTest {
                 """);
         assertThat(initialized.path("result").path("protocolVersion").asText()).isEqualTo("2025-11-25");
 
+        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v9");
+
         JsonNode tools = rpc("""
                 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
                 """);
@@ -205,6 +212,10 @@ class McpEnabledIntegrationTest {
         assertThat(call.path("result").path("isError").asBoolean()).isFalse();
         assertThat(call.path("result").path("structuredContent").path("results").get(0)
                 .path("document_id").asText()).isEqualTo("doc_i2_transport");
+
+        assertThat(call.path("result").path("structuredContent").path("results").get(0)
+                .path("source_url").asText()).isEqualTo("https://app.example/home?doc=doc_i2_transport");
+        assertThat(call.path("result").path("structuredContent").path("workspace_id").asText()).isEqualTo(WORKSPACE);
 
         String rawTitle = "[Wiki](https://evil.example/title)";
         String rawBody = "![diagram](https://evil.example/image.png)\n# Wiki 한글  \n";
@@ -235,6 +246,8 @@ class McpEnabledIntegrationTest {
         assertThat(pageCall.path("result").path("structuredContent").path("content_hash").asText())
                 .isEqualTo("sha256:" + sha256(pageBody));
         JsonNode textContent = mapper.readTree(pageCall.path("result").path("content").get(0).path("text").asText());
+        assertThat(textContent.has("source_url")).isFalse();
+        assertThat(textContent).isEqualTo(pageCall.path("result").path("structuredContent"));
         assertThat(textContent.path("title").asText()).isEqualTo("Wiki (evil.example)");
         assertThat(textContent.path("body").asText()).isEqualTo(pageBody);
         assertThat(textContent.path("content_hash").asText()).isEqualTo("sha256:" + sha256(pageBody));
