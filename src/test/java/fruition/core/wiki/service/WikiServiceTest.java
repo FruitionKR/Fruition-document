@@ -120,6 +120,26 @@ class WikiServiceTest {
         assertThat(detail.markdown()).isNull();
     }
 
+    @Test
+    void readSeparatesEmptyBodyFromUnavailableWhileDetailKeepsBothNull() {
+        String key = "wiki/ws_1/pages/wp_1/ops/op_0.md";
+        when(stateRequester.page("ws_1", "wp_empty")).thenReturn(Optional.of(page("", key)));
+        when(stateRequester.page("ws_1", "wp_missing")).thenReturn(Optional.of(page("", key)));
+        when(versionRepository.findTopByIdPageIdOrderByIdRevisionDesc(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(Optional.empty());
+        when(wikiObjectReader.readPageObject(key, "ws_1", "wp_1"))
+                .thenReturn("")
+                .thenThrow(new WikiObjectReadException("본문 객체를 읽지 못했습니다: pageId=wp_1", null));
+
+        WikiService.PageRead empty = service.read("ws_1", "user_1", "wp_empty");
+        WikiService.PageRead missing = service.read("ws_1", "user_1", "wp_missing");
+
+        assertThat(empty.body()).contains("");
+        assertThat(empty.detail().markdown()).isNull();
+        assertThat(missing.body()).isEmpty();
+        assertThat(missing.detail().markdown()).isNull();
+    }
+
     static WikiPageDetailResponse page(String markdown, String markdownUri) {
         return new WikiPageDetailResponse("wp_1", "concept", "제목", "title", "요약", markdownUri, markdown,
                 "active", Instant.parse("2026-08-01T00:00:00Z"), null, Instant.parse("2026-08-10T00:00:00Z"),

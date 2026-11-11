@@ -14,6 +14,7 @@ import fruition.core.wiki.service.WikiService;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
@@ -23,6 +24,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -38,6 +40,14 @@ class McpWikiPageServiceTest {
     private final DocumentRepository documents = mock(DocumentRepository.class);
     private final WikiService web = new WikiService(documents, guard, ai, versions,
             mock(MarkdownDiffService.class), objects, mock(WikiWorkspaceVersionRepository.class));
+    private static final Instant UPDATED = Instant.parse("2026-08-10T00:00:00Z");
+
+    @org.junit.jupiter.api.BeforeEach void sameStateAfterRead() {
+        // 기본값: 읽은 뒤에도 페이지가 그대로다.
+        when(ai.state(any(), any())).thenAnswer(call -> ai.page(call.getArgument(0), call.getArgument(1))
+                .map(p -> new PipelineWikiStateRequester.PageState(
+                        p.id(), p.pageType(), p.title(), p.markdownUri(), p.status(), p.updatedAt())));
+    }
 
     @Test void readsTheBodyTheWebShowsWhenTheAiObjectIsMissing() throws Exception {
         // AI가 markdown_uri 객체를 못 읽어도 웹은 최신 버전 행 본문을 보여 준다. MCP도 같은 본문이어야 한다.
@@ -52,7 +62,7 @@ class McpWikiPageServiceTest {
         assertThat(page.pageType()).isEqualTo("SOURCE");
         assertThat(page.schemaVersion()).isEqualTo("mcp.wiki-page.v1");
         assertThat(page.dataBoundary()).isEqualTo("UNTRUSTED_WORKSPACE_CONTENT");
-        verify(guard).requireMember("workspace-a", "user-a");
+        verify(guard, org.mockito.Mockito.atLeastOnce()).requireMember("workspace-a", "user-a");
         verifyNoInteractions(objects);
     }
 
@@ -74,29 +84,75 @@ class McpWikiPageServiceTest {
     @Test void mapsWebFailuresToMcpCodes() {
         when(ai.page("workspace-a", "missing")).thenReturn(Optional.empty());
         when(ai.page("workspace-a", "no-body")).thenReturn(Optional.of(page(null, null)));
-        when(ai.page("workspace-a", "big")).thenReturn(Optional.of(page("한글", null)));
+        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(page("한글", null)));
         var service = service(5);
 
         assertThatThrownBy(() -> service.get(identity(), "missing")).hasMessage("PAGE_NOT_FOUND");
         assertThatThrownBy(() -> service.get(identity(), "no-body")).hasMessage("DEPENDENCY_UNAVAILABLE");
-        assertThatThrownBy(() -> service.get(identity(), "big")).hasMessage("RESPONSE_LIMIT_EXCEEDED");
+        assertThatThrownBy(() -> service.get(identity(), "page-a")).hasMessage("RESPONSE_LIMIT_EXCEEDED");
         assertThatThrownBy(() -> service.get(identity(), "../internal")).hasMessage("INVALID_INPUT");
         doThrow(new WorkspaceNotFoundException("ws")).when(guard).requireMember(any(), any());
         assertThatThrownBy(() -> service.get(identity(), "page-a")).hasMessage("PAGE_NOT_FOUND");
     }
 
+    @Test void returnsAnEmptyPublishedBodyAsANormalResponse() throws Exception {
+        String key = "wiki/workspace-a/pages/page-a/v.md";
+        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(page("", key)));
+        when(objects.readPageObject(key, "workspace-a", "page-a")).thenReturn("");
+
+        var page = service(10_000).get(identity(), "page-a");
+
+        assertThat(page.body()).isEmpty();
+        assertThat(page.contentHash()).isEqualTo("sha256:" + sha256(""));
+    }
+
+    @Test void rejectsAPageThatChangedDuringTheRead() {
+        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(page("# body", "wiki/workspace-a/pages/page-a/v.md")));
+        doReturn(Optional.of(new PipelineWikiStateRequester.PageState(
+                "page-a", "source", "Title", "wiki/workspace-a/pages/page-a/v.md", "active", UPDATED.plusSeconds(1))))
+                .when(ai).state("workspace-a", "page-a");
+        assertThatThrownBy(() -> service(10_000).get(identity(), "page-a")).hasMessage("PAGE_CHANGED");
+
+        doReturn(Optional.empty()).when(ai).state("workspace-a", "page-a");
+        assertThatThrownBy(() -> service(10_000).get(identity(), "page-a")).hasMessage("PAGE_CHANGED");
+    }
+
+    @Test void rejectsANewRevisionWrittenDuringTheRead() {
+        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(page(null, "wiki/workspace-a/pages/page-a/v.md")));
+        when(versions.findTopByIdPageIdOrderByIdRevisionDesc("page-a"))
+                .thenReturn(Optional.of(new WikiPageVersion("page-a", 2, 1, "# v2", "k2", "h2", null, null, null)))
+                .thenReturn(Optional.of(new WikiPageVersion("page-a", 3, 1, "# v3", "k3", "h3", null, null, null)));
+
+        assertThatThrownBy(() -> service(10_000).get(identity(), "page-a")).hasMessage("PAGE_CHANGED");
+    }
+
+    @Test void enforcesTheReadDeadline() {
+        when(ai.page("workspace-a", "page-a")).thenAnswer(call -> {
+            Thread.sleep(5_000);
+            return Optional.of(page("# late", null));
+        });
+        long started = System.nanoTime();
+
+        assertThatThrownBy(() -> service(10_000, 100).get(identity(), "page-a")).hasMessage("DEPENDENCY_UNAVAILABLE");
+        assertThat(System.nanoTime() - started).isLessThan(2_000_000_000L);
+    }
+
     private McpWikiPageService service(int bodyBytes) {
+        return service(bodyBytes, 5_000);
+    }
+
+    private McpWikiPageService service(int bodyBytes, long deadlineMs) {
         var p = McpTokenVerifierTest.props();
         var properties = new McpProperties(p.resourceUri(), p.authorizationServerUri(), p.allowedOrigins(),
                 p.wikiSearchUri(), p.cursorSecret(), p.maxPageSize(), p.maxCandidates(), p.maxResponseBytes(),
                 p.maxCursorBytes(), p.maxSourceBlocks(), p.maxSourceBytes(), p.maxDocumentBlocksPerPage(),
                 bodyBytes, p.dependencyTimeoutSeconds());
-        return new McpWikiPageService(web, properties);
+        return new McpWikiPageService(web, properties, deadlineMs);
     }
 
     private static WikiPageDetailResponse page(String markdown, String markdownUri) {
         return new WikiPageDetailResponse("page-a", "source", "Title", "title", null, markdownUri, markdown,
-                "active", null, null, null, List.of(), List.of());
+                "active", null, null, UPDATED, List.of(), List.of());
     }
 
     private static McpIdentity identity() {

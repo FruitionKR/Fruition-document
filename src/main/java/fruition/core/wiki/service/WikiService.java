@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -95,6 +96,28 @@ public class WikiService {
     }
 
     public WikiPageDetailResponse findById(String workspaceId, String userId, String id) {
+        return read(workspaceId, userId, id).detail();
+    }
+
+    /**
+     * 웹 상세 조회 결과와, 그 조회가 고른 본문. {@code body}는 빈 본문이면 빈 문자열이고 끝내 못 구했으면 비어 있다.
+     * 웹 응답({@code detail.markdown})은 둘 다 null로 둔다. MCP {@code get_wiki_page}는 빈 본문을 정상 응답으로 돌려준다.
+     */
+    public record PageRead(WikiPageDetailResponse detail, Optional<String> body) {}
+
+    /** 지금 페이지 metadata와 최신 revision. 없으면 비어 있다. MCP get_wiki_page가 읽은 뒤 변경 여부를 볼 때 쓴다. */
+    public record PageState(String pageType, String title, String markdownUri, String status,
+                            java.time.Instant updatedAt, Long revision) {}
+
+    public Optional<PageState> currentState(String workspaceId, String userId, String id) {
+        verifyWorkspaceOwnership(workspaceId, userId);
+        Long revision = versionRepository.findTopByIdPageIdOrderByIdRevisionDesc(id)
+                .map(WikiPageVersion::getRevision).orElse(null);
+        return pipelineWikiStateRequester.state(workspaceId, id).map(state -> new PageState(
+                state.pageType(), state.title(), state.markdownUri(), state.status(), state.updatedAt(), revision));
+    }
+
+    public PageRead read(String workspaceId, String userId, String id) {
         verifyWorkspaceOwnership(workspaceId, userId);
         WikiPageDetailResponse page = pipelineWikiStateRequester.page(workspaceId, id)
                 .orElseThrow(() -> new WikiPageNotFoundException(id));
@@ -114,12 +137,13 @@ public class WikiService {
                 .toList();
 
         WikiPageVersion latest = versionRepository.findTopByIdPageIdOrderByIdRevisionDesc(id).orElse(null);
-        return new WikiPageDetailResponse(
+        Optional<String> body = markdownOf(workspaceId, page, latest);
+        return new PageRead(new WikiPageDetailResponse(
                 page.id(), page.pageType(), page.title(), page.slug(), page.summary(),
-                page.markdownUri(), markdownOf(workspaceId, page, latest), page.status(), page.createdAt(),
-                latest == null ? null : latest.getRevision(), page.updatedAt(),
+                page.markdownUri(), body.filter(markdown -> !markdown.isBlank()).orElse(null), page.status(),
+                page.createdAt(), latest == null ? null : latest.getRevision(), page.updatedAt(),
                 sourceDocuments,
-                page.relatedPages());
+                page.relatedPages()), body);
     }
 
     /**
@@ -128,32 +152,34 @@ public class WikiService {
      * <p>AI가 준 본문을 먼저 쓴다. 비어 있으면 최신 {@code wiki_page_versions.markdown}을 쓴다.
      * 버전 행은 applier가 객체 본문의 hash를 확인한 뒤 남긴 것이라 객체와 같은 내용이고 저장소 호출이 없다.
      * 버전도 없으면(이력 도입 전 페이지) 버전의 {@code markdown_key}나 AI의 {@code markdown_uri} 객체를 읽는다.
-     * 끝내 못 구하면 상세 조회 자체는 실패시키지 않고 null로 둬 응답에서 키가 빠지게 한다.
+     * 끝내 못 구하면 상세 조회 자체는 실패시키지 않고 비워 둔다. 저장 객체를 읽었는데 비어 있으면 빈 본문이다.
      */
-    private String markdownOf(String workspaceId, WikiPageDetailResponse page, WikiPageVersion latest) {
+    private Optional<String> markdownOf(String workspaceId, WikiPageDetailResponse page, WikiPageVersion latest) {
         if (page.markdown() != null && !page.markdown().isBlank()) {
-            return page.markdown();
+            return Optional.of(page.markdown());
         }
         if (latest != null && !latest.getMarkdown().isBlank()) {
-            return latest.getMarkdown();
+            return Optional.of(latest.getMarkdown());
         }
         String key = latest != null ? latest.getMarkdownKey() : page.markdownUri();
         if (key != null && !key.isBlank()) {
             try {
                 String markdown = wikiObjectReader.readPageObject(key, workspaceId, page.id());
                 if (!markdown.isBlank()) {
-                    return markdown;
+                    return Optional.of(markdown);
                 }
+                log.warn("[Wiki 본문 없음] pageId={}", page.id());
+                return Optional.of(markdown);
             } catch (WikiObjectReadException e) {
                 // 저장소 실패는 reader가 이미 남겼다.
-                return null;
+                return Optional.empty();
             } catch (RuntimeException e) {
                 log.warn("[Wiki 본문 객체 읽기 실패] pageId={} key={} reason={}", page.id(), key, e.getMessage());
-                return null;
+                return Optional.empty();
             }
         }
         log.warn("[Wiki 본문 없음] pageId={}", page.id());
-        return null;
+        return Optional.empty();
     }
 
     /**
