@@ -72,7 +72,7 @@ public class AgentToolService {
 
     /** MCP 승인 계획 전용 PDF 변환본 생성 인자. 내부 Agent 실행 경로는 받지 않는다. */
     private static final Set<String> CONVERTED_CREATE_DOCUMENT_ARGUMENTS = Set.of(
-            "display_name", "folder_id", "content_artifact_id", "content_hash",
+            "display_name", "folder_id", "content_result_key", "content_hash",
             "source_document_id", "source_content_hash");
 
     private final PipelineAgentToolAuthorizationClient authorizationClient;
@@ -181,8 +181,13 @@ public class AgentToolService {
 
     private Object executeMcpMutation(String toolName, AgentToolExecuteRequest request) {
         boolean converted = "create_document".equals(toolName) && request.arguments().has("source_document_id");
-        if (converted) requireArguments(request.arguments(), CONVERTED_CREATE_DOCUMENT_ARGUMENTS);
-        else requireToolArguments(EXECUTE_TOOL_ARGUMENTS, toolName, request.arguments());
+        if (converted) {
+            requireArguments(request.arguments(), CONVERTED_CREATE_DOCUMENT_ARGUMENTS);
+            // MCP PDF 변환 조립 결과는 이 워크스페이스의 변환 결과 위치에서만 읽는다.
+            String key = text(request.arguments(), "content_result_key");
+            if (!key.startsWith("tmp/convert/mcp/" + request.workspaceId() + "/") || key.contains(".."))
+                throw badRequest("PDF 변환 결과 위치가 올바르지 않습니다.");
+        } else requireToolArguments(EXECUTE_TOOL_ARGUMENTS, toolName, request.arguments());
         authorizationClient.authorizeExecute(toolName, request);
         if (mcpApprovals == null)
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
@@ -190,7 +195,7 @@ public class AgentToolService {
         if (McpAgentApprovalService.SKILL_TOOL.equals(toolName)) return executeMcpSkillDefinition(request);
         JsonNode arguments = request.arguments();
         PipelineAgentArtifactClient.ResolvedArtifact artifact = null;
-        if ("create_document".equals(toolName)) {
+        if ("create_document".equals(toolName) && !converted) {
             artifact = artifactClient.resolve(request, toolName, arguments);
             requireResolvedArtifact(artifact, arguments, toolName);
         }
@@ -224,15 +229,16 @@ public class AgentToolService {
                             moved.currentVersion() > before, moved.updatedAt());
                 }
                 case "create_document" -> {
-                    var createRequest = new MarkdownDocumentCreateRequest(
-                            text(arguments, "display_name"), resolvedArtifact.markdown(),
-                            nullableUuid(arguments, "folder_id"));
                     var created = converted
                             ? documentService.createConvertedMarkdownInCurrentTransaction(
                                     request.workspaceId(), request.userId(), text(arguments, "source_document_id"),
-                                    text(arguments, "source_content_hash"), createRequest)
+                                    text(arguments, "source_content_hash"), text(arguments, "display_name"),
+                                    nullableUuid(arguments, "folder_id"), text(arguments, "content_result_key"),
+                                    text(arguments, "content_hash"))
                             : documentService.createAgentMarkdownInCurrentTransaction(
-                                    request.workspaceId(), request.userId(), createRequest);
+                                    request.workspaceId(), request.userId(), new MarkdownDocumentCreateRequest(
+                                            text(arguments, "display_name"), resolvedArtifact.markdown(),
+                                            nullableUuid(arguments, "folder_id")));
                     yield mcpApprovals.recordReceipt(execution, request.operationId(), toolName, "DOCUMENT",
                             created.id(), null, created.currentVersion(), true, created.uploadedAt());
                 }

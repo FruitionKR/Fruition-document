@@ -586,14 +586,15 @@ public class DocumentService {
     }
 
     /**
-     * MCP 승인 계획의 PDF 변환본 생성. 외부 AI가 만든 Markdown을 웹 변환 결과와 같은 규칙(data: 이미지 asset 분리,
-     * 변환본 sanitize)으로 저장하고 원본 PDF를 연결한다. 내부 모델 변환이나 자동 편입은 시작하지 않는다.
-     * 실행 시점에 원본이 그대로 PDF이고 hash가 승인 때와 같으며 요청자가 아직 변환할 수 있어야 한다.
+     * MCP 승인 계획의 PDF 변환본 생성. ai MCP 변환 세션이 {@code tmp/convert/}에 둔 조립 결과({@code [{page_start, markdown}]}
+     * JSON)를 웹 변환처럼 저장소에서 읽어 승인된 hash와 대조하고, 묶음마다 웹 변환 batch와 같은 코드
+     * ({@link #convertedBatchMarkdown})로 이어 붙여 원본 PDF 폴더에 저장한다. 웹 변환처럼 크기와 관계없이 저장한다.
+     * 내부 모델 변환이나 자동 편입은 시작하지 않는다. 실행 시점에 원본이 그대로 PDF이고 hash·폴더가 승인 때와 같으며
+     * 요청자가 아직 변환할 수 있어야 한다.
      */
     public DocumentUploadResponse createConvertedMarkdownInCurrentTransaction(
             String workspaceId, String userId, String sourceDocumentId, String sourceContentHash,
-            MarkdownDocumentCreateRequest request) {
-        if (request == null) throw new InvalidMarkdownContentException("Markdown 생성 요청은 필수입니다.");
+            String displayName, UUID folderId, String resultKey, String resultHash) {
         Document source = documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(sourceDocumentId, workspaceId)
                 .filter(DocumentAccessPolicy::isPdf)
                 .orElseThrow(() -> new DocumentNotFoundException(sourceDocumentId));
@@ -601,12 +602,29 @@ public class DocumentService {
         if (!McpDocumentDataGateway.pdfHash(source).equals(sourceContentHash)) {
             throw new DocumentVersionConflictException("원본 PDF가 승인 뒤 바뀌었습니다.");
         }
-        verifyFolder(workspaceId, request.folderId());
-        DocumentEditingRules.Filename filename = DocumentEditingRules.rename(request.displayName(), "document.md");
-        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.markdown(
-                AiMarkdownSanitizer.sanitizeConverted(externalizeConvertedImages(workspaceId, userId, request.markdown())));
+        // 변환본은 원본과 같은 폴더에 새 문서로 들어간다(웹 변환과 같음).
+        if (!java.util.Objects.equals(folderId, source.getFolderId())) {
+            throw new DocumentVersionConflictException("원본 PDF가 승인 뒤 다른 폴더로 옮겨졌습니다.");
+        }
+        verifyFolder(workspaceId, folderId);
+        String result = readConvertResult(resultKey);
+        if (!("sha256:" + sha256(result.getBytes(StandardCharsets.UTF_8))).equals(resultHash)) {
+            throw new DocumentVersionConflictException("PDF 변환 결과가 승인 때와 다릅니다.");
+        }
+        String merged = "";
+        try {
+            for (JsonNode batch : objectMapper.readTree(result)) {
+                String markdown = convertedBatchMarkdown(workspaceId, userId, batch.path("markdown").textValue(),
+                        batch.path("page_start").intValue());
+                merged = merged.isEmpty() ? markdown : merged.stripTrailing() + "\n\n" + markdown;
+            }
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new DocumentConvertException("변환 결과 형식이 올바르지 않습니다: " + resultKey, e);
+        }
+        DocumentEditingRules.Filename filename = DocumentEditingRules.rename(displayName, "document.md");
+        DocumentEditingRules.MarkdownContent content = DocumentEditingRules.storedMarkdown(merged);
         DocumentUploadResponse created = createMarkdownDocument(workspaceId, userId, null, null, filename.filename(),
-                content, "direct", request.folderId(), Document.AGENT_ORIGIN, true, UploadAccounting.NONE);
+                content, "direct", folderId, Document.AGENT_ORIGIN, true, UploadAccounting.NONE);
         documentRepository.findById(created.id()).orElseThrow().linkSourceDocument(source.getId());
         assetReferenceSynchronizer.synchronize(created.id(), workspaceId, assetReferenceParser.parse(content.markdown()));
         return created;
@@ -1811,7 +1829,7 @@ public class DocumentService {
         }
     }
 
-    /** converter worker가 쓴 batch 결과(Markdown, 이미지는 data: URI)를 읽는다. */
+    /** converter worker가 쓴 batch 결과(Markdown, 이미지는 data: URI)나 MCP 변환 조립 결과(JSON)를 읽는다. */
     private String readConvertResult(String resultKey) {
         try (InputStream stream = minioClient.getObject(GetObjectArgs.builder()
                 .bucket(storageProps.getBucket()).object(resultKey).build())) {
@@ -1875,9 +1893,7 @@ public class DocumentService {
     private void mergeConvertedBatch(DocumentConvertQueue queue, Document parent, String batchMarkdown,
                                      int pageStart, int pageEnd, int totalPages) {
         if (queue.getCompletedPages() >= pageEnd) return;
-        // data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다.
-        String markdown = ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitizeConverted(
-                externalizeConvertedImages(parent.getWorkspaceId(), parent.getUserId(), batchMarkdown)), pageStart);
+        String markdown = convertedBatchMarkdown(parent.getWorkspaceId(), parent.getUserId(), batchMarkdown, pageStart);
         // 변환 batch는 내부 처리 단위일 뿐이다. 크기와 관계없이 원본 PDF의 모든 쪽을 같은 문서에 저장한다.
         // JDBC 저장 직후에도 최신 본문을 읽도록 JPA 1차 캐시를 거치지 않는다.
         var state = postgresDocumentEditStore.findState(parent.getId()).orElseThrow();
@@ -1893,6 +1909,16 @@ public class DocumentService {
         queue.checkpoint(pageEnd, totalPages);
         documentRepository.findById(parent.getId()).ifPresent(doc -> doc.markProcessingHeartbeat(
                 "PDF " + pageEnd + "/" + totalPages + "페이지 변환 완료", Instant.now()));
+    }
+
+    /**
+     * 변환 batch 하나를 저장할 Markdown으로 바꾼다. 웹 변환과 MCP 외부 AI 변환본 저장이 함께 쓴다.
+     * data: 이미지를 내부 주소로 바꾼 뒤에 걸러야 '원본 이미지 보기' 링크가 남는다. 쪽 번호는 batch 안 번호(1부터)를
+     * 원본 PDF 기준으로 바꾼다.
+     */
+    private String convertedBatchMarkdown(String workspaceId, String userId, String batchMarkdown, int pageStart) {
+        return ConvertedMarkdownChunks.renumberPages(AiMarkdownSanitizer.sanitizeConverted(
+                externalizeConvertedImages(workspaceId, userId, batchMarkdown)), pageStart);
     }
 
     /** 변환 결과의 data: 이미지를 asset으로 저장하고 내부 주소로 바꾼다. */

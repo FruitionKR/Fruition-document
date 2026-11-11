@@ -17,7 +17,7 @@ decompression to select the required `read`, `write_propose` (`propose_document_
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-## 공개 카탈로그 (`mcp-tools.v4`)
+## 공개 카탈로그 (`mcp-tools.v6`)
 
 `McpToolCatalog.tools()`는 2026-11-09부터 다음 21개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
 `find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
@@ -30,6 +30,11 @@ Forwarding headers are ignored; the servlet request itself must already represen
 아래 각 절의 웹 승인 경로에서만 일어난다. 도구 인자로 승인이나 실행을 대신할 수 없다. 모든 도구는 같은 spec wrapper로
 감사 로그·오류 코드·응답 크기 제한을 공유한다. 이 카탈로그는 Document `f9882a4`와 AI `6bc6a6d`의 semantic merge 계약을
 전제로 하므로 두 서비스를 함께 배포해야 한다.
+
+schema 변경 기록(2026-11-11, `mcp-tools.v4` → `mcp-tools.v6`; `v5`는 병행 중인 MCP 문서 업로드 변경이 쓴다):
+PDF 변환을 웹 변환 코드 경로에 맞췄다([mcp-pdf.md](mcp-pdf.md)). `finalize_pdf_conversion` 입력에서 `target_folder_id`를 뺐다
+(변환본은 원본 PDF 폴더). `submit_conversion_window` 출력에 `new_window_ordinals`를 더했고 창마다 한 번만 제출한다(`max_attempts` 1,
+떨어진 블록은 재시도 창). `propose_plan` 인자 스키마에서 원본 연결 `create_document` 변형을 뺐다.
 
 정적 설명 변경 기록(2026-11-11, `mcp-tools.v3` → `mcp-tools.v4`, schema 변경 없음): `review_url`을 돌려주는 6개 도구
 (`propose_document_edit`, `propose_plan`, `finalize_ingest`, `submit_lint_changes`, `propose_skill_definition`,
@@ -190,9 +195,10 @@ The strict `propose_plan` tool (`write_propose`) accepts only
 It supports at most 20 closed-set operations (`create_folder`, `rename_folder`, `move_folder`, `create_document`,
 `rename_document`, `move_document`, `apply_document_edit`) plus exact result references and artifact shapes. Its
 validated response remains `{run_id,status,review_url}`. It never approves, reserves credit, or executes.
-`create_document` arguments may additionally carry the pair `{source_document_id,source_content_hash}` for a PDF
-conversion result; the catalog schema advertises it as a separate strict variant, and the pair is revalidated at
-proposal, approval, and save.
+A PDF conversion result is proposed only by `finalize_pdf_conversion` (the public `propose_plan` schema does not
+advertise it): its `create_document` arguments are exactly `{display_name,folder_id,content_result_key,content_hash,
+source_document_id,source_content_hash}` with no artifact. The source pair is revalidated at proposal, approval, and
+save, and the save reads the result from `content_result_key` and checks `content_hash` ([mcp-pdf.md](mcp-pdf.md)).
 
 ## Internal I9 source snapshot callback
 

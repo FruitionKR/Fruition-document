@@ -80,6 +80,31 @@ class McpPlanProposalServiceTest {
                 .isInstanceOf(McpToolException.class).hasMessage("INVALID_INPUT");
     }
 
+    @Test
+    void convertedPdfCreateCarriesOnlyTheConversionResultKeyWithoutArtifact() {
+        String key = "tmp/convert/mcp/workspace/0f6f3d1e-2b7a-4c8e-9d5f-1a2b3c4d5e6f/final.json";
+        var input = McpPlanProposalService.input(convertedPlan(key));
+        assertThat(input.artifacts()).isEmpty();
+
+        for (String foreign : List.of("sources/documents/doc_pdf/original",
+                "tmp/convert/mcp/workspace/../other/final.json", "tmp/convert/mcp/workspace/x/final.md")) {
+            assertThatThrownBy(() -> McpPlanProposalService.input(convertedPlan(foreign)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    private static Map<String, Object> convertedPlan(String resultKey) {
+        Map<String, Object> operation = linked(
+                "id", "convert-pdf", "sequence", 1, "tool_name", "create_document", "target_type", "document",
+                "target_id", null, "base_version", null, "source_parent_id", null, "destination_parent_id", null,
+                "arguments", linked("display_name", "보고서", "folder_id", null, "content_result_key", resultKey,
+                        "content_hash", hash("result"), "source_document_id", "doc_pdf",
+                        "source_content_hash", hash("pdf")),
+                "reason", "PDF 변환본 저장", "depends_on", List.of());
+        return linked("idempotency_key", "key-1", "request_summary", "PDF 변환본 저장", "target_folder_id", null,
+                "operations", List.of(operation), "artifacts", List.of());
+    }
+
     private static Map<String, Object> createFolderThenDocument() {
         String contentHash = hash("body");
         Map<String, Object> destination = linked("$operation_result", "op-1", "field", "id");

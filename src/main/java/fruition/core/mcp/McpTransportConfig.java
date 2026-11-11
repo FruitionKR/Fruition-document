@@ -53,7 +53,7 @@ public class McpTransportConfig {
 
     @Bean
     McpStatelessSyncServer mcpServer(HttpServletStatelessServerTransport transport, McpToolCatalog catalog) {
-        return McpServer.sync(transport).serverInfo("fruition-document-mcp", "mcp-tools.v4")
+        return McpServer.sync(transport).serverInfo("fruition-document-mcp", "mcp-tools.v6")
                 .tools(catalog.tools()).build();
     }
 
