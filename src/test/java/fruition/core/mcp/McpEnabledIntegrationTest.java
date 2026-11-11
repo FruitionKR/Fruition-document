@@ -51,6 +51,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.Date;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -108,6 +109,11 @@ class McpEnabledIntegrationTest {
             access = new MockWebServer();
             access.setDispatcher(new Dispatcher() {
                 @Override public MockResponse dispatch(RecordedRequest request) {
+                    // 웹 서비스(WikiService 등)의 멤버십 확인
+                    if (request.getPath().startsWith("/internal/authz/")) {
+                        return new MockResponse().setHeader("Content-Type", "application/json")
+                                .setBody("{\"role\":\"MEMBER\",\"permissions\":[]}");
+                    }
                     return new MockResponse().setHeader("Content-Type", "application/json").setBody("""
                             {"decision":"ALLOW","deny_reason":null,
                              "grant":{"grant_id":"123e4567-e89b-42d3-a456-426614174000","status":"ACTIVE",
@@ -140,10 +146,12 @@ class McpEnabledIntegrationTest {
         registry.add("app.jwt.public-key", McpEnabledIntegrationTest::publicPem);
         registry.add("app.internal.access-base-url", () -> access.url("/").toString().replaceAll("/$", ""));
         registry.add("app.mcp.wiki-search-uri", () -> ai.url("/internal/mcp/wiki/search").toString());
+        registry.add("app.wiki-state.endpoint", () -> ai.url("/wiki").toString());
     }
 
     @AfterEach void cleanOwnRowsAndObjects() throws Exception {
         jdbc.update("DELETE FROM document_edit_states WHERE document_id LIKE 'doc_i2_%'");
+        jdbc.update("DELETE FROM wiki_page_versions WHERE page_id = 'wiki_page_i2'");
         jdbc.update("DELETE FROM documents WHERE id LIKE 'doc_i2_%' OR id LIKE 'chatdoc_i2_%'");
         for (String object : OBJECTS) {
             minio.removeObject(RemoveObjectArgs.builder().bucket(storage.getBucket()).object(object).build());
@@ -200,11 +208,16 @@ class McpEnabledIntegrationTest {
         String rawTitle = "[Wiki](https://evil.example/title)";
         String rawBody = "![diagram](https://evil.example/image.png)\n# Wiki 한글  \n";
         String pageBody = "외부 이미지(evil.example)\n# Wiki 한글  \n";
+        // 웹 상세 조회와 같은 경로: AI가 본문 객체를 못 읽었으면 최신 버전 행 본문을 쓴다.
         ai.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody(
-                mapper.writeValueAsString(Map.of("schema_version", "mcp.wiki-page.v1",
-                        "page_id", "wiki_page_i2", "page_type", "SOURCE", "title", rawTitle,
-                        "body", rawBody, "content_hash", "sha256:" + sha256(rawBody),
-                        "data_boundary", "UNTRUSTED_WORKSPACE_CONTENT"))));
+                mapper.writeValueAsString(Map.of("id", "wiki_page_i2", "page_type", "source", "title", rawTitle,
+                        "markdown_uri", "wiki/ws_i2_mcp/pages/wiki_page_i2/missing.md", "status", "active",
+                        "source_documents", List.of(), "related_pages", List.of()))));
+        jdbc.update("""
+                INSERT INTO wiki_page_versions(page_id, revision, contribution_count, markdown, markdown_key,
+                    content_hash, created_at)
+                VALUES ('wiki_page_i2', 1, 1, ?, 'wiki/ws_i2_mcp/pages/wiki_page_i2/v1.md', ?, now())
+                """, rawBody, "sha256:" + sha256(rawBody));
         JsonNode pageCall = rpc("""
                 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_wiki_page",
                 "arguments":{"page_id":"wiki_page_i2"}}}
@@ -225,7 +238,7 @@ class McpEnabledIntegrationTest {
         assertThat(pageRequest.getMethod()).isEqualTo("GET");
         assertThat(pageRequest.getRequestUrl().encodedPath()).isEqualTo("/wiki/pages/wiki_page_i2");
         assertThat(pageRequest.getRequestUrl().queryParameter("workspace_id")).isEqualTo(WORKSPACE);
-        assertThat(pageRequest.getRequestUrl().queryParameter("mcp_read")).isEqualTo("true");
+        assertThat(pageRequest.getRequestUrl().queryParameter("mcp_read")).isNull();
         assertThat(pageRequest.getHeader("X-Internal-Token")).isEqualTo("internal-test");
     }
 

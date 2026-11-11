@@ -43,7 +43,7 @@ public class McpDocumentDataGateway {
     }
 
     public List<Document> search(String workspaceId, String query, int limit) {
-        return documents.searchMcpCandidates(workspaceId, query, PageRequest.of(0, limit));
+        return documents.searchVisibleByWorkspaceId(workspaceId, query, PageRequest.of(0, limit));
     }
     public Optional<Document> find(String workspaceId, String documentId) {
         return documents.findByIdAndWorkspaceIdAndDeletedAtIsNull(documentId, workspaceId);

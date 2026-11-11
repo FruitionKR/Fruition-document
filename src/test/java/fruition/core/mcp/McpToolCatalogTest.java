@@ -16,7 +16,7 @@ import static org.mockito.Mockito.when;
 
 class McpToolCatalogTest {
     @Test void catalogReadToolsAreStaticReadOnlyStrictAndAdvertiseBoundedWikiPageRead() {
-        var pages = mock(McpWikiPageClient.class);
+        var pages = mock(McpWikiPageService.class);
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
                 mock(McpDocumentProposalService.class),
@@ -38,7 +38,7 @@ class McpToolCatalogTest {
                         Map.of("query", "x", "cursor", "unexpected", "page_size", 1, "extra", true), null));
         assertThat(result.isError()).isTrue();
 
-        var page = new McpWikiPageClient.Response("mcp.wiki-page.v1", "page-a", "SOURCE", "Title", "body",
+        var page = new McpWikiPageService.Response("mcp.wiki-page.v1", "page-a", "SOURCE", "Title", "body",
                 "sha256:" + "a".repeat(64), "UNTRUSTED_WORKSPACE_CONTENT");
         when(pages.get(id, "page-a")).thenReturn(page);
         var pageTool = tools.get(3);
@@ -62,7 +62,7 @@ class McpToolCatalogTest {
         assertThat(pageResult.structuredContent()).isEqualTo(page);
         verify(audit).log(id, "get_wiki_page", java.util.List.of("page-a"), "SUCCESS", null);
 
-        when(pages.get(id, "page-big")).thenReturn(new McpWikiPageClient.Response("mcp.wiki-page.v1", "page-big",
+        when(pages.get(id, "page-big")).thenReturn(new McpWikiPageService.Response("mcp.wiki-page.v1", "page-big",
                 "SOURCE", "Title", "x".repeat(60_000), "sha256:" + "b".repeat(64),
                 "UNTRUSTED_WORKSPACE_CONTENT"));
         var oversizedEnvelope = pageTool.callHandler().apply(
@@ -81,7 +81,7 @@ class McpToolCatalogTest {
     }
 
     @Test void rejectsInvalidPageIdsBeforeAuditTargetsButRetainsValidatedDependencyTargets() {
-        var pages = mock(McpWikiPageClient.class);
+        var pages = mock(McpWikiPageService.class);
         var audit = mock(McpAuditLogger.class);
         var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
                 mock(McpDocumentProposalService.class),
@@ -115,7 +115,7 @@ class McpToolCatalogTest {
     @Test void proposalToolIsStrictInvocableAndRegistered() {
         var proposals = mock(McpDocumentProposalService.class);
         var audit = mock(McpAuditLogger.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
+        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), proposals, mock(McpPlanProposalService.class),
                 mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props());
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json",
@@ -156,7 +156,7 @@ class McpToolCatalogTest {
 
     @Test void planToolIsStrictInvocableAndRegistered() {
         var planProposals = mock(McpPlanProposalService.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
+        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class), planProposals,
                 mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props());
@@ -194,7 +194,7 @@ class McpToolCatalogTest {
 
     @Test void sixWikiToolsHaveExactSchemasInPublicCatalog() {
         var wikiProposals = mock(McpWikiProposalService.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
+        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), wikiProposals, mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpPdfTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props());
@@ -235,7 +235,7 @@ class McpToolCatalogTest {
     @Test void everyReviewUrlToolTellsClientToOpenItAndWikiSubmitsDocumentEvidenceRules() {
         var pdf = mock(McpPdfTools.class);
         when(pdf.tools()).thenCallRealMethod();
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
+        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), mock(McpWikiProposalService.class),
                 new McpSkillTools(mock(fruition.core.skill.service.SkillService.class), mock(McpDocumentProposalService.class),
@@ -258,7 +258,7 @@ class McpToolCatalogTest {
     @Test void skillToolsAreWrappedWithReadAnnotationsAuditTargetAndErrorMapping() {
         var skills = mock(fruition.core.skill.service.SkillService.class);
         var audit = mock(McpAuditLogger.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageClient.class),
+        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), new McpSkillTools(skills, mock(McpDocumentProposalService.class), new ObjectMapper()), mock(McpMeetingTools.class), mock(McpPdfTools.class),
                 audit, new ObjectMapper(), McpTokenVerifierTest.props());
