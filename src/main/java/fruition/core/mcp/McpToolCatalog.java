@@ -64,6 +64,7 @@ public class McpToolCatalog {
     private final McpWikiProposalService wikiProposals;
     private final McpSkillTools skillTools;
     private final McpMeetingTools meetingTools;
+    private final McpHierarchyTools hierarchyTools;
     private final McpPdfTools pdfTools;
     private final McpDocumentUploadTools uploadTools;
     private final McpAuditLogger audit;
@@ -75,12 +76,13 @@ public class McpToolCatalog {
     public McpToolCatalog(McpWikiSearchClient wiki, McpWikiPageService wikiPages, McpDocumentReadService documents,
                           McpDocumentProposalService proposals, McpPlanProposalService planProposals,
                           McpWikiProposalService wikiProposals, McpSkillTools skillTools,
-                          McpMeetingTools meetingTools, McpPdfTools pdfTools,
+                          McpMeetingTools meetingTools, McpHierarchyTools hierarchyTools, McpPdfTools pdfTools,
                           McpDocumentUploadTools uploadTools, McpAuditLogger audit, ObjectMapper mapper,
                           McpProperties properties, @Value("${app.mcp.review-origin:}") String sourceOrigin,
                           CreditService credits) {
         this.wiki = wiki; this.wikiPages = wikiPages; this.documents = documents;
         this.proposals = proposals; this.planProposals = planProposals; this.wikiProposals = wikiProposals;
+        this.hierarchyTools = hierarchyTools;
         this.skillTools = skillTools; this.meetingTools = meetingTools;
         this.pdfTools = pdfTools;
         this.uploadTools = uploadTools;
@@ -89,7 +91,7 @@ public class McpToolCatalog {
         this.audit = audit; this.mapper = mapper; this.properties = properties;
     }
 
-    /** 읽기 4개 + 제안 8개 + Skill 3개(읽기 2·정의 제안 1) + 회의 읽기 2개 + PDF 변환 4개 + 크레딧 읽기 1개 + 웹 직접 업로드 3개(업로드는 웹과 같이 승인 없이 문서가 된다). 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
+    /** 문서 계층 읽기 5개 + 읽기 4개 + 제안 8개 + Skill 3개(읽기 2·정의 제안 1) + 회의 읽기 2개 + PDF 변환 4개 + 크레딧 읽기 1개 + 웹 직접 업로드 3개(업로드는 웹과 같이 승인 없이 문서가 된다). 제안 도구는 승인 대기 run/draft만 만들고, 승인·과금·실행은 웹 승인 경로에서만 일어난다. */
     public List<io.modelcontextprotocol.server.McpStatelessServerFeatures.SyncToolSpecification> tools() {
         var tools = new java.util.ArrayList<>(List.of(
                 spec(tool("search_wiki", "Search published workspace wiki pages", searchSchema()),
@@ -109,6 +111,8 @@ public class McpToolCatalog {
         for (String name : WIKI_TOOLS)
             tools.add(spec(tool(name, wikiDescription(name), wikiSchema(name), PROPOSAL_ONLY),
                     (id, args) -> wikiProposals.invoke(id, name, args)));
+        for (McpSchema.Tool tool : hierarchyTools.tools())
+            tools.add(spec(tool, (id, args) -> hierarchyTools.invoke(id, tool.name(), args)));
         for (McpSchema.Tool tool : skillTools.tools())
             tools.add(spec(tool, (id, args) -> skillTools.invoke(id, tool.name(), args)));
         for (McpSchema.Tool tool : meetingTools.tools())
@@ -152,6 +156,10 @@ public class McpToolCatalog {
             if (McpPdfTools.START.equals(tool)) targets = List.of(argument(request.arguments(), "document_id"));
             if (Set.of(McpPdfTools.WINDOW, McpPdfTools.SUBMIT, McpPdfTools.FINALIZE).contains(tool))
                 targets = List.of(argument(request.arguments(), "conversion_id"));
+            if (McpHierarchyTools.NAMES.contains(tool)) {
+                String target = McpHierarchyTools.target(tool, request.arguments());
+                if (target != null) targets = List.of(target);
+            }
             if (McpMeetingTools.TRANSCRIPT.equals(tool)) targets = List.of(McpMeetingTools.meetingId(request.arguments()));
             if (McpSkillTools.PROPOSE.equals(tool)) targets = skillDefinitionTargets(request.arguments());
             if (McpSkillTools.GET.equals(tool)) targets = List.of(McpSkillTools.skillId(request.arguments()));

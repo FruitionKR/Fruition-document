@@ -71,9 +71,9 @@ public final class DocumentImportDtos {
     @Schema(name = "DocumentImportIngestEstimateResponse")
     public record IngestEstimateResponse(
             @Schema(description = "아직 편입하지 않은(편입 요청한 적 없는) 휴지통 밖 가져온 Markdown 문서 수. PDF 원본은 빼고, PDF 변환본은 변환이 끝난 것만 센다") int documentCount,
-            @Schema(description = "예상 비용(USD) = 문서 편입 1건 예상 비용 × document_count. 환율을 못 읽으면 null", nullable = true)
+            @Schema(description = "예상 비용(USD) = 본문 길이별 예약액 합계를 최신 환율로 환산. 환율을 못 읽으면 null", nullable = true)
             BigDecimal estimatedCostUsd,
-            @Schema(description = "예상 크레딧(milli-KRW, /users/me/credits의 *_krw_milli와 같은 단위) = app.billing.estimate.document × document_count",
+            @Schema(description = "예상 크레딧(milli-KRW, /users/me/credits의 *_krw_milli와 같은 단위) = 각 Markdown 본문의 UTF-8 바이트 길이별 예약액 합계",
                     nullable = true)
             Long estimatedCredits,
             @Schema(description = "아직 Markdown 변환 중이라 document_count에서 빠진 가져온 PDF 변환본 수. 변환이 끝나면 편입 대상에 들어간다")

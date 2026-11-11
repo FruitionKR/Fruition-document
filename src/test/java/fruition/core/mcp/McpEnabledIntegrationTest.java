@@ -173,6 +173,61 @@ class McpEnabledIntegrationTest {
         }
     }
 
+    @Test void hierarchyReadsExposePlacementThroughTheAuthenticatedMcpTransport() throws Exception {
+        UUID folder = UUID.randomUUID();
+        UUID foreign = UUID.randomUUID();
+        try {
+            jdbc.update("INSERT INTO folders(id, workspace_id, name, sort_order, created_at, updated_at) VALUES (?, ?, 'MCP hierarchy fixture', 0, now(), now())",
+                    folder, WORKSPACE);
+            jdbc.update("INSERT INTO folders(id, workspace_id, name, sort_order, created_at, updated_at) VALUES (?, 'other_workspace', 'Private', 0, now(), now())", foreign);
+            insertDocument("doc_i2_hierarchy", "MCP hierarchy document", "a".repeat(64), 9,
+                    "EDITABLE", null, null, null, 1);
+            jdbc.update("UPDATE documents SET folder_id = ?, sort_order = 4 WHERE id = 'doc_i2_hierarchy'", folder);
+            JsonNode root = rpc("""
+                    {"jsonrpc":"2.0","id":80,"method":"tools/call","params":{"name":"list_root_items",
+                     "arguments":{"cursor":null,"page_size":10}}}
+                    """);
+            assertThat(root.path("result").path("isError").asBoolean()).isFalse();
+            assertThat(root.path("result").path("structuredContent").path("items"))
+                    .anySatisfy(item -> assertThat(item.path("id").asText()).isEqualTo(folder.toString()));
+            JsonNode children = rpc("""
+                    {"jsonrpc":"2.0","id":81,"method":"tools/call","params":{"name":"list_folder_children",
+                     "arguments":{"folder_id":"%s","cursor":null,"page_size":10}}}
+                    """.formatted(folder));
+            assertThat(children.path("result").path("isError").asBoolean()).isFalse();
+            var child = children.path("result").path("structuredContent").path("items").get(0);
+            assertThat(child.path("id").asText()).isEqualTo("doc_i2_hierarchy");
+            assertThat(child.path("parent_id").asText()).isEqualTo(folder.toString());
+            assertThat(child.path("current_version").asLong()).isEqualTo(9);
+            JsonNode metadata = rpc("""
+                    {"jsonrpc":"2.0","id":82,"method":"tools/call","params":{"name":"get_document_metadata",
+                     "arguments":{"document_id":"doc_i2_hierarchy"}}}
+                    """);
+            assertThat(metadata.path("result").path("structuredContent").path("item")).isEqualTo(child);
+            JsonNode search = rpc("""
+                    {"jsonrpc":"2.0","id":83,"method":"tools/call","params":{"name":"search_hierarchy",
+                     "arguments":{"query":"MCP hierarchy","cursor":null,"page_size":10}}}
+                    """);
+            assertThat(search.path("result").path("structuredContent").path("items"))
+                    .extracting(item -> item.path("type").asText()).containsExactlyInAnyOrder("folder", "document");
+            JsonNode path = rpc("""
+                    {"jsonrpc":"2.0","id":84,"method":"tools/call","params":{"name":"get_breadcrumb",
+                     "arguments":{"document_id":"doc_i2_hierarchy","folder_id":null}}}
+                    """);
+            assertThat(path.path("result").path("structuredContent").path("items"))
+                    .extracting(item -> item.path("id").asText()).containsExactly(folder.toString(), "doc_i2_hierarchy");
+            JsonNode denied = rpc("""
+                    {"jsonrpc":"2.0","id":85,"method":"tools/call","params":{"name":"list_folder_children",
+                     "arguments":{"folder_id":"%s","cursor":null,"page_size":10}}}
+                    """.formatted(foreign));
+            assertThat(denied.path("result").path("isError").asBoolean()).isTrue();
+            assertThat(denied.path("result").path("content").get(0).path("text").asText()).contains("RESOURCE_NOT_FOUND");
+        } finally {
+            jdbc.update("DELETE FROM documents WHERE id = 'doc_i2_hierarchy'");
+            jdbc.update("DELETE FROM folders WHERE id IN (?, ?)", folder, foreign);
+        }
+    }
+
     @Test void creditBalanceReadsOnlyCallerAndNeverWritesAccounts() throws Exception {
         String request = """
                 {"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"get_credit_balance","arguments":{}}}
@@ -222,7 +277,7 @@ class McpEnabledIntegrationTest {
                 """);
         assertThat(initialized.path("result").path("protocolVersion").asText()).isEqualTo("2025-11-25");
 
-        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v10");
+        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v11");
 
         JsonNode tools = rpc("""
                 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
@@ -230,7 +285,7 @@ class McpEnabledIntegrationTest {
         assertThat(tools.path("result").path("tools")).extracting(tool -> tool.path("name").asText())
                 .containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page",
                         "propose_document_edit", "propose_plan", "start_ingest", "resume_ingest", "get_window",
-                        "submit_window", "finalize_ingest", "submit_lint_changes", "list_skills", "get_skill", "propose_skill_definition",
+                        "submit_window", "finalize_ingest", "submit_lint_changes", "list_root_items", "list_folder_children", "get_document_metadata", "search_hierarchy", "get_breadcrumb", "list_skills", "get_skill", "propose_skill_definition",
                         "list_meetings", "get_meeting_transcript", "start_pdf_conversion",
                         "get_conversion_window", "submit_conversion_window", "finalize_pdf_conversion",
                         "start_document_upload", "get_upload_part_urls", "complete_document_upload", "get_credit_balance");

@@ -100,6 +100,11 @@ public interface FolderRepository extends JpaRepository<Folder, UUID> {
             @Param("pattern") String pattern
     );
 
+    @Query("SELECT f FROM Folder f WHERE f.workspaceId = :workspaceId AND f.deletedAt IS NULL "
+            + "AND LOWER(f.name) LIKE LOWER(CONCAT('%', :query, '%')) ORDER BY f.sortOrder ASC, f.id ASC")
+    List<Folder> searchVisibleByWorkspaceId(@Param("workspaceId") String workspaceId,
+                                           @Param("query") String query, Pageable pageable);
+
     /** 대상 부모 폴더의 조상 경로(자기 자신 포함)에 이동 폴더가 있으면 순환이다. */
     @Query(value = "WITH RECURSIVE ancestors AS ("
             + "SELECT id, parent_folder_id FROM folders WHERE id = :targetParentId "

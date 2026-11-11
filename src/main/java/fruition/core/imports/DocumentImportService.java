@@ -39,7 +39,6 @@ public class DocumentImportService {
     static final String SOURCE_NOTION = "notion";
     /** 편입 요청 한 번에 큐에 넣는 문서 수. 많은 문서를 한꺼번에 넣어 AI 한도·크레딧을 몰아 쓰지 않게 한다. */
     static final int INGEST_BATCH = 20;
-    private static final String INGEST_KIND = "document";
     /** PDF 변환 한 건의 예상 비용 kind. convert-markdown이 예약하는 kind와 같다. */
     private static final String CONVERT_KIND = "convert";
     /**
@@ -140,15 +139,27 @@ public class DocumentImportService {
                 row.reportedCreated(), row.reportedFailed(), row.reportedSkipped());
     }
 
-    /** 아직 편입하지 않은 가져온 문서를 모두 편입할 때의 예상 비용. 문서 편입 1건 예상치 × 문서 수다. */
+    /** 아직 편입하지 않은 Markdown의 본문 길이별 예약액을 합산한다. */
     @Transactional(readOnly = true)
     public IngestEstimateResponse estimate(String workspaceId, String userId, String importId) {
         access.requireMember(workspaceId, userId);
         UUID id = find(workspaceId, userId, importId, false).id();
-        int count = notIngestedCount(id, workspaceId);
+        List<Long> sizes = jdbc.queryForList("SELECT coalesce((SELECT octet_length(markdown) FROM document_edit_states "
+                + "WHERE document_id = documents.id), byte_size) FROM documents WHERE " + NOT_INGESTED,
+                Long.class, id, workspaceId);
+        long estimate = sizes.stream().mapToLong(credits::estimateDocument).reduce(0, Math::addExact);
         int pdfs = count(UNCONVERTED_PDF, id, workspaceId);
-        return new IngestEstimateResponse(count, usd(INGEST_KIND, count, id), credits.estimate(INGEST_KIND) * count,
+        return new IngestEstimateResponse(sizes.size(), usd(estimate, id), estimate,
                 count(CONVERTING, id, workspaceId), pdfs, usd(CONVERT_KIND, pdfs, id), credits.estimate(CONVERT_KIND) * pdfs);
+    }
+
+    private BigDecimal usd(long krwMilli, UUID id) {
+        try {
+            return BigDecimal.valueOf(credits.estimateUsdMicro(krwMilli)).movePointLeft(6);
+        } catch (RuntimeException e) {
+            log.warn("[가져오기 예상] USD 환산 실패 — null로 응답 importId={} cause={}", id, e.toString());
+            return null;
+        }
     }
 
     /** kind 한 건 예상 비용 × 건수(USD). 환율을 못 읽으면 null. */

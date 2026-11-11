@@ -47,7 +47,10 @@
 ## 적용 흐름
 
 1. `list_skills` → `get_skill`로 지침을 읽는다.
-2. `find_documents`/`get_document`로 대상 문서를 읽는다. 지침의 `{문서}`는 대상 문서 본문, `{선택한 부분}`은 선택한
+2. 폴더 정리는 `list_root_items`/`list_folder_children`로 기존 구조를 조회하고,
+   `search_hierarchy`/`get_breadcrumb`로 분야와 경로를 찾는다. 이동 전 `get_document_metadata`의
+   `current_version`(메타데이터 버전)과 `parent_id`를 확인한다. [계층 조회 계약](mcp-read.md)을 따른다.
+   `find_documents`/`get_document`로 필요한 대상 문서를 읽는다. 내부 `get_document_content`는 외부 `get_document`에 대응한다. 지침의 `{문서}`는 대상 문서 본문, `{선택한 부분}`은 선택한
    줄, `{요청}`은 사용자 요청으로 외부 AI가 바꿔 읽는다.
 3. 외부 AI가 결과를 만들어 기존 `propose_document_edit` 또는 `propose_plan`으로 제출한다. 작업은 `allowed_tools`에
    있는 operation(`apply_document_edit`, `create_document`, 폴더 작업 등)으로 제한한다. 결과는
