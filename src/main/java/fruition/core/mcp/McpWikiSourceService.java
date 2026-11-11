@@ -61,7 +61,7 @@ public class McpWikiSourceService {
         List<Block> blocks = java.util.stream.IntStream.range(0, texts.size())
                 .mapToObj(i -> new Block("B%04d".formatted(i + 1), i + 1, texts.get(i), hash(texts.get(i))))
                 .toList();
-        return new Response("mcp.wiki-source.v1", documentId, identity.workspaceId(), body.version(),
+        return new Response("mcp.wiki-source.v1", documentId, document.getDisplayName(), identity.workspaceId(), body.version(),
                 sourceHash, document.getMimeType(), blocks);
     }
 
@@ -76,6 +76,7 @@ public class McpWikiSourceService {
 
     public record Response(@JsonProperty("schema_version") String schemaVersion,
                            @JsonProperty("document_id") String documentId,
+                           @JsonProperty("display_name") String displayName,
                            @JsonProperty("workspace_id") String workspaceId,
                            @JsonProperty("source_version") long sourceVersion,
                            @JsonProperty("source_content_hash") String sourceContentHash,

@@ -199,8 +199,10 @@ existing `PROPOSAL_CREATE` phase with `ACTIVE_GRANT` rather than `TOOL_CALL`: to
 `wiki_write`, required permission is exactly `wiki.ingest`, and approved policy generation is null. The callback
 does not reuse that phase for resume, finalize, generic source reads, or approved execution.
 
-The response contains only `schema_version`, `document_id`, `workspace_id`, `source_version`,
-`source_content_hash`, `mime_type`, and ordered blocks `{block_id, ordinal, text, content_hash}`. Document reads
+The response contains only `schema_version`, `document_id`, `display_name`, `workspace_id`, `source_version`,
+`source_content_hash`, `mime_type`, and ordered blocks `{block_id, ordinal, text, content_hash}`. `display_name` is
+the document's current display name from the same read, unsanitized; AI treats it as untrusted text and uses it as the
+SOURCE wiki page title. Document reads
 one read-only current Markdown/text revision with a version/hash-coherent body, uses the existing Markdown block segmentation, assigns
 server block IDs `B0001` onward, and hashes the exact UTF-8 source and each block as `sha256:<lowercase hex>`.
 Existing configured MCP source byte/block limits apply. PDF, client-supplied source bytes/version/URLs, storage
