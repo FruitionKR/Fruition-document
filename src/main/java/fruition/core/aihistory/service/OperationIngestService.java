@@ -71,7 +71,7 @@ public class OperationIngestService {
 
         // 이미 확정된 작업이면 같은 payload인지만 본다. 같으면 재전송이므로 기존 결과를 돌려준다.
         if (operation.getStatus().isTerminal()) {
-            if (payloadHash.equals(operation.getPayloadHash())) {
+            if (payloadHash.equals(operation.getPayloadHash()) || matchesRestoreEnvelope(operation, request)) {
                 return new OperationResultResponse(operationId, operation.getStatus().name(),
                         operation.getChangedResourceCount());
             }
@@ -108,6 +108,33 @@ public class OperationIngestService {
                 .toList();
 
         return logged(operation, applier.apply(operationId, request, loaded, deleted, payloadHash, Instant.now()));
+    }
+
+    /** Legacy workers changed only the restore HTTP envelope before publishing the task result.
+     * Recognize that exact representation in either arrival order, without rewriting the
+     * committed hash or applying effects again. Any other payload difference still conflicts.
+     */
+    private boolean matchesRestoreEnvelope(OperationLog operation, OperationResultRequest result) {
+        if (operation.getOperationType() != OperationType.restore || operation.getPayloadHash() == null
+                || !operation.getStatus().name().equals(result.status())
+                || operation.getRestoredFrom() == null) return false;
+        OperationLog target = operationLogRepository.findById(operation.getRestoredFrom()).orElse(null);
+        if (target == null || (target.getOperationType() != OperationType.ingest
+                && target.getOperationType() != OperationType.lint)) return false;
+        String legacyType = target.getOperationType().name() + "_restore";
+        boolean canonical = "restore".equals(result.operationType());
+        if (!canonical && !legacyType.equals(result.operationType())) return false;
+        if (result.changedPages().stream().anyMatch(page -> page.contributionKey() != null
+                || (canonical ? !Boolean.FALSE.equals(page.contributionStored())
+                              : page.contributionStored() != null))) return false;
+        var pages = result.changedPages().stream().map(page -> new OperationResultRequest.ChangedPage(
+                page.pageId(), page.pageType(), page.markdownKey(), null, page.contentHash(),
+                canonical ? null : Boolean.FALSE)).toList();
+        var counterpart = new OperationResultRequest(result.operationId(), canonical ? legacyType : "restore",
+                result.status(), result.workspaceId(), result.userId(), result.targetDocumentId(), result.summary(),
+                pages, result.failedPages(), result.deletedPages(), result.linkChanges(),
+                result.failedActions(), result.ledgerContributions());
+        return operation.getPayloadHash().equals(payloadHash(counterpart));
     }
 
     /** 재전송은 위에서 기존 결과로 돌아가므로 여기에는 처음 확정한 결과만 온다. 호출 트랜잭션의 커밋 뒤에 남긴다. */

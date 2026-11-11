@@ -85,6 +85,30 @@ class WikiPublicationEventIntegrationTest {
     }
 
     @Test
+    void legacyHttpRestoreEnvelopeThenPublicationRecordsReceiptWithoutRepeatingEffects() {
+        RestoreFixture fixture = restoreFixture("http-envelope", false);
+        var raw = objectMapper.valueToTree(fixture.result);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) raw).put("operation_type", "ingest_restore");
+        var legacy = objectMapper.convertValue(raw, OperationResultRequest.class);
+        new TransactionTemplate(transactionManager).execute(status -> taskResults.applySuccessfulRestore(
+                operations.findByIdForUpdate(fixture.operationId).orElseThrow(), legacy));
+        String committedHash = legacyResults.payloadHash(legacy);
+        long versionsBefore = count("wiki_page_versions", "operation_id", fixture.operationId);
+        long changesBefore = count("ai_operation_changes", "operation_id", fixture.operationId);
+        var publication = event("http-envelope-event", fixture.publicationId, fixture.operationId,
+                fixture.workspaceId, fixture.userId, WikiPublicationEvent.Kind.RESTORE, fixture.result);
+
+        assertThat(publications.apply(publication).disposition())
+                .isEqualTo(WikiPublicationInboxRepository.Disposition.ACCEPTED);
+        assertThat(publications.apply(publication).duplicate()).isTrue();
+        assertThat(count("wiki_publication_inbox", "operation_id", fixture.operationId)).isOne();
+        assertThat(count("wiki_page_versions", "operation_id", fixture.operationId)).isEqualTo(versionsBefore);
+        assertThat(count("ai_operation_changes", "operation_id", fixture.operationId)).isEqualTo(changesBefore);
+        assertThat(jdbc.queryForObject("SELECT payload_hash FROM ai_operation_logs WHERE operation_id = ?",
+                String.class, fixture.operationId)).isEqualTo(committedHash);
+    }
+
+    @Test
     void goldenLintFixtureMatchesTheExactLegacyEnvelopeAndHash() throws Exception {
         WikiPublicationEvent event;
         try (InputStream fixture = getClass().getResourceAsStream("/fixtures/wiki-publication-lint-v1.json")) {
