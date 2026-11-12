@@ -98,6 +98,8 @@ class CreditServiceIntegrationTest {
         credits.renew(runId, user, "test_kind", 1);
         assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-900_000);
         assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(ESTIMATE);
+        assertThat(credits.credits(user).limitExempt()).isTrue();
+        assertThat(credits.credits("user-" + UUID.randomUUID()).limitExempt()).isFalse();
         jdbc.update("UPDATE ai_task_runs SET status = 'completed' WHERE id = ?", runId);
         credits.settle(runId);
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();
@@ -112,6 +114,18 @@ class CreditServiceIntegrationTest {
                 .isInstanceOf(CreditService.InsufficientCreditException.class);
         assertThatThrownBy(() -> credits.reserveMcpApproval(UUID.randomUUID().toString(), newcomer, 1_500))
                 .isInstanceOf(CreditService.InsufficientCreditException.class);
+    }
+
+    @Test
+    void freeMcpApprovalPassesEvenWhenAvailableIsNegative() {
+        CreditService credits = credits(true);
+        jdbc.update("INSERT INTO credit_accounts (user_id, balance) VALUES (?, -1000)", user);
+
+        credits.reserveMcpApproval(UUID.randomUUID().toString(), user, 0);
+
+        assertThatThrownBy(() -> credits.reserveMcpApproval(UUID.randomUUID().toString(), user, 1))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
     }
 
     @Test

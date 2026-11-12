@@ -71,7 +71,46 @@ class McpDocumentReadServiceTest {
         assertThat(text).doesNotContain("https://evil.example", "<b>")
                 .contains("external (evil.example)", "외부 이미지(evil.example)", "raw",
                         "[relative](/docs)", "[anchor](#part)", "`https://code.example`");
-        assertThat(response.blocks()).allMatch(block -> block.blockId().startsWith("mcp_aaaaaaaaaaaa_"));
+        assertThat(response.blocks()).extracting(McpDocumentReadService.Block::blockId)
+                .containsExactly("B0001", "B0002");
+    }
+
+    @Test void referenceDefinitionsInOtherBlocksDoNotKeepExternalUrls() {
+        String markdown = "[t][x] and [rel][y]\n\n> [x]: https://evil.example/q?s=secret \"title\"\n\n[y]: /docs\n";
+        var blocks = McpDocumentReadService.markdownBlocks(markdown);
+
+        var out = McpDocumentReadService.withoutExternalDefinitions(markdown, blocks);
+
+        assertThat(out).hasSize(blocks.size());
+        assertThat(String.join("", out)).doesNotContain("evil.example/q", "secret")
+                .contains("x: 외부 링크(evil.example)", "[y]: /docs", "[t][x]");
+        assertThat(out.get(0)).isEqualTo(blocks.get(0));
+        assertThat(McpDocumentReadService.withoutExternalDefinitions("plain\n", List.of("plain\n")))
+                .containsExactly("plain\n");
+    }
+
+    @Test void blockIdsMatchWikiSourceOrdinalsEvenWhenSanitizingEmptiesABlock() {
+        var repository = mock(McpDocumentDataGateway.class); var props = McpTokenVerifierTest.props();
+        var service = new McpDocumentReadService(repository,
+                new McpCursorCodec(new ObjectMapper(), props), props, new ObjectMapper());
+        var identity = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
+                Set.of("read"), "MEMBER", Set.of());
+        var viewer = new DocumentAccessPolicy.Viewer("user", false, false, Map.of(), Map.of(), Map.of());
+        Document document = document("doc_ids");
+        String markdown = "first\n\n<script>alert(1)</script>\n\nthird\n";
+        when(repository.viewer("workspace", "user", false, false)).thenReturn(viewer);
+        when(repository.find("workspace", "doc_ids")).thenReturn(Optional.of(document));
+        when(repository.currentBody(document, props.maxSourceBytes())).thenReturn(Optional.of(
+                new McpDocumentDataGateway.CurrentBody(2, "a".repeat(64), markdown,
+                        markdown.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)));
+
+        var response = service.get(identity, "doc_ids", null);
+
+        var source = McpDocumentReadService.markdownBlocks(markdown);
+        assertThat(response.blocks()).hasSize(source.size());
+        assertThat(response.blocks().get(2).blockId()).isEqualTo("B0003");
+        assertThat(response.blocks().get(2).text()).isEqualTo(source.get(2));
+        assertThat(response.blocks().get(1).text()).doesNotContain("<script>");
     }
     private static Document document(String id) {
         return new Document(id, "workspace", "user", id + ".md", "text/markdown", 1, null, "a".repeat(64));

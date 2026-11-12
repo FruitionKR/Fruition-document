@@ -18,7 +18,14 @@ decompression to select the required `read`, `write_propose` (`propose_document_
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-## 공개 카탈로그 (`mcp-tools.v11`)
+## 공개 카탈로그 (`mcp-tools.v12`)
+
+수수료 안내·면제 표시(2026-11-12, `mcp-tools.v11` → `mcp-tools.v12`): 도구 목록은 그대로다.
+- 서버 `instructions`(`McpTransportConfig.INSTRUCTIONS`)가 읽기·검색·문서 수정 제안은 무료이고, 위키 편입·lint는
+  클라이언트 LLM으로 돌지만 Fruition 수수료가 따로 붙는다고 연결 시점에 알린다.
+- 같은 안내(`McpToolCatalog.FEE_NOTICE`)를 `start_ingest`·`finalize_ingest`·`submit_lint_changes` 설명에 붙인다.
+  승인은 웹 승인 화면의 최대 수수료를 예약하며, 면제 아닌 계정의 가용 잔액이 그보다 적으면 거절된다. 수수료는 바꾸지 않았다.
+- `get_credit_balance` 응답에 `limit_exempt`를 추가했다(아래 크레딧 조회 참고).
 
 계층 조회 추가(2026-11-12, `mcp-tools.v10` → `mcp-tools.v11`): 외부 AI가 폴더 정리 계획의
 대상 ID·현재 위치·메타데이터 버전을 확인할 수 있도록 아래 5개 `read` 도구를 추가했다.
@@ -67,6 +74,8 @@ Forwarding headers are ignored; the servlet request itself must already represen
   음수도 그대로 반환한다. 응답은 조회 시점 값이며 다음 작업의 승인 가능 여부를 보장하지 않는다.
 - 계정이 없으면 0을 반환하며 계정을 생성하지 않는다. 조회 실패는 0으로 숨기지 않고 기존 `DEPENDENCY_UNAVAILABLE` 오류로 처리한다.
   조회는 예약·차감·정산을 수행하지 않는다.
+- `limit_exempt`(2026-11-12 추가)가 true면 잔액 제한을 받지 않는 기존 가입자다. 도구 설명은 이때 금액이나 음수 잔액을
+  빚처럼 전하지 말고 크레딧이 적용되지 않는다고 안내하게 한다. 계정이 없으면 false다.
 
 ```json
 {
@@ -74,7 +83,8 @@ Forwarding headers are ignored; the servlet request itself must already represen
   "currency": "KRW",
   "balance_krw_milli": 123450,
   "reserved_krw_milli": 23450,
-  "available_krw_milli": 100000
+  "available_krw_milli": 100000,
+  "limit_exempt": false
 }
 ```
 
@@ -142,10 +152,16 @@ The read tools are:
   path (Fruition-ai `docs/api/mcp-wiki.md`). Published historical evidence is not invalidated by a later source edit.
 - `find_documents` → the web document-list search (`DocumentRepository.searchVisibleByWorkspaceId`, the same query
   as `GET /documents?query=`) bounded by the candidate limit, then document-policy filtering and a stateless
-  owner-bound cursor.
+  owner-bound cursor. It matches only title or filename substrings, never document bodies, so `snippet` is the title
+  and `evidence_block_ids` is empty. The tool description says so and points content queries to `search_wiki`
+  (ingested documents only) or `get_document`.
 - `get_document` → bounded block-boundary chunks from the document-owned current edit state (or the immutable
   chat-export pipeline input), tied to that body version, source hash, and sanitized presentation snapshot. It does
-  not require a wiki ingest snapshot.
+  not require a wiki ingest snapshot. Since 2026-11-12 it splits the raw Markdown first and sanitizes each block, so
+  `block_id` is `B0001`… with the same ordinals as `McpWikiSourceService`; `submit_lint_changes` evidence accepts these
+  IDs directly. Earlier responses used `mcp_<hash>_<n>`, which lint rejected with `INVALID_EVIDENCE`.
+  Because blocks are sanitized one at a time, a reference link (`[t][x]`) whose definition sits in another block is
+  not rewritten; external URLs in link reference definitions are therefore replaced with `label: 외부 링크(host)` text.
 - `get_wiki_page` → the web page detail (`WikiService.read`, the same path as
   `GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}`), so the body is resolved in the web order
   (AI body → latest `wiki_page_versions.markdown` → stored object). The MCP boundary adds the ADR 0046 contract:

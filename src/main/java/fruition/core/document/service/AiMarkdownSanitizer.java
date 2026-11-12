@@ -214,6 +214,11 @@ public final class AiMarkdownSanitizer {
         return STRAY_LT.matcher(text).replaceAll("\\\\<");
     }
 
+    /** 외부 주소(isExternal)면 그 hostname(없으면 빈 문자열)을, 아니면 비어 있는 값을 준다. */
+    public static java.util.Optional<String> externalHost(String destination) {
+        return isExternal(destination) ? java.util.Optional.of(host(destination)) : java.util.Optional.empty();
+    }
+
     private static boolean isSafe(String destination) {
         // 브라우저는 주소의 공백·제어 문자를 무시하고 scheme을 읽는다(java\tscript: 등).
         String compact = destination.replaceAll("[\\x00-\\x20]", "");
