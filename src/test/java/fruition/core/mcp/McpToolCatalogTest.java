@@ -78,8 +78,9 @@ class McpToolCatalogTest {
                         Map.of("query", "x", "cursor", "unexpected", "page_size", 1, "extra", true), null));
         assertThat(result.isError()).isTrue();
 
-        var page = new McpWikiPageService.Response("mcp.wiki-page.v1", "page-a", "SOURCE", "Title", "body",
-                "sha256:" + "a".repeat(64), "UNTRUSTED_WORKSPACE_CONTENT");
+        var page = new McpWikiPageService.Response("mcp.wiki-page.v1", "page-a", "SOURCE", "Title", null, "body",
+                "sha256:" + "a".repeat(64), null, java.util.List.of(), java.util.List.of(), java.util.List.of(), false, null,
+                "UNTRUSTED_WORKSPACE_CONTENT");
         when(pages.get(id, "page-a")).thenReturn(page);
         var pageTool = tools.get(3);
         assertThat(pageTool.tool().inputSchema().get("required")).isEqualTo(java.util.List.of("page_id"));
@@ -90,7 +91,8 @@ class McpToolCatalogTest {
         @SuppressWarnings("unchecked")
         var outputProperties = (Map<String,Object>) pageTool.tool().outputSchema().get("properties");
         assertThat(outputProperties.keySet()).containsExactlyInAnyOrder("schema_version", "page_id", "page_type", "title",
-                "body", "content_hash", "data_boundary", "workspace_id");
+                "slug", "body", "content_hash", "lint_target", "statements", "links", "lint_target_page_ids",
+                "lint_target_truncated", "lint_context_error", "data_boundary", "workspace_id");
         assertThat(((Map<?,?>) outputProperties.get("content_hash")).get("description"))
                 .isEqualTo("SHA-256 of the exact UTF-8 body returned by this tool");
         assertThat(outputProperties).doesNotContainKeys("version", "evidence", "next_cursor", "truncated");
@@ -107,8 +109,8 @@ class McpToolCatalogTest {
         verify(audit).log(id, "get_wiki_page", java.util.List.of("page-a"), "SUCCESS", null);
 
         when(pages.get(id, "page-big")).thenReturn(new McpWikiPageService.Response("mcp.wiki-page.v1", "page-big",
-                "SOURCE", "Title", "x".repeat(60_000), "sha256:" + "b".repeat(64),
-                "UNTRUSTED_WORKSPACE_CONTENT"));
+                "SOURCE", "Title", null, "x".repeat(60_000), "sha256:" + "b".repeat(64), null,
+                java.util.List.of(), java.util.List.of(), java.util.List.of(), false, null, "UNTRUSTED_WORKSPACE_CONTENT"));
         var oversizedEnvelope = pageTool.callHandler().apply(
                 McpTransportContext.create(Map.of(McpSecurityFilter.IDENTITY, id)),
                 new io.modelcontextprotocol.spec.McpSchema.CallToolRequest("get_wiki_page",
@@ -143,10 +145,11 @@ class McpToolCatalogTest {
                 "Paper", 1, "hash", "Summary", java.util.List.of("B0046"))), "next", true, "UNTRUSTED_WORKSPACE_CONTENT"));
         when(documents.get(id, "doc_1", "cursor")).thenReturn(new McpDocumentReadService.DocumentReadResponse(
                 "mcp.document-read.v1", "doc_1", "Paper", 1, "hash",
-                java.util.List.of(new McpDocumentReadService.Block("B0046", 1, "Attention text")),
+                java.util.List.of(new McpDocumentReadService.Block("B0046", 1, 1, 1, "Attention text")),
                 "next", true, "UNTRUSTED_WORKSPACE_CONTENT"));
         when(pages.get(id, "page-a")).thenReturn(new McpWikiPageService.Response("mcp.wiki-page.v1", "page-a",
-                "CONCEPT", "Attention", "body", "sha256:" + "a".repeat(64), "UNTRUSTED_WORKSPACE_CONTENT"));
+                "CONCEPT", "Attention", "attention", "body", "sha256:" + "a".repeat(64), null, java.util.List.of(),
+                java.util.List.of(), java.util.List.of(), false, null, "UNTRUSTED_WORKSPACE_CONTENT"));
 
         for (String origin : java.util.List.of("https://app.example/", "")) {
             var catalog = new McpToolCatalog(wiki, pages, documents, mock(McpDocumentProposalService.class),

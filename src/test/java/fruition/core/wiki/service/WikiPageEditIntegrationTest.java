@@ -367,7 +367,7 @@ class WikiPageEditIntegrationTest {
     private void aiPage(String markdownUri, String markdown) {
         when(wikiStateRequester.page(workspaceId, pageId)).thenReturn(Optional.of(new WikiPageDetailResponse(
                 pageId, "concept", "캐시", "cache", null, markdownUri, markdown, "active", null, null, null,
-                List.of(), List.of())));
+                List.of(), List.of(), null, null, null, null, null)));
     }
 
     private void insertVersion(long revision, String markdown) {

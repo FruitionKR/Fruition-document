@@ -208,15 +208,33 @@ public class McpWikiProposalService {
 
     private List<Map<String,Object>> lintMappings(McpIdentity id,McpProposalActor actor,String key,String externalHash,
                                                    List<Map<String,Object>> documents){
+        // 원문 확인은 pipeline 블록 계산(HTTP)을 거치므로 DB 트랜잭션·advisory lock 밖에서 한다.
+        // 같은 키의 기존 intent가 있으면 원문을 다시 읽지 않고 그대로 돌려준다(재시도 동작 유지).
+        List<Map<String,Object>> existing=transaction.execute(tx->existingLintIntent(id,key,externalHash));
+        if(existing!=null)return existing;
+        List<Map<String,Object>> fresh=checkedLintSnapshots(actor,documents);
         return transaction.execute(tx->{
-            jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?,0))","mcp-wiki-lint:"+id.grantId()+":"+key);
-            List<Map<String,Object>> rows=jdbc.queryForList("SELECT request_hash,source_snapshots FROM mcp_wiki_lint_intents "
-                    +"WHERE workspace_id=? AND user_id=? AND grant_id=?::uuid AND client_id=? AND idempotency_key=?",
-                    id.workspaceId(),id.userId(),id.grantId(),id.clientId(),key);
-            if(!rows.isEmpty()){
-                if(!externalHash.equals(rows.getFirst().get("request_hash")))throw new McpToolException("IDEMPOTENCY_CONFLICT");
-                return readList(String.valueOf(rows.getFirst().get("source_snapshots")));
-            }
+            List<Map<String,Object>> raced=existingLintIntent(id,key,externalHash);
+            if(raced!=null)return raced;
+            jdbc.update("INSERT INTO mcp_wiki_lint_intents(workspace_id,user_id,grant_id,client_id,policy_generation,"
+                            +"idempotency_key,request_hash,source_snapshots) VALUES (?,?,?::uuid,?,?,?,?,?::jsonb)",
+                    id.workspaceId(),id.userId(),id.grantId(),id.clientId(),id.policyGeneration(),key,externalHash,json(fresh));
+            return fresh;
+        });
+    }
+
+    /** 같은 grant·키의 intent를 잠그고 읽는다. 없으면 null. 요청이 다르면 IDEMPOTENCY_CONFLICT. */
+    private List<Map<String,Object>> existingLintIntent(McpIdentity id,String key,String externalHash){
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?,0))","mcp-wiki-lint:"+id.grantId()+":"+key);
+        List<Map<String,Object>> rows=jdbc.queryForList("SELECT request_hash,source_snapshots FROM mcp_wiki_lint_intents "
+                +"WHERE workspace_id=? AND user_id=? AND grant_id=?::uuid AND client_id=? AND idempotency_key=?",
+                id.workspaceId(),id.userId(),id.grantId(),id.clientId(),key);
+        if(rows.isEmpty())return null;
+        if(!externalHash.equals(rows.getFirst().get("request_hash")))throw new McpToolException("IDEMPOTENCY_CONFLICT");
+        return readList(String.valueOf(rows.getFirst().get("source_snapshots")));
+    }
+
+    private List<Map<String,Object>> checkedLintSnapshots(McpProposalActor actor,List<Map<String,Object>> documents){
             List<Map<String,Object>> mappings=new ArrayList<>();
             long totalBytes=0;
             for(Map<String,Object> document:documents){
@@ -230,11 +248,7 @@ public class McpWikiProposalService {
                 mappings.add(linked("snapshot_id",UUID.randomUUID().toString(),"document_id",document.get("document_id"),
                         "source_version",document.get("current_version"),"source_content_hash",document.get("content_hash")));
             }
-            jdbc.update("INSERT INTO mcp_wiki_lint_intents(workspace_id,user_id,grant_id,client_id,policy_generation,"
-                            +"idempotency_key,request_hash,source_snapshots) VALUES (?,?,?::uuid,?,?,?,?,?::jsonb)",
-                    id.workspaceId(),id.userId(),id.grantId(),id.clientId(),id.policyGeneration(),key,externalHash,json(mappings));
             return mappings;
-        });
     }
 
     @SuppressWarnings("unchecked") private List<Map<String,Object>> replaceLintEvidence(List<Map<String,Object>> operations,

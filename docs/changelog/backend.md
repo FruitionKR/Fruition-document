@@ -1,5 +1,17 @@
 # Backend 변경 기록
 
+## 2026-11-12 — MCP 블록 ID를 source_blocks 레지스트리로 통일하고 lint 맥락 노출
+
+- MCP `get_document`와 wiki source callback(`/internal/documents/{id}/mcp-wiki-source`)이 블록을 직접 나누지 않고 pipeline `POST /internal/mcp/source-blocks/resolve`(`mcp.source-blocks.v1`)에서 웹 편입과 같은 `source_blocks` 레지스트리 ID·줄 범위를 받는다. 이전에는 commonmark 최상위 노드 순번(`B0001`…)이라 화면 근거 강조와 어긋났고 MCP 편입이 문서 블록을 다시 번호 매겼다. pipeline이 실패하면 순번 ID로 대신하지 않고 `DEPENDENCY_UNAVAILABLE`(callback은 503)로 실패한다.
+- `get_document` 블록에 `line_start`·`line_end`(현재 원문을 '\n'으로 나눈 1부터 세는 줄)를 추가했다. `propose_document_edit`·`propose_plan` 대상 줄은 이 값을 쓰도록 도구 설명을 바꿨다. 블록마다 sanitize한 `text`는 줄 수가 원문과 다를 수 있고 블록 사이 빈 줄은 어느 블록에도 없다.
+- source callback 블록에 `line_start`·`line_end`·`block_type`(nullable)을 추가했다. `text`는 원문 줄 범위 그대로이고 `content_hash`는 그 text의 hash다. 블록 사이 빈 줄이 빠지므로 편입 견적 수량(블록 text 바이트 합)이 빈 줄만큼 줄어든다.
+- MCP `get_wiki_page`에 `slug`, `statements`(`statement_id`·`text`·`text_hash`, text만 무해화), `links`(`page_id`·`slug`·`relation`·`direction`·`source_ref`·`target_ref`), `lint_target_page_ids`, `lint_target_truncated`를 추가했다(`mcp-tools.v14`). Concept 페이지만 값이 있다. `submit_lint_changes` 설명이 REMOVE_STATEMENT·ADD_LINK·REMOVE_LINK 인자와 `lint_target_page_ids` 전부의 `target_snapshot` 포함을 안내한다.
+- 웹 위키 페이지 상세(`GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}`) 응답도 같은 네 필드를 더 받는다(키 추가만, 기존 필드는 그대로).
+
+## 2026-11-12 — get_wiki_page lint 대상 값
+
+- MCP `get_wiki_page`에 `lint_target`(`page_id`·`version`·`content_hash`)을 추가했다(`mcp-tools.v13`). 기존 `content_hash`는 무해화한 본문 hash이고 `search_wiki` hash는 검색 단위 hash라, 외부 AI가 `submit_lint_changes` 대상 값을 얻을 방법이 없어 `TARGET_CHANGED`가 났다.
+
 ## 2026-11-12 — 0원 MCP 승인의 잔액 검사 제외
 
 - 0원 MCP 승인(문서 수정·계획, `MCP_APPROVAL_UNIT_PRICE_MINOR=0`)은 잔액을 검사하지 않는다. 정산으로 가용 잔액이 음수가 된 면제 아닌 계정도 무료 승인은 계속 쓸 수 있다. 유료 승인(위키 편입·lint)은 기존처럼 최대 수수료만큼 가용 잔액이 있어야 한다.

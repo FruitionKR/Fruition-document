@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
@@ -68,7 +69,7 @@ public class McpWikiPageService {
     private Response read(McpIdentity identity, String pageId) {
         WikiService.PageRead read;
         try {
-            read = wiki.read(identity.workspaceId(), identity.userId(), pageId);
+            read = wiki.readForMcp(identity.workspaceId(), identity.userId(), pageId);
         } catch (WikiPageNotFoundException | WorkspaceNotFoundException e) {
             throw new McpToolException("PAGE_NOT_FOUND");
         }
@@ -87,7 +88,24 @@ public class McpWikiPageService {
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         }
         return new Response("mcp.wiki-page.v1", page.id(), pageType, AiMarkdownSanitizer.sanitize(page.title()),
-                body, "sha256:" + sha256(bodyBytes), "UNTRUSTED_WORKSPACE_CONTENT");
+                page.slug(), body, "sha256:" + sha256(bodyBytes), lintTarget(page, read.objectMarkdown()),
+                statements(page), links(page),
+                page.lintTargetPageIds() == null ? List.of() : List.copyOf(page.lintTargetPageIds()),
+                Boolean.TRUE.equals(page.lintTargetTruncated()), page.lintContextError(), "UNTRUSTED_WORKSPACE_CONTENT");
+    }
+
+    /** text만 화면용으로 무해화한다. statement_id·text_hash는 lint REMOVE_STATEMENT가 대조하는 값이라 그대로 둔다. */
+    private static List<Statement> statements(WikiPageDetailResponse page) {
+        if (page.statements() == null) return List.of();
+        return page.statements().stream().map(s -> new Statement(s.statementId(),
+                s.text() == null ? "" : AiMarkdownSanitizer.sanitize(s.text()), s.textHash())).toList();
+    }
+
+    /** source_ref·target_ref·relation은 lint ADD_LINK·REMOVE_LINK arguments에 그대로 넣는 값이다. */
+    private static List<Link> links(WikiPageDetailResponse page) {
+        if (page.links() == null) return List.of();
+        return page.links().stream().map(l -> new Link(l.pageId(), l.slug(), l.relation(), l.direction(),
+                l.sourceRef(), l.targetRef())).toList();
     }
 
     /** 본문을 고른 뒤 페이지 metadata와 최신 revision이 읽기 시작 때와 같고 아직 active인지 본다. */
@@ -105,6 +123,16 @@ public class McpWikiPageService {
         }
     }
 
+    /**
+     * pipeline lint가 대조하는 값과 같은 기준의 target_snapshot. version은 updated_at의 epoch 마이크로초,
+     * hash는 markdown_uri 원문 객체(없으면 빈 문자열)의 SHA-256이다. 응답 body는 무해화돼 있어 그 hash와 다르다.
+     */
+    private static LintTarget lintTarget(WikiPageDetailResponse page, String objectMarkdown) {
+        if (page.updatedAt() == null) return null;
+        return new LintTarget(page.id(), McpWikiApprovalService.pageVersion(page.updatedAt()), "sha256:"
+                + sha256((objectMarkdown == null ? "" : objectMarkdown).getBytes(StandardCharsets.UTF_8)));
+    }
+
     static boolean validPageId(String pageId) {
         return PAGE_ID.matcher(pageId == null ? "" : pageId).matches();
     }
@@ -120,7 +148,22 @@ public class McpWikiPageService {
     public record Response(@JsonProperty("schema_version") String schemaVersion,
                            @JsonProperty("page_id") String pageId,
                            @JsonProperty("page_type") String pageType,
-                           String title, String body,
+                           String title, String slug, String body,
                            @JsonProperty("content_hash") String contentHash,
+                           @JsonProperty("lint_target") LintTarget lintTarget,
+                           List<Statement> statements, List<Link> links,
+                           @JsonProperty("lint_target_page_ids") List<String> lintTargetPageIds,
+                           @JsonProperty("lint_target_truncated") boolean lintTargetTruncated,
+                           @JsonProperty("lint_context_error") String lintContextError,
                            @JsonProperty("data_boundary") String dataBoundary) {}
+
+    public record Statement(@JsonProperty("statement_id") String statementId, String text,
+                            @JsonProperty("text_hash") String textHash) {}
+
+    public record Link(@JsonProperty("page_id") String pageId, String slug, String relation, String direction,
+                       @JsonProperty("source_ref") String sourceRef, @JsonProperty("target_ref") String targetRef) {}
+
+    /** submit_lint_changes target_snapshot 항목에 그대로 넣는 값. */
+    public record LintTarget(@JsonProperty("page_id") String pageId, long version,
+                             @JsonProperty("content_hash") String contentHash) {}
 }
