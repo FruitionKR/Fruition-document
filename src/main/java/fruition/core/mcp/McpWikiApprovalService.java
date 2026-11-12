@@ -44,8 +44,9 @@ public class McpWikiApprovalService {
     private static final Set<String> CHANGE_FIELDS = Set.of("change_id", "kind", "action", "page_id", "subject_id",
             "before_text", "after_text", "evidence");
     private static final Set<String> EVIDENCE_FIELDS = Set.of("snapshot_id", "block_id", "quote");
+    /** pipeline이 lint로 페이지 본문을 다시 쓰면 PAGE_BODY(UPDATE)를 낸다. 빠지면 진술 lint가 모두 거절된다. */
     private static final Set<String> CHANGE_KINDS = Set.of("SOURCE_PAGE", "CONCEPT_STATEMENT", "EVIDENCE_INVALIDATION",
-            "PAGE_DELETE", "ENTRY", "LINK", "REFERENCE", "REVIVAL_LINK");
+            "PAGE_BODY", "PAGE_DELETE", "ENTRY", "LINK", "REFERENCE", "REVIVAL_LINK");
     private static final Set<String> CHANGE_ACTIONS = Set.of("ADD", "UPDATE", "REMOVE", "DELETE", "REVIVE");
     private static final Set<String> RESULT_FIELDS = Set.of("schema_version", "approval_id", "operation_id",
             "draft_id", "state", "changed", "event_id", "published_reference_hash", "committed_at", "error_code");
