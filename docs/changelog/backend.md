@@ -1,5 +1,10 @@
 # Backend 변경 기록
 
+## 2026-11-13 — MCP lint 원장 대기·모순 구분
+
+- pipeline이 새로 내는 `LEDGER_CONTRADICTION`(409, 재시도 불가)을 MCP 오류 허용 목록에 넣었다. 빠지면 `DEPENDENCY_UNAVAILABLE`로 바뀐다. 게시 직후 원장 반영 대기는 기존 `LEDGER_RECONCILIATION_PENDING`(재시도 가능)이다.
+- `get_wiki_page.lint_context_error`에 `LEDGER_PENDING`(게시 직후 일시 상태)을 안내하고, `submit_lint_changes` 설명에 두 코드의 재시도 여부를 적었다.
+
 ## 2026-11-12 — MCP 위키 승인 화면용 변경 요약
 
 - 웹 draft 응답(`preview`)에서 `changes`(위키 Markdown before/after)와 `target_pages`(내부 버전·hash)를 뺐다. 위키 본문은 웹에 내보내지 않는다. 승인 요청은 draft_id·draft_version·draft_hash·public_state_hash만 쓴다.
