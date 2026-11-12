@@ -17,11 +17,13 @@ class PipelineWikiStateRequesterTest {
 
     private HttpServer server;
     private final AtomicReference<String> responseBody = new AtomicReference<>();
+    private final AtomicReference<String> lastQuery = new AtomicReference<>();
 
     @BeforeEach
     void setUp() throws IOException {
         server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
         server.createContext("/wiki/pages", exchange -> {
+            lastQuery.set(exchange.getRequestURI().getRawQuery());
             byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, body.length);
@@ -111,6 +113,22 @@ class PipelineWikiStateRequesterTest {
         assertThat(page.links()).isNull();
         assertThat(page.lintTargetPageIds()).isNull();
         assertThat(page.lintTargetTruncated()).isNull();
+    }
+
+    @Test
+    void mcpPageReadAsksForLintContextButWebReadDoesNot() {
+        responseBody.set("""
+                {"id":"wp_1","page_type":"concept","title":"개념","source_documents":[],"related_pages":[],
+                 "statements":[],"links":[],"lint_target_page_ids":["wp_1"],"lint_target_truncated":false,
+                 "lint_context_error":"STATEMENTS_UNAVAILABLE"}
+                """);
+
+        var page = requester().page("ws_1", "wp_1", true).orElseThrow();
+        assertThat(lastQuery.get()).contains("workspace_id=ws_1").contains("mcp_read=true");
+        assertThat(page.lintContextError()).isEqualTo("STATEMENTS_UNAVAILABLE");
+
+        requester().page("ws_1", "wp_1");
+        assertThat(lastQuery.get()).isEqualTo("workspace_id=ws_1");
     }
 
     private PipelineWikiStateRequester requester() {

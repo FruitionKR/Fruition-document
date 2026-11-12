@@ -120,8 +120,17 @@ public class WikiService {
 
     public PageRead read(String workspaceId, String userId, String id) {
         verifyWorkspaceOwnership(workspaceId, userId);
-        WikiPageDetailResponse page = pipelineWikiStateRequester.page(workspaceId, id)
-                .orElseThrow(() -> new WikiPageNotFoundException(id));
+        return read(workspaceId, id, pipelineWikiStateRequester.page(workspaceId, id));
+    }
+
+    /** MCP get_wiki_page용. pipeline에 lint 준비 정보를 함께 요청한다. */
+    public PageRead readForMcp(String workspaceId, String userId, String id) {
+        verifyWorkspaceOwnership(workspaceId, userId);
+        return read(workspaceId, id, pipelineWikiStateRequester.page(workspaceId, id, true));
+    }
+
+    private PageRead read(String workspaceId, String id, Optional<WikiPageDetailResponse> found) {
+        WikiPageDetailResponse page = found.orElseThrow(() -> new WikiPageNotFoundException(id));
         Map<String, Document> documents = documentRepository.findAllById(
                         page.sourceDocuments().stream().map(WikiPageSourceDoc::id).toList()).stream()
                 .collect(Collectors.toMap(Document::getId, document -> document));
@@ -145,7 +154,7 @@ public class WikiService {
                 page.createdAt(), latest == null ? null : latest.getRevision(), page.updatedAt(),
                 sourceDocuments,
                 page.relatedPages(), page.statements(), page.links(), page.lintTargetPageIds(),
-                page.lintTargetTruncated()), body, page.markdown());
+                page.lintTargetTruncated(), page.lintContextError()), body, page.markdown());
     }
 
     /**

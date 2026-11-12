@@ -39,9 +39,17 @@ public class PipelineWikiStateRequester {
     }
 
     public Optional<WikiPageDetailResponse> page(String workspaceId, String pageId) {
+        return page(workspaceId, pageId, false);
+    }
+
+    /** mcpRead면 pipeline이 lint 준비 정보(statements·links·lint_target_page_ids)를 붙인다. 웹 상세는 false다. */
+    public Optional<WikiPageDetailResponse> page(String workspaceId, String pageId, boolean mcpRead) {
+        var builder = UriComponentsBuilder.fromUriString(endpoint).path("/pages/" + pageId)
+                .queryParam("workspace_id", workspaceId);
+        if (mcpRead) builder.queryParam("mcp_read", "true");
         try {
             return Optional.of(requireBody(restClient.get()
-                    .uri(uri("/pages/" + pageId, "workspace_id", workspaceId))
+                    .uri(builder.build().encode().toUri())
                     .retrieve()
                     .body(WikiPageDetailResponse.class)));
         } catch (HttpClientErrorException.NotFound e) {

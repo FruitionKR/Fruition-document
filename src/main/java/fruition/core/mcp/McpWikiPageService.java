@@ -69,7 +69,7 @@ public class McpWikiPageService {
     private Response read(McpIdentity identity, String pageId) {
         WikiService.PageRead read;
         try {
-            read = wiki.read(identity.workspaceId(), identity.userId(), pageId);
+            read = wiki.readForMcp(identity.workspaceId(), identity.userId(), pageId);
         } catch (WikiPageNotFoundException | WorkspaceNotFoundException e) {
             throw new McpToolException("PAGE_NOT_FOUND");
         }
@@ -91,7 +91,7 @@ public class McpWikiPageService {
                 page.slug(), body, "sha256:" + sha256(bodyBytes), lintTarget(page, read.objectMarkdown()),
                 statements(page), links(page),
                 page.lintTargetPageIds() == null ? List.of() : List.copyOf(page.lintTargetPageIds()),
-                Boolean.TRUE.equals(page.lintTargetTruncated()), "UNTRUSTED_WORKSPACE_CONTENT");
+                Boolean.TRUE.equals(page.lintTargetTruncated()), page.lintContextError(), "UNTRUSTED_WORKSPACE_CONTENT");
     }
 
     /** text만 화면용으로 무해화한다. statement_id·text_hash는 lint REMOVE_STATEMENT가 대조하는 값이라 그대로 둔다. */
@@ -154,6 +154,7 @@ public class McpWikiPageService {
                            List<Statement> statements, List<Link> links,
                            @JsonProperty("lint_target_page_ids") List<String> lintTargetPageIds,
                            @JsonProperty("lint_target_truncated") boolean lintTargetTruncated,
+                           @JsonProperty("lint_context_error") String lintContextError,
                            @JsonProperty("data_boundary") String dataBoundary) {}
 
     public record Statement(@JsonProperty("statement_id") String statementId, String text,

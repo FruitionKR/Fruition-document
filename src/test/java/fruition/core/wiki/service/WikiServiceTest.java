@@ -143,7 +143,7 @@ class WikiServiceTest {
     static WikiPageDetailResponse page(String markdown, String markdownUri) {
         return new WikiPageDetailResponse("wp_1", "concept", "제목", "title", "요약", markdownUri, markdown,
                 "active", Instant.parse("2026-08-01T00:00:00Z"), null, Instant.parse("2026-08-10T00:00:00Z"),
-                List.of(), List.of(), null, null, null, null);
+                List.of(), List.of(), null, null, null, null, null);
     }
 
     private static WikiPageVersion version(long revision, String markdown) {

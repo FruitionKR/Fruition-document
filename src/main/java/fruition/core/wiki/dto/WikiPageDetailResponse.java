@@ -67,5 +67,9 @@ public record WikiPageDetailResponse(
 
         @JsonProperty("lint_target_truncated")
         @Schema(description = "lint_target_page_ids가 상한에서 잘렸으면 true")
-        Boolean lintTargetTruncated
+        Boolean lintTargetTruncated,
+
+        @JsonProperty("lint_context_error")
+        @Schema(description = "statement 원장을 읽지 못하면 STATEMENTS_UNAVAILABLE. statements가 비어 있어도 없는 것이 아니다.")
+        String lintContextError
 ) {}

@@ -300,6 +300,9 @@ public class McpToolCatalog {
                             + " when linting this page."));
             fields.put("lint_target_truncated", Map.of("type", "boolean",
                     "description", "true if lint_target_page_ids was cut at the server limit."));
+            fields.put("lint_context_error", Map.of("type", List.of("string", "null"),
+                    "description", "STATEMENTS_UNAVAILABLE when statements could not be loaded; an empty statements"
+                            + " list then does not mean the page has none. Retry later."));
             fields.put("data_boundary", Map.of("type", "string", "const", "UNTRUSTED_WORKSPACE_CONTENT"));
             return Map.of("type", "object", "additionalProperties", false, "properties", fields,
                     "required", List.copyOf(fields.keySet()));

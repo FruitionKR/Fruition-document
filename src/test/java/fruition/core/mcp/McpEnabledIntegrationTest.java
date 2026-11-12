@@ -362,7 +362,8 @@ class McpEnabledIntegrationTest {
         assertThat(pageRequest.getMethod()).isEqualTo("GET");
         assertThat(pageRequest.getRequestUrl().encodedPath()).isEqualTo("/wiki/pages/wiki_page_i2");
         assertThat(pageRequest.getRequestUrl().queryParameter("workspace_id")).isEqualTo(WORKSPACE);
-        assertThat(pageRequest.getRequestUrl().queryParameter("mcp_read")).isNull();
+        // 웹 상세와 같은 경로를 쓰되, lint 준비 정보(statements·links·lint_target_page_ids)를 받으려고 mcp_read를 붙인다.
+        assertThat(pageRequest.getRequestUrl().queryParameter("mcp_read")).isEqualTo("true");
         assertThat(pageRequest.getHeader("X-Internal-Token")).isEqualTo("internal-test");
         RecordedRequest stateRequest = ai.takeRequest(5, TimeUnit.SECONDS);
         assertThat(stateRequest).isNotNull();
