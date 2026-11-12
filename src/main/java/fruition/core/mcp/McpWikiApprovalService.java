@@ -398,14 +398,6 @@ public class McpWikiApprovalService {
             sourceDocuments.add(linked("document_id", source.documentId(), "source_version", source.version(),
                     "source_content_hash", source.hash(), "display_name", displayName));
         }
-        List<Map<String, Object>> changes = new ArrayList<>();
-        for (JsonNode change : preview.changes()) {
-            List<Map<String, Object>> evidence = evidence(change.path("evidence"), documentBySnapshot);
-            changes.add(linked("change_id", change.path("change_id").asText(), "kind", change.path("kind").asText(),
-                    "action", change.path("action").asText(), "page_id", change.path("page_id").asText(),
-                    "subject_id", change.path("subject_id").asText(), "before_text", safeNullable(change.get("before_text")),
-                    "after_text", safeNullable(change.get("after_text")), "evidence", evidence));
-        }
         List<Map<String, Object>> summary = new ArrayList<>();
         for (JsonNode item : preview.summaryOrEmpty()) {
             summary.add(linked("kind", item.path("kind").asText(), "page_id", nullableText(item.get("page_id")),
@@ -418,10 +410,11 @@ public class McpWikiApprovalService {
                 "price_version", draft.quote().version(), "quantity", draft.quote().quantity(),
                 "unit", draft.quote().unit(), "formula", draft.quote().formula(),
                 "maximum_charge_minor", draft.quote().maximumMinor());
+        // 웹에는 위키 본문을 내보내지 않는다(위키는 LLM이 관리하고 사용자에게 보여주지 않는다).
+        // changes의 before/after는 위키 Markdown이고 target_pages는 내부 버전·hash라 응답에서 뺀다.
+        // 승인 요청은 draft_id·draft_version·draft_hash·public_state_hash만 쓰므로 이 필드가 필요 없다.
         Map<String, Object> safePreview = linked("schema_version", "mcp.wiki-preview.v1", "complete", true,
-                "source_documents", sourceDocuments, "target_pages", preview.targets().stream().map(t -> linked(
-                        "page_id", t.pageId(), "version", t.version(), "content_hash", t.hash())).toList(), "changes", changes,
-                "summary", summary);
+                "source_documents", sourceDocuments, "summary", summary);
         return linked("schema_version", "mcp.wiki-web-draft.v1", "draft_id", draft.draftId(),
                 "draft_kind", draft.kind(), "draft_version", draft.version(), "draft_hash", draft.draftHash(),
                 "public_state_hash", draft.publicStateHash(), "client_name", draft.clientName(), "quote", quote,

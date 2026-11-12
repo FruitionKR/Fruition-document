@@ -126,6 +126,9 @@ class McpWikiApprovalServiceIntegrationTest {
             service.registerDraft(identity, UUID.randomUUID().toString(), bodyPreview);
             assertThat(jdbc.queryForObject("SELECT draft_kind FROM mcp_wiki_drafts WHERE draft_id=?::uuid",
                     String.class, bodyDraft)).isEqualTo("LINT");
+            // 웹 응답에는 위키 본문(PAGE_BODY before/after)이 실리지 않는다.
+            String web = mapper.writeValueAsString(service.detail(workspace, user, bodyDraft));
+            assertThat(web).doesNotContain("# A", "- added").doesNotContain("\"changes\"");
         } finally {
             jdbc.update("DELETE FROM mcp_wiki_drafts WHERE draft_id=?::uuid", bodyDraft);
         }
@@ -174,7 +177,7 @@ class McpWikiApprovalServiceIntegrationTest {
             assertThat(summary.get(1)).containsEntry("kind", "CONCEPT_CREATE").containsEntry("page_id", null)
                     .containsEntry("text", null).containsEntry("related_page_title", "관련 개념")
                     .containsEntry("evidence", List.of());
-            assertThat(view).containsKeys("changes", "target_pages");
+            assertThat(view).doesNotContainKeys("changes", "target_pages");
         } finally {
             jdbc.update("DELETE FROM mcp_wiki_drafts WHERE draft_id=?::uuid", summaryDraft);
         }
