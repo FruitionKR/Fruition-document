@@ -42,7 +42,8 @@ public class McpToolCatalog {
     static final String FEE_NOTICE = " Wiki ingest and lint carry a small Fruition fee, separate from the user's own"
             + " LLM: your model does the reasoning and Fruition calls no server LLM. Approval reserves the maximum fee"
             + " shown on the web approval screen, and is refused for insufficient credit when the user's available"
-            + " credit is below it. Before starting, tell the user about the fee and check get_credit_balance.";
+            + " credit is below it, unless get_credit_balance reports limit_exempt. Before starting, tell the user"
+            + " about the fee and check get_credit_balance.";
     static final String REVIEW_APPROVAL = " Nothing is saved until a person approves it in Fruition web: open the"
             + " returned review_url for the user right away (for example in their browser) and tell them it needs"
             + " their approval.";
@@ -106,7 +107,8 @@ public class McpToolCatalog {
                         + " document bodies, so snippet is the title and evidence_block_ids is empty. For content, use"
                         + " search_wiki; for documents not in the wiki, open candidates with get_document.", searchSchema()),
                         (id, args) -> documents.find(id, text(args, "query"), optionalText(args, "cursor"), integer(args, "page_size"))),
-                spec(tool("get_document", "Read a readable document at block boundaries", getSchema()),
+                spec(tool("get_document", "Read a readable document at block boundaries. block_id values (B0001, B0002, ...)"
+                        + " are the evidence locators submit_lint_changes accepts for this current_version.", getSchema()),
                         (id, args) -> documents.get(id, text(args, "document_id"), optionalText(args, "cursor"))),
                 spec(tool("get_wiki_page", "Read a published workspace wiki page", wikiPageSchema()),
                         (id, args) -> wikiPages.get(id, pageId(args))),
@@ -337,7 +339,9 @@ public class McpToolCatalog {
                     + SEMANTIC_CONCEPT_INSTRUCTIONS;
             case "finalize_ingest" -> "Freeze the complete ingest draft for explicit web approval." + REVIEW_APPROVAL
                     + FEE_NOTICE;
-            case "submit_lint_changes" -> "Freeze structured wiki lint changes for explicit web approval." + EVIDENCE_RULES
+            case "submit_lint_changes" -> "Freeze structured wiki lint changes for explicit web approval."
+                    + " Cite evidence with block_id values from get_document for the source document's current_version,"
+                    + " not search_wiki evidence, which may point to an older version." + EVIDENCE_RULES
                     + REVIEW_APPROVAL + FEE_NOTICE;
             default -> throw new IllegalArgumentException("unknown wiki tool");
         };

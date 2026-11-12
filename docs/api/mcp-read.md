@@ -157,7 +157,11 @@ The read tools are:
   (ingested documents only) or `get_document`.
 - `get_document` → bounded block-boundary chunks from the document-owned current edit state (or the immutable
   chat-export pipeline input), tied to that body version, source hash, and sanitized presentation snapshot. It does
-  not require a wiki ingest snapshot.
+  not require a wiki ingest snapshot. Since 2026-11-12 it splits the raw Markdown first and sanitizes each block, so
+  `block_id` is `B0001`… with the same ordinals as `McpWikiSourceService`; `submit_lint_changes` evidence accepts these
+  IDs directly. Earlier responses used `mcp_<hash>_<n>`, which lint rejected with `INVALID_EVIDENCE`.
+  Because blocks are sanitized one at a time, a reference link (`[t][x]`) whose definition sits in another block is
+  not rewritten; external URLs in link reference definitions are therefore replaced with `label: 외부 링크(host)` text.
 - `get_wiki_page` → the web page detail (`WikiService.read`, the same path as
   `GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}`), so the body is resolved in the web order
   (AI body → latest `wiki_page_versions.markdown` → stored object). The MCP boundary adds the ADR 0046 contract:

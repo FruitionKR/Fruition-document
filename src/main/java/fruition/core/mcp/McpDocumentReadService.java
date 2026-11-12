@@ -6,6 +6,8 @@ import fruition.core.document.domain.Document;
 import fruition.core.document.service.AiMarkdownSanitizer;
 import fruition.core.document.service.DocumentAccessPolicy;
 import fruition.core.document.service.McpDocumentDataGateway;
+import org.commonmark.node.AbstractVisitor;
+import org.commonmark.node.LinkReferenceDefinition;
 import org.commonmark.node.Node;
 import org.commonmark.parser.IncludeSourceSpans;
 import org.commonmark.parser.Parser;
@@ -71,16 +73,20 @@ public class McpDocumentReadService {
         if (body.markdown() == null || body.bodyBytes() > properties.maxSourceBytes())
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         String hash = normalizeHash(body.contentHash());
-        String sanitized = AiMarkdownSanitizer.sanitize(body.markdown());
-        if (utf8(sanitized) > properties.maxSourceBytes())
-            throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
-        List<String> texts = markdownBlocks(sanitized);
-        if (texts.size() > properties.maxSourceBlocks())
+        // 원문을 먼저 블록으로 나눠 McpWikiSourceService와 같은 순번·ID(B0001…)를 쓴다. 그래야 외부 AI가 이 ID를
+        // lint·편입 근거로 그대로 낼 수 있다. sanitize는 블록마다 따로 해서 블록 수가 바뀌지 않게 한다.
+        List<String> raw = withoutExternalDefinitions(body.markdown(), markdownBlocks(body.markdown()));
+        if (raw.size() > properties.maxSourceBlocks())
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         List<Block> all = new ArrayList<>();
-        String hashPrefix = hash.substring("sha256:".length(), "sha256:".length() + 12);
-        for (int i = 0; i < texts.size(); i++)
-            all.add(new Block("mcp_" + hashPrefix + "_" + (i + 1), i + 1, texts.get(i)));
+        int sanitizedBytes = 0;
+        for (int i = 0; i < raw.size(); i++) {
+            String text = AiMarkdownSanitizer.sanitize(raw.get(i));
+            sanitizedBytes += utf8(text);
+            all.add(new Block("B%04d".formatted(i + 1), i + 1, text));
+        }
+        if (sanitizedBytes > properties.maxSourceBytes())
+            throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         String snapshot = snapshot(all);
         int offset = 0;
         if (cursor != null) {
@@ -130,6 +136,41 @@ public class McpDocumentReadService {
         try { return McpCursorCodec.sha256(mapper.writeValueAsString(value)); }
         catch (Exception e) { throw new McpToolException("DEPENDENCY_UNAVAILABLE"); }
     }
+    /**
+     * 블록별 sanitize는 다른 블록의 참조 정의를 보지 못해 {@code [t][x]}를 외부 링크로 판단하지 못하고 글자로 남긴다.
+     * 정의 줄({@code [x]: https://...})의 외부 주소를 글자로 바꿔, 응답을 이어 붙여 렌더링해도 외부 링크가 살아나지 않게 한다.
+     * 정의가 있던 블록 안에서만 글자를 바꾸므로 블록 수·순번은 원문과 같다.
+     */
+    static List<String> withoutExternalDefinitions(String markdown, List<String> blocks) {
+        List<int[]> ranges = new ArrayList<>();
+        List<String> replacements = new ArrayList<>();
+        MARKDOWN.parse(markdown).accept(new AbstractVisitor() {
+            @Override public void visit(LinkReferenceDefinition node) {
+                var host = AiMarkdownSanitizer.externalHost(node.getDestination());
+                var spans = node.getSourceSpans();
+                if (host.isEmpty() || spans.isEmpty()) return;
+                var last = spans.getLast();
+                ranges.add(new int[] {spans.getFirst().getInputIndex(), last.getInputIndex() + last.getLength()});
+                replacements.add(node.getLabel() + ": " + (host.get().isEmpty() ? "외부 링크" : "외부 링크(" + host.get() + ")"));
+            }
+        });
+        if (ranges.isEmpty()) return blocks;
+        List<String> out = new ArrayList<>(blocks.size());
+        int start = 0, next = 0;
+        for (String block : blocks) {
+            int end = start + block.length(), cursor = start;
+            StringBuilder text = new StringBuilder();
+            while (next < ranges.size() && ranges.get(next)[0] < end) {
+                int[] range = ranges.get(next);
+                text.append(markdown, cursor, Math.max(cursor, range[0])).append(replacements.get(next++));
+                cursor = Math.min(end, Math.max(cursor, range[1]));
+            }
+            out.add(text.append(markdown, cursor, end).toString());
+            start = end;
+        }
+        return out;
+    }
+
     static List<String> markdownBlocks(String markdown) {
         List<Integer> starts = new ArrayList<>();
         for (Node node = MARKDOWN.parse(markdown).getFirstChild(); node != null; node = node.getNext()) {
