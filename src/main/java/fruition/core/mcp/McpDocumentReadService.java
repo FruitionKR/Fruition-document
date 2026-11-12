@@ -71,16 +71,20 @@ public class McpDocumentReadService {
         if (body.markdown() == null || body.bodyBytes() > properties.maxSourceBytes())
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         String hash = normalizeHash(body.contentHash());
-        String sanitized = AiMarkdownSanitizer.sanitize(body.markdown());
-        if (utf8(sanitized) > properties.maxSourceBytes())
-            throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
-        List<String> texts = markdownBlocks(sanitized);
-        if (texts.size() > properties.maxSourceBlocks())
+        // 원문을 먼저 블록으로 나눠 McpWikiSourceService와 같은 순번·ID(B0001…)를 쓴다. 그래야 외부 AI가 이 ID를
+        // lint·편입 근거로 그대로 낼 수 있다. sanitize는 블록마다 따로 해서 블록 수가 바뀌지 않게 한다.
+        List<String> raw = markdownBlocks(body.markdown());
+        if (raw.size() > properties.maxSourceBlocks())
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         List<Block> all = new ArrayList<>();
-        String hashPrefix = hash.substring("sha256:".length(), "sha256:".length() + 12);
-        for (int i = 0; i < texts.size(); i++)
-            all.add(new Block("mcp_" + hashPrefix + "_" + (i + 1), i + 1, texts.get(i)));
+        int sanitizedBytes = 0;
+        for (int i = 0; i < raw.size(); i++) {
+            String text = AiMarkdownSanitizer.sanitize(raw.get(i));
+            sanitizedBytes += utf8(text);
+            all.add(new Block("B%04d".formatted(i + 1), i + 1, text));
+        }
+        if (sanitizedBytes > properties.maxSourceBytes())
+            throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         String snapshot = snapshot(all);
         int offset = 0;
         if (cursor != null) {

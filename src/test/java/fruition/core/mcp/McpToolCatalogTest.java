@@ -337,6 +337,7 @@ class McpToolCatalogTest {
         }
         for (int i : new int[] {0, 4, 5})
             assertThat(staged.get(i).tool().description()).contains("Fruition fee", "no server LLM", "get_credit_balance");
+        assertThat(staged.get(5).tool().description()).contains("block_id values from get_document");
         var schema = new ObjectMapper().valueToTree(staged.get(3).tool().inputSchema());
         var contribution = schema.path("properties").path("contributions").path("items");
         assertThat(contribution.path("properties").has("merge_target_page_id")).isTrue();

@@ -1,5 +1,9 @@
 # Backend 변경 기록
 
+## 2026-11-12 — MCP 블록 ID 통일
+
+- `get_document`의 `block_id`를 `mcp_<hash>_<n>`에서 `B0001` 형식으로 바꿨다. 원문을 먼저 블록으로 나눈 뒤 블록마다 sanitize해 lint·편입 원문 스냅샷과 순번이 같다. 외부 AI가 읽은 ID를 `submit_lint_changes` 근거로 그대로 낼 수 있다.
+
 ## 2026-11-12 — 면제 계정 크레딧 숨김과 MCP 수수료 안내
 
 - `GET /api/users/me/credits`와 MCP `get_credit_balance`에 `limit_exempt`를 추가했다. 웹은 true면 크레딧 섹션을 숨기고, MCP 도구 설명은 음수 잔액을 빚처럼 전하지 않게 한다.

@@ -106,7 +106,8 @@ public class McpToolCatalog {
                         + " document bodies, so snippet is the title and evidence_block_ids is empty. For content, use"
                         + " search_wiki; for documents not in the wiki, open candidates with get_document.", searchSchema()),
                         (id, args) -> documents.find(id, text(args, "query"), optionalText(args, "cursor"), integer(args, "page_size"))),
-                spec(tool("get_document", "Read a readable document at block boundaries", getSchema()),
+                spec(tool("get_document", "Read a readable document at block boundaries. block_id values (B0001, B0002, ...)"
+                        + " are the evidence locators submit_lint_changes accepts for this current_version.", getSchema()),
                         (id, args) -> documents.get(id, text(args, "document_id"), optionalText(args, "cursor"))),
                 spec(tool("get_wiki_page", "Read a published workspace wiki page", wikiPageSchema()),
                         (id, args) -> wikiPages.get(id, pageId(args))),
@@ -337,7 +338,9 @@ public class McpToolCatalog {
                     + SEMANTIC_CONCEPT_INSTRUCTIONS;
             case "finalize_ingest" -> "Freeze the complete ingest draft for explicit web approval." + REVIEW_APPROVAL
                     + FEE_NOTICE;
-            case "submit_lint_changes" -> "Freeze structured wiki lint changes for explicit web approval." + EVIDENCE_RULES
+            case "submit_lint_changes" -> "Freeze structured wiki lint changes for explicit web approval."
+                    + " Cite evidence with block_id values from get_document for the source document's current_version,"
+                    + " not search_wiki evidence, which may point to an older version." + EVIDENCE_RULES
                     + REVIEW_APPROVAL + FEE_NOTICE;
             default -> throw new IllegalArgumentException("unknown wiki tool");
         };
