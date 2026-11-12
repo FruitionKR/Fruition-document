@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import fruition.core.document.service.McpDocumentDataGateway;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -29,7 +28,8 @@ public class McpWikiSourceService {
         this.blocks = blocks;
     }
 
-    @Transactional(readOnly = true)
+    // 트랜잭션을 두지 않는다. pipeline 블록 계산(HTTP) 동안 DB 커넥션을 쥐지 않게 하려는 것이다.
+    // 문서 조회·본문 조회는 각자 짧은 쿼리이고, 본문 version·hash 대조가 그 사이 변경을 잡는다.
     public Response read(McpProposalActor actor, String documentId) {
         McpIdentity identity = access.authorizeWikiSource(actor);
         return read(identity, documentId);

@@ -86,6 +86,11 @@ class McpDocumentReadServiceTest {
                 .hasSameSizeAs(multiLine.split("\n", -1)).doesNotContain("  https://evil.example/q")
                 .endsWith("after", "");
         assertThat(McpDocumentReadService.withoutExternalDefinitions("plain\n")).isEqualTo("plain\n");
+        // 여러 줄 라벨도 줄 수를 그대로 둔다. 그렇지 않으면 뒤 블록 text가 다른 줄로 잘린다.
+        String multiLabel = "[foo\nbar]: https://evil.example/x\n\nafter\n";
+        assertThat(McpDocumentReadService.withoutExternalDefinitions(multiLabel).split("\n", -1))
+                .hasSameSizeAs(multiLabel.split("\n", -1)).doesNotContain("https://evil.example/x")
+                .endsWith("after", "");
     }
 
     @Test void blocksUseRegistryIdsAndRawLineRangesEvenAroundScriptAndMultiLineDefinitions() {

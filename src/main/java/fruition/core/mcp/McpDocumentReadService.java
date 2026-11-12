@@ -156,7 +156,9 @@ public class McpDocumentReadService {
                 if (host.isEmpty() || spans.isEmpty()) return;
                 var last = spans.getLast();
                 ranges.add(new int[] {spans.getFirst().getInputIndex(), last.getInputIndex() + last.getLength()});
-                replacements.add(node.getLabel() + ": " + (host.get().isEmpty() ? "외부 링크" : "외부 링크(" + host.get() + ")"));
+                // 라벨은 여러 줄일 수 있다. 교체 글자에 줄바꿈이 남으면 뒤 블록 줄이 밀리므로 공백으로 바꾼다.
+                String label = node.getLabel().replaceAll("[\\r\\n]+", " ");
+                replacements.add(label + ": " + (host.get().isEmpty() ? "외부 링크" : "외부 링크(" + host.get() + ")"));
             }
         });
         if (ranges.isEmpty()) return markdown;
