@@ -98,6 +98,30 @@ class McpWikiApprovalServiceIntegrationTest {
     }
 
     @Test
+    void lintDraftWithPageBodyChangeRegisters() throws Exception {
+        String bodyDraft = UUID.randomUUID().toString();
+        JsonNode bodyPreview = mapper.readTree("""
+                {"schema_version":"mcp.wiki-preview.v1","draft_id":"%s","draft_kind":"LINT",
+                 "draft_version":1,"draft_hash":"sha256:%s",
+                 "source_snapshots":[{"snapshot_id":"00000000-0000-4000-8000-000000000012",
+                   "document_id":"doc_i9","source_version":4,"source_content_hash":"sha256:%s"}],
+                 "target_pages":[{"page_id":"wiki_page_1","version":1,"content_hash":"sha256:%s"}],
+                 "public_state_hash":"sha256:%s",
+                 "changes":[{"change_id":"sha256:%s","kind":"PAGE_BODY","action":"UPDATE","page_id":"wiki_page_1",
+                   "subject_id":"wiki_page_1","before_text":"# A","after_text":"# A\\n- added","evidence":[]}],
+                 "complete":true}
+                """.formatted(bodyDraft, "a".repeat(64), "b".repeat(64), "e".repeat(64), "c".repeat(64),
+                "f".repeat(64)));
+        try {
+            service.registerDraft(identity, UUID.randomUUID().toString(), bodyPreview);
+            assertThat(jdbc.queryForObject("SELECT draft_kind FROM mcp_wiki_drafts WHERE draft_id=?::uuid",
+                    String.class, bodyDraft)).isEqualTo("LINT");
+        } finally {
+            jdbc.update("DELETE FROM mcp_wiki_drafts WHERE draft_id=?::uuid", bodyDraft);
+        }
+    }
+
+    @Test
     void fullReservationLookupAndDuplicatePublicationSettleExactlyOnce() throws Exception {
         credits.post(user, "grant", 10_000, "i9-grant:" + user, "test");
         when(ai.getPreview(draft, 1, workspace, user)).thenReturn(preview);
