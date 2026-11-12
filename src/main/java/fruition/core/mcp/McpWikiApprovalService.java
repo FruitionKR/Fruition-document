@@ -10,6 +10,7 @@ import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.aihistory.domain.OperationType;
 import fruition.core.aihistory.service.McpWikiOperationRegistrar;
 import fruition.core.document.service.AiMarkdownSanitizer;
+import fruition.core.document.service.McpDocumentDataGateway;
 import fruition.core.usage.service.CreditService;
 import fruition.core.wiki.service.McpWikiStateGateway;
 import org.springframework.beans.factory.annotation.Value;
@@ -44,6 +45,17 @@ public class McpWikiApprovalService {
     private static final Set<String> CHANGE_FIELDS = Set.of("change_id", "kind", "action", "page_id", "subject_id",
             "before_text", "after_text", "evidence");
     private static final Set<String> EVIDENCE_FIELDS = Set.of("snapshot_id", "block_id", "quote");
+    /**
+     * 사람이 읽는 변경 요약. 배포 전에 등록된 draft의 저장 preview에는 없으므로 선택 필드다(없으면 빈 목록).
+     * 새 pipeline은 항상 보낸다. 승인 시 저장본과 AI 재조회본 모두에 있을 때만 서로 같아야 한다.
+     */
+    private static final String SUMMARY = "summary";
+    private static final Set<String> PREVIEW_FIELDS_WITH_SUMMARY = union(PREVIEW_FIELDS, Set.of(SUMMARY));
+    private static final Set<String> SUMMARY_FIELDS = Set.of("kind", "page_id", "page_title", "text", "before_text",
+            "related_page_title", "evidence");
+    private static final Set<String> SUMMARY_KINDS = Set.of("CONCEPT_CREATE", "SOURCE_PAGE", "STATEMENT_ADD",
+            "STATEMENT_UPDATE", "STATEMENT_REMOVE", "EVIDENCE_INVALIDATION", "LINK_ADD", "LINK_REMOVE",
+            "CONCEPT_MERGE", "CONCEPT_DELETE");
     /** pipeline이 lint로 페이지 본문을 다시 쓰면 PAGE_BODY(UPDATE)를 낸다. 빠지면 진술 lint가 모두 거절된다. */
     private static final Set<String> CHANGE_KINDS = Set.of("SOURCE_PAGE", "CONCEPT_STATEMENT", "EVIDENCE_INVALIDATION",
             "PAGE_BODY", "PAGE_DELETE", "ENTRY", "LINK", "REFERENCE", "REVIVAL_LINK");
@@ -60,13 +72,14 @@ public class McpWikiApprovalService {
     private final WorkspaceAccessGuard webAccess;
     private final CreditService credits;
     private final McpWikiOperationRegistrar operations;
+    private final McpDocumentDataGateway documents;
     private final PriceConfig prices;
     private final String maintenanceTopic;
 
     public McpWikiApprovalService(JdbcTemplate jdbc, TransactionTemplate transaction, ObjectMapper mapper,
                                   McpAccessClient access, McpWikiSourceService sources, McpWikiDraftClient ai,
                                   McpWikiStateGateway wiki, WorkspaceAccessGuard webAccess, CreditService credits,
-                                  McpWikiOperationRegistrar operations,
+                                  McpWikiOperationRegistrar operations, McpDocumentDataGateway documents,
                                   @Value("${app.maintenance.command-topic}") String maintenanceTopic,
                                   @Value("${app.mcp.wiki.currency:}") String currency,
                                   @Value("${app.mcp.wiki.ingest.unit-price-minor:}") String ingestUnitPrice,
@@ -80,7 +93,7 @@ public class McpWikiApprovalService {
                                   @Value("${app.mcp.wiki.lint.price-version:}") String lintVersion) {
         this.jdbc = jdbc; this.transaction = transaction; this.mapper = mapper; this.access = access;
         this.sources = sources; this.ai = ai; this.wiki = wiki; this.webAccess = webAccess; this.credits = credits;
-        this.operations = operations; this.maintenanceTopic = maintenanceTopic;
+        this.operations = operations; this.documents = documents; this.maintenanceTopic = maintenanceTopic;
         this.prices = new PriceConfig(currency, ingestUnitPrice, ingestUnitSize, ingestUnit, ingestFormula,
                 ingestVersion, lintFixedPrice, lintUnit, lintFormula, lintVersion);
     }
@@ -377,21 +390,29 @@ public class McpWikiApprovalService {
     private Map<String, Object> external(Draft draft, Preview preview) {
         Map<String, String> documentBySnapshot = new LinkedHashMap<>();
         List<Map<String, Object>> sourceDocuments = new ArrayList<>();
+        var viewer = documents.viewer(draft.workspaceId(), draft.userId());
         for (Source source : preview.sources()) {
             documentBySnapshot.put(source.snapshotId(), source.documentId());
+            String displayName = documents.find(draft.workspaceId(), source.documentId())
+                    .filter(viewer::canRead).map(d -> d.getDisplayName()).orElse(null);
             sourceDocuments.add(linked("document_id", source.documentId(), "source_version", source.version(),
-                    "source_content_hash", source.hash()));
+                    "source_content_hash", source.hash(), "display_name", displayName));
         }
         List<Map<String, Object>> changes = new ArrayList<>();
         for (JsonNode change : preview.changes()) {
-            List<Map<String, Object>> evidence = new ArrayList<>();
-            for (JsonNode item : change.path("evidence")) evidence.add(linked(
-                    "document_id", documentBySnapshot.get(item.path("snapshot_id").asText()),
-                    "block_id", item.path("block_id").asText(), "quote", safe(item.path("quote").asText())));
+            List<Map<String, Object>> evidence = evidence(change.path("evidence"), documentBySnapshot);
             changes.add(linked("change_id", change.path("change_id").asText(), "kind", change.path("kind").asText(),
                     "action", change.path("action").asText(), "page_id", change.path("page_id").asText(),
                     "subject_id", change.path("subject_id").asText(), "before_text", safeNullable(change.get("before_text")),
                     "after_text", safeNullable(change.get("after_text")), "evidence", evidence));
+        }
+        List<Map<String, Object>> summary = new ArrayList<>();
+        for (JsonNode item : preview.summaryOrEmpty()) {
+            summary.add(linked("kind", item.path("kind").asText(), "page_id", nullableText(item.get("page_id")),
+                    "page_title", safe(item.path("page_title").asText()), "text", safeNullable(item.get("text")),
+                    "before_text", safeNullable(item.get("before_text")),
+                    "related_page_title", safeNullable(item.get("related_page_title")),
+                    "evidence", evidence(item.path("evidence"), documentBySnapshot)));
         }
         Map<String, Object> quote = linked("pricing_model", draft.quote().model(), "currency", draft.quote().currency(),
                 "price_version", draft.quote().version(), "quantity", draft.quote().quantity(),
@@ -399,7 +420,8 @@ public class McpWikiApprovalService {
                 "maximum_charge_minor", draft.quote().maximumMinor());
         Map<String, Object> safePreview = linked("schema_version", "mcp.wiki-preview.v1", "complete", true,
                 "source_documents", sourceDocuments, "target_pages", preview.targets().stream().map(t -> linked(
-                        "page_id", t.pageId(), "version", t.version(), "content_hash", t.hash())).toList(), "changes", changes);
+                        "page_id", t.pageId(), "version", t.version(), "content_hash", t.hash())).toList(), "changes", changes,
+                "summary", summary);
         return linked("schema_version", "mcp.wiki-web-draft.v1", "draft_id", draft.draftId(),
                 "draft_kind", draft.kind(), "draft_version", draft.version(), "draft_hash", draft.draftHash(),
                 "public_state_hash", draft.publicStateHash(), "client_name", draft.clientName(), "quote", quote,
@@ -409,6 +431,14 @@ public class McpWikiApprovalService {
                         "published_reference_hash", draft.publishedReferenceHash(), "committed_at", draft.committedAt(),
                         "error_code", draft.publicationError()),
                 "settlement", linked("status", draft.settlementStatus(), "charged_minor", draft.chargedMinor()));
+    }
+
+    private static List<Map<String, Object>> evidence(JsonNode items, Map<String, String> documentBySnapshot) {
+        List<Map<String, Object>> evidence = new ArrayList<>();
+        for (JsonNode item : items) evidence.add(linked(
+                "document_id", documentBySnapshot.get(item.path("snapshot_id").asText()),
+                "block_id", item.path("block_id").asText(), "quote", safe(item.path("quote").asText())));
+        return evidence;
     }
 
     private void snapshotClientName(Draft draft) {
@@ -473,7 +503,9 @@ public class McpWikiApprovalService {
     }
 
     private Preview preview(JsonNode node) {
-        if (!exact(node, PREVIEW_FIELDS) || !"mcp.wiki-preview.v1".equals(node.path("schema_version").asText())
+        boolean hasSummary = node != null && node.has(SUMMARY);
+        if (!exact(node, hasSummary ? PREVIEW_FIELDS_WITH_SUMMARY : PREVIEW_FIELDS)
+                || hasSummary && !node.path(SUMMARY).isArray() || !"mcp.wiki-preview.v1".equals(node.path("schema_version").asText())
                 || !node.path("complete").asBoolean(false) || !Set.of("INGEST", "LINT").contains(node.path("draft_kind").asText())
                 || node.path("draft_version").asLong() < 1 || !uuid4(node.path("draft_id").asText())
                 || !hashValue(node.path("draft_hash").asText()) || !hashValue(node.path("public_state_hash").asText())
@@ -513,12 +545,24 @@ public class McpWikiApprovalService {
                     || !change.path("evidence").isArray() || !changeIds.add(change.path("change_id").asText())) {
                 throw new McpToolException("DEPENDENCY_UNAVAILABLE");
             }
-            for (JsonNode evidence : change.path("evidence")) if (!exact(evidence, EVIDENCE_FIELDS)
-                    || !snapshotIds.contains(evidence.path("snapshot_id").asText())
-                    || evidence.path("block_id").asText().isBlank() || evidence.path("quote").asText().isBlank()) {
-                throw new McpToolException("DEPENDENCY_UNAVAILABLE");
-            }
+            requireEvidence(change.path("evidence"), snapshotIds);
             changes.add(change);
+        }
+        List<JsonNode> summary = null;
+        if (hasSummary) {
+            summary = new ArrayList<>();
+            for (JsonNode item : node.path(SUMMARY)) {
+                if (!exact(item, SUMMARY_FIELDS) || !SUMMARY_KINDS.contains(item.path("kind").asText())
+                        || !nullOrNonBlank(item.get("page_id")) || !item.path("page_title").isTextual()
+                        || item.path("page_title").asText().isBlank() || !nullOrText(item.get("text"))
+                        || !nullOrText(item.get("before_text")) || !nullOrText(item.get("related_page_title"))
+                        || !item.path("evidence").isArray()) {
+                    throw new McpToolException("DEPENDENCY_UNAVAILABLE");
+                }
+                requireEvidence(item.path("evidence"), snapshotIds);
+                summary.add(item);
+            }
+            summary = List.copyOf(summary);
         }
         if (!changes.stream().map(c -> c.path("change_id").asText()).toList().equals(
                 changes.stream().map(c -> c.path("change_id").asText()).sorted().toList())) {
@@ -526,7 +570,16 @@ public class McpWikiApprovalService {
         }
         return new Preview(node.path("draft_id").asText(), node.path("draft_kind").asText(),
                 node.path("draft_version").asLong(), node.path("draft_hash").asText(),
-                node.path("public_state_hash").asText(), List.copyOf(sources), List.copyOf(targets), List.copyOf(changes));
+                node.path("public_state_hash").asText(), List.copyOf(sources), List.copyOf(targets), List.copyOf(changes),
+                summary);
+    }
+
+    private static void requireEvidence(JsonNode items, Set<String> snapshotIds) {
+        for (JsonNode evidence : items) if (!exact(evidence, EVIDENCE_FIELDS)
+                || !snapshotIds.contains(evidence.path("snapshot_id").asText())
+                || evidence.path("block_id").asText().isBlank() || evidence.path("quote").asText().isBlank()) {
+            throw new McpToolException("DEPENDENCY_UNAVAILABLE");
+        }
     }
 
     private Draft find(String draftId) {
@@ -605,6 +658,9 @@ public class McpWikiApprovalService {
         for (String field : fields) if (!node.has(field)) return false;
         return true;
     }
+    private static boolean nullOrText(JsonNode value) { return value != null && (value.isNull() || value.isTextual()); }
+    private static boolean nullOrNonBlank(JsonNode value) { return nullOrText(value) && (value.isNull() || !value.asText().isBlank()); }
+    private static Set<String> union(Set<String> a, Set<String> b) { Set<String> out = new java.util.HashSet<>(a); out.addAll(b); return Set.copyOf(out); }
     private static boolean hashValue(String value) { return value != null && value.matches("sha256:[0-9a-f]{64}"); }
     private static boolean uuid4(String value) { try { UUID id=UUID.fromString(value); return id.version()==4 && id.toString().equals(value); } catch(Exception e){return false;} }
     private static UUID uuid(String value) { try { return UUID.fromString(value); } catch(Exception e){throw new IllegalArgumentException("UUID required",e);} }
@@ -641,8 +697,16 @@ public class McpWikiApprovalService {
             if(!"KRW".equals(currency)||required.stream().anyMatch(s->s==null||s.isBlank())) throw new McpToolException("DEPENDENCY_UNAVAILABLE");
         }
     }
+    /** summary는 배포 전 저장본이면 null이다. */
     private record Preview(String draftId,String kind,long version,String draftHash,String publicStateHash,
-                           List<Source> sources,List<Target> targets,List<JsonNode> changes) {}
+                           List<Source> sources,List<Target> targets,List<JsonNode> changes,List<JsonNode> summary) {
+        List<JsonNode> summaryOrEmpty(){return summary==null?List.of():summary;}
+        /** 요약은 화면용이라 한쪽에 없으면(배포 전 저장본·pipeline 롤백) 비교하지 않는다. */
+        boolean sameContent(Preview p){return draftId.equals(p.draftId)&&kind.equals(p.kind)&&version==p.version
+                &&draftHash.equals(p.draftHash)&&publicStateHash.equals(p.publicStateHash)&&sources.equals(p.sources)
+                &&targets.equals(p.targets)&&changes.equals(p.changes)
+                &&(summary==null||p.summary==null||summary.equals(p.summary));}
+    }
     public record Source(@com.fasterxml.jackson.annotation.JsonProperty("snapshot_id") String snapshotId,
                          @com.fasterxml.jackson.annotation.JsonProperty("document_id") String documentId,
                          @com.fasterxml.jackson.annotation.JsonProperty("source_version") long version,
@@ -657,7 +721,7 @@ public class McpWikiApprovalService {
                          Boolean changed,String publishedReferenceHash,Instant committedAt,String publicationError,long reservedCreditMilli) {
         boolean sameDraft(Preview p){return draftId.equals(p.draftId())&&kind.equals(p.kind())&&version==p.version()
                 &&draftHash.equals(p.draftHash())&&publicStateHash.equals(p.publicStateHash())&&sources.equals(p.sources())
-                &&preview!=null&&preview.equals(p);}
+                &&preview!=null&&preview.sameContent(p);}
         boolean sameActor(McpIdentity i){return workspaceId.equals(i.workspaceId())&&userId.equals(i.userId())
                 &&grantId.equals(i.grantId())&&clientId.equals(i.clientId())&&policyGeneration==i.policyGeneration();}
         boolean sameLookup(ApprovalLookup l){return draftId.equals(l.draftId())&&version==l.draftVersion()

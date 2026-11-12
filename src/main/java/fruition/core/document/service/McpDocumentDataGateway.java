@@ -99,6 +99,10 @@ public class McpDocumentDataGateway {
                                               boolean owner, boolean canConvert) {
         return policy.viewer(workspaceId, userId, owner, canConvert);
     }
+    /** 웹 owner 화면용 판정. 웹 요청과 같은 캐시된 workspace 권한을 쓴다. */
+    public DocumentAccessPolicy.Viewer viewer(String workspaceId, String userId) {
+        return policy.viewer(workspaceId, userId);
+    }
     public void requireEdit(Document document, McpIdentity identity) {
         policy.requireEdit(document, identity.userId(), identity.owner(), identity.canConvert());
     }
