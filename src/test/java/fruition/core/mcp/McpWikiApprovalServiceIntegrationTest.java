@@ -77,7 +77,7 @@ class McpWikiApprovalServiceIntegrationTest {
         when(sources.read(any(McpIdentity.class), anyString())).thenReturn(new McpWikiSourceService.Response(
                 "mcp.wiki-source.v1", "doc_i9", "Source", workspace, 4, "sha256:" + "b".repeat(64),
                 "text/markdown", List.of(new McpWikiSourceService.Block("B0001", 1, "body",
-                "sha256:" + "d".repeat(64)))));
+                "sha256:" + "d".repeat(64), 1, 1, "paragraph"))));
         when(access.authorizeWikiWebApproval(any(), anyString())).thenReturn(identity);
         when(access.authorizeWikiOperationBoundary(any(), anyLong(), anyString())).thenReturn(identity);
         service = new McpWikiApprovalService(jdbc, new TransactionTemplate(manager), mapper, access, sources, ai,
@@ -228,7 +228,7 @@ class McpWikiApprovalServiceIntegrationTest {
         when(sources.read(any(McpIdentity.class), anyString())).thenReturn(new McpWikiSourceService.Response(
                 "mcp.wiki-source.v1", "doc_i9", "Source", workspace, 5, "sha256:" + "e".repeat(64),
                 "text/markdown", List.of(new McpWikiSourceService.Block("B0001", 1, "changed",
-                "sha256:" + "f".repeat(64)))));
+                "sha256:" + "f".repeat(64), 1, 1, "paragraph"))));
         assertThat(service.lookup(lookup(approvalId(), operationId())))
                 .extracting(McpWikiApprovalService.ApprovalStatus::status,
                         McpWikiApprovalService.ApprovalStatus::reason)

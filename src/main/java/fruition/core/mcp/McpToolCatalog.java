@@ -57,11 +57,11 @@ public class McpToolCatalog {
             .readOnlyHint(true).destructiveHint(false).idempotentHint(true).openWorldHint(false).build();
     private static final McpSchema.ToolAnnotations PROPOSAL_ONLY = McpSchema.ToolAnnotations.builder()
             .readOnlyHint(false).destructiveHint(false).idempotentHint(true).openWorldHint(false).build();
-    private static final String TARGET_LINES_DESCRIPTION = "1-based inclusive logical line range in the complete"
-            + " current document text at base_version. Lines are separated by CRLF, CR or LF, and a trailing newline"
-            + " adds a final empty line (\"a\\nb\\n\" has 3 lines). Count lines from the full text across all"
-            + " returned get_document pages, not block ordinals. whole_document requires start_line 1 and end_line"
-            + " equal to the full current line count.";
+    private static final String TARGET_LINES_DESCRIPTION = "1-based inclusive line range in the complete current"
+            + " document at base_version. Take line numbers from get_document blocks[].line_start and line_end,"
+            + " which use this same basis; do not count lines in the returned block text, which is sanitized and"
+            + " omits the blank lines between blocks. A trailing newline adds a final empty line (\"a\\nb\\n\" has 3"
+            + " lines). whole_document requires start_line 1 and end_line equal to the full current line count.";
     private final McpWikiSearchClient wiki;
     private final McpWikiPageService wikiPages;
     private final McpDocumentReadService documents;
@@ -107,11 +107,18 @@ public class McpToolCatalog {
                         + " document bodies, so snippet is the title and evidence_block_ids is empty. For content, use"
                         + " search_wiki; for documents not in the wiki, open candidates with get_document.", searchSchema()),
                         (id, args) -> documents.find(id, text(args, "query"), optionalText(args, "cursor"), integer(args, "page_size"))),
-                spec(tool("get_document", "Read a readable document at block boundaries. block_id values (B0001, B0002, ...)"
-                        + " are the evidence locators submit_lint_changes accepts for this current_version.", getSchema()),
+                spec(tool("get_document", "Read a readable document at block boundaries. block_id values are the"
+                        + " document's persistent source block IDs, the evidence locators submit_window and"
+                        + " submit_lint_changes accept for this current_version. line_start and line_end are the"
+                        + " block's 1-based line range in the current document; use them for propose_document_edit"
+                        + " and propose_plan target lines. text is sanitized for display, so do not count lines in it.",
+                        getSchema()),
                         (id, args) -> documents.get(id, text(args, "document_id"), optionalText(args, "cursor"))),
                 spec(tool("get_wiki_page", "Read a published workspace wiki page. Use its lint_target as the"
-                        + " submit_lint_changes target_snapshot entry; search_wiki version/content_hash are not lint targets.",
+                        + " submit_lint_changes target_snapshot entry; search_wiki version/content_hash are not lint targets."
+                        + " For CONCEPT pages, statements[] and links[] give the exact statement_id, text_hash,"
+                        + " source_ref, target_ref and relation lint operations need, and lint_target_page_ids lists"
+                        + " every page whose lint_target must be in target_snapshot: call get_wiki_page for each.",
                         wikiPageSchema()),
                         (id, args) -> wikiPages.get(id, pageId(args))),
                 spec(tool("propose_document_edit", "Propose a document edit for later review and approval." + REVIEW_APPROVAL,
@@ -267,7 +274,7 @@ public class McpToolCatalog {
             fields.put("page_id", string);
             fields.put("workspace_id", string);
             fields.put("page_type", Map.of("type", "string", "enum", List.of("SOURCE", "CONCEPT")));
-            fields.put("title", string); fields.put("body", string);
+            fields.put("title", string); fields.put("slug", nullableString()); fields.put("body", string);
             fields.put("content_hash", Map.of("type", "string", "pattern", "^sha256:[0-9a-f]{64}$",
                     "description", "SHA-256 of the exact UTF-8 body returned by this tool"));
             fields.put("lint_target", Map.of("type", List.of("object", "null"), "additionalProperties", false,
@@ -276,6 +283,23 @@ public class McpToolCatalog {
                             "content_hash", Map.of("type", "string", "pattern", "^sha256:[0-9a-f]{64}$")),
                     "description", "Pass as-is in submit_lint_changes target_snapshot; content_hash also serves as"
                             + " DELETE_ORPHAN_PAGE expected_content_hash. It hashes the stored page, not the returned body."));
+            fields.put("statements", Map.of("type", "array", "items", Map.of("type", "object",
+                    "additionalProperties", false, "required", List.of("statement_id", "text", "text_hash"),
+                    "properties", Map.of("statement_id", string, "text", string, "text_hash", string)),
+                    "description", "CONCEPT statements. text is sanitized; statement_id and text_hash are exact"
+                            + " REMOVE_STATEMENT statement_id and expected_text_hash values."));
+            fields.put("links", Map.of("type", "array", "items", Map.of("type", "object",
+                    "additionalProperties", false,
+                    "required", List.of("page_id", "slug", "relation", "direction", "source_ref", "target_ref"),
+                    "properties", Map.of("page_id", string, "slug", nullableString(), "relation", string,
+                            "direction", nullableString(), "source_ref", string, "target_ref", string)),
+                    "description", "CONCEPT links; source_ref, target_ref and relation are exact ADD_LINK/REMOVE_LINK"
+                            + " arguments."));
+            fields.put("lint_target_page_ids", Map.of("type", "array", "items", string,
+                    "description", "Every page whose lint_target submit_lint_changes target_snapshot must include"
+                            + " when linting this page."));
+            fields.put("lint_target_truncated", Map.of("type", "boolean",
+                    "description", "true if lint_target_page_ids was cut at the server limit."));
             fields.put("data_boundary", Map.of("type", "string", "const", "UNTRUSTED_WORKSPACE_CONTENT"));
             return Map.of("type", "object", "additionalProperties", false, "properties", fields,
                     "required", List.copyOf(fields.keySet()));
@@ -307,8 +331,10 @@ public class McpToolCatalog {
             common.put("results", Map.of("type", "array", "items", item));
         } else {
             var block = Map.of("type", "object", "additionalProperties", false,
-                    "properties", Map.of("block_id", string, "ordinal", Map.of("type", "integer", "minimum", 1), "text", string),
-                    "required", List.of("block_id", "ordinal", "text"));
+                    "properties", Map.of("block_id", string, "ordinal", Map.of("type", "integer", "minimum", 1),
+                            "line_start", Map.of("type", "integer", "minimum", 1),
+                            "line_end", Map.of("type", "integer", "minimum", 1), "text", string),
+                    "required", List.of("block_id", "ordinal", "line_start", "line_end", "text"));
             common.put("source_url", sourceUrl);
             common.put("document_id", string); common.put("display_name", string);
             common.put("current_version", Map.of("type", "integer", "minimum", 1));
@@ -348,7 +374,10 @@ public class McpToolCatalog {
             case "finalize_ingest" -> "Freeze the complete ingest draft for explicit web approval." + REVIEW_APPROVAL
                     + FEE_NOTICE;
             case "submit_lint_changes" -> "Freeze structured wiki lint changes for explicit web approval."
-                    + " Take each target_snapshot entry from get_wiki_page lint_target."
+                    + " Take each target_snapshot entry from get_wiki_page lint_target, and include one for every"
+                    + " page_id in the target page's lint_target_page_ids (call get_wiki_page for each)."
+                    + " REMOVE_STATEMENT: use get_wiki_page statements[].statement_id and its text_hash as"
+                    + " expected_text_hash. ADD_LINK/REMOVE_LINK: use links[].source_ref, target_ref and relation."
                     + " Cite evidence with block_id values from get_document for the source document's current_version,"
                     + " not search_wiki evidence, which may point to an older version." + EVIDENCE_RULES
                     + REVIEW_APPROVAL + FEE_NOTICE;

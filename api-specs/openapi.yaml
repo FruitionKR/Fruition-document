@@ -11806,6 +11806,19 @@ components:
         id:
           type: string
           description: Wiki 페이지 ID
+        links:
+          type: array
+          description: Concept 페이지에 걸린 링크 목록. 다른 페이지 종류는 비어 있거나 키가 빠진다.
+          items:
+            $ref: "#/components/schemas/WikiPageLink"
+        lint_target_page_ids:
+          type: array
+          description: 이 페이지를 lint할 때 target_snapshot에 함께 넣어야 하는 페이지 ID 목록(Concept만)
+          items:
+            type: string
+        lint_target_truncated:
+          type: boolean
+          description: lint_target_page_ids가 상한에서 잘렸으면 true
         markdown:
           type: string
           description: 페이지 본문 Markdown
@@ -11835,6 +11848,11 @@ components:
           description: 이 페이지의 근거가 된 원본 문서 목록
           items:
             $ref: "#/components/schemas/WikiPageSourceDoc"
+        statements:
+          type: array
+          description: Concept 페이지의 statement 목록. 다른 페이지 종류는 비어 있거나 키가 빠진다.
+          items:
+            $ref: "#/components/schemas/WikiPageStatement"
         status:
           type: string
           description: 페이지 상태
@@ -11883,6 +11901,31 @@ components:
           format: int64
           description: 비교 대상 revision
           example: 3
+    WikiPageLink:
+      type: object
+      description: Concept 페이지에 걸린 링크. lint ADD_LINK·REMOVE_LINK가 source_ref·target_ref·relation을 쓴다.
+      properties:
+        direction:
+          type: string
+          description: 이 페이지 기준 방향
+          example: outgoing
+        page_id:
+          type: string
+          description: 링크 반대쪽 Wiki 페이지 ID
+        relation:
+          type: string
+          description: 관계 종류
+          example: concept_related_to
+        slug:
+          type: string
+          description: 링크 반대쪽 페이지의 URL 식별자
+          example: inverted-index
+        source_ref:
+          type: string
+          description: 링크 출발 참조
+        target_ref:
+          type: string
+          description: 링크 도착 참조
     WikiPageSourceDoc:
       type: object
       description: Wiki 페이지의 근거가 된 원본 문서
@@ -11906,6 +11949,20 @@ components:
         source_uri:
           type: string
           description: 원본 파일이 저장된 오브젝트 스토리지 경로
+    WikiPageStatement:
+      type: object
+      description: Concept 페이지의 statement. lint REMOVE_STATEMENT가 statement_id와 text_hash로 대상을 고른다.
+      properties:
+        statement_id:
+          type: string
+          description: statement ID
+        text:
+          type: string
+          description: statement 본문
+        text_hash:
+          type: string
+          description: statement 본문 hash(sha256:...)
+          example: sha256:0000000000000000000000000000000000000000000000000000000000000000
     WikiRelatedPage:
       type: object
       description: 그래프에서 이어진 관련 Wiki 페이지

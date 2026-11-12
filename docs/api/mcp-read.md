@@ -18,7 +18,20 @@ decompression to select the required `read`, `write_propose` (`propose_document_
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-## 공개 카탈로그 (`mcp-tools.v13`)
+## 공개 카탈로그 (`mcp-tools.v14`)
+
+source block 레지스트리·lint 맥락(2026-11-12, `mcp-tools.v13` → `mcp-tools.v14`):
+- `get_document` 블록 ID는 웹 편입이 쓰는 pipeline `source_blocks` 레지스트리 ID다(아래 Source block 해석 참고).
+  블록마다 `line_start`·`line_end`를 준다. 현재 원문을 '\n'으로 나눈 1부터 세는 줄 번호이고,
+  `propose_document_edit`·`propose_plan`의 `target.start_line`·`end_line` 검증 기준과 같다. `text`는 블록마다
+  무해화해 줄 수가 원문과 다를 수 있고 블록 사이 빈 줄은 어느 블록에도 없으므로, 클라이언트는 text로 줄을 세지
+  않고 이 값을 쓴다.
+- `get_wiki_page`에 `slug`, `statements[]`(`statement_id`, `text`, `text_hash`), `links[]`(`page_id`, `slug`,
+  `relation`, `direction`, `source_ref`, `target_ref`), `lint_target_page_ids[]`, `lint_target_truncated`를 추가했다.
+  Concept 페이지만 값이 있고 나머지는 빈 배열·false다. statement `text`만 무해화하고 `statement_id`·`text_hash`는
+  pipeline 값 그대로다. REMOVE_STATEMENT는 `statement_id`와 `text_hash`(`expected_text_hash`)를, ADD_LINK·REMOVE_LINK는
+  `links[]`의 `source_ref`·`target_ref`·`relation`을 쓴다. lint validator가 요구하는 대상 페이지 묶음이
+  `lint_target_page_ids`이고, 클라이언트는 각 ID로 `get_wiki_page`를 불러 `lint_target`을 모두 `target_snapshot`에 넣는다.
 
 lint 대상 값 추가(2026-11-12, `mcp-tools.v12` → `mcp-tools.v13`): `get_wiki_page` 응답에 `lint_target`
 (`page_id`, `version`, `content_hash`)을 추가했다. pipeline lint가 대조하는 값과 같은 기준이다. `version`은
@@ -163,11 +176,17 @@ The read tools are:
   (ingested documents only) or `get_document`.
 - `get_document` → bounded block-boundary chunks from the document-owned current edit state (or the immutable
   chat-export pipeline input), tied to that body version, source hash, and sanitized presentation snapshot. It does
-  not require a wiki ingest snapshot. Since 2026-11-12 it splits the raw Markdown first and sanitizes each block, so
-  `block_id` is `B0001`… with the same ordinals as `McpWikiSourceService`; `submit_lint_changes` evidence accepts these
-  IDs directly. Earlier responses used `mcp_<hash>_<n>`, which lint rejected with `INVALID_EVIDENCE`.
+  not require a wiki ingest snapshot. Blocks come from the pipeline source block registry (see "Source block
+  resolution" below), so `block_id` is the persistent ID a web ingest assigns and the frontend highlights;
+  `submit_window`/`submit_lint_changes` evidence accepts these IDs directly. Each block is
+  `{block_id, ordinal, line_start, line_end, text}`: `line_start`/`line_end` are 1-based '\n' lines of the current
+  Markdown (the `propose_document_edit` target basis) and `text` is those raw lines sanitized on their own.
   Because blocks are sanitized one at a time, a reference link (`[t][x]`) whose definition sits in another block is
-  not rewritten; external URLs in link reference definitions are therefore replaced with `label: 외부 링크(host)` text.
+  not rewritten; external URLs in link reference definitions are therefore replaced with `label: 외부 링크(host)` text
+  in a copy of the Markdown that keeps every line break, and block text is cut from that copy by line range.
+  If the registry call fails the read fails (`DEPENDENCY_UNAVAILABLE` or the mapped pipeline code); it never falls
+  back to ordinal IDs. Before 2026-11-12 (v14) IDs were commonmark top-level ordinals `B0001`…, and before that
+  `mcp_<hash>_<n>`.
 - `get_wiki_page` → the web page detail (`WikiService.read`, the same path as
   `GET /api/workspaces/{workspace_id}/wiki/pages/{wiki_page_id}`), so the body is resolved in the web order
   (AI body → latest `wiki_page_versions.markdown` → stored object). The MCP boundary adds the ADR 0046 contract:
@@ -176,8 +195,10 @@ The read tools are:
   `POST /wiki/pages/lookup`) and the latest revision are read again, and any difference or a non-active page is
   retryable `PAGE_CHANGED`; the whole read must finish within `app.mcp.wiki-page-deadline-ms`
   (`MCP_WIKI_PAGE_DEADLINE_MS`, default 5000) or it is `DEPENDENCY_UNAVAILABLE`. It also applies the body size limit,
-  sanitizing, and the eight `mcp.wiki-page.v1` fields with a body hash over the exact UTF-8 body returned by the tool
-  plus `lint_target` (stored-object hash and `updated_at` micros, the values lint compares).
+  sanitizing, and the `mcp.wiki-page.v1` fields with a body hash over the exact UTF-8 body returned by the tool
+  plus `lint_target` (stored-object hash and `updated_at` micros, the values lint compares), and the CONCEPT lint
+  context the AI page detail (`GET /wiki/pages/{page_id}`) returns: `slug`, `statements`, `links`,
+  `lint_target_page_ids`, `lint_target_truncated`.
   A missing page is `PAGE_NOT_FOUND`; a page whose body the web cannot resolve is `DEPENDENCY_UNAVAILABLE`.
 
 Request bodies are capped at 4 MiB after gzip decompression. Candidate counts, source block counts/bytes,
@@ -348,12 +369,30 @@ existing `PROPOSAL_CREATE` phase with `ACTIVE_GRANT` rather than `TOOL_CALL`: to
 does not reuse that phase for resume, finalize, generic source reads, or approved execution.
 
 The response contains only `schema_version`, `document_id`, `display_name`, `workspace_id`, `source_version`,
-`source_content_hash`, `mime_type`, and ordered blocks `{block_id, ordinal, text, content_hash}`. `display_name` is
+`source_content_hash`, `mime_type`, and ordered blocks
+`{block_id, ordinal, text, content_hash, line_start, line_end, block_type}`. `display_name` is
 the document's current display name from the same read, unsanitized; AI treats it as untrusted text and uses it as the
 SOURCE wiki page title. Document reads
-one read-only current Markdown/text revision with a version/hash-coherent body, uses the existing Markdown block segmentation, assigns
-server block IDs `B0001` onward, and hashes the exact UTF-8 source and each block as `sha256:<lowercase hex>`.
-Existing configured MCP source byte/block limits apply. PDF, client-supplied source bytes/version/URLs, storage
+one read-only current Markdown/text revision with a version/hash-coherent body, resolves its blocks through the
+pipeline source block registry (below) so MCP ingest keeps the IDs a web ingest uses, and hashes the exact UTF-8
+source and each block as `sha256:<lowercase hex>`. Block `text` is the exact raw lines `line_start..line_end`; blank
+lines between blocks belong to no block. `block_type` is the registry's type or null. A registry failure is 503
+`DEPENDENCY_UNAVAILABLE` (a registry size rejection is 413 `SOURCE_LIMIT_EXCEEDED`), never an ordinal fallback.
+Existing configured MCP source byte/block limits apply.
+
+### Source block resolution
+
+`McpSourceBlockResolver` calls the pipeline `POST /internal/mcp/source-blocks/resolve` with
+`X-Agent-Service-Token` (same client and base URL as the wiki draft calls, `app.agent.run-endpoint` origin) and
+`{"schema_version":"mcp.source-blocks.v1","workspace_id","document_id","markdown"}`, sending the same current body
+it hashes. It expects `{"schema_version":"mcp.source-blocks.v1","document_id","blocks":[{"block_id","ordinal",
+"line_start","line_end","block_type","text","raw_text"}]}` in document order and fails closed
+(`DEPENDENCY_UNAVAILABLE`) unless `document_id` matches, ordinals run 1..n, IDs are unique, line ranges are
+increasing, non-overlapping and inside the document, and every `raw_text` equals the sent Markdown's lines
+`line_start..line_end` joined with '\n'. Pipeline error envelopes map through the same allow-list as other internal
+MCP calls. Empty Markdown has no blocks and makes no call. Because each block carries `text` and `raw_text`, the
+response bound is `max-response-bytes + 4 × max-source-bytes + 512 × max-source-blocks` instead of
+`max-response-bytes`. PDF, client-supplied source bytes/version/URLs, storage
 locators, unreadable documents, inconsistent stored hashes, and unknown request fields fail closed.
 
 ## I9 wiki tools, web approval, and settlement

@@ -97,6 +97,8 @@ class McpEnabledIntegrationTest {
     private static KeyPair keys;
     private static MockWebServer access;
     private static MockWebServer ai;
+    /** pipeline source_blocks 레지스트리 대역(POST /internal/mcp/source-blocks/resolve). */
+    private static MockWebServer sourceBlocks;
     private static SSLContext defaultTls;
 
     static {
@@ -107,6 +109,21 @@ class McpEnabledIntegrationTest {
             ai = new MockWebServer();
             configureAiTls(ai);
             ai.start();
+            sourceBlocks = new MockWebServer();
+            sourceBlocks.setDispatcher(new Dispatcher() {
+                @Override public MockResponse dispatch(RecordedRequest request) {
+                    if (!McpSourceBlockResolver.PATH.equals(request.getPath())) return new MockResponse().setResponseCode(404);
+                    try {
+                        var body = new ObjectMapper().readTree(request.getBody().readUtf8());
+                        return new MockResponse().setHeader("Content-Type", "application/json").setBody(
+                                McpSourceBlockResolverTest.response(body.path("document_id").asText(),
+                                        body.path("markdown").asText(), "reg_").toString());
+                    } catch (Exception e) {
+                        return new MockResponse().setResponseCode(500);
+                    }
+                }
+            });
+            sourceBlocks.start();
             access = new MockWebServer();
             access.setDispatcher(new Dispatcher() {
                 @Override public MockResponse dispatch(RecordedRequest request) {
@@ -152,6 +169,7 @@ class McpEnabledIntegrationTest {
         registry.add("app.internal.access-base-url", () -> access.url("/").toString().replaceAll("/$", ""));
         registry.add("app.mcp.wiki-search-uri", () -> ai.url("/internal/mcp/wiki/search").toString());
         registry.add("app.wiki-state.endpoint", () -> ai.url("/wiki").toString());
+        registry.add("app.agent.run-endpoint", () -> sourceBlocks.url("/agent/runs").toString());
     }
 
     @AfterEach void cleanOwnRowsAndObjects() throws Exception {
@@ -168,6 +186,7 @@ class McpEnabledIntegrationTest {
         try {
             access.shutdown();
             ai.shutdown();
+            sourceBlocks.shutdown();
         } finally {
             SSLContext.setDefault(defaultTls);
         }
@@ -277,7 +296,7 @@ class McpEnabledIntegrationTest {
                 """);
         assertThat(initialized.path("result").path("protocolVersion").asText()).isEqualTo("2025-11-25");
 
-        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v13");
+        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v14");
         assertThat(initialized.path("result").path("instructions").asText()).contains("free", "Fruition fee", "get_credit_balance");
 
         JsonNode tools = rpc("""
@@ -397,15 +416,15 @@ class McpEnabledIntegrationTest {
         var lazy = reads.get(identity(), "doc_i2_lazy", null);
 
         assertSameIdentity(lazySearch, lazy);
-        assertThat(text(lazy)).isEqualTo(lazyBody);
+        assertBlocks(lazy, lazyBody);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM document_edit_states WHERE document_id = ?",
                 Integer.class, "doc_i2_lazy")).isOne();
-        assertThat(text(never)).isEqualTo(neverBody);
+        assertBlocks(never, neverBody);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM document_edit_states WHERE document_id = ?",
                 Integer.class, "doc_i2_never")).isOne();
-        assertThat(text(chat)).isEqualTo(chatBody);
+        assertBlocks(chat, chatBody);
         assertThat(chat.contentHash()).isEqualTo("sha256:" + sha256(chatBody));
-        assertThat(text(edited)).isEqualTo(editedBody);
+        assertBlocks(edited, editedBody);
         assertThat(edited.currentVersion()).isEqualTo(2);
         assertThat(edited.contentHash()).isEqualTo("sha256:" + editedHash);
         assertSameIdentity(chatSearch, chat);
@@ -461,9 +480,19 @@ class McpEnabledIntegrationTest {
         OBJECTS.add(object);
     }
 
-    private static String text(McpDocumentReadService.DocumentReadResponse response) {
-        return response.blocks().stream().map(McpDocumentReadService.Block::text)
-                .collect(java.util.stream.Collectors.joining());
+    /** 블록은 레지스트리 ID를 쓰고, 줄 범위의 원문 줄과 같으며, 빈 줄이 아닌 모든 줄을 덮는다. */
+    private static void assertBlocks(McpDocumentReadService.DocumentReadResponse response, String body) {
+        String[] lines = body.split("\n", -1);
+        Set<Integer> covered = new java.util.HashSet<>();
+        for (var block : response.blocks()) {
+            assertThat(block.blockId()).startsWith("reg_");
+            assertThat(block.text()).isEqualTo(String.join("\n",
+                    java.util.Arrays.asList(lines).subList(block.lineStart() - 1, block.lineEnd())));
+            for (int line = block.lineStart(); line <= block.lineEnd(); line++) covered.add(line);
+        }
+        for (int line = 1; line <= lines.length; line++) {
+            if (!lines[line - 1].isBlank()) assertThat(covered).contains(line);
+        }
     }
 
     private static McpIdentity identity() {

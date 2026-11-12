@@ -19,12 +19,14 @@ public class McpWikiSourceService {
     private final McpAccessClient access;
     private final McpDocumentDataGateway documents;
     private final McpProperties properties;
+    private final McpSourceBlockResolver blocks;
 
     public McpWikiSourceService(McpAccessClient access, McpDocumentDataGateway documents,
-                                McpProperties properties) {
+                                McpProperties properties, McpSourceBlockResolver blocks) {
         this.access = access;
         this.documents = documents;
         this.properties = properties;
+        this.blocks = blocks;
     }
 
     @Transactional(readOnly = true)
@@ -54,15 +56,28 @@ public class McpWikiSourceService {
                 || !(body.contentHash().equals(sourceHash) || body.contentHash().equals(sourceHash.substring(7)))) {
             throw new McpAuthorizationException(503, "DEPENDENCY_UNAVAILABLE");
         }
-        List<String> texts = McpDocumentReadService.markdownBlocks(body.markdown());
-        if (texts.isEmpty() || texts.size() > properties.maxSourceBlocks()) {
+        // 블록 ID는 웹 편입과 같은 pipeline source_blocks 레지스트리 ID다. 순번으로 대신 매기지 않는다.
+        List<McpSourceBlockResolver.SourceBlock> resolved = resolve(identity.workspaceId(), documentId, body.markdown());
+        if (resolved.isEmpty() || resolved.size() > properties.maxSourceBlocks()) {
             throw new McpAuthorizationException(413, "SOURCE_LIMIT_EXCEEDED");
         }
-        List<Block> blocks = java.util.stream.IntStream.range(0, texts.size())
-                .mapToObj(i -> new Block("B%04d".formatted(i + 1), i + 1, texts.get(i), hash(texts.get(i))))
+        List<Block> out = resolved.stream()
+                .map(b -> new Block(b.blockId(), b.ordinal(), b.rawText(), hash(b.rawText()),
+                        b.lineStart(), b.lineEnd(), b.blockType()))
                 .toList();
         return new Response("mcp.wiki-source.v1", documentId, document.getDisplayName(), identity.workspaceId(), body.version(),
-                sourceHash, document.getMimeType(), blocks);
+                sourceHash, document.getMimeType(), out);
+    }
+
+    private List<McpSourceBlockResolver.SourceBlock> resolve(String workspaceId, String documentId, String markdown) {
+        try {
+            return blocks.resolve(workspaceId, documentId, markdown);
+        } catch (McpToolException e) {
+            if ("RESPONSE_LIMIT_EXCEEDED".equals(e.code()) || "SOURCE_LIMIT_EXCEEDED".equals(e.code())) {
+                throw new McpAuthorizationException(413, "SOURCE_LIMIT_EXCEEDED");
+            }
+            throw new McpAuthorizationException(503, "DEPENDENCY_UNAVAILABLE");
+        }
     }
 
     private static String hash(String value) {
@@ -82,6 +97,9 @@ public class McpWikiSourceService {
                            @JsonProperty("source_content_hash") String sourceContentHash,
                            @JsonProperty("mime_type") String mimeType,
                            List<Block> blocks) {}
+    /** text는 원문 line_start..line_end 줄 그대로다. block_type은 레지스트리가 주지 않으면 null이다. */
     public record Block(@JsonProperty("block_id") String blockId, int ordinal, String text,
-                        @JsonProperty("content_hash") String contentHash) {}
+                        @JsonProperty("content_hash") String contentHash,
+                        @JsonProperty("line_start") int lineStart, @JsonProperty("line_end") int lineEnd,
+                        @JsonProperty("block_type") String blockType) {}
 }

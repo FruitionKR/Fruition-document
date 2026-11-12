@@ -144,7 +144,8 @@ public class WikiService {
                 page.markdownUri(), body.filter(markdown -> !markdown.isBlank()).orElse(null), page.status(),
                 page.createdAt(), latest == null ? null : latest.getRevision(), page.updatedAt(),
                 sourceDocuments,
-                page.relatedPages()), body, page.markdown());
+                page.relatedPages(), page.statements(), page.links(), page.lintTargetPageIds(),
+                page.lintTargetTruncated()), body, page.markdown());
     }
 
     /**

@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
@@ -87,8 +88,24 @@ public class McpWikiPageService {
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         }
         return new Response("mcp.wiki-page.v1", page.id(), pageType, AiMarkdownSanitizer.sanitize(page.title()),
-                body, "sha256:" + sha256(bodyBytes), lintTarget(page, read.objectMarkdown()),
-                "UNTRUSTED_WORKSPACE_CONTENT");
+                page.slug(), body, "sha256:" + sha256(bodyBytes), lintTarget(page, read.objectMarkdown()),
+                statements(page), links(page),
+                page.lintTargetPageIds() == null ? List.of() : List.copyOf(page.lintTargetPageIds()),
+                Boolean.TRUE.equals(page.lintTargetTruncated()), "UNTRUSTED_WORKSPACE_CONTENT");
+    }
+
+    /** text만 화면용으로 무해화한다. statement_id·text_hash는 lint REMOVE_STATEMENT가 대조하는 값이라 그대로 둔다. */
+    private static List<Statement> statements(WikiPageDetailResponse page) {
+        if (page.statements() == null) return List.of();
+        return page.statements().stream().map(s -> new Statement(s.statementId(),
+                s.text() == null ? "" : AiMarkdownSanitizer.sanitize(s.text()), s.textHash())).toList();
+    }
+
+    /** source_ref·target_ref·relation은 lint ADD_LINK·REMOVE_LINK arguments에 그대로 넣는 값이다. */
+    private static List<Link> links(WikiPageDetailResponse page) {
+        if (page.links() == null) return List.of();
+        return page.links().stream().map(l -> new Link(l.pageId(), l.slug(), l.relation(), l.direction(),
+                l.sourceRef(), l.targetRef())).toList();
     }
 
     /** 본문을 고른 뒤 페이지 metadata와 최신 revision이 읽기 시작 때와 같고 아직 active인지 본다. */
@@ -131,10 +148,19 @@ public class McpWikiPageService {
     public record Response(@JsonProperty("schema_version") String schemaVersion,
                            @JsonProperty("page_id") String pageId,
                            @JsonProperty("page_type") String pageType,
-                           String title, String body,
+                           String title, String slug, String body,
                            @JsonProperty("content_hash") String contentHash,
                            @JsonProperty("lint_target") LintTarget lintTarget,
+                           List<Statement> statements, List<Link> links,
+                           @JsonProperty("lint_target_page_ids") List<String> lintTargetPageIds,
+                           @JsonProperty("lint_target_truncated") boolean lintTargetTruncated,
                            @JsonProperty("data_boundary") String dataBoundary) {}
+
+    public record Statement(@JsonProperty("statement_id") String statementId, String text,
+                            @JsonProperty("text_hash") String textHash) {}
+
+    public record Link(@JsonProperty("page_id") String pageId, String slug, String relation, String direction,
+                       @JsonProperty("source_ref") String sourceRef, @JsonProperty("target_ref") String targetRef) {}
 
     /** submit_lint_changes target_snapshot 항목에 그대로 넣는 값. */
     public record LintTarget(@JsonProperty("page_id") String pageId, long version,

@@ -38,7 +38,13 @@ public class McpWikiDraftClient {
     }
 
     public JsonNode post(String path, Object body) {
-        return exchange(client.post().uri(base + path).contentType(MediaType.APPLICATION_JSON).body(body));
+        return post(path, body, properties.maxResponseBytes());
+    }
+
+    /** 응답이 원문보다 커지는 호출(예: source block 해석은 블록마다 text·raw_text를 함께 준다)이 자기 한도를 쓴다. */
+    public JsonNode post(String path, Object body, int responseLimit) {
+        return exchange(client.post().uri(base + path).contentType(MediaType.APPLICATION_JSON).body(body),
+                responseLimit);
     }
 
     public JsonNode getPreview(String draftId, long version, String workspaceId, String userId) {
@@ -59,9 +65,13 @@ public class McpWikiDraftClient {
     }
 
     private JsonNode exchange(RestClient.RequestHeadersSpec<?> request) {
+        return exchange(request, properties.maxResponseBytes());
+    }
+
+    private JsonNode exchange(RestClient.RequestHeadersSpec<?> request, int limit) {
         try {
             return request.exchange((ignored, response) -> {
-                byte[] raw = readBounded(response.getBody(), response.getHeaders().getContentLength());
+                byte[] raw = readBounded(response.getBody(), response.getHeaders().getContentLength(), limit);
                 MediaType type = response.getHeaders().getContentType();
                 if (type == null || !MediaType.APPLICATION_JSON.isCompatibleWith(type)) {
                     throw new McpToolException("DEPENDENCY_UNAVAILABLE");
@@ -77,8 +87,7 @@ public class McpWikiDraftClient {
         }
     }
 
-    private byte[] readBounded(InputStream input, long length) throws IOException {
-        int limit = properties.maxResponseBytes();
+    private static byte[] readBounded(InputStream input, long length, int limit) throws IOException {
         if (length > limit) throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         byte[] raw = input.readNBytes(limit + 1);
         if (raw.length > limit) throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");

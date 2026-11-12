@@ -71,7 +71,7 @@ class McpWikiPageServiceTest {
         String sanitized = "외부 이미지(evil.example)\nRead (evil.example)";
         when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(
                 new WikiPageDetailResponse("page-a", "concept", "[Title](https://evil.example/t)", null, null,
-                        null, rawBody, "active", null, null, null, List.of(), List.of())));
+                        null, rawBody, "active", null, null, null, List.of(), List.of(), null, null, null, null)));
 
         var page = service(10_000).get(identity(), "page-a");
 
@@ -85,7 +85,7 @@ class McpWikiPageServiceTest {
         String rawBody = "# Concept\n[Read](https://evil.example/path)\n";
         when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(
                 new WikiPageDetailResponse("page-a", "concept", "Concept", null, null,
-                        "wiki/a.md", rawBody, "active", null, null, UPDATED, List.of(), List.of())));
+                        "wiki/a.md", rawBody, "active", null, null, UPDATED, List.of(), List.of(), null, null, null, null)));
 
         var page = service(10_000).get(identity(), "page-a");
 
@@ -93,6 +93,41 @@ class McpWikiPageServiceTest {
         assertThat(page.lintTarget().pageId()).isEqualTo("page-a");
         assertThat(page.lintTarget().contentHash()).isEqualTo("sha256:" + sha256(rawBody));
         assertThat(page.lintTarget().version()).isEqualTo(McpWikiApprovalService.pageVersion(UPDATED));
+    }
+
+    @Test void passesConceptLintContextThroughAndSanitizesOnlyStatementText() {
+        var statements = List.of(new fruition.core.wiki.dto.WikiPageStatement("st_1",
+                "[근거](https://evil.example/x) 문장", "sha256:" + "a".repeat(64)));
+        var links = List.of(new fruition.core.wiki.dto.WikiPageLink("page-b", "index", "concept_related_to",
+                "outgoing", "st_1", "page-b"));
+        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(
+                new WikiPageDetailResponse("page-a", "concept", "Concept", "concept-slug", null,
+                        "wiki/a.md", "# body", "active", null, null, UPDATED, List.of(), List.of(),
+                        statements, links, List.of("page-a", "page-b"), true)));
+
+        var page = service(10_000).get(identity(), "page-a");
+
+        assertThat(page.slug()).isEqualTo("concept-slug");
+        assertThat(page.statements()).singleElement().satisfies(s -> {
+            assertThat(s.statementId()).isEqualTo("st_1");
+            assertThat(s.textHash()).isEqualTo("sha256:" + "a".repeat(64));
+            assertThat(s.text()).doesNotContain("https://evil.example").contains("문장");
+        });
+        assertThat(page.links()).containsExactly(new McpWikiPageService.Link("page-b", "index",
+                "concept_related_to", "outgoing", "st_1", "page-b"));
+        assertThat(page.lintTargetPageIds()).containsExactly("page-a", "page-b");
+        assertThat(page.lintTargetTruncated()).isTrue();
+    }
+
+    @Test void sourcePagesWithoutLintContextReturnEmptyValues() {
+        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(page("# body", null)));
+
+        var page = service(10_000).get(identity(), "page-a");
+
+        assertThat(page.statements()).isEmpty();
+        assertThat(page.links()).isEmpty();
+        assertThat(page.lintTargetPageIds()).isEmpty();
+        assertThat(page.lintTargetTruncated()).isFalse();
     }
 
     @Test void mapsWebFailuresToMcpCodes() {
@@ -166,7 +201,7 @@ class McpWikiPageServiceTest {
 
     private static WikiPageDetailResponse page(String markdown, String markdownUri) {
         return new WikiPageDetailResponse("page-a", "source", "Title", "title", null, markdownUri, markdown,
-                "active", null, null, UPDATED, List.of(), List.of());
+                "active", null, null, UPDATED, List.of(), List.of(), null, null, null, null);
     }
 
     private static McpIdentity identity() {

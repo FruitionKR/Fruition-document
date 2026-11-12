@@ -8,7 +8,6 @@ import fruition.core.document.service.DocumentAccessPolicy;
 import fruition.core.document.service.McpDocumentDataGateway;
 import org.commonmark.node.AbstractVisitor;
 import org.commonmark.node.LinkReferenceDefinition;
-import org.commonmark.node.Node;
 import org.commonmark.parser.IncludeSourceSpans;
 import org.commonmark.parser.Parser;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -16,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -31,11 +31,12 @@ public class McpDocumentReadService {
     private final McpCursorCodec cursors;
     private final McpProperties properties;
     private final ObjectMapper mapper;
+    private final McpSourceBlockResolver sourceBlocks;
 
     public McpDocumentReadService(McpDocumentDataGateway documents, McpCursorCodec cursors,
-                                  McpProperties properties, ObjectMapper mapper) {
+                                  McpProperties properties, ObjectMapper mapper, McpSourceBlockResolver sourceBlocks) {
         this.documents = documents; this.cursors = cursors;
-        this.properties = properties; this.mapper = mapper;
+        this.properties = properties; this.mapper = mapper; this.sourceBlocks = sourceBlocks;
     }
 
     public DocumentSearchResponse find(McpIdentity id, String query, String cursor, int pageSize) {
@@ -73,17 +74,21 @@ public class McpDocumentReadService {
         if (body.markdown() == null || body.bodyBytes() > properties.maxSourceBytes())
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         String hash = normalizeHash(body.contentHash());
-        // 원문을 먼저 블록으로 나눠 McpWikiSourceService와 같은 순번·ID(B0001…)를 쓴다. 그래야 외부 AI가 이 ID를
-        // lint·편입 근거로 그대로 낼 수 있다. sanitize는 블록마다 따로 해서 블록 수가 바뀌지 않게 한다.
-        List<String> raw = withoutExternalDefinitions(body.markdown(), markdownBlocks(body.markdown()));
-        if (raw.size() > properties.maxSourceBlocks())
+        // 블록 ID·줄 범위는 웹 편입과 같은 pipeline source_blocks 레지스트리에서 받는다. 그래야 외부 AI가 낸 근거 ID를
+        // 화면이 그대로 강조하고 lint·편입 근거로 쓸 수 있다. 실패하면 순번 ID로 대신하지 않는다.
+        List<McpSourceBlockResolver.SourceBlock> resolved =
+                sourceBlocks.resolve(id.workspaceId(), documentId, body.markdown());
+        if (resolved.size() > properties.maxSourceBlocks())
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
+        // 줄 수가 원문과 같은 사본에서 같은 줄 범위를 잘라 블록마다 sanitize한다.
+        String[] lines = withoutExternalDefinitions(body.markdown()).split("\n", -1);
         List<Block> all = new ArrayList<>();
         int sanitizedBytes = 0;
-        for (int i = 0; i < raw.size(); i++) {
-            String text = AiMarkdownSanitizer.sanitize(raw.get(i));
+        for (var block : resolved) {
+            String text = AiMarkdownSanitizer.sanitize(
+                    String.join("\n", Arrays.asList(lines).subList(block.lineStart() - 1, block.lineEnd())));
             sanitizedBytes += utf8(text);
-            all.add(new Block("B%04d".formatted(i + 1), i + 1, text));
+            all.add(new Block(block.blockId(), block.ordinal(), block.lineStart(), block.lineEnd(), text));
         }
         if (sanitizedBytes > properties.maxSourceBytes())
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
@@ -139,9 +144,9 @@ public class McpDocumentReadService {
     /**
      * 블록별 sanitize는 다른 블록의 참조 정의를 보지 못해 {@code [t][x]}를 외부 링크로 판단하지 못하고 글자로 남긴다.
      * 정의 줄({@code [x]: https://...})의 외부 주소를 글자로 바꿔, 응답을 이어 붙여 렌더링해도 외부 링크가 살아나지 않게 한다.
-     * 정의가 있던 블록 안에서만 글자를 바꾸므로 블록 수·순번은 원문과 같다.
+     * 바꾼 자리에 원래 있던 줄바꿈 수만큼 줄바꿈을 남겨 줄 수·줄 번호를 원문과 같게 둔다(블록 줄 범위가 원문 기준이다).
      */
-    static List<String> withoutExternalDefinitions(String markdown, List<String> blocks) {
+    static String withoutExternalDefinitions(String markdown) {
         List<int[]> ranges = new ArrayList<>();
         List<String> replacements = new ArrayList<>();
         MARKDOWN.parse(markdown).accept(new AbstractVisitor() {
@@ -154,40 +159,18 @@ public class McpDocumentReadService {
                 replacements.add(node.getLabel() + ": " + (host.get().isEmpty() ? "외부 링크" : "외부 링크(" + host.get() + ")"));
             }
         });
-        if (ranges.isEmpty()) return blocks;
-        List<String> out = new ArrayList<>(blocks.size());
-        int start = 0, next = 0;
-        for (String block : blocks) {
-            int end = start + block.length(), cursor = start;
-            StringBuilder text = new StringBuilder();
-            while (next < ranges.size() && ranges.get(next)[0] < end) {
-                int[] range = ranges.get(next);
-                // 줄 수를 원문과 같게 둔다. propose_document_edit의 줄 번호는 원문 기준이라 줄이 줄면 뒤 편집이 밀린다.
-                String removed = markdown.substring(Math.max(cursor, range[0]), Math.min(end, Math.max(cursor, range[1])));
-                text.append(markdown, cursor, Math.max(cursor, range[0])).append(replacements.get(next++))
-                        .append("\n".repeat((int) removed.chars().filter(ch -> ch == '\n').count()));
-                cursor = Math.min(end, Math.max(cursor, range[1]));
-            }
-            out.add(text.append(markdown, cursor, end).toString());
-            start = end;
+        if (ranges.isEmpty()) return markdown;
+        StringBuilder out = new StringBuilder(markdown.length());
+        int cursor = 0;
+        for (int i = 0; i < ranges.size(); i++) {
+            int start = Math.max(cursor, ranges.get(i)[0]), end = Math.max(start, ranges.get(i)[1]);
+            long newlines = markdown.substring(start, end).chars().filter(ch -> ch == '\n').count();
+            out.append(markdown, cursor, start).append(replacements.get(i)).append("\n".repeat((int) newlines));
+            cursor = end;
         }
-        return out;
+        return out.append(markdown, cursor, markdown.length()).toString();
     }
 
-    static List<String> markdownBlocks(String markdown) {
-        List<Integer> starts = new ArrayList<>();
-        for (Node node = MARKDOWN.parse(markdown).getFirstChild(); node != null; node = node.getNext()) {
-            if (!node.getSourceSpans().isEmpty()) starts.add(node.getSourceSpans().getFirst().getInputIndex());
-        }
-        if (starts.isEmpty()) return markdown.isEmpty() ? List.of() : List.of(markdown);
-        List<String> blocks = new ArrayList<>(starts.size());
-        for (int i = 0; i < starts.size(); i++) {
-            int start = i == 0 ? 0 : starts.get(i);
-            int end = i + 1 < starts.size() ? starts.get(i + 1) : markdown.length();
-            blocks.add(markdown.substring(start, end));
-        }
-        return blocks;
-    }
     private <T> T bounded(T value) {
         try { if (mapper.writeValueAsBytes(value).length > properties.maxResponseBytes())
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED"); return value; }
@@ -209,5 +192,8 @@ public class McpDocumentReadService {
             @JsonProperty("current_version") long currentVersion, @JsonProperty("content_hash") String contentHash,
             List<Block> blocks, @JsonProperty("next_cursor") String nextCursor, boolean truncated,
             @JsonProperty("data_boundary") String dataBoundary) {}
-    public record Block(@JsonProperty("block_id") String blockId, int ordinal, String text) {}
+    /** line_start·line_end는 '\n'으로 나눈 현재 원문의 1부터 세는 줄 번호다(propose_document_edit target과 같은 기준). */
+    public record Block(@JsonProperty("block_id") String blockId, int ordinal,
+                        @JsonProperty("line_start") int lineStart, @JsonProperty("line_end") int lineEnd,
+                        String text) {}
 }

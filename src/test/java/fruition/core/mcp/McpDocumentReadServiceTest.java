@@ -23,8 +23,7 @@ class McpDocumentReadServiceTest {
     @Test void candidateAndBlockCapsFailWithoutSilentTruncation() {
         var repository = mock(McpDocumentDataGateway.class);
         var props = McpTokenVerifierTest.props();
-        var service = new McpDocumentReadService(repository,
-                new McpCursorCodec(new ObjectMapper(), props), props, new ObjectMapper());
+        var service = service(repository, props);
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
                 Set.of("read"), "MEMBER", Set.of());
         var viewer = new DocumentAccessPolicy.Viewer("user", false, false, Map.of(), Map.of(), Map.of());
@@ -46,8 +45,7 @@ class McpDocumentReadServiceTest {
 
     @Test void sanitizesCurrentMarkdownWithoutChangingItsStoredHash() {
         var repository = mock(McpDocumentDataGateway.class); var props = McpTokenVerifierTest.props();
-        var service = new McpDocumentReadService(repository,
-                new McpCursorCodec(new ObjectMapper(), props), props, new ObjectMapper());
+        var service = service(repository, props);
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
                 Set.of("read"), "MEMBER", Set.of());
         var viewer = new DocumentAccessPolicy.Viewer("user", false, false, Map.of(), Map.of(), Map.of());
@@ -72,49 +70,83 @@ class McpDocumentReadServiceTest {
                 .contains("external (evil.example)", "외부 이미지(evil.example)", "raw",
                         "[relative](/docs)", "[anchor](#part)", "`https://code.example`");
         assertThat(response.blocks()).extracting(McpDocumentReadService.Block::blockId)
-                .containsExactly("B0001", "B0002");
+                .containsExactly("src_1", "src_2");
     }
 
     @Test void referenceDefinitionsInOtherBlocksDoNotKeepExternalUrls() {
         String markdown = "[t][x] and [rel][y]\n\n> [x]: https://evil.example/q?s=secret \"title\"\n\n[y]: /docs\n";
-        var blocks = McpDocumentReadService.markdownBlocks(markdown);
 
-        var out = McpDocumentReadService.withoutExternalDefinitions(markdown, blocks);
+        String out = McpDocumentReadService.withoutExternalDefinitions(markdown);
 
-        assertThat(out).hasSize(blocks.size());
-        assertThat(String.join("", out)).doesNotContain("evil.example/q", "secret")
+        assertThat(out).doesNotContain("evil.example/q", "secret")
                 .contains("x: 외부 링크(evil.example)", "[y]: /docs", "[t][x]");
-        assertThat(out.get(0)).isEqualTo(blocks.get(0));
+        assertThat(out.split("\n", -1)[0]).isEqualTo("[t][x] and [rel][y]");
         String multiLine = "[x]:\n  https://evil.example/q\n  \"title\"\n\nafter\n";
-        var multiBlocks = McpDocumentReadService.markdownBlocks(multiLine);
-        assertThat(String.join("", McpDocumentReadService.withoutExternalDefinitions(multiLine, multiBlocks)).lines().count())
-                .isEqualTo(multiLine.lines().count());
-        assertThat(McpDocumentReadService.withoutExternalDefinitions("plain\n", List.of("plain\n")))
-                .containsExactly("plain\n");
+        assertThat(McpDocumentReadService.withoutExternalDefinitions(multiLine).split("\n", -1))
+                .hasSameSizeAs(multiLine.split("\n", -1)).doesNotContain("  https://evil.example/q")
+                .endsWith("after", "");
+        assertThat(McpDocumentReadService.withoutExternalDefinitions("plain\n")).isEqualTo("plain\n");
     }
 
-    @Test void blockIdsMatchWikiSourceOrdinalsEvenWhenSanitizingEmptiesABlock() {
+    @Test void blocksUseRegistryIdsAndRawLineRangesEvenAroundScriptAndMultiLineDefinitions() {
         var repository = mock(McpDocumentDataGateway.class); var props = McpTokenVerifierTest.props();
-        var service = new McpDocumentReadService(repository,
-                new McpCursorCodec(new ObjectMapper(), props), props, new ObjectMapper());
-        var identity = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
-                Set.of("read"), "MEMBER", Set.of());
-        var viewer = new DocumentAccessPolicy.Viewer("user", false, false, Map.of(), Map.of(), Map.of());
+        var ai = mock(McpWikiDraftClient.class);
+        var service = new McpDocumentReadService(repository, new McpCursorCodec(new ObjectMapper(), props), props,
+                new ObjectMapper(), McpSourceBlockResolverTest.fakeRegistry(ai, "src_", java.util.function.UnaryOperator.identity()));
+        var identity = identity();
         Document document = document("doc_ids");
-        String markdown = "first\n\n<script>alert(1)</script>\n\nthird\n";
-        when(repository.viewer("workspace", "user", false, false)).thenReturn(viewer);
-        when(repository.find("workspace", "doc_ids")).thenReturn(Optional.of(document));
-        when(repository.currentBody(document, props.maxSourceBytes())).thenReturn(Optional.of(
-                new McpDocumentDataGateway.CurrentBody(2, "a".repeat(64), markdown,
-                        markdown.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)));
+        String markdown = "# Title\n\n<script>\nalert(1)\n</script>\n\n[x]:\n  https://evil.example/q\n  \"t\"\n\n"
+                + "after [t][x]\nmore\n";
+        stubBody(repository, document, markdown);
 
         var response = service.get(identity, "doc_ids", null);
 
-        var source = McpDocumentReadService.markdownBlocks(markdown);
-        assertThat(response.blocks()).hasSize(source.size());
-        assertThat(response.blocks().get(2).blockId()).isEqualTo("B0003");
-        assertThat(response.blocks().get(2).text()).isEqualTo(source.get(2));
+        assertThat(response.blocks()).extracting(McpDocumentReadService.Block::blockId)
+                .containsExactly("src_1", "src_2", "src_3", "src_4");
+        assertThat(response.blocks()).extracting(McpDocumentReadService.Block::lineStart).containsExactly(1, 3, 7, 11);
+        assertThat(response.blocks()).extracting(McpDocumentReadService.Block::lineEnd).containsExactly(1, 5, 9, 12);
+        // propose_document_edit 검증기(McpDocumentProposalService)와 같은 기준: 1부터 세는 원문 줄.
+        String[] validatorLines = markdown.split("\\r\\n|\\r|\\n", -1);
+        assertThat(validatorLines).hasSize(13);
+        var last = response.blocks().getLast();
+        assertThat(String.join("\n", List.of(validatorLines).subList(last.lineStart() - 1, last.lineEnd())))
+                .isEqualTo("after [t][x]\nmore");
+        assertThat(last.text()).isEqualTo("after [t][x]\nmore");
         assertThat(response.blocks().get(1).text()).doesNotContain("<script>");
+        assertThat(response.blocks().get(2).text()).doesNotContain("evil.example/q").contains("외부 링크(evil.example)");
+    }
+
+    @Test void failsInsteadOfFallingBackToOrdinalIdsWhenTheRegistryIsUnavailable() {
+        var repository = mock(McpDocumentDataGateway.class); var props = McpTokenVerifierTest.props();
+        var ai = mock(McpWikiDraftClient.class);
+        when(ai.post(eq(McpSourceBlockResolver.PATH), any(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenThrow(new McpToolException("DEPENDENCY_UNAVAILABLE"));
+        var service = new McpDocumentReadService(repository, new McpCursorCodec(new ObjectMapper(), props), props,
+                new ObjectMapper(), new McpSourceBlockResolver(ai, props));
+        Document document = document("doc_down");
+        stubBody(repository, document, "first\n\nsecond\n");
+
+        assertThatThrownBy(() -> service.get(identity(), "doc_down", null))
+                .isInstanceOf(McpToolException.class).hasMessage("DEPENDENCY_UNAVAILABLE");
+    }
+
+    private static void stubBody(McpDocumentDataGateway repository, Document document, String markdown) {
+        var props = McpTokenVerifierTest.props();
+        var viewer = new DocumentAccessPolicy.Viewer("user", false, false, Map.of(), Map.of(), Map.of());
+        when(repository.viewer("workspace", "user", false, false)).thenReturn(viewer);
+        when(repository.find("workspace", document.getId())).thenReturn(Optional.of(document));
+        when(repository.currentBody(document, props.maxSourceBytes())).thenReturn(Optional.of(
+                new McpDocumentDataGateway.CurrentBody(2, "a".repeat(64), markdown,
+                        markdown.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)));
+    }
+    private static McpIdentity identity() {
+        return new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
+                Set.of("read"), "MEMBER", Set.of());
+    }
+    private static McpDocumentReadService service(McpDocumentDataGateway repository, McpProperties props) {
+        return new McpDocumentReadService(repository, new McpCursorCodec(new ObjectMapper(), props), props,
+                new ObjectMapper(), McpSourceBlockResolverTest.fakeRegistry(mock(McpWikiDraftClient.class), "src_",
+                java.util.function.UnaryOperator.identity()));
     }
     private static Document document(String id) {
         return new Document(id, "workspace", "user", id + ".md", "text/markdown", 1, null, "a".repeat(64));

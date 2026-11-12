@@ -158,7 +158,7 @@ class McpWikiProposalServiceIntegrationTest {
         when(sources.read(any(McpProposalActor.class), anyString())).thenReturn(new McpWikiSourceService.Response(
                 "mcp.wiki-source.v1", "doc_i9", "Source", identity.workspaceId(), 4, "sha256:" + "a".repeat(64),
                 "text/markdown", List.of(new McpWikiSourceService.Block("B0001", 1, "quote",
-                "sha256:" + "b".repeat(64)))));
+                "sha256:" + "b".repeat(64), 1, 1, "paragraph"))));
         for (int i = 0; i < 2; i++) {
             aiServer.enqueue(json("""
                     {"schema_version":"mcp.wiki-draft.v1","draft_id":"%s","draft_version":1,

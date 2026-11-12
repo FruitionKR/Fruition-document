@@ -20,7 +20,9 @@ class McpWikiSourceServiceTest {
     private final McpAccessClient access = mock(McpAccessClient.class);
     private final McpDocumentDataGateway documents = mock(McpDocumentDataGateway.class);
     private final McpProperties props = McpTokenVerifierTest.props();
-    private final McpWikiSourceService service = new McpWikiSourceService(access, documents, props);
+    private final McpWikiDraftClient ai = mock(McpWikiDraftClient.class);
+    private final McpWikiSourceService service = new McpWikiSourceService(access, documents, props,
+            McpSourceBlockResolverTest.fakeRegistry(ai, "src_", java.util.function.UnaryOperator.identity()));
     private final McpProposalActor actor = new McpProposalActor(
             "00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000001",
             "user", "workspace", "https://client.example/client.json", 2,
@@ -29,7 +31,7 @@ class McpWikiSourceServiceTest {
             2, Set.of("wiki_write"), "MEMBER", Set.of("wiki.ingest"));
 
     @Test void returnsCurrentAuthoritativeSourceWithStableServerBlocksAndHashes() {
-        String markdown = "# Heading\n\nParagraph";
+        String markdown = "# Heading\n\nParagraph\nsecond line\n";
         Document document = document("workspace", "text/markdown");
         authorized(document, markdown, 7, markdown.getBytes(StandardCharsets.UTF_8).length);
 
@@ -45,10 +47,17 @@ class McpWikiSourceServiceTest {
         assertThat(response.workspaceId()).isEqualTo("workspace");
         assertThat(response.sourceVersion()).isEqualTo(7);
         assertThat(response.sourceContentHash()).isEqualTo("sha256:" + sha256(markdown));
-        assertThat(response.blocks()).extracting(McpWikiSourceService.Block::blockId)
-                .containsExactly("B0001", "B0002");
-        assertThat(response.blocks()).allSatisfy(block ->
-                assertThat(block.contentHash()).isEqualTo("sha256:" + sha256(block.text())));
+        // 블록 ID는 웹 편입이 쓰는 pipeline 레지스트리 ID이고, text는 원문 줄 범위 그대로다.
+        assertThat(response.blocks()).containsExactly(
+                new McpWikiSourceService.Block("src_1", 1, "# Heading", "sha256:" + sha256("# Heading"), 1, 1, "heading"),
+                new McpWikiSourceService.Block("src_2", 2, "Paragraph\nsecond line",
+                        "sha256:" + sha256("Paragraph\nsecond line"), 3, 4, "paragraph"));
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().convertValue(response.blocks().getFirst(), Map.class)
+                .keySet()).containsExactlyInAnyOrder("block_id", "ordinal", "text", "content_hash",
+                "line_start", "line_end", "block_type");
+        verify(ai).post(org.mockito.ArgumentMatchers.eq(McpSourceBlockResolver.PATH), org.mockito.ArgumentMatchers.eq(
+                Map.of("schema_version", "mcp.source-blocks.v1", "workspace_id", "workspace",
+                        "document_id", "doc_1", "markdown", markdown)), org.mockito.ArgumentMatchers.anyInt());
         verify(access).authorizeWikiSource(actor);
         verify(documents).find("workspace", "doc_1");
     }
@@ -96,6 +105,23 @@ class McpWikiSourceServiceTest {
 
         when(documents.currentBody(markdown, props.maxSourceBytes())).thenReturn(Optional.of(
                 new McpDocumentDataGateway.CurrentBody(1, sha256("body"), null, props.maxSourceBytes() + 1)));
+        assertThatThrownBy(() -> service.read(actor, "doc_1"))
+                .isInstanceOf(McpAuthorizationException.class).hasMessage("SOURCE_LIMIT_EXCEEDED");
+    }
+
+    @Test void registryFailuresFailClosedWithoutOrdinalFallback() {
+        String markdown = "body";
+        authorized(document("workspace", "text/markdown"), markdown, 1, 4);
+        reset(ai);
+        when(ai.post(org.mockito.ArgumentMatchers.eq(McpSourceBlockResolver.PATH), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyInt())).thenThrow(new McpToolException("DEPENDENCY_UNAVAILABLE"));
+        assertThatThrownBy(() -> service.read(actor, "doc_1"))
+                .isInstanceOf(McpAuthorizationException.class).hasMessage("DEPENDENCY_UNAVAILABLE")
+                .extracting(e -> ((McpAuthorizationException) e).status()).isEqualTo(503);
+
+        reset(ai);
+        when(ai.post(org.mockito.ArgumentMatchers.eq(McpSourceBlockResolver.PATH), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyInt())).thenThrow(new McpToolException("RESPONSE_LIMIT_EXCEEDED"));
         assertThatThrownBy(() -> service.read(actor, "doc_1"))
                 .isInstanceOf(McpAuthorizationException.class).hasMessage("SOURCE_LIMIT_EXCEEDED");
     }
