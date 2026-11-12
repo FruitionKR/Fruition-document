@@ -1,5 +1,11 @@
 # Backend 변경 기록
 
+## 2026-11-12 — 면제 계정 크레딧 숨김과 MCP 수수료 안내
+
+- `GET /api/users/me/credits`와 MCP `get_credit_balance`에 `limit_exempt`를 추가했다. 웹은 true면 크레딧 섹션을 숨기고, MCP 도구 설명은 음수 잔액을 빚처럼 전하지 않게 한다.
+- MCP 서버 `instructions`와 위키 편입·lint 도구 설명에 Fruition 수수료가 클라이언트 LLM과 별도로 붙는다는 안내를 넣었다(`mcp-tools.v12`). 가격·예약 규칙은 그대로다.
+- MCP `find_documents` 설명에 제목·파일명만 찾고 본문은 검색하지 않는다는 점과 `search_wiki`·`get_document` 대안을 명시했다.
+
 ## 2026-11-11 — MCP 본인 크레딧 조회
 
 - `get_credit_balance` 읽기 도구를 추가했다(`mcp-tools.v10`). 인증된 본인의 총 잔액·예약액·가용액만 반환하고 원장 내역은 제외한다. 기존 웹 조회를 재사용하며 예약·차감·계정 생성 없이 동작한다.

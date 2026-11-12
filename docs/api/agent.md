@@ -1844,7 +1844,7 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 
 ## 본인 크레딧 잔액 (선불)
 
-**기존 가입자 예외(V117):** 아래 잔액 부족 거절 규칙은 `credit_accounts.limit_exempt=false`인 계정에 적용한다. 적용 전 가입자 명단을 반영한 면제 계정은 일반 AI 요청·구간 갱신·MCP 승인에서 잔액 부족 검사만 면제한다. 일일 AI 토큰 한도는 기존 설정대로 적용한다. 예약·사용량·정산은 유지하고 응답 DTO는 바꾸지 않는다. 업로드·동시 실행·권한 제한은 그대로다. [전환 절차](../credit-beta-rollout.md)를 따른다.
+**기존 가입자 예외(V117):** 아래 잔액 부족 거절 규칙은 `credit_accounts.limit_exempt=false`인 계정에 적용한다. 적용 전 가입자 명단을 반영한 면제 계정은 일반 AI 요청·구간 갱신·MCP 승인에서 잔액 부족 검사만 면제한다. 일일 AI 토큰 한도는 기존 설정대로 적용한다. 예약·사용량·정산은 유지한다. 잔액 응답의 `limit_exempt`가 true면 웹은 크레딧 표시를 숨긴다(2026-11-12). 업로드·동시 실행·권한 제한은 그대로다. [전환 절차](../credit-beta-rollout.md)를 따른다.
 
 `GET /api/users/me/credits`
 
@@ -1854,6 +1854,7 @@ curl -X POST "$DOCUMENT/internal/agent/tools/read/<value>" \
 {
   "user_id": "user_1", "currency": "KRW",
   "balance_krw_milli": 600000, "reserved_krw_milli": 300000, "available_krw_milli": 300000,
+  "limit_exempt": false,
   "entries": [{"type": "release", "amount_krw_milli": -300000, "run_id": "query-1", "reason": null,
     "created_at": "2026-10-09T03:00:00Z"}]
 }

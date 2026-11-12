@@ -98,6 +98,8 @@ class CreditServiceIntegrationTest {
         credits.renew(runId, user, "test_kind", 1);
         assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-900_000);
         assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(ESTIMATE);
+        assertThat(credits.credits(user).limitExempt()).isTrue();
+        assertThat(credits.credits("user-" + UUID.randomUUID()).limitExempt()).isFalse();
         jdbc.update("UPDATE ai_task_runs SET status = 'completed' WHERE id = ?", runId);
         credits.settle(runId);
         assertThat(credits.credits(user).reservedKrwMilli()).isZero();

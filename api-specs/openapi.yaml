@@ -7589,6 +7589,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Entry"
+        limit_exempt:
+          type: boolean
         reserved_krw_milli:
           type: integer
           format: int64
