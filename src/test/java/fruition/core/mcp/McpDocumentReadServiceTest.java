@@ -75,6 +75,20 @@ class McpDocumentReadServiceTest {
                 .containsExactly("B0001", "B0002");
     }
 
+    @Test void referenceDefinitionsInOtherBlocksDoNotKeepExternalUrls() {
+        String markdown = "[t][x] and [rel][y]\n\n> [x]: https://evil.example/q?s=secret \"title\"\n\n[y]: /docs\n";
+        var blocks = McpDocumentReadService.markdownBlocks(markdown);
+
+        var out = McpDocumentReadService.withoutExternalDefinitions(markdown, blocks);
+
+        assertThat(out).hasSize(blocks.size());
+        assertThat(String.join("", out)).doesNotContain("evil.example/q", "secret")
+                .contains("x: 외부 링크(evil.example)", "[y]: /docs", "[t][x]");
+        assertThat(out.get(0)).isEqualTo(blocks.get(0));
+        assertThat(McpDocumentReadService.withoutExternalDefinitions("plain\n", List.of("plain\n")))
+                .containsExactly("plain\n");
+    }
+
     @Test void blockIdsMatchWikiSourceOrdinalsEvenWhenSanitizingEmptiesABlock() {
         var repository = mock(McpDocumentDataGateway.class); var props = McpTokenVerifierTest.props();
         var service = new McpDocumentReadService(repository,
