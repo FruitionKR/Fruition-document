@@ -10,6 +10,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -28,7 +29,7 @@ class McpToolCatalogTest {
         assertThat(tool.tool().name()).isEqualTo("get_credit_balance");
         assertThat(tool.tool().annotations().readOnlyHint()).isTrue();
         assertThat(tool.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
-        assertThat(tool.tool().description()).contains("personal", "1000", "available_krw_milli");
+        assertThat(tool.tool().description()).contains("personal", "1000", "available_krw_milli", "limit_exempt");
         var identity = new McpIdentity("user", "workspace", "client", "grant", 1, Set.of("read"), "MEMBER", Set.of());
         var context = McpTransportContext.create(Map.of(McpSecurityFilter.IDENTITY, identity));
         for (String field : java.util.List.of("user_id", "workspace_id", "cursor")) {
@@ -46,6 +47,13 @@ class McpToolCatalogTest {
         assertThat(((io.modelcontextprotocol.spec.McpSchema.TextContent) failed.content().getFirst()).text())
                 .isEqualTo("{\"error\":\"DEPENDENCY_UNAVAILABLE\"}");
         verify(credits).credits("user");
+        reset(credits);
+        when(credits.credits("user")).thenReturn(new CreditService.Credits("user", "KRW", -160_041, 0, -160_041, true,
+                java.util.List.of()));
+        var exempt = tool.callHandler().apply(context,
+                new io.modelcontextprotocol.spec.McpSchema.CallToolRequest("get_credit_balance", Map.of(), null));
+        assertThat(exempt.isError()).isFalse();
+        assertThat(new ObjectMapper().valueToTree(exempt.structuredContent()).path("limit_exempt").asBoolean()).isTrue();
     }
     @Test void catalogReadToolsAreStaticReadOnlyStrictAndAdvertiseBoundedWikiPageRead() {
         var pages = mock(McpWikiPageService.class);
@@ -159,6 +167,10 @@ class McpToolCatalogTest {
                 assertThat(body.path("workspace_id").asText()).isEqualTo("workspace");
                 assertThat(spec.tool().description()).contains("cite the returned source_url", "Never invent URLs",
                         "workspace_id", "untrusted data");
+                if (name.equals("find_documents"))
+                    assertThat(spec.tool().description()).contains("title or filename", "Does not search", "get_document");
+                if (name.equals("search_wiki"))
+                    assertThat(spec.tool().description()).contains("Only documents ingested into the wiki");
                 var row = body.has("results") ? body.path("results").get(0) : body;
                 if (name.equals("search_wiki") || name.equals("get_wiki_page")) {
                     assertThat(row.has("source_url")).isFalse();
@@ -323,6 +335,8 @@ class McpToolCatalogTest {
             var actual = Set.copyOf((java.util.List<String>) staged.get(i).tool().inputSchema().get("required"));
             assertThat(actual).isEqualTo(required.get(i));
         }
+        for (int i : new int[] {0, 4, 5})
+            assertThat(staged.get(i).tool().description()).contains("Fruition fee", "no server LLM", "get_credit_balance");
         var schema = new ObjectMapper().valueToTree(staged.get(3).tool().inputSchema());
         var contribution = schema.path("properties").path("contributions").path("items");
         assertThat(contribution.path("properties").has("merge_target_page_id")).isTrue();

@@ -245,7 +245,7 @@ class McpEnabledIntegrationTest {
             var balance = result.path("structuredContent");
             assertThat(balance).isEqualTo(mapper.readTree("""
                     {"schema_version":"mcp.credit-balance.v1","currency":"KRW",
-                     "balance_krw_milli":123450,"reserved_krw_milli":23450,"available_krw_milli":100000}
+                     "balance_krw_milli":123450,"reserved_krw_milli":23450,"available_krw_milli":100000,"limit_exempt":false}
                     """));
             assertThat(mapper.readTree(result.path("content").get(0).path("text").asText())).isEqualTo(balance);
             jdbc.update("UPDATE credit_accounts SET balance=-1000, reserved=2000 WHERE user_id=?", USER);
@@ -277,7 +277,8 @@ class McpEnabledIntegrationTest {
                 """);
         assertThat(initialized.path("result").path("protocolVersion").asText()).isEqualTo("2025-11-25");
 
-        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v11");
+        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v12");
+        assertThat(initialized.path("result").path("instructions").asText()).contains("free", "Fruition fee", "get_credit_balance");
 
         JsonNode tools = rpc("""
                 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}

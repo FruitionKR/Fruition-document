@@ -394,14 +394,16 @@ public class CreditService {
 
     /** 본인의 잔액·예약과 최근 원장 50건. */
     public Credits credits(String userId) {
-        var accounts = jdbc.queryForList("SELECT balance, reserved FROM credit_accounts WHERE user_id = ?", userId);
+        var accounts = jdbc.queryForList("SELECT balance, reserved, limit_exempt FROM credit_accounts WHERE user_id = ?",
+                userId);
         long balance = accounts.isEmpty() ? 0 : ((Number) accounts.getFirst().get("balance")).longValue();
         long reserved = accounts.isEmpty() ? 0 : ((Number) accounts.getFirst().get("reserved")).longValue();
+        boolean limitExempt = !accounts.isEmpty() && Boolean.TRUE.equals(accounts.getFirst().get("limit_exempt"));
         List<Entry> entries = jdbc.query("SELECT type, amount, run_id, reason, created_at FROM credit_entries "
                 + "WHERE user_id = ? ORDER BY id DESC LIMIT 50", (rs, i) -> new Entry(rs.getString("type"),
                 rs.getLong("amount"), rs.getString("run_id"), rs.getString("reason"),
                 rs.getTimestamp("created_at").toInstant()), userId);
-        return new Credits(userId, "KRW", balance, reserved, balance - reserved, entries);
+        return new Credits(userId, "KRW", balance, reserved, balance - reserved, limitExempt, entries);
     }
 
     private Map<String, Object> lock(String userId) {
@@ -422,10 +424,10 @@ public class CreditService {
                 userId, type, amount, runId, key, reason, reservationType) == 1;
     }
 
-    /** 금액은 milli-KRW다. available은 잔액 − 예약이며 음수일 수 있다. */
+    /** 금액은 milli-KRW다. available은 잔액 − 예약이며 음수일 수 있다. limitExempt면 화면은 잔액을 숨긴다. */
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record Credits(String userId, String currency, long balanceKrwMilli, long reservedKrwMilli,
-                          long availableKrwMilli, List<Entry> entries) {
+                          long availableKrwMilli, boolean limitExempt, List<Entry> entries) {
     }
 
     /** amount는 원장 부호 그대로다(reserve +, release·charge −). */
