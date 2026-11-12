@@ -301,8 +301,9 @@ public class McpToolCatalog {
             fields.put("lint_target_truncated", Map.of("type", "boolean",
                     "description", "true if lint_target_page_ids was cut at the server limit."));
             fields.put("lint_context_error", Map.of("type", List.of("string", "null"),
-                    "description", "STATEMENTS_UNAVAILABLE when statements could not be loaded; an empty statements"
-                            + " list then does not mean the page has none. Retry later."));
+                    "description", "LEDGER_PENDING right after a wiki publication, until it is recorded; read the page"
+                            + " again in a few seconds. STATEMENTS_UNAVAILABLE when statements could not be loaded."
+                            + " In both cases an empty statements list does not mean the page has none."));
             fields.put("data_boundary", Map.of("type", "string", "const", "UNTRUSTED_WORKSPACE_CONTENT"));
             return Map.of("type", "object", "additionalProperties", false, "properties", fields,
                     "required", List.copyOf(fields.keySet()));
@@ -377,6 +378,8 @@ public class McpToolCatalog {
             case "finalize_ingest" -> "Freeze the complete ingest draft for explicit web approval." + REVIEW_APPROVAL
                     + FEE_NOTICE;
             case "submit_lint_changes" -> "Freeze structured wiki lint changes for explicit web approval."
+                    + " LEDGER_RECONCILIATION_PENDING is transient (e.g. just after a publication): retry in a few"
+                    + " seconds. LEDGER_CONTRADICTION is not retryable."
                     + " Take each target_snapshot entry from get_wiki_page lint_target, and include one for every"
                     + " page_id in the target page's lint_target_page_ids (call get_wiki_page for each)."
                     + " REMOVE_STATEMENT: use get_wiki_page statements[].statement_id and its text_hash as"
