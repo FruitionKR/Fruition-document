@@ -162,7 +162,10 @@ public class McpDocumentReadService {
             StringBuilder text = new StringBuilder();
             while (next < ranges.size() && ranges.get(next)[0] < end) {
                 int[] range = ranges.get(next);
-                text.append(markdown, cursor, Math.max(cursor, range[0])).append(replacements.get(next++));
+                // 줄 수를 원문과 같게 둔다. propose_document_edit의 줄 번호는 원문 기준이라 줄이 줄면 뒤 편집이 밀린다.
+                String removed = markdown.substring(Math.max(cursor, range[0]), Math.min(end, Math.max(cursor, range[1])));
+                text.append(markdown, cursor, Math.max(cursor, range[0])).append(replacements.get(next++))
+                        .append("\n".repeat((int) removed.chars().filter(ch -> ch == '\n').count()));
                 cursor = Math.min(end, Math.max(cursor, range[1]));
             }
             out.add(text.append(markdown, cursor, end).toString());

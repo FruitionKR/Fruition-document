@@ -85,6 +85,10 @@ class McpDocumentReadServiceTest {
         assertThat(String.join("", out)).doesNotContain("evil.example/q", "secret")
                 .contains("x: 외부 링크(evil.example)", "[y]: /docs", "[t][x]");
         assertThat(out.get(0)).isEqualTo(blocks.get(0));
+        String multiLine = "[x]:\n  https://evil.example/q\n  \"title\"\n\nafter\n";
+        var multiBlocks = McpDocumentReadService.markdownBlocks(multiLine);
+        assertThat(String.join("", McpDocumentReadService.withoutExternalDefinitions(multiLine, multiBlocks)).lines().count())
+                .isEqualTo(multiLine.lines().count());
         assertThat(McpDocumentReadService.withoutExternalDefinitions("plain\n", List.of("plain\n")))
                 .containsExactly("plain\n");
     }
