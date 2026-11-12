@@ -117,6 +117,18 @@ class CreditServiceIntegrationTest {
     }
 
     @Test
+    void freeMcpApprovalPassesEvenWhenAvailableIsNegative() {
+        CreditService credits = credits(true);
+        jdbc.update("INSERT INTO credit_accounts (user_id, balance) VALUES (?, -1000)", user);
+
+        credits.reserveMcpApproval(UUID.randomUUID().toString(), user, 0);
+
+        assertThatThrownBy(() -> credits.reserveMcpApproval(UUID.randomUUID().toString(), user, 1))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+    }
+
+    @Test
     void exemptMcpApprovalStillReservesAndSettlesExactlyOnce() {
         CreditService credits = credits(true);
         jdbc.update("INSERT INTO credit_accounts (user_id, limit_exempt) VALUES (?, true)", user);

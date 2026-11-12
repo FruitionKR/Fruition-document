@@ -92,7 +92,10 @@ public class CreditService {
         });
     }
 
-    /** MCP reserves its full cap; only explicit account exemptions bypass the balance check. */
+    /**
+     * MCP reserves its full cap; only explicit account exemptions bypass the balance check.
+     * A free approval (cap 0) never checks the balance, so accounts left negative by settlement keep using it.
+     */
     public void reserveMcpApproval(String approvalId, String userId, long amountCreditMilli) {
         if (amountCreditMilli < 0) throw new IllegalArgumentException("MCP reservation must be non-negative.");
         String runId = mcpRunId(approvalId);
@@ -104,7 +107,9 @@ public class CreditService {
             }
             long available = Math.subtractExact(((Number) account.get("balance")).longValue(),
                     ((Number) account.get("reserved")).longValue());
-            if (!limitExempt(userId) && available < amountCreditMilli) throw new InsufficientCreditException(AiErrorMessages.INSUFFICIENT_CREDIT);
+            if (amountCreditMilli > 0 && !limitExempt(userId) && available < amountCreditMilli) {
+                throw new InsufficientCreditException(AiErrorMessages.INSUFFICIENT_CREDIT);
+            }
             if (append(userId, "reserve", amountCreditMilli, runId, key, "mcp_approval", "MCP_APPROVAL")) {
                 jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
                         amountCreditMilli, userId);

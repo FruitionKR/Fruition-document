@@ -42,7 +42,8 @@ public class McpToolCatalog {
     static final String FEE_NOTICE = " Wiki ingest and lint carry a small Fruition fee, separate from the user's own"
             + " LLM: your model does the reasoning and Fruition calls no server LLM. Approval reserves the maximum fee"
             + " shown on the web approval screen, and is refused for insufficient credit when the user's available"
-            + " credit is below it. Before starting, tell the user about the fee and check get_credit_balance.";
+            + " credit is below it, unless get_credit_balance reports limit_exempt. Before starting, tell the user"
+            + " about the fee and check get_credit_balance.";
     static final String REVIEW_APPROVAL = " Nothing is saved until a person approves it in Fruition web: open the"
             + " returned review_url for the user right away (for example in their browser) and tell them it needs"
             + " their approval.";
