@@ -18,7 +18,13 @@ decompression to select the required `read`, `write_propose` (`propose_document_
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-## 공개 카탈로그 (`mcp-tools.v12`)
+## 공개 카탈로그 (`mcp-tools.v13`)
+
+lint 대상 값 추가(2026-11-12, `mcp-tools.v12` → `mcp-tools.v13`): `get_wiki_page` 응답에 `lint_target`
+(`page_id`, `version`, `content_hash`)을 추가했다. pipeline lint가 대조하는 값과 같은 기준이다. `version`은
+`updated_at`의 epoch 마이크로초, `content_hash`는 `markdown_uri` 원문 객체(없으면 빈 문자열)의 SHA-256이다.
+응답 `content_hash`는 무해화한 `body`의 hash라 lint 대상으로 쓰면 `TARGET_CHANGED`가 난다. `search_wiki`의
+`content_hash`도 검색 단위 hash라 lint 대상이 아니다. `submit_lint_changes`·`get_wiki_page` 설명이 이를 안내한다.
 
 수수료 안내·면제 표시(2026-11-12, `mcp-tools.v11` → `mcp-tools.v12`): 도구 목록은 그대로다.
 - 서버 `instructions`(`McpTransportConfig.INSTRUCTIONS`)가 읽기·검색·문서 수정 제안은 무료이고, 위키 편입·lint는
@@ -170,7 +176,8 @@ The read tools are:
   `POST /wiki/pages/lookup`) and the latest revision are read again, and any difference or a non-active page is
   retryable `PAGE_CHANGED`; the whole read must finish within `app.mcp.wiki-page-deadline-ms`
   (`MCP_WIKI_PAGE_DEADLINE_MS`, default 5000) or it is `DEPENDENCY_UNAVAILABLE`. It also applies the body size limit,
-  sanitizing, and the seven `mcp.wiki-page.v1` fields with a body hash over the exact UTF-8 body returned by the tool.
+  sanitizing, and the eight `mcp.wiki-page.v1` fields with a body hash over the exact UTF-8 body returned by the tool
+  plus `lint_target` (stored-object hash and `updated_at` micros, the values lint compares).
   A missing page is `PAGE_NOT_FOUND`; a page whose body the web cannot resolve is `DEPENDENCY_UNAVAILABLE`.
 
 Request bodies are capped at 4 MiB after gzip decompression. Candidate counts, source block counts/bytes,

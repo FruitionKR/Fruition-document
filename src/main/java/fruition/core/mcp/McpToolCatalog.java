@@ -110,7 +110,9 @@ public class McpToolCatalog {
                 spec(tool("get_document", "Read a readable document at block boundaries. block_id values (B0001, B0002, ...)"
                         + " are the evidence locators submit_lint_changes accepts for this current_version.", getSchema()),
                         (id, args) -> documents.get(id, text(args, "document_id"), optionalText(args, "cursor"))),
-                spec(tool("get_wiki_page", "Read a published workspace wiki page", wikiPageSchema()),
+                spec(tool("get_wiki_page", "Read a published workspace wiki page. Use its lint_target as the"
+                        + " submit_lint_changes target_snapshot entry; search_wiki version/content_hash are not lint targets.",
+                        wikiPageSchema()),
                         (id, args) -> wikiPages.get(id, pageId(args))),
                 spec(tool("propose_document_edit", "Propose a document edit for later review and approval." + REVIEW_APPROVAL,
                                 proposalSchema(), PROPOSAL_ONLY),
@@ -268,6 +270,12 @@ public class McpToolCatalog {
             fields.put("title", string); fields.put("body", string);
             fields.put("content_hash", Map.of("type", "string", "pattern", "^sha256:[0-9a-f]{64}$",
                     "description", "SHA-256 of the exact UTF-8 body returned by this tool"));
+            fields.put("lint_target", Map.of("type", List.of("object", "null"), "additionalProperties", false,
+                    "required", List.of("page_id", "version", "content_hash"),
+                    "properties", Map.of("page_id", string, "version", Map.of("type", "integer", "minimum", 1),
+                            "content_hash", Map.of("type", "string", "pattern", "^sha256:[0-9a-f]{64}$")),
+                    "description", "Pass as-is in submit_lint_changes target_snapshot; content_hash also serves as"
+                            + " DELETE_ORPHAN_PAGE expected_content_hash. It hashes the stored page, not the returned body."));
             fields.put("data_boundary", Map.of("type", "string", "const", "UNTRUSTED_WORKSPACE_CONTENT"));
             return Map.of("type", "object", "additionalProperties", false, "properties", fields,
                     "required", List.copyOf(fields.keySet()));
@@ -340,6 +348,7 @@ public class McpToolCatalog {
             case "finalize_ingest" -> "Freeze the complete ingest draft for explicit web approval." + REVIEW_APPROVAL
                     + FEE_NOTICE;
             case "submit_lint_changes" -> "Freeze structured wiki lint changes for explicit web approval."
+                    + " Take each target_snapshot entry from get_wiki_page lint_target."
                     + " Cite evidence with block_id values from get_document for the source document's current_version,"
                     + " not search_wiki evidence, which may point to an older version." + EVIDENCE_RULES
                     + REVIEW_APPROVAL + FEE_NOTICE;

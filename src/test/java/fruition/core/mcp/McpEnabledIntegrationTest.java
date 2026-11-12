@@ -277,7 +277,7 @@ class McpEnabledIntegrationTest {
                 """);
         assertThat(initialized.path("result").path("protocolVersion").asText()).isEqualTo("2025-11-25");
 
-        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v12");
+        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v13");
         assertThat(initialized.path("result").path("instructions").asText()).contains("free", "Fruition fee", "get_credit_balance");
 
         JsonNode tools = rpc("""

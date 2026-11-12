@@ -81,6 +81,20 @@ class McpWikiPageServiceTest {
         assertThat(page.contentHash()).isEqualTo("sha256:" + sha256(sanitized));
     }
 
+    @Test void lintTargetHashesTheStoredObjectNotTheSanitizedBody() throws Exception {
+        String rawBody = "# Concept\n[Read](https://evil.example/path)\n";
+        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(
+                new WikiPageDetailResponse("page-a", "concept", "Concept", null, null,
+                        "wiki/a.md", rawBody, "active", null, null, UPDATED, List.of(), List.of())));
+
+        var page = service(10_000).get(identity(), "page-a");
+
+        assertThat(page.contentHash()).isNotEqualTo("sha256:" + sha256(rawBody));
+        assertThat(page.lintTarget().pageId()).isEqualTo("page-a");
+        assertThat(page.lintTarget().contentHash()).isEqualTo("sha256:" + sha256(rawBody));
+        assertThat(page.lintTarget().version()).isEqualTo(McpWikiApprovalService.pageVersion(UPDATED));
+    }
+
     @Test void mapsWebFailuresToMcpCodes() {
         when(ai.page("workspace-a", "missing")).thenReturn(Optional.empty());
         when(ai.page("workspace-a", "no-body")).thenReturn(Optional.of(page(null, null)));

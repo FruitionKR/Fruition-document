@@ -1,5 +1,9 @@
 # Backend 변경 기록
 
+## 2026-11-12 — get_wiki_page lint 대상 값
+
+- MCP `get_wiki_page`에 `lint_target`(`page_id`·`version`·`content_hash`)을 추가했다(`mcp-tools.v13`). 기존 `content_hash`는 무해화한 본문 hash이고 `search_wiki` hash는 검색 단위 hash라, 외부 AI가 `submit_lint_changes` 대상 값을 얻을 방법이 없어 `TARGET_CHANGED`가 났다.
+
 ## 2026-11-12 — 0원 MCP 승인의 잔액 검사 제외
 
 - 0원 MCP 승인(문서 수정·계획, `MCP_APPROVAL_UNIT_PRICE_MINOR=0`)은 잔액을 검사하지 않는다. 정산으로 가용 잔액이 음수가 된 면제 아닌 계정도 무료 승인은 계속 쓸 수 있다. 유료 승인(위키 편입·lint)은 기존처럼 최대 수수료만큼 가용 잔액이 있어야 한다.

@@ -87,7 +87,8 @@ public class McpWikiPageService {
             throw new McpToolException("RESPONSE_LIMIT_EXCEEDED");
         }
         return new Response("mcp.wiki-page.v1", page.id(), pageType, AiMarkdownSanitizer.sanitize(page.title()),
-                body, "sha256:" + sha256(bodyBytes), "UNTRUSTED_WORKSPACE_CONTENT");
+                body, "sha256:" + sha256(bodyBytes), lintTarget(page, read.objectMarkdown()),
+                "UNTRUSTED_WORKSPACE_CONTENT");
     }
 
     /** 본문을 고른 뒤 페이지 metadata와 최신 revision이 읽기 시작 때와 같고 아직 active인지 본다. */
@@ -103,6 +104,16 @@ public class McpWikiPageService {
                 || !Objects.equals(after.revision(), before.revision())) {
             throw new McpToolException("PAGE_CHANGED");
         }
+    }
+
+    /**
+     * pipeline lint가 대조하는 값과 같은 기준의 target_snapshot. version은 updated_at의 epoch 마이크로초,
+     * hash는 markdown_uri 원문 객체(없으면 빈 문자열)의 SHA-256이다. 응답 body는 무해화돼 있어 그 hash와 다르다.
+     */
+    private static LintTarget lintTarget(WikiPageDetailResponse page, String objectMarkdown) {
+        if (page.updatedAt() == null) return null;
+        return new LintTarget(page.id(), McpWikiApprovalService.pageVersion(page.updatedAt()), "sha256:"
+                + sha256((objectMarkdown == null ? "" : objectMarkdown).getBytes(StandardCharsets.UTF_8)));
     }
 
     static boolean validPageId(String pageId) {
@@ -122,5 +133,10 @@ public class McpWikiPageService {
                            @JsonProperty("page_type") String pageType,
                            String title, String body,
                            @JsonProperty("content_hash") String contentHash,
+                           @JsonProperty("lint_target") LintTarget lintTarget,
                            @JsonProperty("data_boundary") String dataBoundary) {}
+
+    /** submit_lint_changes target_snapshot 항목에 그대로 넣는 값. */
+    public record LintTarget(@JsonProperty("page_id") String pageId, long version,
+                             @JsonProperty("content_hash") String contentHash) {}
 }
