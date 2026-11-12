@@ -103,7 +103,8 @@ public class WikiService {
      * 웹 상세 조회 결과와, 그 조회가 고른 본문. {@code body}는 빈 본문이면 빈 문자열이고 끝내 못 구했으면 비어 있다.
      * 웹 응답({@code detail.markdown})은 둘 다 null로 둔다. MCP {@code get_wiki_page}는 빈 본문을 정상 응답으로 돌려준다.
      */
-    public record PageRead(WikiPageDetailResponse detail, Optional<String> body) {}
+    /** objectMarkdown은 AI가 markdown_uri 객체에서 읽은 원문 그대로다(없으면 null). MCP lint 대상 hash의 기준이다. */
+    public record PageRead(WikiPageDetailResponse detail, Optional<String> body, String objectMarkdown) {}
 
     /** 지금 페이지 metadata와 최신 revision. 없으면 비어 있다. MCP get_wiki_page가 읽은 뒤 변경 여부를 볼 때 쓴다. */
     public record PageState(String pageType, String title, String markdownUri, String status,
@@ -119,8 +120,17 @@ public class WikiService {
 
     public PageRead read(String workspaceId, String userId, String id) {
         verifyWorkspaceOwnership(workspaceId, userId);
-        WikiPageDetailResponse page = pipelineWikiStateRequester.page(workspaceId, id)
-                .orElseThrow(() -> new WikiPageNotFoundException(id));
+        return read(workspaceId, id, pipelineWikiStateRequester.page(workspaceId, id));
+    }
+
+    /** MCP get_wiki_page용. pipeline에 lint 준비 정보를 함께 요청한다. */
+    public PageRead readForMcp(String workspaceId, String userId, String id) {
+        verifyWorkspaceOwnership(workspaceId, userId);
+        return read(workspaceId, id, pipelineWikiStateRequester.page(workspaceId, id, true));
+    }
+
+    private PageRead read(String workspaceId, String id, Optional<WikiPageDetailResponse> found) {
+        WikiPageDetailResponse page = found.orElseThrow(() -> new WikiPageNotFoundException(id));
         Map<String, Document> documents = documentRepository.findAllById(
                         page.sourceDocuments().stream().map(WikiPageSourceDoc::id).toList()).stream()
                 .collect(Collectors.toMap(Document::getId, document -> document));
@@ -143,7 +153,8 @@ public class WikiService {
                 page.markdownUri(), body.filter(markdown -> !markdown.isBlank()).orElse(null), page.status(),
                 page.createdAt(), latest == null ? null : latest.getRevision(), page.updatedAt(),
                 sourceDocuments,
-                page.relatedPages()), body);
+                page.relatedPages(), page.statements(), page.links(), page.lintTargetPageIds(),
+                page.lintTargetTruncated(), page.lintContextError()), body, page.markdown());
     }
 
     /**

@@ -17,10 +17,19 @@ class PipelineWikiStateRequesterTest {
 
     private HttpServer server;
     private final AtomicReference<String> responseBody = new AtomicReference<>();
+    private final AtomicReference<String> lastQuery = new AtomicReference<>();
 
     @BeforeEach
     void setUp() throws IOException {
         server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.createContext("/wiki/pages", exchange -> {
+            lastQuery.set(exchange.getRequestURI().getRawQuery());
+            byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
         server.createContext("/wiki/documents", exchange -> {
             byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -68,6 +77,58 @@ class PipelineWikiStateRequesterTest {
         assertThat(context.sourceContentHash()).isNull();
         assertThat(context.sourceBlocks()).containsExactly(
                 new PipelineWikiStateRequester.SourceBlock("B0001", null, null, null, null, "본문"));
+    }
+
+    @Test
+    void page_readsConceptStatementsLinksAndLintTargets() {
+        responseBody.set("""
+                {"id":"wp_1","page_type":"concept","title":"캐시","slug":"cache","status":"active",
+                 "source_documents":[],"related_pages":[],
+                 "statements":[{"statement_id":"st_1","text":"문장","text_hash":"sha256:ab"}],
+                 "links":[{"page_id":"wp_2","slug":"index","relation":"concept_related_to","direction":"outgoing",
+                           "source_ref":"st_1","target_ref":"wp_2"}],
+                 "lint_target_page_ids":["wp_1","wp_2"],"lint_target_truncated":false}
+                """);
+
+        var page = requester().page("ws_1", "wp_1").orElseThrow();
+
+        assertThat(page.slug()).isEqualTo("cache");
+        assertThat(page.statements()).containsExactly(
+                new fruition.core.wiki.dto.WikiPageStatement("st_1", "문장", "sha256:ab"));
+        assertThat(page.links()).containsExactly(new fruition.core.wiki.dto.WikiPageLink(
+                "wp_2", "index", "concept_related_to", "outgoing", "st_1", "wp_2"));
+        assertThat(page.lintTargetPageIds()).containsExactly("wp_1", "wp_2");
+        assertThat(page.lintTargetTruncated()).isFalse();
+    }
+
+    @Test
+    void page_acceptsResponseWithoutLintFields() {
+        responseBody.set("""
+                {"id":"wp_1","page_type":"source","title":"원문","source_documents":[],"related_pages":[]}
+                """);
+
+        var page = requester().page("ws_1", "wp_1").orElseThrow();
+
+        assertThat(page.statements()).isNull();
+        assertThat(page.links()).isNull();
+        assertThat(page.lintTargetPageIds()).isNull();
+        assertThat(page.lintTargetTruncated()).isNull();
+    }
+
+    @Test
+    void mcpPageReadAsksForLintContextButWebReadDoesNot() {
+        responseBody.set("""
+                {"id":"wp_1","page_type":"concept","title":"개념","source_documents":[],"related_pages":[],
+                 "statements":[],"links":[],"lint_target_page_ids":["wp_1"],"lint_target_truncated":false,
+                 "lint_context_error":"STATEMENTS_UNAVAILABLE"}
+                """);
+
+        var page = requester().page("ws_1", "wp_1", true).orElseThrow();
+        assertThat(lastQuery.get()).contains("workspace_id=ws_1").contains("mcp_read=true");
+        assertThat(page.lintContextError()).isEqualTo("STATEMENTS_UNAVAILABLE");
+
+        requester().page("ws_1", "wp_1");
+        assertThat(lastQuery.get()).isEqualTo("workspace_id=ws_1");
     }
 
     private PipelineWikiStateRequester requester() {

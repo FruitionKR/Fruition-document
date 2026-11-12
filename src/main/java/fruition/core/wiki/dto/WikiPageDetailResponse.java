@@ -53,5 +53,23 @@ public record WikiPageDetailResponse(
 
         @JsonProperty("related_pages")
         @Schema(description = "그래프에서 이어진 관련 페이지 목록")
-        List<WikiRelatedPage> relatedPages
+        List<WikiRelatedPage> relatedPages,
+
+        @Schema(description = "Concept 페이지의 statement 목록. 다른 페이지 종류는 비어 있거나 키가 빠진다.")
+        List<WikiPageStatement> statements,
+
+        @Schema(description = "Concept 페이지에 걸린 링크 목록. 다른 페이지 종류는 비어 있거나 키가 빠진다.")
+        List<WikiPageLink> links,
+
+        @JsonProperty("lint_target_page_ids")
+        @Schema(description = "이 페이지를 lint할 때 target_snapshot에 함께 넣어야 하는 페이지 ID 목록(Concept만)")
+        List<String> lintTargetPageIds,
+
+        @JsonProperty("lint_target_truncated")
+        @Schema(description = "lint_target_page_ids가 상한에서 잘렸으면 true")
+        Boolean lintTargetTruncated,
+
+        @JsonProperty("lint_context_error")
+        @Schema(description = "statement 원장을 읽지 못하면 STATEMENTS_UNAVAILABLE. statements가 비어 있어도 없는 것이 아니다.")
+        String lintContextError
 ) {}

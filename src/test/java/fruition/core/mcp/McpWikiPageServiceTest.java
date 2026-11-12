@@ -44,14 +44,14 @@ class McpWikiPageServiceTest {
 
     @org.junit.jupiter.api.BeforeEach void sameStateAfterRead() {
         // 기본값: 읽은 뒤에도 페이지가 그대로다.
-        when(ai.state(any(), any())).thenAnswer(call -> ai.page(call.getArgument(0), call.getArgument(1))
+        when(ai.state(any(), any())).thenAnswer(call -> ai.page(call.getArgument(0), call.getArgument(1), true)
                 .map(p -> new PipelineWikiStateRequester.PageState(
                         p.id(), p.pageType(), p.title(), p.markdownUri(), p.status(), p.updatedAt())));
     }
 
     @Test void readsTheBodyTheWebShowsWhenTheAiObjectIsMissing() throws Exception {
         // AI가 markdown_uri 객체를 못 읽어도 웹은 최신 버전 행 본문을 보여 준다. MCP도 같은 본문이어야 한다.
-        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(page(null, "wiki/missing.md")));
+        when(ai.page("workspace-a", "page-a", true)).thenReturn(Optional.of(page(null, "wiki/missing.md")));
         when(versions.findTopByIdPageIdOrderByIdRevisionDesc("page-a"))
                 .thenReturn(Optional.of(new WikiPageVersion("page-a", 2, 1, "# 버전 본문  \n", "k2", "h2", null, null, null)));
 
@@ -69,9 +69,9 @@ class McpWikiPageServiceTest {
     @Test void neutralizesTitleAndBodyAndHashesTheReturnedBody() {
         String rawBody = "![alt](https://evil.example/image.png)\n[Read](https://evil.example/path)";
         String sanitized = "외부 이미지(evil.example)\nRead (evil.example)";
-        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(
+        when(ai.page("workspace-a", "page-a", true)).thenReturn(Optional.of(
                 new WikiPageDetailResponse("page-a", "concept", "[Title](https://evil.example/t)", null, null,
-                        null, rawBody, "active", null, null, null, List.of(), List.of())));
+                        null, rawBody, "active", null, null, null, List.of(), List.of(), null, null, null, null, null)));
 
         var page = service(10_000).get(identity(), "page-a");
 
@@ -81,10 +81,59 @@ class McpWikiPageServiceTest {
         assertThat(page.contentHash()).isEqualTo("sha256:" + sha256(sanitized));
     }
 
+    @Test void lintTargetHashesTheStoredObjectNotTheSanitizedBody() throws Exception {
+        String rawBody = "# Concept\n[Read](https://evil.example/path)\n";
+        when(ai.page("workspace-a", "page-a", true)).thenReturn(Optional.of(
+                new WikiPageDetailResponse("page-a", "concept", "Concept", null, null,
+                        "wiki/a.md", rawBody, "active", null, null, UPDATED, List.of(), List.of(), null, null, null, null, null)));
+
+        var page = service(10_000).get(identity(), "page-a");
+
+        assertThat(page.contentHash()).isNotEqualTo("sha256:" + sha256(rawBody));
+        assertThat(page.lintTarget().pageId()).isEqualTo("page-a");
+        assertThat(page.lintTarget().contentHash()).isEqualTo("sha256:" + sha256(rawBody));
+        assertThat(page.lintTarget().version()).isEqualTo(McpWikiApprovalService.pageVersion(UPDATED));
+    }
+
+    @Test void passesConceptLintContextThroughAndSanitizesOnlyStatementText() {
+        var statements = List.of(new fruition.core.wiki.dto.WikiPageStatement("st_1",
+                "[근거](https://evil.example/x) 문장", "sha256:" + "a".repeat(64)));
+        var links = List.of(new fruition.core.wiki.dto.WikiPageLink("page-b", "index", "concept_related_to",
+                "outgoing", "st_1", "page-b"));
+        when(ai.page("workspace-a", "page-a", true)).thenReturn(Optional.of(
+                new WikiPageDetailResponse("page-a", "concept", "Concept", "concept-slug", null,
+                        "wiki/a.md", "# body", "active", null, null, UPDATED, List.of(), List.of(),
+                        statements, links, List.of("page-a", "page-b"), true, null)));
+
+        var page = service(10_000).get(identity(), "page-a");
+
+        assertThat(page.slug()).isEqualTo("concept-slug");
+        assertThat(page.statements()).singleElement().satisfies(s -> {
+            assertThat(s.statementId()).isEqualTo("st_1");
+            assertThat(s.textHash()).isEqualTo("sha256:" + "a".repeat(64));
+            assertThat(s.text()).doesNotContain("https://evil.example").contains("문장");
+        });
+        assertThat(page.links()).containsExactly(new McpWikiPageService.Link("page-b", "index",
+                "concept_related_to", "outgoing", "st_1", "page-b"));
+        assertThat(page.lintTargetPageIds()).containsExactly("page-a", "page-b");
+        assertThat(page.lintTargetTruncated()).isTrue();
+    }
+
+    @Test void sourcePagesWithoutLintContextReturnEmptyValues() {
+        when(ai.page("workspace-a", "page-a", true)).thenReturn(Optional.of(page("# body", null)));
+
+        var page = service(10_000).get(identity(), "page-a");
+
+        assertThat(page.statements()).isEmpty();
+        assertThat(page.links()).isEmpty();
+        assertThat(page.lintTargetPageIds()).isEmpty();
+        assertThat(page.lintTargetTruncated()).isFalse();
+    }
+
     @Test void mapsWebFailuresToMcpCodes() {
-        when(ai.page("workspace-a", "missing")).thenReturn(Optional.empty());
-        when(ai.page("workspace-a", "no-body")).thenReturn(Optional.of(page(null, null)));
-        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(page("한글", null)));
+        when(ai.page("workspace-a", "missing", true)).thenReturn(Optional.empty());
+        when(ai.page("workspace-a", "no-body", true)).thenReturn(Optional.of(page(null, null)));
+        when(ai.page("workspace-a", "page-a", true)).thenReturn(Optional.of(page("한글", null)));
         var service = service(5);
 
         assertThatThrownBy(() -> service.get(identity(), "missing")).hasMessage("PAGE_NOT_FOUND");
@@ -97,7 +146,7 @@ class McpWikiPageServiceTest {
 
     @Test void returnsAnEmptyPublishedBodyAsANormalResponse() throws Exception {
         String key = "wiki/workspace-a/pages/page-a/v.md";
-        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(page("", key)));
+        when(ai.page("workspace-a", "page-a", true)).thenReturn(Optional.of(page("", key)));
         when(objects.readPageObject(key, "workspace-a", "page-a")).thenReturn("");
 
         var page = service(10_000).get(identity(), "page-a");
@@ -107,7 +156,7 @@ class McpWikiPageServiceTest {
     }
 
     @Test void rejectsAPageThatChangedDuringTheRead() {
-        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(page("# body", "wiki/workspace-a/pages/page-a/v.md")));
+        when(ai.page("workspace-a", "page-a", true)).thenReturn(Optional.of(page("# body", "wiki/workspace-a/pages/page-a/v.md")));
         doReturn(Optional.of(new PipelineWikiStateRequester.PageState(
                 "page-a", "source", "Title", "wiki/workspace-a/pages/page-a/v.md", "active", UPDATED.plusSeconds(1))))
                 .when(ai).state("workspace-a", "page-a");
@@ -118,7 +167,7 @@ class McpWikiPageServiceTest {
     }
 
     @Test void rejectsANewRevisionWrittenDuringTheRead() {
-        when(ai.page("workspace-a", "page-a")).thenReturn(Optional.of(page(null, "wiki/workspace-a/pages/page-a/v.md")));
+        when(ai.page("workspace-a", "page-a", true)).thenReturn(Optional.of(page(null, "wiki/workspace-a/pages/page-a/v.md")));
         when(versions.findTopByIdPageIdOrderByIdRevisionDesc("page-a"))
                 .thenReturn(Optional.of(new WikiPageVersion("page-a", 2, 1, "# v2", "k2", "h2", null, null, null)))
                 .thenReturn(Optional.of(new WikiPageVersion("page-a", 3, 1, "# v3", "k3", "h3", null, null, null)));
@@ -127,7 +176,7 @@ class McpWikiPageServiceTest {
     }
 
     @Test void enforcesTheReadDeadline() {
-        when(ai.page("workspace-a", "page-a")).thenAnswer(call -> {
+        when(ai.page("workspace-a", "page-a", true)).thenAnswer(call -> {
             Thread.sleep(5_000);
             return Optional.of(page("# late", null));
         });
@@ -152,7 +201,7 @@ class McpWikiPageServiceTest {
 
     private static WikiPageDetailResponse page(String markdown, String markdownUri) {
         return new WikiPageDetailResponse("page-a", "source", "Title", "title", null, markdownUri, markdown,
-                "active", null, null, UPDATED, List.of(), List.of());
+                "active", null, null, UPDATED, List.of(), List.of(), null, null, null, null, null);
     }
 
     private static McpIdentity identity() {
