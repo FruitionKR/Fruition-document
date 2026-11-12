@@ -6,6 +6,10 @@ import fruition.TestcontainersConfiguration;
 import fruition.core.authz.WorkspaceAccessGuard;
 import fruition.core.aihistory.repository.OperationLogRepository;
 import fruition.core.aihistory.service.McpWikiOperationRegistrar;
+import fruition.core.document.domain.Document;
+import fruition.core.document.service.AiMarkdownSanitizer;
+import fruition.core.document.service.DocumentAccessPolicy;
+import fruition.core.document.service.McpDocumentDataGateway;
 import fruition.core.purge.DataPurgeService;
 import fruition.core.usage.service.CreditService;
 import fruition.core.wiki.service.McpWikiStateGateway;
@@ -21,6 +25,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -50,6 +56,7 @@ class McpWikiApprovalServiceIntegrationTest {
     private McpAccessClient access;
     private McpWikiSourceService sources;
     private McpWikiDraftClient ai;
+    private McpDocumentDataGateway documents;
     private McpWikiApprovalService service;
     private final String user = "user_i9_" + UUID.randomUUID();
     private final String workspace = "ws_i9";
@@ -65,6 +72,9 @@ class McpWikiApprovalServiceIntegrationTest {
         access = mock(McpAccessClient.class);
         sources = mock(McpWikiSourceService.class);
         ai = mock(McpWikiDraftClient.class);
+        documents = mock(McpDocumentDataGateway.class);
+        when(documents.viewer(workspace, user)).thenReturn(new DocumentAccessPolicy.Viewer(user, false, false,
+                Map.of(), Map.of(), Map.of()));
         identity = new McpIdentity(user, workspace, client, grant, 2, Set.of("wiki_write"), "MEMBER",
                 Set.of("wiki.lint"), "Trusted MCP Client");
         preview = mapper.readTree("""
@@ -82,7 +92,7 @@ class McpWikiApprovalServiceIntegrationTest {
         when(access.authorizeWikiOperationBoundary(any(), anyLong(), anyString())).thenReturn(identity);
         service = new McpWikiApprovalService(jdbc, new TransactionTemplate(manager), mapper, access, sources, ai,
                 mock(McpWikiStateGateway.class), mock(WorkspaceAccessGuard.class), credits,
-                new McpWikiOperationRegistrar(operations), "ai.maintenance.command",
+                new McpWikiOperationRegistrar(operations), documents, "ai.maintenance.command",
                 "KRW", "", "", "", "", "", "3", "apply", "fixed 3 KRW per apply", "i9-test-v1");
         service.registerDraft(identity, task, preview);
     }
@@ -116,9 +126,140 @@ class McpWikiApprovalServiceIntegrationTest {
             service.registerDraft(identity, UUID.randomUUID().toString(), bodyPreview);
             assertThat(jdbc.queryForObject("SELECT draft_kind FROM mcp_wiki_drafts WHERE draft_id=?::uuid",
                     String.class, bodyDraft)).isEqualTo("LINT");
+            // 웹 응답에는 위키 본문(PAGE_BODY before/after)이 실리지 않는다.
+            String web = mapper.writeValueAsString(service.detail(workspace, user, bodyDraft));
+            assertThat(web).doesNotContain("# A", "- added").doesNotContain("\"changes\"");
         } finally {
             jdbc.update("DELETE FROM mcp_wiki_drafts WHERE draft_id=?::uuid", bodyDraft);
         }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void summaryIsForwardedWithDocumentMappingSanitizedTextAndReadableDisplayName() throws Exception {
+        String summaryDraft = UUID.randomUUID().toString();
+        Document readable = new Document("doc_i9", workspace, user, "회의록.md", "text/markdown", 1, "k/doc_i9", "h");
+        Document hidden = new Document("doc_hidden", workspace, "other_user", "비밀.md", "text/markdown", 1, "k/h", "h");
+        when(documents.find(workspace, "doc_i9")).thenReturn(Optional.of(readable));
+        when(documents.find(workspace, "doc_hidden")).thenReturn(Optional.of(hidden));
+        // 기본 접근은 EDIT라 숨김 문서는 접근 설정 "none"으로 막는다.
+        when(documents.viewer(workspace, user)).thenReturn(new DocumentAccessPolicy.Viewer(user, false, false,
+                Map.of("doc_hidden", "none"), Map.of(), Map.of()));
+        String quote = "근거 <script>x</script> 문장";
+        try {
+            service.registerDraft(identity, UUID.randomUUID().toString(), summaryPreview(summaryDraft, """
+                    [{"kind":"STATEMENT_UPDATE","page_id":"wiki_page_1","page_title":"개념 **A**",
+                      "text":"새 진술","before_text":"옛 진술","related_page_title":null,
+                      "evidence":[{"snapshot_id":"00000000-0000-4000-8000-000000000021","block_id":"blk_1",
+                        "quote":"%s"}]},
+                     {"kind":"CONCEPT_CREATE","page_id":null,"page_title":"새 개념","text":null,
+                      "before_text":null,"related_page_title":"관련 개념","evidence":[]}]
+                    """.formatted(quote)));
+
+            Map<String, Object> detail = service.detail(workspace, user, summaryDraft);
+
+            Map<String, Object> view = (Map<String, Object>) detail.get("preview");
+            assertThat((List<Map<String, Object>>) view.get("source_documents"))
+                    .extracting(d -> d.get("document_id"), d -> d.get("display_name"))
+                    .containsExactly(org.assertj.core.groups.Tuple.tuple("doc_i9", readable.getDisplayName()),
+                            org.assertj.core.groups.Tuple.tuple("doc_hidden", null));
+            List<Map<String, Object>> summary = (List<Map<String, Object>>) view.get("summary");
+            assertThat(summary).hasSize(2);
+            assertThat(summary.get(0)).containsOnlyKeys("kind", "page_id", "page_title", "text", "before_text",
+                            "related_page_title", "evidence")
+                    .containsEntry("kind", "STATEMENT_UPDATE").containsEntry("page_id", "wiki_page_1")
+                    .containsEntry("page_title", AiMarkdownSanitizer.sanitize("개념 **A**"))
+                    .containsEntry("text", AiMarkdownSanitizer.sanitize("새 진술"))
+                    .containsEntry("before_text", AiMarkdownSanitizer.sanitize("옛 진술"))
+                    .containsEntry("related_page_title", null)
+                    .containsEntry("evidence", List.of(Map.of("document_id", "doc_i9", "block_id", "blk_1",
+                            "quote", AiMarkdownSanitizer.sanitize(quote))));
+            assertThat(summary.get(1)).containsEntry("kind", "CONCEPT_CREATE").containsEntry("page_id", null)
+                    .containsEntry("text", null).containsEntry("related_page_title", "관련 개념")
+                    .containsEntry("evidence", List.of());
+            assertThat(view).doesNotContainKeys("changes", "target_pages");
+        } finally {
+            jdbc.update("DELETE FROM mcp_wiki_drafts WHERE draft_id=?::uuid", summaryDraft);
+        }
+    }
+
+    @Test
+    void invalidSummaryItemsAreRejected() {
+        String evidence = "[{\"snapshot_id\":\"00000000-0000-4000-8000-000000000021\",\"block_id\":\"b\",\"quote\":\"q\"}]";
+        List<String> invalid = List.of(
+                item("\"UNKNOWN_KIND\"", "\"t\"", "[]"),
+                item("\"LINK_ADD\"", "\"  \"", "[]"),
+                item("\"LINK_ADD\"", "null", "[]"),
+                item("\"LINK_ADD\"", "\"t\"", "[{\"snapshot_id\":\"00000000-0000-4000-8000-000000000099\",\"block_id\":\"b\",\"quote\":\"q\"}]"),
+                item("\"LINK_ADD\"", "\"t\"", evidence.replace("\"quote\":\"q\"", "\"quote\":\"q\",\"extra\":1")),
+                "[{\"kind\":\"LINK_ADD\",\"page_id\":null,\"page_title\":\"t\",\"text\":null,\"before_text\":null,"
+                        + "\"related_page_title\":null,\"evidence\":[],\"extra\":true}]",
+                "[{\"kind\":\"LINK_ADD\",\"page_id\":null,\"page_title\":\"t\",\"text\":3,\"before_text\":null,"
+                        + "\"related_page_title\":null,\"evidence\":[]}]",
+                "{}");
+        for (String summary : invalid) {
+            String id = UUID.randomUUID().toString();
+            assertThatThrownBy(() -> service.registerDraft(identity, UUID.randomUUID().toString(),
+                    summaryPreview(id, summary))).as(summary).isInstanceOf(McpToolException.class)
+                    .hasMessageContaining("DEPENDENCY_UNAVAILABLE");
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM mcp_wiki_drafts WHERE draft_id=?::uuid",
+                    Integer.class, id)).isZero();
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void legacyStoredPreviewWithoutSummaryRendersAndApprovesAgainstSummarizedRefetch() throws Exception {
+        when(documents.find(workspace, "doc_i9")).thenReturn(Optional.of(
+                new Document("doc_i9", workspace, user, "원문.md", "text/markdown", 1, "k/doc_i9", "h")));
+        Map<String, Object> view = (Map<String, Object>) service.detail(workspace, user, draft).get("preview");
+        assertThat(view).containsEntry("summary", List.of());
+        assertThat((List<Map<String, Object>>) view.get("source_documents")).singleElement()
+                .satisfies(d -> assertThat(d).containsEntry("display_name", "원문"));
+
+        var refetched = (com.fasterxml.jackson.databind.node.ObjectNode) preview.deepCopy();
+        refetched.set("summary", mapper.readTree("""
+                [{"kind":"SOURCE_PAGE","page_id":"p","page_title":"원문","text":null,"before_text":null,
+                  "related_page_title":null,"evidence":[]}]"""));
+        when(ai.getPreview(draft, 1, workspace, user)).thenReturn(refetched);
+        // 저장본에 요약이 없으면 비교하지 않으므로 preview 변경이 아니라 다음 단계(잔액 부족)까지 간다.
+        assertThatThrownBy(() -> service.approve(workspace, user, approval()))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+    }
+
+    @Test
+    void storedSummaryMismatchWithRefetchIsPreviewChange() throws Exception {
+        String summaryDraft = UUID.randomUUID().toString();
+        String original = """
+                [{"kind":"LINK_ADD","page_id":"p","page_title":"A","text":null,"before_text":null,
+                  "related_page_title":"B","evidence":[]}]""";
+        try {
+            service.registerDraft(identity, UUID.randomUUID().toString(), summaryPreview(summaryDraft, original));
+            when(ai.getPreview(summaryDraft, 1, workspace, user))
+                    .thenReturn(summaryPreview(summaryDraft, original.replace("\"B\"", "\"C\"")));
+            assertThatThrownBy(() -> service.approve(workspace, user, new McpWikiApprovalService.ApprovalRequest(
+                    summaryDraft, 1, "sha256:" + "a".repeat(64), "sha256:" + "c".repeat(64))))
+                    .hasMessageContaining("MCP_WIKI_PREVIEW_CHANGED");
+        } finally {
+            jdbc.update("DELETE FROM mcp_wiki_drafts WHERE draft_id=?::uuid", summaryDraft);
+        }
+    }
+
+    private static String item(String kind, String pageTitle, String evidence) {
+        return "[{\"kind\":" + kind + ",\"page_id\":null,\"page_title\":" + pageTitle
+                + ",\"text\":null,\"before_text\":null,\"related_page_title\":null,\"evidence\":" + evidence + "}]";
+    }
+
+    private JsonNode summaryPreview(String draftId, String summary) throws Exception {
+        return mapper.readTree("""
+                {"schema_version":"mcp.wiki-preview.v1","draft_id":"%s","draft_kind":"LINT",
+                 "draft_version":1,"draft_hash":"sha256:%s",
+                 "source_snapshots":[{"snapshot_id":"00000000-0000-4000-8000-000000000021",
+                   "document_id":"doc_i9","source_version":4,"source_content_hash":"sha256:%s"},
+                  {"snapshot_id":"00000000-0000-4000-8000-000000000022",
+                   "document_id":"doc_hidden","source_version":4,"source_content_hash":"sha256:%s"}],
+                 "target_pages":[],"public_state_hash":"sha256:%s","changes":[],"summary":%s,"complete":true}
+                """.formatted(draftId, "a".repeat(64), "b".repeat(64), "b".repeat(64), "c".repeat(64), summary));
     }
 
     @Test

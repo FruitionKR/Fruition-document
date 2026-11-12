@@ -444,6 +444,22 @@ Insufficient credit returns the existing 402 path and never creates a partial re
 source UTF-8 byte quantity, configured unit size/unit price/formula/version; LINT binds one configured fixed apply.
 Blank price settings fail closed rather than inventing a rate.
 
+사람이 읽는 변경 요약: AI `mcp.wiki-preview.v1`에 선택 필드 `summary`가 있다. 항목은 정확히
+`{kind,page_id,page_title,text,before_text,related_page_title,evidence}`이고 `kind`는
+`CONCEPT_CREATE|SOURCE_PAGE|STATEMENT_ADD|STATEMENT_UPDATE|STATEMENT_REMOVE|EVIDENCE_INVALIDATION|LINK_ADD|LINK_REMOVE|CONCEPT_MERGE|CONCEPT_DELETE`,
+`page_id`는 비어 있지 않은 문자열 또는 null, `page_title`은 비어 있지 않은 문자열, `text`·`before_text`·
+`related_page_title`은 문자열 또는 null이다. `evidence`는 `changes[].evidence`와 같은
+`{snapshot_id,block_id,quote}`이고 `snapshot_id`는 같은 preview의 `source_snapshots`에 있어야 한다.
+알 수 없는 kind·필드나 형식 위반은 `DEPENDENCY_UNAVAILABLE`이다. 배포 전에 등록된 draft의 저장 preview에는
+`summary`가 없으므로 필드가 없어도 받고 빈 목록으로 본다. 승인 때 저장본과 AI 재조회본이 둘 다 `summary`를
+가지면 서로 같아야 하고(다르면 `MCP_WIKI_PREVIEW_CHANGED`), 한쪽에 없으면 요약은 비교하지 않는다. 요약은
+화면용이며 웹 승인 hash(`{draft_id,draft_version,draft_hash,public_state_hash}`)에는 들어가지 않는다.
+
+웹 응답 `preview.summary`는 같은 항목 구조로 내보내되 evidence의 `snapshot_id`를 `document_id`로 바꾸고,
+`page_title`·`text`·`before_text`·`related_page_title`·`quote`를 `AiMarkdownSanitizer`로 무해화한다(요약이 없는
+draft는 `[]`). `preview.source_documents[]`에 `display_name`(현재 문서 표시 이름, 요청 사용자가 읽을 수 없거나
+문서가 없으면 null)을 더한다. 기존 `changes`·`target_pages`·hash 필드는 그대로 남는다.
+
 AI verifies an approved apply through service-authenticated
 `POST /internal/mcp/wiki/approvals/lookup`. The request is exact `mcp.wiki-approval-lookup.v1`; its response has
 only `{schema_version:"mcp.wiki-approval-status.v1",status,reason}` where status is

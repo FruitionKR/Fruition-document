@@ -1,5 +1,11 @@
 # Backend 변경 기록
 
+## 2026-11-12 — MCP 위키 승인 화면용 변경 요약
+
+- 웹 draft 응답(`preview`)에서 `changes`(위키 Markdown before/after)와 `target_pages`(내부 버전·hash)를 뺐다. 위키 본문은 웹에 내보내지 않는다. 승인 요청은 draft_id·draft_version·draft_hash·public_state_hash만 쓴다.
+- AI 위키 preview(`mcp.wiki-preview.v1`)의 새 선택 필드 `summary`를 항목별로 엄격히 검증한다(정확한 7개 필드, 10개 kind, evidence snapshot은 preview source에 있어야 함). 위반은 `DEPENDENCY_UNAVAILABLE`이다. 배포 전에 저장된 preview에는 없으므로 없으면 빈 목록으로 보고 조회·승인을 그대로 허용한다. 승인 때 저장본과 재조회본이 둘 다 요약을 가지면 같아야 한다.
+- 웹 draft 조회(`GET /api/workspaces/{workspace_id}/mcp/wiki-drafts/{draft_id}`) `preview`에 `summary`(evidence는 `document_id`로 변환, 사람용 텍스트는 무해화)와 `source_documents[].display_name`(읽을 수 있을 때만, 아니면 null)을 추가했다. 기존 `changes`·`target_pages`·hash는 그대로다(키 추가만).
+
 ## 2026-11-12 — MCP 블록 ID를 source_blocks 레지스트리로 통일하고 lint 맥락 노출
 
 - MCP `get_document`와 wiki source callback(`/internal/documents/{id}/mcp-wiki-source`)이 블록을 직접 나누지 않고 pipeline `POST /internal/mcp/source-blocks/resolve`(`mcp.source-blocks.v1`)에서 웹 편입과 같은 `source_blocks` 레지스트리 ID·줄 범위를 받는다. 이전에는 commonmark 최상위 노드 순번(`B0001`…)이라 화면 근거 강조와 어긋났고 MCP 편입이 문서 블록을 다시 번호 매겼다. pipeline이 실패하면 순번 ID로 대신하지 않고 `DEPENDENCY_UNAVAILABLE`(callback은 503)로 실패한다.
