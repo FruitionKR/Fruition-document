@@ -7230,6 +7230,26 @@ components:
           type: string
           description: 바뀐 리소스 종류
           example: wiki_page
+    ChargeHistory:
+      type: object
+      properties:
+        amount_krw_milli:
+          type: integer
+          format: int64
+        charged_at:
+          type: string
+          format: date-time
+        id:
+          type: integer
+          format: int64
+        reason:
+          type: string
+        run_id:
+          type: string
+        usage:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChargeUsage"
     ChargeSummary:
       type: object
       properties:
@@ -7255,6 +7275,46 @@ components:
           type: integer
           format: int64
         user_id:
+          type: string
+    ChargeUsage:
+      type: object
+      properties:
+        amount_krw_milli:
+          type: integer
+          format: int64
+        audio_seconds:
+          type: number
+        cache_creation_tokens:
+          type: integer
+          format: int64
+        cached_input_tokens:
+          type: integer
+          format: int64
+        calls:
+          type: integer
+          format: int64
+        input_tokens:
+          type: integer
+          format: int64
+        kind:
+          type: string
+        last_started_at:
+          type: string
+          format: date-time
+        model:
+          type: string
+        output_tokens:
+          type: integer
+          format: int64
+        provider:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        tts_characters:
+          type: integer
+          format: int64
+        workspace_id:
           type: string
     ChatMessageReference:
       type: object
@@ -7583,6 +7643,10 @@ components:
         balance_krw_milli:
           type: integer
           format: int64
+        charge_history:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChargeHistory"
         currency:
           type: string
         entries:

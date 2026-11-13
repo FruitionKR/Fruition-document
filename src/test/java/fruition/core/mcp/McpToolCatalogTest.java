@@ -49,7 +49,7 @@ class McpToolCatalogTest {
         verify(credits).credits("user");
         reset(credits);
         when(credits.credits("user")).thenReturn(new CreditService.Credits("user", "KRW", -160_041, 0, -160_041, true,
-                java.util.List.of()));
+                java.util.List.of(), java.util.List.of()));
         var exempt = tool.callHandler().apply(context,
                 new io.modelcontextprotocol.spec.McpSchema.CallToolRequest("get_credit_balance", Map.of(), null));
         assertThat(exempt.isError()).isFalse();
