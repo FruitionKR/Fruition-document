@@ -16,6 +16,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -408,7 +410,65 @@ public class CreditService {
                 + "WHERE user_id = ? ORDER BY id DESC LIMIT 50", (rs, i) -> new Entry(rs.getString("type"),
                 rs.getLong("amount"), rs.getString("run_id"), rs.getString("reason"),
                 rs.getTimestamp("created_at").toInstant()), userId);
-        return new Credits(userId, "KRW", balance, reserved, balance - reserved, limitExempt, entries);
+        return new Credits(userId, "KRW", balance, reserved, balance - reserved, limitExempt, entries, chargeHistory(userId));
+    }
+
+    /** 원장을 먼저 실행별로 합친다. 최근 50행을 먼저 자르면 늦게 정산된 실행의 합계가 잘린다. */
+    private List<ChargeHistory> chargeHistory(String userId) {
+        return jdbc.query("""
+                WITH recent AS (
+                    SELECT max(id) AS history_id, run_id, reason, -sum(amount) AS amount,
+                           max(created_at) AS charged_at
+                    FROM credit_entries WHERE user_id = ? AND type = 'charge' AND amount < 0
+                    GROUP BY run_id, reason,
+                        CASE WHEN run_id IS NULL OR run_id IN ('', 'unattributed') THEN id END
+                    ORDER BY max(id) DESC LIMIT 50
+                )
+                SELECT r.*, u.* FROM recent r
+                LEFT JOIN LATERAL (
+                    SELECT workspace_id, kind, provider, model, count(*) AS calls,
+                           CASE WHEN count(input_tokens) = count(*) THEN sum(input_tokens)::bigint END AS input_tokens,
+                           CASE WHEN count(output_tokens) = count(*) THEN sum(output_tokens)::bigint END AS output_tokens,
+                           CASE WHEN count(cached_input_tokens) = count(*) THEN sum(cached_input_tokens)::bigint END AS cached_input_tokens,
+                           CASE WHEN count(cache_creation_tokens) = count(*) THEN sum(cache_creation_tokens)::bigint END AS cache_creation_tokens,
+                           CASE WHEN count(audio_seconds) = count(*) THEN sum(audio_seconds) END AS audio_seconds,
+                           CASE WHEN count(tts_characters) = count(*) THEN sum(tts_characters)::bigint END AS tts_characters,
+                           sum(charge_krw_milli) AS usage_amount, min(started_at) AS started_at,
+                           max(started_at) AS last_started_at
+                    FROM usage_charges
+                    WHERE user_id = ? AND status = 'charged' AND run_id = r.run_id AND r.run_id NOT IN ('', 'unattributed')
+                      AND r.reason IS DISTINCT FROM 'mcp_approval'
+                    GROUP BY workspace_id, kind, provider, model
+                ) u ON true
+                ORDER BY r.history_id DESC, u.started_at, u.workspace_id, u.kind, u.provider, u.model
+                """, rs -> {
+            Map<Long, ChargeHistory> history = new LinkedHashMap<>();
+            while (rs.next()) {
+                long id = rs.getLong("history_id");
+                var entry = history.get(id);
+                if (entry == null) {
+                    entry = new ChargeHistory(id, rs.getString("run_id"), rs.getString("reason"),
+                            rs.getLong("amount"), rs.getTimestamp("charged_at").toInstant(), new ArrayList<>());
+                    history.put(id, entry);
+                }
+                if (rs.getObject("calls") != null) {
+                    entry.usage().add(new ChargeUsage(rs.getString("workspace_id"), rs.getString("kind"),
+                            rs.getString("provider"), rs.getString("model"), rs.getLong("calls"),
+                            rs.getObject("input_tokens", Long.class), rs.getObject("output_tokens", Long.class),
+                            rs.getObject("cached_input_tokens", Long.class), rs.getObject("cache_creation_tokens", Long.class),
+                            rs.getBigDecimal("audio_seconds"), rs.getObject("tts_characters", Long.class),
+                            rs.getLong("usage_amount"), rs.getTimestamp("started_at").toInstant(),
+                            rs.getTimestamp("last_started_at").toInstant()));
+                }
+            }
+            // 수집과 차감 사이의 순간에는 사용량 합계가 원장과 다를 수 있다. 차감액을 임의 배분하지 않는다.
+            for (var entry : history.values()) {
+                if (entry.usage().stream().mapToLong(ChargeUsage::amountKrwMilli).sum() != entry.amountKrwMilli()) {
+                    entry.usage().clear();
+                }
+            }
+            return List.copyOf(history.values());
+        }, userId, userId);
     }
 
     private Map<String, Object> lock(String userId) {
@@ -432,12 +492,24 @@ public class CreditService {
     /** 금액은 milli-KRW다. available은 잔액 − 예약이며 음수일 수 있다. limitExempt면 화면은 잔액을 숨긴다. */
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record Credits(String userId, String currency, long balanceKrwMilli, long reservedKrwMilli,
-                          long availableKrwMilli, boolean limitExempt, List<Entry> entries) {
+                          long availableKrwMilli, boolean limitExempt, List<Entry> entries, List<ChargeHistory> chargeHistory) {
     }
 
     /** amount는 원장 부호 그대로다(reserve +, release·charge −). */
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record Entry(String type, long amountKrwMilli, String runId, String reason, Instant createdAt) {
+    }
+
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record ChargeHistory(long id, String runId, String reason, long amountKrwMilli,
+                                Instant chargedAt, List<ChargeUsage> usage) {
+    }
+
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record ChargeUsage(String workspaceId, String kind, String provider, String model, long calls,
+                              Long inputTokens, Long outputTokens, Long cachedInputTokens, Long cacheCreationTokens,
+                              BigDecimal audioSeconds, Long ttsCharacters, long amountKrwMilli,
+                              Instant startedAt, Instant lastStartedAt) {
     }
 
     /** 잔액이 모자라 AI 요청 전에 거절한다. 402 {@code INSUFFICIENT_CREDIT}로 응답한다. */

@@ -810,6 +810,100 @@ class CreditServiceIntegrationTest {
         }
     }
 
+    @Test
+    void chargeHistoryGroupsWholeRunsAndSeparatesModelsTasksWorkspacesAndUsers() throws Exception {
+        var credits = credits(false);
+        grant(100_000);
+        String first = "history-" + UUID.randomUUID();
+        String second = "history-" + UUID.randomUUID();
+        for (int i = 0; i < 55; i++) {
+            historyCall(first, user, "ws-1", "ingest", "model-a", 100);
+            credits.settle(first);
+        }
+        historyCall(first, user, "ws-1", "ingest", "model-b", 200);
+        historyCall(first, user, "ws-1", "post_ingest", "model-a", 300);
+        historyCall(first, user, "ws-2", "ingest", "model-a", 400);
+        // 같은 실행 ID를 가진 다른 사용자의 사용량은 읽지 않는다.
+        historyCall(first, "other-" + user, "ws-1", "ingest", "secret-model", 900);
+        historyCall(second, user, "ws-1", "ingest", "model-a", 500);
+        credits.settle(first);
+        credits.settle(second);
+        credits.settleMcpApproval("history-" + user, user, 2_000, true);
+        jdbc.update("""
+                INSERT INTO usage_charges (call_id, user_id, run_id, model, call_status, status, started_at)
+                VALUES (?, ?, ?, 'unpriced-model', 'succeeded', 'unpriced', now())
+                """, UUID.randomUUID().toString(), user, first);
+        var result = credits.credits(user);
+        assertThat(result.chargeHistory()).hasSize(3);
+        var grouped = result.chargeHistory().stream().filter(e -> first.equals(e.runId())).findFirst().orElseThrow();
+        assertThat(grouped.amountKrwMilli()).isEqualTo(6_400);
+        assertThat(grouped.usage()).hasSize(4);
+        assertThat(grouped.usage()).noneMatch(u -> "secret-model".equals(u.model()));
+        var main = grouped.usage().stream().filter(u -> "ws-1".equals(u.workspaceId()) && "ingest".equals(u.kind())
+                && "model-a".equals(u.model())).findFirst().orElseThrow();
+        assertThat(main.calls()).isEqualTo(55);
+        assertThat(main.inputTokens()).isEqualTo(550);
+        assertThat(main.outputTokens()).isEqualTo(110);
+        assertThat(main.cachedInputTokens()).isNull();
+        assertThat(main.startedAt()).isEqualTo(java.time.Instant.parse("2026-11-12T09:43:34Z"));
+        assertThat(result.chargeHistory().stream().mapToLong(CreditService.ChargeHistory::amountKrwMilli).sum())
+                .isEqualTo(100_000 - result.balanceKrwMilli());
+        assertThat(result.chargeHistory().getFirst().reason()).isEqualTo("mcp_approval");
+        assertThat(result.chargeHistory().getFirst().usage()).isEmpty();
+        var json = mapper.readTree(mapper.writeValueAsString(result));
+        assertThat(json.path("charge_history").size()).isEqualTo(3);
+        assertThat(json.path("charge_history").get(1).path("usage").get(0).path("input_tokens").asLong()).isEqualTo(10);
+        assertLedgerMatchesAccount();
+    }
+
+    @Test
+    void chargeHistoryKeepsDeductionWhenDetailsAreMissingOrNotYetSettled() {
+        var credits = credits(false);
+        grant(10_000);
+        String run = "history-pending-" + UUID.randomUUID();
+        historyCall(run, user, "ws", "query", "model", 100);
+        credits.settle(run);
+        historyCall(run, user, "ws", "query", "model", 200);
+        var pending = credits.credits(user).chargeHistory().getFirst();
+        assertThat(pending.amountKrwMilli()).isEqualTo(100);
+        assertThat(pending.usage()).isEmpty();
+        credits.settle(run);
+        var complete = credits.credits(user).chargeHistory().getFirst();
+        assertThat(complete.amountKrwMilli()).isEqualTo(300);
+        assertThat(complete.usage()).singleElement().satisfies(u -> assertThat(u.calls()).isEqualTo(2));
+        jdbc.update("UPDATE usage_charges SET input_tokens = NULL WHERE user_id = ? AND run_id = ? AND charge_krw_milli = 200", user, run);
+        assertThat(credits.credits(user).chargeHistory().getFirst().usage().getFirst().inputTokens()).isNull();
+        jdbc.update("DELETE FROM usage_charges WHERE user_id = ? AND run_id = ?", user, run);
+        assertThat(credits.credits(user).chargeHistory().getFirst().usage()).isEmpty();
+        assertThat(credits.credits(user).chargeHistory().getFirst().amountKrwMilli()).isEqualTo(300);
+    }
+
+    @Test
+    void chargeHistoryLimitsRunsAfterGroupingAndNeverMergesMissingRunIds() {
+        var credits = credits(false);
+        grant(100_000);
+        for (int i = 0; i < 52; i++) {
+            jdbc.update("INSERT INTO credit_entries (user_id, type, amount, run_id, idempotency_key) "
+                    + "VALUES (?, 'charge', -100, ?, ?)", user, "history-run-" + i, user + ":history:" + i);
+        }
+        for (String run : java.util.Arrays.asList(null, null, "unattributed", "unattributed")) {
+            jdbc.update("INSERT INTO credit_entries (user_id, type, amount, run_id, idempotency_key) "
+                    + "VALUES (?, 'charge', -100, ?, ?)", user, run, UUID.randomUUID().toString());
+        }
+        var history = credits.credits(user).chargeHistory();
+        assertThat(history).hasSize(50);
+        assertThat(history.subList(0, 4)).allSatisfy(e -> assertThat(e.amountKrwMilli()).isEqualTo(100));
+        assertThat(history).noneMatch(e -> "history-run-0".equals(e.runId()));
+    }
+
+    private void historyCall(String run, String actor, String workspace, String kind, String model, long amount) {
+        jdbc.update("""
+                INSERT INTO usage_charges (call_id, user_id, workspace_id, run_id, kind, provider, model,
+                    call_status, status, charge_krw_milli, cost_usd_micro, input_tokens, output_tokens, started_at)
+                VALUES (?, ?, ?, ?, ?, 'test-provider', ?, 'succeeded', 'charged', ?, 0, 10, 2, '2026-11-12T09:43:34Z')
+                """, UUID.randomUUID().toString(), actor, workspace, run, kind, model, amount);
+    }
+
     private boolean queueWaiting(String runId) {
         return jdbc.queryForList("SELECT run_id FROM usage_collect_queue WHERE run_id = ? AND available_at > now()",
                 String.class, runId).size() == 1;
