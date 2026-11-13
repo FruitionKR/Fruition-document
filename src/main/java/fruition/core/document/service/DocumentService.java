@@ -199,6 +199,7 @@ public class DocumentService {
     private final fruition.core.document.repository.AiCommandOutboxWriter taskWriter;
     private final DocumentAccessPolicy documentAccessPolicy;
     private final Duration trashRetention;
+    private final fruition.core.usage.service.DocumentCostEstimator costEstimator;
 
     public DocumentService(DocumentRepository documentRepository,
                            FolderRepository folderRepository,
@@ -234,7 +235,8 @@ public class DocumentService {
                            DocumentAccessPolicy documentAccessPolicy,
                            @Value("${app.document-trash.retention:30d}") Duration trashRetention,
                            @Value("${app.convert.pages-per-batch:10}") int convertPagesPerBatch,
-                           @Value("${app.convert.max-in-flight:3}") int convertMaxInFlight) {
+                           @Value("${app.convert.max-in-flight:3}") int convertMaxInFlight, fruition.core.usage.service.DocumentCostEstimator costEstimator) {
+        this.costEstimator = costEstimator;
         this.convertPagesPerBatch = convertPagesPerBatch;
         this.convertMaxInFlight = convertMaxInFlight;
         this.documentAccessPolicy = documentAccessPolicy;
@@ -1538,6 +1540,7 @@ public class DocumentService {
                     Prefetched<String> stored = Prefetched.of(() -> putMarkdownSource(placeholderId, content.bytes()));
                     storedKey.set(stored.value());
                     return new ConvertPrepared(placeholderId, stored,
+                            Prefetched.of(() -> costEstimator.inspect(normalizeObjectKey(source.getSourceUri()))),
                             Prefetched.of(() -> workspaceAiModelClient.get(workspaceId)),
                             // 조회 실패는 꺼진 것으로 돌려받는다. 외부 AI 전송은 명시적으로 켠 워크스페이스만 한다.
                             workspaceSettingsClient.describePdfFigures(workspaceId),
@@ -1552,7 +1555,17 @@ public class DocumentService {
                 }));
     }
 
+    public long[] estimateImportCosts(String workspaceId, java.util.List<Long> sizes, java.util.List<String> pdfKeys) {
+        var model = workspaceAiModelClient.get(workspaceId);
+        long ingest = sizes.stream().mapToLong(size -> costEstimator.document(size, model).amount()).reduce(0, Math::addExact);
+        boolean figures = !pdfKeys.isEmpty() && workspaceSettingsClient.describePdfFigures(workspaceId);
+        long convert = pdfKeys.stream().mapToLong(key -> costEstimator.conversion(
+                costEstimator.inspect(normalizeObjectKey(key)), figures, model).amount()).reduce(0, Math::addExact);
+        return new long[]{ingest, convert};
+    }
+
     private record ConvertPrepared(String placeholderId, Prefetched<String> sourceKey,
+                                   Prefetched<fruition.core.usage.service.DocumentCostEstimator.PdfFeatures> features,
                                    Prefetched<WorkspaceAiModelClient.AiModelSelection> aiModel,
                                    boolean describeFigures, boolean autoIngest) {}
 
@@ -1565,7 +1578,11 @@ public class DocumentService {
                 DocumentEditingRules.rename(source.getDisplayName(), "document.md");
         String placeholderId = prepared.placeholderId();
         String convertRunId = "convert:" + placeholderId;
-        taskWriter.begin(convertRunId, workspaceId, userId, "convert");
+        var model = prepared.aiModel().get();
+        var features = prepared.features().get();
+        var quote = costEstimator.conversion(features, prepared.describeFigures(), model);
+        long total = prepared.autoIngest() ? Math.addExact(quote.amount(), costEstimator.document(features.markdownBytes(), model).amount()) : quote.amount();
+        taskWriter.beginEstimated(convertRunId, workspaceId, userId, quote, total, prepared.autoIngest());
         Document placeholder = new Document(
                 placeholderId,
                 workspaceId,
@@ -1847,7 +1864,7 @@ public class DocumentService {
                     doc.finishAutoIngestSchedule();
                     if (autoIngest && (doc.getPipelineRunId() == null || doc.getPipelineRunId().startsWith("convert:"))) {
                         doc.reopenForReingest(content.getContentHash(), content.getMarkdown().getBytes(StandardCharsets.UTF_8).length);
-                        enqueueIngest(doc, doc.getUserId(), "auto", aiModel);
+                        enqueueIngest(doc, doc.getUserId(), "auto", aiModel, "convert:" + placeholder.getId());
                     }
                     return null;
                 });
@@ -2125,10 +2142,17 @@ public class DocumentService {
      */
     private String enqueueIngest(Document document, String requesterId, String trigger,
                                  Prefetched<WorkspaceAiModelClient.AiModelSelection> prefetchedModel) {
+        return enqueueIngest(document, requesterId, trigger, prefetchedModel, null);
+    }
+
+    private String enqueueIngest(Document document, String requesterId, String trigger,
+            Prefetched<WorkspaceAiModelClient.AiModelSelection> prefetchedModel, String admittedConvertRun) {
         String runId = UUID.randomUUID().toString();
         // access HTTP 조회는 크레딧 예약(계정 행 잠금) 전에 한다. 잠금을 쥔 채 기다리면 같은 사용자의 AI 요청이 줄을 선다.
         var aiModel = prefetchedModel.get();
-        ingestCommandOutbox.begin(runId, document.getWorkspaceId(), requesterId, document.getByteSize());
+        var quote = costEstimator.document(document.getByteSize(), aiModel);
+        if (admittedConvertRun == null) taskWriter.beginEstimated(runId, document.getWorkspaceId(), requesterId, quote, quote.amount(), false);
+        else taskWriter.beginConvertedIngest(runId, admittedConvertRun, document.getWorkspaceId(), requesterId, quote);
         String documentId = document.getId();
         Instant startedAt = Instant.now();
         document.markPipelineStarted(runId, startedAt);

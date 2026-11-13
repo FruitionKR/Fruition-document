@@ -41,6 +41,31 @@ public class AiCommandOutboxWriter {
         begin(runId, workspaceId, userId, "document", credits.estimateDocument(sourceBytes));
     }
 
+    public void beginEstimated(String runId, String workspaceId, String userId,
+            fruition.core.usage.service.DocumentCostEstimator.Quote quote, long total, boolean autoIngest) {
+        begin(runId, workspaceId, userId, quote.kind(), total);
+        jdbcTemplate.update("UPDATE ai_task_runs SET command=coalesce(command, '{}'::jsonb) || "
+                + "jsonb_build_object('_cost_base', ?::bigint, '_cost_provider', ?::text, '_cost_model', ?::text, "
+                + "'auto_ingest', ?::boolean, '_cost_estimate', ?::bigint) WHERE id=?",
+                quote.base(), quote.provider(), quote.model(), autoIngest, total, runId);
+    }
+
+    public void beginConvertedIngest(String runId, String parentRunId, String workspaceId, String userId,
+            fruition.core.usage.service.DocumentCostEstimator.Quote quote) {
+        // Conversions admitted before cost preflight was deployed keep their original admission path.
+        if (Boolean.TRUE.equals(jdbcTemplate.queryForObject("SELECT EXISTS (SELECT 1 FROM ai_task_runs "
+                + "WHERE id=? AND user_id=? AND workspace_id=? AND kind='convert' AND command IS NULL)",
+                Boolean.class, parentRunId, userId, workspaceId))) {
+            beginEstimated(runId, workspaceId, userId, quote, quote.amount(), false);
+            return;
+        }
+        entityManager.flush();
+        jdbcTemplate.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind) VALUES (?, ?, ?, 'document') "
+                + "ON CONFLICT(id) DO NOTHING", runId, workspaceId, userId);
+        credits.reserveConvertedIngest(parentRunId, runId, workspaceId, userId, quote.amount());
+        beginEstimated(runId, workspaceId, userId, quote, quote.amount(), false);
+    }
+
     private void begin(String runId, String workspaceId, String userId, String kind, Long estimate) {
         // 작업 시작 전에 대기 중이던 사용자 변경을 이번 작업의 변경으로 잘못 기록하지 않는다.
         entityManager.flush();
@@ -130,7 +155,7 @@ public class AiCommandOutboxWriter {
             var payload = objectMapper.valueToTree(command);
             if (payload.hasNonNull("user_id") && payload.hasNonNull("workspace_id")) {
                 begin(runId, payload.path("workspace_id").asText(), payload.path("user_id").asText(), payload.path("kind").asText());
-                jdbcTemplate.update("UPDATE ai_task_runs SET command = CAST(? AS jsonb) WHERE id = ?", payload.toString(), runId);
+                jdbcTemplate.update("UPDATE ai_task_runs SET command = coalesce(command, '{}'::jsonb) || CAST(? AS jsonb) WHERE id = ?", payload.toString(), runId);
             }
             repository.save(new AiCommandOutbox(
                     UUID.randomUUID().toString(), runId, topic, messageKey,

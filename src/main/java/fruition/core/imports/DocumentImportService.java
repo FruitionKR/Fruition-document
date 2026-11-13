@@ -39,8 +39,6 @@ public class DocumentImportService {
     static final String SOURCE_NOTION = "notion";
     /** 편입 요청 한 번에 큐에 넣는 문서 수. 많은 문서를 한꺼번에 넣어 AI 한도·크레딧을 몰아 쓰지 않게 한다. */
     static final int INGEST_BATCH = 20;
-    /** PDF 변환 한 건의 예상 비용 kind. convert-markdown이 예약하는 kind와 같다. */
-    private static final String CONVERT_KIND = "convert";
     /**
      * 아직 변환하지 않은 가져온 PDF 원본: 휴지통 밖이고, 변환 중이거나 끝난 변환본이 없다(변환 실패만 있으면 다시 변환할 수 있다).
      * 가져온 PDF는 업로드만 하고 사용자가 고른 뒤에만 변환한다.
@@ -147,10 +145,13 @@ public class DocumentImportService {
         List<Long> sizes = jdbc.queryForList("SELECT coalesce((SELECT octet_length(markdown) FROM document_edit_states "
                 + "WHERE document_id = documents.id), byte_size) FROM documents WHERE " + NOT_INGESTED,
                 Long.class, id, workspaceId);
-        long estimate = sizes.stream().mapToLong(credits::estimateDocument).reduce(0, Math::addExact);
-        int pdfs = count(UNCONVERTED_PDF, id, workspaceId);
+        List<String> pdfKeys = jdbc.queryForList("SELECT source_uri FROM documents WHERE " + UNCONVERTED_PDF,
+                String.class, id, workspaceId);
+        long[] estimates = documents.estimateImportCosts(workspaceId, sizes, pdfKeys);
+        long estimate = estimates[0];
+        int pdfs = pdfKeys.size();
         return new IngestEstimateResponse(sizes.size(), usd(estimate, id), estimate,
-                count(CONVERTING, id, workspaceId), pdfs, usd(CONVERT_KIND, pdfs, id), credits.estimate(CONVERT_KIND) * pdfs);
+                count(CONVERTING, id, workspaceId), pdfs, usd(estimates[1], id), estimates[1]);
     }
 
     private BigDecimal usd(long krwMilli, UUID id) {
@@ -158,16 +159,6 @@ public class DocumentImportService {
             return BigDecimal.valueOf(credits.estimateUsdMicro(krwMilli)).movePointLeft(6);
         } catch (RuntimeException e) {
             log.warn("[가져오기 예상] USD 환산 실패 — null로 응답 importId={} cause={}", id, e.toString());
-            return null;
-        }
-    }
-
-    /** kind 한 건 예상 비용 × 건수(USD). 환율을 못 읽으면 null. */
-    private BigDecimal usd(String kind, int count, UUID id) {
-        try {
-            return BigDecimal.valueOf(credits.estimateUsdMicro(kind)).multiply(BigDecimal.valueOf(count)).movePointLeft(6);
-        } catch (RuntimeException e) {
-            log.warn("[가져오기 예상] USD 환산 실패 — null로 응답 importId={} kind={} cause={}", id, kind, e.toString());
             return null;
         }
     }

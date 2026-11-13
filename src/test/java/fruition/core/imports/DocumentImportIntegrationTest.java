@@ -59,6 +59,8 @@ class DocumentImportIntegrationTest {
     @MockBean fruition.core.document.service.AiCommandOutboxPublisher outboxPublisher;
     @MockBean WorkspaceAiModelClient workspaceAiModelClient;
     @MockBean WorkspaceSettingsClient workspaceSettings;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    fruition.core.usage.service.DocumentCostEstimator costEstimator;
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired JdbcTemplate jdbc;
@@ -77,6 +79,8 @@ class DocumentImportIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.doReturn(new fruition.core.usage.service.DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0))
+                .when(costEstimator).inspect(org.mockito.ArgumentMatchers.anyString());
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_import_" + suffix;
         workspaceId = "ws_import_" + suffix;
@@ -312,8 +316,8 @@ class DocumentImportIntegrationTest {
                 .header("Authorization", bearer(userId))), 200);
         assertThat(body.path("document_count").asInt()).isEqualTo(2);
         long estimate = jdbc.queryForList("SELECT byte_size FROM documents WHERE import_id=?::uuid AND deleted_at IS NULL AND id<>?",
-                Long.class, importId, first).stream().mapToLong(credits::estimateDocument).sum()
-                + credits.estimateDocument(edited.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+                Long.class, importId, first).stream().mapToLong(bytes -> costEstimator.document(bytes, workspaceAiModelClient.get(workspaceId)).amount()).sum()
+                + costEstimator.document(edited.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, workspaceAiModelClient.get(workspaceId)).amount();
         assertThat(body.path("estimated_credits").asLong()).isEqualTo(estimate);
         assertThat(body.path("estimated_cost_usd").decimalValue()).isEqualByComparingTo(
                 BigDecimal.valueOf(credits.estimateUsdMicro(estimate)).movePointLeft(6));
@@ -462,9 +466,9 @@ class DocumentImportIntegrationTest {
         assertThat(convertedFrom(first)).isZero();
         JsonNode before = json(estimate(importId), 200);
         assertThat(before.path("pdf_unconverted_count").asInt()).isEqualTo(2);
-        assertThat(before.path("convert_estimated_credits").asLong()).isEqualTo(2 * credits.estimate("convert"));
+        assertThat(before.path("convert_estimated_credits").asLong()).isEqualTo(2 * costEstimator.conversion(new fruition.core.usage.service.DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0), false, workspaceAiModelClient.get(workspaceId)).amount());
         assertThat(before.path("convert_estimated_cost_usd").decimalValue()).isEqualByComparingTo(
-                BigDecimal.valueOf(credits.estimateUsdMicro("convert") * 2).movePointLeft(6));
+                BigDecimal.valueOf(credits.estimateUsdMicro(before.path("convert_estimated_credits").asLong())).movePointLeft(6));
         assertThat(before.path("document_count").asInt()).isEqualTo(1);
 
         mockMvc.perform(post(imports() + "/" + importId + "/convert").header("Authorization", bearer(userId)))

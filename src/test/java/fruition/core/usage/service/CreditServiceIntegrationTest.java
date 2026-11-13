@@ -66,6 +66,95 @@ class CreditServiceIntegrationTest {
         assertLedgerMatchesAccount();
     }
 
+    @Test
+    void finiteDocumentWorkRequiresFullEstimateAndSettlesOverrunOnce() {
+        var credits = credits(true);
+        grant(100_000);
+        assertThatThrownBy(() -> credits.reserve("rejected-" + UUID.randomUUID(), user, "document", 100_001))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        String id = "accepted-" + UUID.randomUUID();
+        run(id, "running");
+        credits.reserve(id, user, "document", 100_000);
+        charge(id, 150_000);
+        jdbc.update("UPDATE ai_task_runs SET status='completed' WHERE id=?", id);
+        credits.settle(id);
+        credits.settle(id);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-50_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertLedgerMatchesAccount();
+    }
+
+    @Test
+    void admittedConversionSponsorsAllPartsEvenAfterBalanceTurnsNegative() {
+        var credits = credits(true);
+        grant(100_000);
+        String parent = "convert:" + UUID.randomUUID();
+        jdbc.update("INSERT INTO ai_task_runs(id,workspace_id,user_id,kind,status,command) "
+                + "VALUES (?, 'ws-1', ?, 'convert', 'running', '{\"auto_ingest\":true}'::jsonb)", parent, user);
+        credits.reserve(parent, user, "convert", 100_000);
+        charge(parent, 150_000);
+        jdbc.update("UPDATE ai_task_runs SET status='completed' WHERE id=?", parent);
+        credits.settle(parent);
+        for (int i=0; i<2; i++) {
+            String child = "ingest-" + UUID.randomUUID();
+            run(child, "running");
+            credits.reserveConvertedIngest(parent, child, "ws-1", user, 20_000);
+            credits.reserveConvertedIngest(parent, child, "ws-1", user, 20_000);
+            credits.reserve(child, user, "document");
+            charge(child, 25_000);
+            jdbc.update("UPDATE ai_task_runs SET status='completed' WHERE id=?", child);
+            credits.settle(child);
+        }
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-100_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertThatThrownBy(() -> credits.reserveConvertedIngest(parent, "foreign", "wrong-workspace", user, 20_000))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> credits.reserveConvertedIngest("missing", "foreign", "ws-1", user, 20_000))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> credits.reserve("new-" + UUID.randomUUID(), user, "convert", 1))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+        assertLedgerMatchesAccount();
+    }
+
+    @Autowired DocumentCostEstimator estimator;
+
+    @Test
+    void costEstimateUsesModelPriceAndCalibratesCompletedWorkIncludingPostIngest() {
+        String model = "estimate-" + UUID.randomUUID();
+        for (String name : List.of(model, model + "-expensive")) {
+            int price = name.equals(model) ? 1 : 10;
+            jdbc.update("INSERT INTO ai_model_prices(provider,model,effective_from,input_usd_per_mtok,output_usd_per_mtok," +
+                    "cache_read_usd_per_mtok,cache_write_usd_per_mtok) VALUES ('openai',?,now(),?,?,0,0)", name, price, price);
+        }
+        var selection = new fruition.core.authz.WorkspaceAiModelClient.AiModelSelection("openai", model);
+        var initial = estimator.document(5537, selection);
+        assertThat(initial.amount()).isGreaterThan(initial.base());
+        assertThat(estimator.document(11074, selection).amount()).isGreaterThan(initial.amount());
+        assertThat(estimator.document(5537, new fruition.core.authz.WorkspaceAiModelClient.AiModelSelection("openai", model + "-expensive")).amount())
+                .isGreaterThan(initial.amount() * 9);
+        for (int i=0; i<5; i++) {
+            String id = "estimate-run-" + UUID.randomUUID();
+            String post = "estimate-post-" + UUID.randomUUID();
+            jdbc.update("INSERT INTO ai_task_runs(id,workspace_id,user_id,kind,status,updated_at,command) "
+                    + "VALUES (?,'ws-1',?,'document','completed',now()-interval '2 days'," +
+                    "jsonb_build_object('_cost_base',?::bigint,'_cost_provider','openai','_cost_model',?::text,'_cost_post_run',?::text))",
+                    id, user, initial.base(), model, post);
+            charge(id, initial.base());
+            charge(post, initial.base());
+        }
+        assertThat(estimator.document(5537, selection).amount()).isEqualTo(
+                java.math.BigDecimal.valueOf(initial.base()).multiply(new java.math.BigDecimal("2.30"))
+                        .setScale(0, java.math.RoundingMode.CEILING).longValueExact());
+        assertThatThrownBy(() -> estimator.document(-1, selection)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> estimator.document(Long.MAX_VALUE, selection)).isInstanceOf(ArithmeticException.class);
+        var text = new DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0);
+        var scan = new DocumentCostEstimator.PdfFeatures(1, 0, 1, 1);
+        assertThat(estimator.conversion(scan, true, selection).amount()).isGreaterThan(estimator.conversion(text, false, selection).amount());
+        assertThatThrownBy(() -> estimator.document(1, new fruition.core.authz.WorkspaceAiModelClient.AiModelSelection("openai", "missing")))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager manager;
     @Autowired Environment environment;

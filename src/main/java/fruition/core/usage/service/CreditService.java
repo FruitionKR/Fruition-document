@@ -94,6 +94,23 @@ public class CreditService {
         });
     }
 
+    /** Only a server-recorded conversion admission can sponsor its automatic ingestion. */
+    public void reserveConvertedIngest(String parentRunId, String runId, String workspaceId, String userId, long estimate) {
+        if (estimate < 0) throw new IllegalArgumentException("Invalid estimate");
+        transaction.executeWithoutResult(tx -> {
+            lock(userId);
+            boolean accepted = Boolean.TRUE.equals(jdbc.queryForObject("""
+                    SELECT EXISTS (SELECT 1 FROM ai_task_runs r JOIN credit_entries e ON e.run_id=r.id
+                    WHERE r.id=? AND r.user_id=? AND r.workspace_id=? AND r.kind='convert'
+                    AND r.status IN ('running','completed') AND r.command->>'auto_ingest'='true'
+                    AND e.user_id=? AND e.type='reserve')
+                    """, Boolean.class, parentRunId, userId, workspaceId, userId));
+            if (!accepted) throw new IllegalStateException("Conversion did not admit automatic ingestion");
+            if (append(userId, "reserve", estimate, runId, "reserve:" + runId, "document"))
+                jdbc.update("UPDATE credit_accounts SET reserved=reserved+?, updated_at=now() WHERE user_id=?", estimate, userId);
+        });
+    }
+
     /**
      * MCP reserves its full cap; only explicit account exemptions bypass the balance check.
      * A free approval (cap 0) never checks the balance, so accounts left negative by settlement keep using it.
@@ -242,6 +259,10 @@ public class CreditService {
      */
     private long admit(String userId, String kind, long estimate, long available, String rejection) {
         if (!enforce || limitExempt(userId)) return estimate;
+        if (java.util.Set.of("document", "chat_wiki", "convert").contains(kind)) {
+            if (available < estimate) throw new InsufficientCreditException(rejection);
+            return estimate;
+        }
         if (available < minimum(kind, estimate)) throw new InsufficientCreditException(rejection);
         return Math.min(estimate, available);
     }
