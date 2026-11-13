@@ -31,10 +31,10 @@ public class BetaSignupCreditService {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Beta credit recipient conflicts with an existing grant");
             return ((Number) row.get("amount_krw_milli")).longValue();
         }
-        long amount = 500_000L; // 500 KRW in milli-KRW; existing grants keep their stored amount.
+        long amount = 1_000_000L; // 1,000 KRW in milli-KRW; existing grants keep their stored amount.
         jdbc.update("INSERT INTO beta_signup_credit_grants(slot, user_id, email_hash, amount_krw_milli) VALUES (?, ?, ?, ?)",
                 slot, userId, emailHash, amount);
-        if (!credits.post(userId, "grant", amount, "beta-signup:" + slot, "베타 선착순 50명 · 500원 크레딧"))
+        if (!credits.post(userId, "grant", amount, "beta-signup:" + slot, "베타 선착순 50명 · 1,000원 크레딧"))
             throw new IllegalStateException("Beta credit ledger already exists without a grant record");
         return amount;
     }
