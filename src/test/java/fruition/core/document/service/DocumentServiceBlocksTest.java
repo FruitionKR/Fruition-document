@@ -140,6 +140,8 @@ class DocumentServiceBlocksTest {
     private final fruition.core.document.repository.AiCommandOutboxWriter taskWriter =
             org.mockito.Mockito.mock(fruition.core.document.repository.AiCommandOutboxWriter.class);
 
+    private final fruition.core.usage.service.DocumentCostEstimator costEstimator = mock(fruition.core.usage.service.DocumentCostEstimator.class);
+
     @BeforeEach
     void setUp() {
         // DocumentAccessPolicy.viewer가 역할·권한을 한 번에 읽는다. 기본은 권한 항목 없는 MEMBER.
@@ -149,6 +151,9 @@ class DocumentServiceBlocksTest {
         org.mockito.Mockito.lenient().when(applyOperationStore.authorizeSave(anyString(), anyString(), anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.active(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         org.mockito.Mockito.lenient().when(taskWriter.join(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
+        lenient().when(costEstimator.inspect(any())).thenReturn(new fruition.core.usage.service.DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0));
+        lenient().when(costEstimator.document(anyLong(), any())).thenReturn(new fruition.core.usage.service.DocumentCostEstimator.Quote(1000, 1250, "document", "openai", "gpt-5-mini"));
+        lenient().when(costEstimator.conversion(any(), anyBoolean(), any())).thenReturn(new fruition.core.usage.service.DocumentCostEstimator.Quote(1000, 1250, "convert", "openai", "gpt-5-mini"));
         documentService = new DocumentService(documentRepository, folderRepository,
                 workspaceAccessGuard, minioClient, storageProps,
                 ingestCommandOutbox, pipelineWikiStateRequester,
@@ -164,7 +169,7 @@ class DocumentServiceBlocksTest {
                 operationRecorder,
                 ingestOperationStarter,
                 workspaceAiModelClient, workspaceSettingsClient, taskWriter, documentWikiRetirement, accessPolicy,
-                java.time.Duration.ofDays(30), 10, 3);
+                java.time.Duration.ofDays(30), 10, 3, costEstimator);
         lenient().when(pipelineWikiStateRequester.documentContext(anyString(), anyString()))
                 .thenReturn(new PipelineWikiStateRequester.DocumentWikiContext(List.of(), List.of(), null));
         // 직접 생성·복제·변환 placeholder도 생성 시점에 원본을 object storage에 쓴다.
@@ -1539,8 +1544,7 @@ class DocumentServiceBlocksTest {
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
 
-        verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID),
-                eq((long) "# 업로드".getBytes(java.nio.charset.StandardCharsets.UTF_8).length));
+        verify(taskWriter).beginEstimated(anyString(), eq(WORKSPACE_ID), eq(USER_ID), any(), anyLong(), anyBoolean());
         verify(ingestCommandOutbox).enqueue(anyString(), anyString(), eq(USER_ID), eq(WORKSPACE_ID),
                 any(), any(), any(), eq(false), any(), anyLong(), any(), any());
         // 응답은 업로드 시점 상태이고, 편입은 이후 별도 트랜잭션에서 등록된다.
@@ -1559,12 +1563,12 @@ class DocumentServiceBlocksTest {
             documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
 
             verify(workspaceSettingsClient, never()).autoIngestMarkdownOnUpload(anyString());
-            verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+            verify(taskWriter, never()).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), anyBoolean());
 
             org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations()
                     .forEach(org.springframework.transaction.support.TransactionSynchronization::afterCommit);
 
-            verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(USER_ID), anyLong());
+            verify(taskWriter).beginEstimated(anyString(), eq(WORKSPACE_ID), eq(USER_ID), any(), anyLong(), anyBoolean());
         } finally {
             org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
         }
@@ -1578,7 +1582,7 @@ class DocumentServiceBlocksTest {
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verify(taskWriter, never()).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), anyBoolean());
         assertThat(response.status()).isEqualTo(fruition.core.document.domain.DocumentStatus.uploaded);
         assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.notApplicable(fruition.core.document.dto.UploadWikiIngest.Reason.DISABLED));
     }
@@ -1593,7 +1597,7 @@ class DocumentServiceBlocksTest {
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verify(taskWriter, never()).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), anyBoolean());
         assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.notApplicable(fruition.core.document.dto.UploadWikiIngest.Reason.PERMISSION));
     }
 
@@ -1608,7 +1612,7 @@ class DocumentServiceBlocksTest {
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verify(taskWriter, never()).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), anyBoolean());
         assertThat(response.status()).isEqualTo(fruition.core.document.domain.DocumentStatus.uploaded);
         assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.skipped(fruition.core.document.dto.UploadWikiIngest.Reason.ERROR));
     }
@@ -1620,7 +1624,7 @@ class DocumentServiceBlocksTest {
         when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
         doThrow(new IllegalStateException("outbox 장애"))
-                .when(ingestCommandOutbox).begin(anyString(), anyString(), anyString(), anyLong());
+                .when(taskWriter).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), anyBoolean());
 
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
@@ -1639,7 +1643,7 @@ class DocumentServiceBlocksTest {
         when(workspaceSettingsClient.autoIngestMarkdownOnUpload(WORKSPACE_ID)).thenReturn(true);
         when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
         doThrow(new fruition.core.usage.service.CreditService.InsufficientCreditException("크레딧 부족"))
-                .when(ingestCommandOutbox).begin(anyString(), anyString(), anyString(), anyLong());
+                .when(taskWriter).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), anyBoolean());
 
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
@@ -1659,7 +1663,7 @@ class DocumentServiceBlocksTest {
         when(workspaceAccessGuard.hasPermission(WORKSPACE_ID, USER_ID, "wiki.ingest")).thenReturn(true);
         doThrow(new fruition.core.usage.limit.AiUsageLimitExceededException(
                 fruition.core.usage.limit.AiUsageLimitType.values()[0], Instant.now()))
-                .when(ingestCommandOutbox).begin(anyString(), anyString(), anyString(), anyLong());
+                .when(taskWriter).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), anyBoolean());
 
         DocumentUploadResponse response =
                 documentService.upload(WORKSPACE_ID, USER_ID, "upload-key", null, markdownUploadFile());
@@ -1695,7 +1699,7 @@ class DocumentServiceBlocksTest {
         DocumentUploadResponse response = documentService.upload(
                 WORKSPACE_ID, USER_ID, "ref-key", null, markdownUploadFile(), "skill_reference");
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verify(taskWriter, never()).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), anyBoolean());
         assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.NOT_APPLICABLE);
     }
 
@@ -1712,7 +1716,7 @@ class DocumentServiceBlocksTest {
 
         DocumentUploadResponse response = documentService.upload(WORKSPACE_ID, USER_ID, "pdf-key", null, file);
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verify(taskWriter, never()).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), anyBoolean());
         assertThat(response.wikiIngest()).isEqualTo(fruition.core.document.dto.UploadWikiIngest.NOT_APPLICABLE);
     }
 
@@ -1737,7 +1741,7 @@ class DocumentServiceBlocksTest {
 
         assertThatThrownBy(() -> documentService.ingest(WORKSPACE_ID, USER_ID, "chatdoc_1"))
                 .isInstanceOf(fruition.core.authz.WorkspacePermissionRequiredException.class);
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verify(taskWriter, never()).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), anyBoolean());
     }
 
     @Test
@@ -2008,7 +2012,7 @@ class DocumentServiceBlocksTest {
 
         documentService.ingest(WORKSPACE_ID, editorId, chatDoc.getId());
 
-        verify(ingestCommandOutbox).begin(anyString(), eq(WORKSPACE_ID), eq(editorId), anyLong());
+        verify(taskWriter).beginEstimated(anyString(), eq(WORKSPACE_ID), eq(editorId), any(), anyLong(), anyBoolean());
         verify(ingestOperationStarter).start(eq(WORKSPACE_ID), eq(editorId), eq(chatDoc.getId()),
                 anyString(), any(Instant.class));
         verify(ingestCommandOutbox).enqueue(

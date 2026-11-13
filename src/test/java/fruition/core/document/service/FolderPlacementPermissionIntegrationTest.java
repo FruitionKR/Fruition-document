@@ -98,8 +98,13 @@ class FolderPlacementPermissionIntegrationTest {
     UUID inherited;
     UUID reset;
 
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    fruition.core.usage.service.DocumentCostEstimator costEstimator;
+
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.doReturn(new fruition.core.usage.service.DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0))
+                .when(costEstimator).inspect(org.mockito.ArgumentMatchers.anyString());
         role(author, "MEMBER");
         role(member, "MEMBER");
         role(owner, "OWNER");

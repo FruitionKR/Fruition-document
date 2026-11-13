@@ -49,8 +49,7 @@ class CreditServiceIntegrationTest {
         grant(498_000);
         String runId = "run-" + UUID.randomUUID();
         run(runId, "running");
-        long estimate = credits.estimateDocument(5537);
-        assertThat(estimate).isEqualTo(70_000);
+        long estimate = 70_000;
         credits.reserve(runId, user, "document", estimate);
         // enqueue calls the ordinary reservation again; it must not replace the size-based reservation.
         credits.reserve(runId, user, "document");
@@ -64,6 +63,95 @@ class CreditServiceIntegrationTest {
         assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(465_000);
         assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(300_000);
         assertLedgerMatchesAccount();
+    }
+
+    @Test
+    void finiteDocumentWorkRequiresFullEstimateAndSettlesOverrunOnce() {
+        var credits = credits(true);
+        grant(100_000);
+        assertThatThrownBy(() -> credits.reserve("rejected-" + UUID.randomUUID(), user, "document", 100_001))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        String id = "accepted-" + UUID.randomUUID();
+        run(id, "running");
+        credits.reserve(id, user, "document", 100_000);
+        charge(id, 150_000);
+        jdbc.update("UPDATE ai_task_runs SET status='completed' WHERE id=?", id);
+        credits.settle(id);
+        credits.settle(id);
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-50_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertLedgerMatchesAccount();
+    }
+
+    @Test
+    void admittedConversionSponsorsAllPartsEvenAfterBalanceTurnsNegative() {
+        var credits = credits(true);
+        grant(100_000);
+        String parent = "convert:" + UUID.randomUUID();
+        jdbc.update("INSERT INTO ai_task_runs(id,workspace_id,user_id,kind,status,cost_quote) "
+                + "VALUES (?, 'ws-1', ?, 'convert', 'running', '{\"auto_ingest\":true}'::jsonb)", parent, user);
+        credits.reserve(parent, user, "convert", 100_000);
+        charge(parent, 150_000);
+        jdbc.update("UPDATE ai_task_runs SET status='completed' WHERE id=?", parent);
+        credits.settle(parent);
+        for (int i=0; i<2; i++) {
+            String child = "ingest-" + UUID.randomUUID();
+            run(child, "running");
+            credits.reserveConvertedIngest(parent, child, "ws-1", user, 20_000);
+            credits.reserveConvertedIngest(parent, child, "ws-1", user, 20_000);
+            credits.reserve(child, user, "document");
+            charge(child, 25_000);
+            jdbc.update("UPDATE ai_task_runs SET status='completed' WHERE id=?", child);
+            credits.settle(child);
+        }
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(-100_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertThatThrownBy(() -> credits.reserveConvertedIngest(parent, "foreign", "wrong-workspace", user, 20_000))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> credits.reserveConvertedIngest("missing", "foreign", "ws-1", user, 20_000))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> credits.reserve("new-" + UUID.randomUUID(), user, "convert", 1))
+                .isInstanceOf(CreditService.InsufficientCreditException.class);
+        assertLedgerMatchesAccount();
+    }
+
+    @Autowired DocumentCostEstimator estimator;
+
+    @Test
+    void costEstimateUsesModelPriceAndCalibratesCompletedWorkIncludingPostIngest() {
+        String model = "estimate-" + UUID.randomUUID();
+        for (String name : List.of(model, model + "-expensive")) {
+            int price = name.equals(model) ? 1 : 10;
+            jdbc.update("INSERT INTO ai_model_prices(provider,model,effective_from,input_usd_per_mtok,output_usd_per_mtok," +
+                    "cache_read_usd_per_mtok,cache_write_usd_per_mtok) VALUES ('openai',?,now(),?,?,0,0)", name, price, price);
+        }
+        var selection = new fruition.core.authz.WorkspaceAiModelClient.AiModelSelection("openai", model);
+        var initial = estimator.document(5537, selection);
+        assertThat(initial.amount()).isGreaterThan(initial.base());
+        assertThat(estimator.document(11074, selection).amount()).isGreaterThan(initial.amount());
+        assertThat(estimator.document(5537, new fruition.core.authz.WorkspaceAiModelClient.AiModelSelection("openai", model + "-expensive")).amount())
+                .isGreaterThan(initial.amount() * 9);
+        for (int i=0; i<5; i++) {
+            String id = "estimate-run-" + UUID.randomUUID();
+            String post = "estimate-post-" + UUID.randomUUID();
+            jdbc.update("INSERT INTO ai_task_runs(id,workspace_id,user_id,kind,status,updated_at,cost_quote) "
+                    + "VALUES (?,'ws-1',?,'document','completed',now()-interval '2 days'," +
+                    "jsonb_build_object('base',?::bigint,'provider','openai','model',?::text,'post_run',?::text))",
+                    id, user, initial.base(), model, post);
+            charge(id, initial.base());
+            charge(post, initial.base());
+        }
+        assertThat(estimator.document(5537, selection).amount()).isEqualTo(
+                java.math.BigDecimal.valueOf(initial.base()).multiply(new java.math.BigDecimal("2.30"))
+                        .setScale(0, java.math.RoundingMode.CEILING).longValueExact());
+        assertThatThrownBy(() -> estimator.document(-1, selection)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> estimator.document(Long.MAX_VALUE, selection)).isInstanceOf(ArithmeticException.class);
+        var text = new DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0);
+        var scan = new DocumentCostEstimator.PdfFeatures(1, 0, 1, 1);
+        assertThat(estimator.conversion(scan, true, selection).amount()).isGreaterThan(estimator.conversion(text, false, selection).amount());
+        assertThatThrownBy(() -> estimator.document(1, new fruition.core.authz.WorkspaceAiModelClient.AiModelSelection("openai", "missing")))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Autowired JdbcTemplate jdbc;
@@ -732,28 +820,102 @@ class CreditServiceIntegrationTest {
         assertThat(queueWaiting(ingest)).isFalse();
     }
 
-    @Test
-    void convertReservationMustBeSettledBeforeAutoIngestAdmit() {
-        // 운영 기본값과 같게 convert 상한 500,000(default-estimate)으로 맞춘다.
-        CreditService credits = new CreditService(jdbc, manager, environment, true, 500_000, 48);
-        var writer = new fruition.core.document.repository.AiCommandOutboxWriter(outboxRepository, mapper, jdbc,
+    private fruition.core.document.repository.AiCommandOutboxWriter writer(CreditService credits) {
+        return new fruition.core.document.repository.AiCommandOutboxWriter(outboxRepository, mapper, jdbc,
                 entityManager, credits, limits);
-        var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
-        grant(505_000);
-        String convert = "convert:" + UUID.randomUUID();
-        transaction.executeWithoutResult(tx -> writer.begin(convert, "ws-1", user, "convert"));  // 500,000 예약, 가용 5,000
+    }
 
-        // 변환 예약이 남은 채로는 기준 길이 ingest(최저 7,000)가 거절된다.
-        assertThatThrownBy(() -> transaction.executeWithoutResult(tx ->
-                writer.beginDocument("run-" + UUID.randomUUID(), "ws-1", user, 5537)))
+    private static DocumentCostEstimator.Quote quote(String kind, long amount) {
+        return new DocumentCostEstimator.Quote(1, amount, kind, "openai", "estimate-test");
+    }
+
+    @Test
+    void completedConversionKeepsAutoIngestShareUntilEveryPartIsRegistered() {
+        CreditService credits = credits(true);
+        var writer = writer(credits);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
+        grant(100_000);
+        String convert = "convert:" + UUID.randomUUID();
+        // 변환 60,000 + 자동 편입 40,000을 전액 승인한다.
+        transaction.executeWithoutResult(tx -> writer.beginEstimated(convert, "ws-1", user, quote("convert", 60_000), 100_000, true));
+        assertThat(credits.credits(user).availableKrwMilli()).isZero();
+        charge(convert, 50_000);
+
+        // 변환 완료(이벤트 재처리 포함): 변환 몫은 정산하고 편입 몫 40,000은 다른 원장 키로 남는다.
+        transaction.executeWithoutResult(tx -> writer.completeConvert(convert));
+        transaction.executeWithoutResult(tx -> writer.completeConvert(convert));
+        // 수집 대기열·오래된 예약 정리가 변환을 따로 정산해도 편입 몫은 풀리지 않는다.
+        credits.settle(convert);
+        credits.releaseStale();
+        assertThat(credits.credits(user).balanceKrwMilli()).isEqualTo(50_000);
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(40_000);
+        // 그 사이 다른 요청은 편입 몫을 쓰지 못한다.
+        assertThatThrownBy(() -> credits.reserve("other-" + UUID.randomUUID(), user, "document", 10_001))
                 .isInstanceOf(CreditService.InsufficientCreditException.class);
 
-        // 변환을 정산하면 기준 길이 ingest가 통과하고 70,000을 예약한다.
-        transaction.executeWithoutResult(tx -> writer.completeAndSettle(convert));
-        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
-        transaction.executeWithoutResult(tx -> writer.beginDocument("run-" + UUID.randomUUID(), "ws-1", user, 5537));
-        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(70_000);
+        // 분할 파트 두 개: 첫 파트는 몫에서 30,000을, 둘째는 남은 10,000을 옮기고 20,000은 잔액 확인 없이 더 예약한다.
+        String first = "ingest-" + UUID.randomUUID();
+        String second = "ingest-" + UUID.randomUUID();
+        transaction.executeWithoutResult(tx -> writer.beginConvertedIngest(first, convert, "ws-1", user, quote("document", 30_000)));
+        transaction.executeWithoutResult(tx -> writer.beginConvertedIngest(first, convert, "ws-1", user, quote("document", 30_000)));
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(40_000);
+        transaction.executeWithoutResult(tx -> writer.beginConvertedIngest(second, convert, "ws-1", user, quote("document", 30_000)));
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(60_000);
+
+        // 등록을 마치면 남은 몫을 푼다. 여러 번 불러도 같다.
+        writer.releaseAutoIngestHold(convert);
+        writer.releaseAutoIngestHold(convert);
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(60_000);
         assertLedgerMatchesAccount();
+    }
+
+    @Test
+    void skippedAutoIngestReleasesTheWholeHeldShare() {
+        CreditService credits = credits(true);
+        var writer = writer(credits);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
+        grant(100_000);
+        String convert = "convert:" + UUID.randomUUID();
+        transaction.executeWithoutResult(tx -> writer.beginEstimated(convert, "ws-1", user, quote("convert", 60_000), 100_000, true));
+        transaction.executeWithoutResult(tx -> writer.completeConvert(convert));
+        assertThat(credits.credits(user).reservedKrwMilli()).isEqualTo(40_000);
+        writer.releaseAutoIngestHold(convert);
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertThat(credits.credits(user).availableKrwMilli()).isEqualTo(100_000);
+        // 자동 편입을 승인하지 않은 변환은 몫을 남기지 않는다.
+        String plain = "convert:" + UUID.randomUUID();
+        transaction.executeWithoutResult(tx -> writer.beginEstimated(plain, "ws-1", user, quote("convert", 60_000), 60_000, false));
+        transaction.executeWithoutResult(tx -> writer.completeConvert(plain));
+        assertThat(credits.credits(user).reservedKrwMilli()).isZero();
+        assertThatThrownBy(() -> credits.reserveConvertedIngest(plain, "ingest-" + UUID.randomUUID(), "ws-1", user, 1))
+                .isInstanceOf(IllegalStateException.class);
+        assertLedgerMatchesAccount();
+    }
+
+    @Test
+    void costQuoteStaysOutOfThePublishedCommandThatCancellationHashes() throws Exception {
+        CreditService credits = credits(false);
+        var writer = writer(credits);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
+        String run = UUID.randomUUID().toString();
+        var command = new java.util.LinkedHashMap<String, Object>();
+        command.put("run_id", run);
+        command.put("kind", "document");
+        command.put("workspace_id", "ws-1");
+        command.put("user_id", user);
+        command.put("document_id", "doc_cost_quote");
+        transaction.executeWithoutResult(tx -> {
+            writer.beginEstimated(run, "ws-1", user, new DocumentCostEstimator.Quote(5, 7, "document", "openai", "m"), 7, false);
+            writer.enqueue(run, "ai.processing.command", "doc_cost_quote", command);
+        });
+        charges(credits, "http://127.0.0.1:1/unused").releasePostIngestHold("post-" + run, run, "ws-1", user);
+        // AI 취소는 이 command의 해시를 Kafka로 받은 command와 대조한다. 비용 기준이 섞이면 취소가 409로 막힌다.
+        var stored = mapper.readTree(jdbc.queryForObject("SELECT command::text FROM ai_task_runs WHERE id = ?", String.class, run));
+        var published = mapper.readTree(jdbc.queryForObject("SELECT payload FROM ai_command_outbox WHERE run_id = ?", String.class, run));
+        assertThat(stored).isEqualTo(published);
+        var costQuote = mapper.readTree(jdbc.queryForObject("SELECT cost_quote::text FROM ai_task_runs WHERE id = ?", String.class, run));
+        assertThat(costQuote.path("base").asLong()).isEqualTo(5);
+        assertThat(costQuote.path("post_run").asText()).isEqualTo("post-" + run);
     }
 
     @Test
