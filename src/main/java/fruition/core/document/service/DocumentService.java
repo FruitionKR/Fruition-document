@@ -158,6 +158,8 @@ public class DocumentService {
     private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
     private static final String INITIAL_NOTE_FILENAME = "새 노트.md";
     private static final String CONVERT_PLACEHOLDER_MARKDOWN = Document.CONVERT_PLACEHOLDER_MARKDOWN;
+    /** 구조를 읽을 수 없는 PDF의 변환 실패 코드. converter의 같은 실패와 같은 코드라 화면 문구가 같다. */
+    public static final String UNREADABLE_PDF_CODE = "input_rejected";
     // 크기 상한을 넘은 변환 이미지 자리 표시. 정규식·치환 특수 문자가 없는 값이어야 한다.
     private static final String OVERSIZED_CONVERTED_IMAGE = "fruition-oversized-converted-image";
     private static final String PDF_MIME_TYPE = "application/pdf";
@@ -1555,13 +1557,35 @@ public class DocumentService {
                 }));
     }
 
-    public long[] estimateImportCosts(String workspaceId, java.util.List<Long> sizes, java.util.List<String> pdfKeys) {
+    /** 가져오기 견적. 읽을 수 없는 PDF는 변환하면 비용 없이 실패로 남으므로 합계에 넣지 않고 따로 센다. */
+    public record ImportCostEstimate(long ingest, long convert, int unreadablePdfs) {}
+
+    /**
+     * 가져온 문서의 편입·변환 예상액. 단가·보정 계수는 kind마다 한 번만 읽고, PDF 구조 확인(HTTP)은 호출자가
+     * DB 트랜잭션을 열지 않은 상태에서 부른다.
+     */
+    public ImportCostEstimate estimateImportCosts(String workspaceId, java.util.List<Long> sizes, java.util.List<String> pdfKeys) {
+        if (sizes.isEmpty() && pdfKeys.isEmpty()) return new ImportCostEstimate(0, 0, 0);
         var model = workspaceAiModelClient.get(workspaceId);
-        long ingest = sizes.stream().mapToLong(size -> costEstimator.document(size, model).amount()).reduce(0, Math::addExact);
-        boolean figures = !pdfKeys.isEmpty() && workspaceSettingsClient.describePdfFigures(workspaceId);
-        long convert = pdfKeys.stream().mapToLong(key -> costEstimator.conversion(
-                costEstimator.inspect(normalizeObjectKey(key)), figures, model).amount()).reduce(0, Math::addExact);
-        return new long[]{ingest, convert};
+        long ingest = 0;
+        if (!sizes.isEmpty()) {
+            var rate = costEstimator.rate("document", model);
+            for (long size : sizes) ingest = Math.addExact(ingest, rate.document(size).amount());
+        }
+        long convert = 0;
+        int unreadable = 0;
+        if (!pdfKeys.isEmpty()) {
+            boolean figures = workspaceSettingsClient.describePdfFigures(workspaceId);
+            var rate = costEstimator.rate("convert", model);
+            for (String key : pdfKeys) {
+                try {
+                    convert = Math.addExact(convert, rate.conversion(costEstimator.inspect(normalizeObjectKey(key)), figures).amount());
+                } catch (fruition.core.usage.service.DocumentCostEstimator.UnreadablePdfException e) {
+                    unreadable++;
+                }
+            }
+        }
+        return new ImportCostEstimate(ingest, convert, unreadable);
     }
 
     private record ConvertPrepared(String placeholderId, Prefetched<String> sourceKey,
@@ -1578,8 +1602,13 @@ public class DocumentService {
                 DocumentEditingRules.rename(source.getDisplayName(), "document.md");
         String placeholderId = prepared.placeholderId();
         String convertRunId = "convert:" + placeholderId;
+        fruition.core.usage.service.DocumentCostEstimator.PdfFeatures features;
+        try {
+            features = prepared.features().get();
+        } catch (fruition.core.usage.service.DocumentCostEstimator.UnreadablePdfException e) {
+            return recordUnreadablePdf(workspaceId, userId, source, filename, content, placeholderId, prepared.sourceKey().get());
+        }
         var model = prepared.aiModel().get();
-        var features = prepared.features().get();
         var quote = costEstimator.conversion(features, prepared.describeFigures(), model);
         long total = prepared.autoIngest() ? Math.addExact(quote.amount(), costEstimator.document(features.markdownBytes(), model).amount()) : quote.amount();
         taskWriter.beginEstimated(convertRunId, workspaceId, userId, quote, total, prepared.autoIngest());
@@ -1617,6 +1646,28 @@ public class DocumentService {
         CommittedLog.info(log, "[문서 변환 요청 접수] operation=document_convert stage=accepted workspaceId={} userId={} sourceDocumentId={} documentId={} 설명=변환 작업을 등록했습니다. 변환 완료는 별도 로그로 남습니다.",
                 workspaceId, userId, documentId, placeholderId);
         return response;
+    }
+
+    /**
+     * 구조를 읽을 수 없는(암호화·손상) PDF는 공급사를 부르지 않고 실패한 변환본으로 남긴다. 화면은 다른 변환 실패와 같은
+     * 코드로 이유를 보여 주고, 가져오기 변환은 이 원본을 다시 고르지 않는다. 실행·예약을 만들지 않아 비용이 없다.
+     */
+    private DocumentUploadResponse recordUnreadablePdf(String workspaceId, String userId, Document source,
+                                                      DocumentEditingRules.Filename filename,
+                                                      DocumentEditingRules.MarkdownContent content, String placeholderId,
+                                                      String sourceKey) {
+        Document placeholder = new Document(placeholderId, workspaceId, userId, filename.filename(), "text/markdown",
+                content.bytes().length, sourceKey, null, "convert");
+        placeholder.initializeConvertPlaceholder(source.getId(), source.getFolderId(), content.contentHash(),
+                content.bytes().length, placementSortOrder(workspaceId, source.getFolderId(), DocumentRole.EDITABLE));
+        if (source.getImportId() != null) placeholder.markImported(source.getImportId());
+        placeholder.scheduleAutoIngestOnConvert(false);
+        placeholder.markProcessingFailed(UNREADABLE_PDF_CODE, AiErrorMessages.convert(UNREADABLE_PDF_CODE), Instant.now());
+        documentRepository.save(placeholder);
+        editStateRepository.save(new DocumentEditState(placeholderId, content.markdown(), content.contentHash(), 1));
+        CommittedLog.info(log, "[문서 변환 실패 확정] operation=document_convert stage=preflight errorCode={} retryable=false workspaceId={} userId={} sourceDocumentId={} documentId={} 원인=PDF 구조를 읽을 수 없어 변환하지 않았습니다.",
+                UNREADABLE_PDF_CODE, workspaceId, userId, source.getId(), placeholderId);
+        return toUploadResponse(placeholder, true);
     }
 
     public String originalReadUrl(String workspaceId, String userId, String documentId) {
@@ -1766,8 +1817,8 @@ public class DocumentService {
                             content.getMarkdown().getBytes(StandardCharsets.UTF_8).length, Instant.now());
                 }
             });
-            // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 푼다. 남겨 두면 그 예약이 가용 잔액을 줄여 ingest를 거절시킨다.
-            taskWriter.completeAndSettle(convertRunId);
+            // 변환 실행을 닫고 변환 몫의 예약을 푼다. 승인된 자동 편입 몫은 같은 트랜잭션에서 따로 예약해 둔다.
+            taskWriter.completeConvert(convertRunId);
             if (analytics != null) analytics.converted(placeholder, queue.getSourceDocumentId(), total, null);
             convertQueueRepository.delete(queue);
             CommittedLog.info(log, "[문서 변환 완료] operation=document_convert stage=completed documentId={} workspaceId={} userId={} totalPages={} 설명=변환 결과를 문서에 저장했습니다. 위키 편입은 별도 작업입니다.",
@@ -1837,6 +1888,20 @@ public class DocumentService {
 
     /** 변환 문서를 AI 큐로 보낸다. 이전 버전에서 생성한 파트도 호환 처리한다. */
     private void ingestConvertedParts(Document placeholder) {
+        try {
+            ingestConvertedPartsUnderHold(placeholder);
+        } finally {
+            // 편입을 등록했든 건너뛰었든 실패했든 남은 자동 편입 몫을 푼다. 여기까지 오지 못하면 오래된 예약 정리가 푼다.
+            try {
+                taskWriter.releaseAutoIngestHold("convert:" + placeholder.getId());
+            } catch (RuntimeException e) {
+                log.warn("[자동 편입 예약 해제 실패] operation=document_convert stage=release_auto_ingest_hold retryable=true documentId={} errorType={} 원인=남은 자동 편입 예약을 풀지 못했습니다. 오래된 예약 정리가 다시 풉니다.",
+                        placeholder.getId(), e.getClass().getSimpleName());
+            }
+        }
+    }
+
+    private void ingestConvertedPartsUnderHold(Document placeholder) {
         // 설정은 변환 요청 때 정해 문서에 남긴 값을 따른다. 권한은 변환을 요청한 사용자 기준으로 끝나는 시점에 다시 보고
         // (트랜잭션 밖), 도중에 회수됐으면 편입하지 않는다. 값을 남기기 전에 요청된 변환(null)은 지금 설정으로 판정한다.
         // 가져온 PDF의 변환본(import_id 있음)은 자동 편입하지 않는다. 변환 결과는 그대로 저장한다.

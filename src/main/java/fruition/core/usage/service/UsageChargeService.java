@@ -223,8 +223,9 @@ public class UsageChargeService {
     public void releasePostIngestHold(String postRunId, String ingestRunId, String workspaceId, String userId) {
         enqueue(postRunId);
         if (ingestRunId == null || ingestRunId.isBlank()) return;
-        jdbc.update("UPDATE ai_task_runs SET command=command || jsonb_build_object('_cost_post_run', ?::text) "
-                + "WHERE id=? AND user_id=? AND workspace_id=? AND kind='document' AND command->>'_cost_base' IS NOT NULL",
+        // 견적 보정이 편입과 품질 평가 비용을 함께 보도록 연결한다. command는 바꾸지 않는다(AI 취소 해시 대조).
+        jdbc.update("UPDATE ai_task_runs SET cost_quote = cost_quote || jsonb_build_object('post_run', ?::text) "
+                + "WHERE id=? AND user_id=? AND workspace_id=? AND kind='document' AND cost_quote IS NOT NULL",
                 postRunId, ingestRunId, userId, workspaceId);
         // ingest 결과가 아직 안 왔을 수도 있어 종료를 기록해 둔다. 뒤늦게 온 ingest 결과는 보류하지 않는다.
         if (credits.enforcing()) {

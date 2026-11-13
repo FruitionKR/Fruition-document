@@ -483,6 +483,43 @@ class DocumentImportIntegrationTest {
     }
 
     @Test
+    void unreadablePdf_isRecordedAsFailedWithoutCost_andDoesNotStarveLaterPdfs() throws Exception {
+        String importId = openImport();
+        String unreadable = json(uploadPdf("암호.pdf", importId, UUID.randomUUID().toString()), 201).path("id").asText();
+        String readable = json(uploadPdf("일반.pdf", importId, UUID.randomUUID().toString()), 201).path("id").asText();
+        complete(importId, "{}").andExpect(status().isOk());
+        org.mockito.Mockito.doThrow(new fruition.core.usage.service.DocumentCostEstimator.UnreadablePdfException())
+                .when(costEstimator).inspect("sources/documents/" + unreadable + "/original");
+
+        // 읽을 수 없는 PDF는 0원으로 합치지 않고 따로 센다. 단가·보정은 kind마다 한 번만 읽는다.
+        org.mockito.Mockito.clearInvocations(costEstimator);
+        JsonNode before = json(estimate(importId), 200);
+        org.mockito.Mockito.verify(costEstimator, org.mockito.Mockito.times(1))
+                .rate(org.mockito.ArgumentMatchers.eq("convert"), org.mockito.ArgumentMatchers.any());
+        assertThat(before.path("pdf_unconverted_count").asInt()).isEqualTo(2);
+        assertThat(before.path("pdf_unreadable_count").asInt()).isEqualTo(1);
+        assertThat(before.path("convert_estimated_credits").asLong()).isEqualTo(costEstimator.conversion(
+                new fruition.core.usage.service.DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0), false,
+                workspaceAiModelClient.get(workspaceId)).amount());
+
+        // 앞의 읽을 수 없는 PDF가 뒤의 PDF를 막지 않는다. 다시 불러도 같은 원본을 고르지 않는다.
+        mockMvc.perform(post(imports() + "/" + importId + "/convert").header("Authorization", bearer(userId)))
+                .andExpect(status().isAccepted()).andExpect(content().json("{\"queued\":2,\"remaining\":0}", true));
+        mockMvc.perform(post(imports() + "/" + importId + "/convert").header("Authorization", bearer(userId)))
+                .andExpect(status().isAccepted()).andExpect(content().json("{\"queued\":0,\"remaining\":0}", true));
+        assertThat(convertedFrom(unreadable)).isEqualTo(1);
+        assertThat(convertedFrom(readable)).isEqualTo(1);
+        var failed = jdbc.queryForMap("SELECT id, status, error_code FROM documents WHERE source_document_id = ?", unreadable);
+        assertThat(failed.get("status")).isEqualTo("failed");
+        assertThat(failed.get("error_code")).isEqualTo("input_rejected");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE id = ?", Integer.class,
+                "convert:" + failed.get("id"))).isZero();
+        JsonNode after = json(estimate(importId), 200);
+        assertThat(after.path("pdf_unconverted_count").asInt()).isZero();
+        assertThat(after.path("pdf_unreadable_count").asInt()).isZero();
+    }
+
+    @Test
     void convert_failedConversionCanBeRequestedAgain() throws Exception {
         String importId = openImport();
         String pdfId = json(uploadPdf("하나.pdf", importId, UUID.randomUUID().toString()), 201).path("id").asText();

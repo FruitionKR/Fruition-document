@@ -199,7 +199,7 @@ class DocumentServiceConvertTest {
 
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verifyNoIngestEnqueued();
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
     }
 
@@ -213,7 +213,7 @@ class DocumentServiceConvertTest {
 
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verifyNoIngestEnqueued();
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
     }
 
@@ -292,7 +292,7 @@ class DocumentServiceConvertTest {
 
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verifyNoIngestEnqueued();
         verify(workspaceSettingsClient, never()).autoIngestPdfOnConvert(anyString());
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
         assertThat(parent.isAutoIngestScheduled()).isFalse();
@@ -309,7 +309,7 @@ class DocumentServiceConvertTest {
 
         documentService.applyConvertBatch(succeeded(0, 3, 3));
 
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verifyNoIngestEnqueued();
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
         assertThat(parent.getAutoIngestScheduled()).isFalse();
     }
@@ -437,6 +437,32 @@ class DocumentServiceConvertTest {
             assertThat(listed).as(c.name()).isEqualTo(c.expected());
             assertThat(accepted).as(c.name()).isEqualTo(listed);
         }
+    }
+
+    @Test
+    @DisplayName("구조를 읽을 수 없는 PDF는 공급사·예약 없이 input_rejected 실패 변환본으로 남긴다")
+    void convertToMarkdown_unreadablePdf_recordsFailedPlaceholderWithoutRun() {
+        stubOwnedWorkspace();
+        Document source = sourcePdf();
+        when(documentRepository.findByIdAndWorkspaceIdAndDeletedAtIsNull(SOURCE_DOCUMENT_ID, WORKSPACE_ID))
+                .thenReturn(Optional.of(source));
+        when(costEstimator.inspect(any())).thenThrow(new fruition.core.usage.service.DocumentCostEstimator.UnreadablePdfException());
+
+        DocumentUploadResponse response = documentService.convertToMarkdown(
+                WORKSPACE_ID, USER_ID, SOURCE_DOCUMENT_ID, "convert-key");
+
+        ArgumentCaptor<Document> savedDocument = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(savedDocument.capture());
+        Document placeholder = savedDocument.getValue();
+        assertThat(placeholder.getStatus()).isEqualTo(DocumentStatus.failed);
+        assertThat(placeholder.getErrorCode()).isEqualTo("input_rejected");
+        assertThat(placeholder.getErrorMessage()).contains("암호가 걸렸거나 손상되어 변환할 수 없는 PDF입니다.");
+        assertThat(placeholder.getSourceDocumentId()).isEqualTo(SOURCE_DOCUMENT_ID);
+        assertThat(placeholder.getAutoIngestScheduled()).isFalse();
+        assertThat(response.status()).isEqualTo(DocumentStatus.failed);
+        verify(taskWriter, never()).beginEstimated(anyString(), anyString(), anyString(), any(), anyLong(), org.mockito.ArgumentMatchers.anyBoolean());
+        verify(convertQueueRepository, never()).save(any());
+        verify(taskWriter, never()).enqueueJoined(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -955,7 +981,7 @@ class DocumentServiceConvertTest {
         assertThat(cancelled.getAllValues()).containsExactly("convert:doc_placeholder:10", "convert:doc_placeholder:30");
         assertThat(commands.getAllValues().stream().map(command -> command.path("run_id").asText()))
                 .containsExactly("convert:doc_placeholder:10", "convert:doc_placeholder:30");
-        verify(taskWriter, never()).completeAndSettle(anyString());
+        verify(taskWriter, never()).completeConvert(anyString());
     }
 
     @Test
@@ -998,7 +1024,7 @@ class DocumentServiceConvertTest {
         assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 1 -->\n\n# 본문\n");
         verify(convertQueueRepository).delete(queue);
         var order = org.mockito.Mockito.inOrder(taskWriter, ingestCommandOutbox);
-        order.verify(taskWriter).completeAndSettle("convert:doc_placeholder");
+        order.verify(taskWriter).completeConvert("convert:doc_placeholder");
         order.verify(taskWriter, times(1)).beginConvertedIngest(anyString(), eq("convert:" + parent.getId()), eq(WORKSPACE_ID), eq(USER_ID), any());
         verify(taskWriter, never()).enqueueJoined(anyString(), anyString(), anyString(), anyString());
     }
@@ -1017,8 +1043,8 @@ class DocumentServiceConvertTest {
 
         assertThat(states.get(parent.getId()).getMarkdown()).isEqualTo("<!-- page 1 -->\n\n# 본문\n");
         assertThat(parent.getStatus()).isEqualTo(DocumentStatus.completed);
-        verify(taskWriter).completeAndSettle("convert:doc_placeholder");
-        verify(ingestCommandOutbox, never()).begin(anyString(), anyString(), anyString(), anyLong());
+        verify(taskWriter).completeConvert("convert:doc_placeholder");
+        verifyNoIngestEnqueued();
     }
 
     @Test
@@ -1058,8 +1084,26 @@ class DocumentServiceConvertTest {
         assertThat(parent.getErrorCode()).isEqualTo("INSUFFICIENT_CREDIT");
         // 변환 실행은 자동 ingest를 시작하기 전에 닫고 예약을 풀었다.
         var order = org.mockito.Mockito.inOrder(taskWriter, ingestCommandOutbox);
-        order.verify(taskWriter).completeAndSettle("convert:" + parent.getId());
+        order.verify(taskWriter).completeConvert("convert:" + parent.getId());
         order.verify(taskWriter).beginConvertedIngest(anyString(), eq("convert:" + parent.getId()), eq(WORKSPACE_ID), eq(USER_ID), any());
+        // 등록을 건너뛰어도 남은 자동 편입 몫은 등록 시도 뒤에 푼다.
+        order.verify(taskWriter).releaseAutoIngestHold("convert:" + parent.getId());
+    }
+
+    @Test
+    @DisplayName("자동 편입 등록이 예상하지 못한 오류로 실패해도 남은 자동 편입 몫을 푼다")
+    void autoIngestFailureStillReleasesHeldShare() throws Exception {
+        enableAutoIngest(true);
+        startScenario("<!-- page 10 -->\n\n# first pages\n");
+        queue.checkpoint(10, 20);
+        seedDispatched(10);
+        stubResult(10, "<!-- page 1 -->\n\n# next pages\n");
+        org.mockito.Mockito.doThrow(new IllegalStateException("boom"))
+                .when(taskWriter).beginConvertedIngest(anyString(), eq("convert:" + parent.getId()), eq(WORKSPACE_ID), eq(USER_ID), any());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> documentService.applyConvertBatch(succeeded(10, 20, 20)))
+                .isInstanceOf(IllegalStateException.class);
+        verify(taskWriter).releaseAutoIngestHold("convert:" + parent.getId());
     }
 
     @Test
@@ -1291,4 +1335,10 @@ class DocumentServiceConvertTest {
             DocumentStatus status,
             long currentVersion
     ) {}
+
+    private void verifyNoIngestEnqueued() {
+        verify(ingestCommandOutbox, never()).enqueue(any(), any(), any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyBoolean(), any(), anyLong(), any(), any());
+        verify(taskWriter, never()).beginConvertedIngest(any(), any(), any(), any(), any());
+    }
 }

@@ -41,12 +41,14 @@ public class DocumentImportService {
     static final int INGEST_BATCH = 20;
     /**
      * 아직 변환하지 않은 가져온 PDF 원본: 휴지통 밖이고, 변환 중이거나 끝난 변환본이 없다(변환 실패만 있으면 다시 변환할 수 있다).
+     * 구조를 읽을 수 없는 PDF로 실패한 원본은 다시 해도 같아 빼서, 뒤의 PDF가 계속 밀리지 않게 한다.
      * 가져온 PDF는 업로드만 하고 사용자가 고른 뒤에만 변환한다.
      */
     private static final String UNCONVERTED_PDF =
             "import_id = ? AND workspace_id = ? AND deleted_at IS NULL AND document_role = 'ORIGINAL'"
                     + " AND mime_type = 'application/pdf' AND NOT EXISTS (SELECT 1 FROM documents c"
-                    + " WHERE c.source_document_id = documents.id AND c.deleted_at IS NULL AND c.status <> 'failed')";
+                    + " WHERE c.source_document_id = documents.id AND c.deleted_at IS NULL"
+                    + " AND (c.status <> 'failed' OR c.error_code = '" + DocumentService.UNREADABLE_PDF_CODE + "'))";
     /**
      * 편입 대상: 이 세션의 휴지통 밖 편집 가능 Markdown 중 편입 요청한 적 없는 문서. PDF 원본(ORIGINAL)은 편입 대상이 아니라
      * 빼고, PDF 변환본은 변환이 끝난 뒤(completed, 변환 run만 남음)에만 넣는다. 변환 중·변환 실패는 빠진다.
@@ -137,8 +139,10 @@ public class DocumentImportService {
                 row.reportedCreated(), row.reportedFailed(), row.reportedSkipped());
     }
 
-    /** 아직 편입하지 않은 Markdown의 본문 길이별 예약액을 합산한다. */
-    @Transactional(readOnly = true)
+    /**
+     * 아직 편입하지 않은 Markdown과 아직 변환하지 않은 PDF의 견적을 합산한다. PDF 구조 확인(HTTP)이 DB 연결을 붙잡지 않게
+     * 트랜잭션을 열지 않는다.
+     */
     public IngestEstimateResponse estimate(String workspaceId, String userId, String importId) {
         access.requireMember(workspaceId, userId);
         UUID id = find(workspaceId, userId, importId, false).id();
@@ -147,11 +151,10 @@ public class DocumentImportService {
                 Long.class, id, workspaceId);
         List<String> pdfKeys = jdbc.queryForList("SELECT source_uri FROM documents WHERE " + UNCONVERTED_PDF,
                 String.class, id, workspaceId);
-        long[] estimates = documents.estimateImportCosts(workspaceId, sizes, pdfKeys);
-        long estimate = estimates[0];
-        int pdfs = pdfKeys.size();
-        return new IngestEstimateResponse(sizes.size(), usd(estimate, id), estimate,
-                count(CONVERTING, id, workspaceId), pdfs, usd(estimates[1], id), estimates[1]);
+        var estimates = documents.estimateImportCosts(workspaceId, sizes, pdfKeys);
+        return new IngestEstimateResponse(sizes.size(), usd(estimates.ingest(), id), estimates.ingest(),
+                count(CONVERTING, id, workspaceId), pdfKeys.size(), usd(estimates.convert(), id), estimates.convert(),
+                estimates.unreadablePdfs());
     }
 
     private BigDecimal usd(long krwMilli, UUID id) {

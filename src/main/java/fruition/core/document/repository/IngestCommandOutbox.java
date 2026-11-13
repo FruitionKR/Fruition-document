@@ -27,10 +27,6 @@ public class IngestCommandOutbox {
         this.objectMapper = objectMapper;
     }
 
-    public void begin(String runId, String workspaceId, String userId, long sourceBytes) {
-        writer.beginDocument(runId, workspaceId, userId, sourceBytes);
-    }
-
     public void enqueue(String runId, String documentId, String userId, String workspaceId,
                         String selectionMode, String inputMarkdown, String inputBlocksJson, boolean chatWiki,
                         String operationId, long sourceRevision, String sourceContentHash,
