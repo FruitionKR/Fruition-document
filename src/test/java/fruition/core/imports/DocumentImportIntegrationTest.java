@@ -59,6 +59,8 @@ class DocumentImportIntegrationTest {
     @MockBean fruition.core.document.service.AiCommandOutboxPublisher outboxPublisher;
     @MockBean WorkspaceAiModelClient workspaceAiModelClient;
     @MockBean WorkspaceSettingsClient workspaceSettings;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    fruition.core.usage.service.DocumentCostEstimator costEstimator;
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired JdbcTemplate jdbc;
@@ -77,6 +79,8 @@ class DocumentImportIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.doReturn(new fruition.core.usage.service.DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0))
+                .when(costEstimator).inspect(org.mockito.ArgumentMatchers.anyString());
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         userId = "user_import_" + suffix;
         workspaceId = "ws_import_" + suffix;
@@ -312,8 +316,8 @@ class DocumentImportIntegrationTest {
                 .header("Authorization", bearer(userId))), 200);
         assertThat(body.path("document_count").asInt()).isEqualTo(2);
         long estimate = jdbc.queryForList("SELECT byte_size FROM documents WHERE import_id=?::uuid AND deleted_at IS NULL AND id<>?",
-                Long.class, importId, first).stream().mapToLong(credits::estimateDocument).sum()
-                + credits.estimateDocument(edited.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+                Long.class, importId, first).stream().mapToLong(bytes -> costEstimator.document(bytes, workspaceAiModelClient.get(workspaceId)).amount()).sum()
+                + costEstimator.document(edited.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, workspaceAiModelClient.get(workspaceId)).amount();
         assertThat(body.path("estimated_credits").asLong()).isEqualTo(estimate);
         assertThat(body.path("estimated_cost_usd").decimalValue()).isEqualByComparingTo(
                 BigDecimal.valueOf(credits.estimateUsdMicro(estimate)).movePointLeft(6));
@@ -462,9 +466,9 @@ class DocumentImportIntegrationTest {
         assertThat(convertedFrom(first)).isZero();
         JsonNode before = json(estimate(importId), 200);
         assertThat(before.path("pdf_unconverted_count").asInt()).isEqualTo(2);
-        assertThat(before.path("convert_estimated_credits").asLong()).isEqualTo(2 * credits.estimate("convert"));
+        assertThat(before.path("convert_estimated_credits").asLong()).isEqualTo(2 * costEstimator.conversion(new fruition.core.usage.service.DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0), false, workspaceAiModelClient.get(workspaceId)).amount());
         assertThat(before.path("convert_estimated_cost_usd").decimalValue()).isEqualByComparingTo(
-                BigDecimal.valueOf(credits.estimateUsdMicro("convert") * 2).movePointLeft(6));
+                BigDecimal.valueOf(credits.estimateUsdMicro(before.path("convert_estimated_credits").asLong())).movePointLeft(6));
         assertThat(before.path("document_count").asInt()).isEqualTo(1);
 
         mockMvc.perform(post(imports() + "/" + importId + "/convert").header("Authorization", bearer(userId)))
@@ -476,6 +480,43 @@ class DocumentImportIntegrationTest {
         JsonNode after = json(estimate(importId), 200);
         assertThat(after.path("pdf_unconverted_count").asInt()).isZero();
         assertThat(after.path("converting_count").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void unreadablePdf_isRecordedAsFailedWithoutCost_andDoesNotStarveLaterPdfs() throws Exception {
+        String importId = openImport();
+        String unreadable = json(uploadPdf("암호.pdf", importId, UUID.randomUUID().toString()), 201).path("id").asText();
+        String readable = json(uploadPdf("일반.pdf", importId, UUID.randomUUID().toString()), 201).path("id").asText();
+        complete(importId, "{}").andExpect(status().isOk());
+        org.mockito.Mockito.doThrow(new fruition.core.usage.service.DocumentCostEstimator.UnreadablePdfException())
+                .when(costEstimator).inspect("sources/documents/" + unreadable + "/original");
+
+        // 읽을 수 없는 PDF는 0원으로 합치지 않고 따로 센다. 단가·보정은 kind마다 한 번만 읽는다.
+        org.mockito.Mockito.clearInvocations(costEstimator);
+        JsonNode before = json(estimate(importId), 200);
+        org.mockito.Mockito.verify(costEstimator, org.mockito.Mockito.times(1))
+                .rate(org.mockito.ArgumentMatchers.eq("convert"), org.mockito.ArgumentMatchers.any());
+        assertThat(before.path("pdf_unconverted_count").asInt()).isEqualTo(2);
+        assertThat(before.path("pdf_unreadable_count").asInt()).isEqualTo(1);
+        assertThat(before.path("convert_estimated_credits").asLong()).isEqualTo(costEstimator.conversion(
+                new fruition.core.usage.service.DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0), false,
+                workspaceAiModelClient.get(workspaceId)).amount());
+
+        // 앞의 읽을 수 없는 PDF가 뒤의 PDF를 막지 않는다. 다시 불러도 같은 원본을 고르지 않는다.
+        mockMvc.perform(post(imports() + "/" + importId + "/convert").header("Authorization", bearer(userId)))
+                .andExpect(status().isAccepted()).andExpect(content().json("{\"queued\":2,\"remaining\":0}", true));
+        mockMvc.perform(post(imports() + "/" + importId + "/convert").header("Authorization", bearer(userId)))
+                .andExpect(status().isAccepted()).andExpect(content().json("{\"queued\":0,\"remaining\":0}", true));
+        assertThat(convertedFrom(unreadable)).isEqualTo(1);
+        assertThat(convertedFrom(readable)).isEqualTo(1);
+        var failed = jdbc.queryForMap("SELECT id, status, error_code FROM documents WHERE source_document_id = ?", unreadable);
+        assertThat(failed.get("status")).isEqualTo("failed");
+        assertThat(failed.get("error_code")).isEqualTo("input_rejected");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM ai_task_runs WHERE id = ?", Integer.class,
+                "convert:" + failed.get("id"))).isZero();
+        JsonNode after = json(estimate(importId), 200);
+        assertThat(after.path("pdf_unconverted_count").asInt()).isZero();
+        assertThat(after.path("pdf_unreadable_count").asInt()).isZero();
     }
 
     @Test

@@ -56,8 +56,18 @@ class FolderServiceIntegrationTest {
     private String userId;
     private String workspaceId;
 
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    fruition.core.usage.service.DocumentCostEstimator costEstimator;
+
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    fruition.core.authz.WorkspaceAiModelClient workspaceAiModelClient;
+
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.when(workspaceAiModelClient.get(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(new fruition.core.authz.WorkspaceAiModelClient.AiModelSelection("gemini", "gemini-3.5-flash-lite"));
+        org.mockito.Mockito.doReturn(new fruition.core.usage.service.DocumentCostEstimator.PdfFeatures(1, 1000, 0, 0))
+                .when(costEstimator).inspect(org.mockito.ArgumentMatchers.anyString());
         String suffix = UUID.randomUUID().toString();
         userId = "user_" + suffix;
         workspaceId = "ws_" + suffix;

@@ -37,8 +37,33 @@ public class AiCommandOutboxWriter {
         begin(runId, workspaceId, userId, kind, null);
     }
 
-    public void beginDocument(String runId, String workspaceId, String userId, long sourceBytes) {
-        begin(runId, workspaceId, userId, "document", credits.estimateDocument(sourceBytes));
+    /**
+     * 견적으로 승인·예약하고 견적 기준을 {@code cost_quote}에 남긴다. {@code command}에는 넣지 않는다: command는 발행한
+     * payload 그대로여야 AI 취소가 같은 해시로 대조된다. autoIngest면 total에 들어 있는 편입 몫을 함께 남긴다.
+     */
+    public void beginEstimated(String runId, String workspaceId, String userId,
+            fruition.core.usage.service.DocumentCostEstimator.Quote quote, long total, boolean autoIngest) {
+        begin(runId, workspaceId, userId, quote.kind(), total);
+        jdbcTemplate.update("UPDATE ai_task_runs SET cost_quote = jsonb_build_object('base', ?::bigint, 'provider', ?::text, "
+                + "'model', ?::text, 'auto_ingest', ?::boolean, 'estimate', ?::bigint, 'ingest_hold', ?::bigint) WHERE id = ?",
+                quote.base(), quote.provider(), quote.model(), autoIngest, total,
+                autoIngest ? total - quote.amount() : 0, runId);
+    }
+
+    public void beginConvertedIngest(String runId, String parentRunId, String workspaceId, String userId,
+            fruition.core.usage.service.DocumentCostEstimator.Quote quote) {
+        // 견적 없이 승인된(사전 확인 배포 전) 변환의 자동 편입은 새 편입과 같이 전액 승인을 거친다.
+        if (Boolean.TRUE.equals(jdbcTemplate.queryForObject("SELECT EXISTS (SELECT 1 FROM ai_task_runs "
+                + "WHERE id=? AND user_id=? AND workspace_id=? AND kind='convert' AND cost_quote IS NULL)",
+                Boolean.class, parentRunId, userId, workspaceId))) {
+            beginEstimated(runId, workspaceId, userId, quote, quote.amount(), false);
+            return;
+        }
+        entityManager.flush();
+        jdbcTemplate.update("INSERT INTO ai_task_runs(id, workspace_id, user_id, kind) VALUES (?, ?, ?, 'document') "
+                + "ON CONFLICT(id) DO NOTHING", runId, workspaceId, userId);
+        credits.reserveConvertedIngest(parentRunId, runId, workspaceId, userId, quote.amount());
+        beginEstimated(runId, workspaceId, userId, quote, quote.amount(), false);
     }
 
     private void begin(String runId, String workspaceId, String userId, String kind, Long estimate) {
@@ -73,12 +98,20 @@ public class AiCommandOutboxWriter {
     }
 
     /**
-     * 실행을 끝내면서 같은 트랜잭션에서 예약도 바로 푼다. 이어서 새 작업(변환 뒤 자동 ingest)을 시작할 때 이 실행의 예약이
-     * 가용 잔액을 줄여 그 작업을 거절하게 만들지 않는다. 끝난 실행의 사용 금액은 수집 대기열이 이어서 차감한다.
+     * 변환을 끝내고 같은 트랜잭션에서 예약을 푼다. 자동 편입을 승인한 변환이면 먼저 편입 몫을 따로 예약해 두어
+     * 변환 정산이 그 몫을 풀지 않게 한다. 남은 몫은 자동 편입 등록 뒤 {@link #releaseAutoIngestHold}가 푼다.
      */
-    public void completeAndSettle(String runId) {
+    public void completeConvert(String runId) {
+        var held = jdbcTemplate.queryForList("SELECT user_id, (cost_quote->>'ingest_hold')::bigint AS hold FROM ai_task_runs "
+                + "WHERE id = ? AND status = 'running' AND cost_quote->>'auto_ingest' = 'true'", runId);
+        if (!held.isEmpty()) credits.holdAutoIngest(runId, (String) held.getFirst().get("user_id"),
+                ((Number) held.getFirst().get("hold")).longValue());
         close(runId, "completed");
         credits.settle(runId);
+    }
+
+    public void releaseAutoIngestHold(String convertRunId) {
+        credits.releaseAutoIngestHold(convertRunId);
     }
 
     /** 다시 시도하지 않을 실패로 실행을 닫는다. 실패 전까지의 공급사 호출도 수집·정산한다. */

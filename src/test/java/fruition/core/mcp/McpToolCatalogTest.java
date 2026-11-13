@@ -18,9 +18,45 @@ import static org.mockito.Mockito.when;
 
 class McpToolCatalogTest {
 
+    @Test void productGuideIsStrictReadOnlyAuditedAndDoesNotTouchCredits() {
+        var guide = mock(McpProductGuideClient.class);
+        var credits = mock(CreditService.class);
+        var audit = mock(McpAuditLogger.class);
+        var catalog = new McpToolCatalog(guide, mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
+                mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
+                mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class),
+                mock(McpMeetingTools.class), mock(McpHierarchyTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class),
+                audit, new ObjectMapper(), McpTokenVerifierTest.props(), "", credits);
+        var tool = catalog.tools().stream().filter(t -> t.tool().name().equals("get_product_guide")).findFirst().orElseThrow();
+        assertThat(tool.tool().annotations().readOnlyHint()).isTrue();
+        assertThat(tool.tool().annotations().destructiveHint()).isFalse();
+        assertThat(tool.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
+        assertThat(tool.tool().outputSchema().get("additionalProperties")).isEqualTo(false);
+        var id = new McpIdentity("user", "workspace", "client", "grant", 1, Set.of("read"), "MEMBER", Set.of());
+        var context = McpTransportContext.create(Map.of(McpSecurityFilter.IDENTITY, id));
+        var request = new io.modelcontextprotocol.spec.McpSchema.CallToolRequest("get_product_guide", Map.of(), null);
+        var expected = new McpProductGuideClient.Response("mcp.product-guide.v1", "Guide", "## MCP\nConnect and approve.");
+        when(guide.read()).thenReturn(expected);
+        var result = tool.callHandler().apply(context, request);
+        assertThat(result.isError()).isFalse();
+        assertThat(new ObjectMapper().valueToTree(result.structuredContent()).path("markdown").asText()).isEqualTo(expected.markdown());
+        verify(audit).log(id, "get_product_guide", java.util.List.of(), "SUCCESS", null);
+        var invalid = tool.callHandler().apply(context, new io.modelcontextprotocol.spec.McpSchema.CallToolRequest(
+                "get_product_guide", Map.of("workspace_id", "other"), null));
+        assertThat(invalid.isError()).isTrue();
+        verify(guide).read();
+        verify(audit).log(id, "get_product_guide", java.util.List.of(), "ERROR", "INVALID_INPUT");
+        when(guide.read()).thenThrow(new McpToolException("DEPENDENCY_UNAVAILABLE"));
+        assertThat(tool.callHandler().apply(context, request).isError()).isTrue();
+        org.mockito.Mockito.doReturn(new McpProductGuideClient.Response("mcp.product-guide.v1", "Guide", "x".repeat(60_000))).when(guide).read();
+        assertThat(tool.callHandler().apply(context, request).isError()).isTrue();
+        verify(audit).log(id, "get_product_guide", java.util.List.of(), "ERROR", "RESPONSE_LIMIT_EXCEEDED");
+        org.mockito.Mockito.verifyNoInteractions(credits);
+    }
+
     @Test void creditBalanceIsReadOnlySelfScopedAndFailsClosed() {
         var credits = mock(CreditService.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
+        var catalog = new McpToolCatalog(mock(McpProductGuideClient.class), mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class),
                 mock(McpMeetingTools.class), mock(McpHierarchyTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class),
@@ -58,13 +94,13 @@ class McpToolCatalogTest {
     @Test void catalogReadToolsAreStaticReadOnlyStrictAndAdvertiseBoundedWikiPageRead() {
         var pages = mock(McpWikiPageService.class);
         var audit = mock(McpAuditLogger.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
+        var catalog = new McpToolCatalog(mock(McpProductGuideClient.class), mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
                 mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpHierarchyTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props(), "https://app.example/", mock(CreditService.class));
         var tools = catalog.tools();
         assertThat(tools).extracting(s -> s.tool().name()).containsExactly("search_wiki", "find_documents", "get_document", "get_wiki_page",
                         "propose_document_edit", "propose_plan", "start_ingest", "resume_ingest", "get_window",
-                        "submit_window", "finalize_ingest", "submit_lint_changes", "get_credit_balance");
+                        "submit_window", "finalize_ingest", "submit_lint_changes", "get_product_guide", "get_credit_balance");
         assertThat(tools.subList(0, 4)).allSatisfy(s -> {
             assertThat(s.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
             assertThat(s.tool().outputSchema().get("additionalProperties")).isEqualTo(false);
@@ -152,7 +188,7 @@ class McpToolCatalogTest {
                 java.util.List.of(), java.util.List.of(), false, null, "UNTRUSTED_WORKSPACE_CONTENT"));
 
         for (String origin : java.util.List.of("https://app.example/", "")) {
-            var catalog = new McpToolCatalog(wiki, pages, documents, mock(McpDocumentProposalService.class),
+            var catalog = new McpToolCatalog(mock(McpProductGuideClient.class), wiki, pages, documents, mock(McpDocumentProposalService.class),
                     mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class),
                     mock(McpMeetingTools.class), mock(McpHierarchyTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class),
                     mock(McpAuditLogger.class), mapper, McpTokenVerifierTest.props(), origin, mock(CreditService.class));
@@ -201,7 +237,7 @@ class McpToolCatalogTest {
     @Test void rejectsInvalidPageIdsBeforeAuditTargetsButRetainsValidatedDependencyTargets() {
         var pages = mock(McpWikiPageService.class);
         var audit = mock(McpAuditLogger.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
+        var catalog = new McpToolCatalog(mock(McpProductGuideClient.class), mock(McpWikiSearchClient.class), pages, mock(McpDocumentReadService.class),
                 mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpHierarchyTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props(), "https://app.example/", mock(CreditService.class));
         var pageTool = catalog.tools().get(3);
@@ -233,7 +269,7 @@ class McpToolCatalogTest {
     @Test void proposalToolIsStrictInvocableAndRegistered() {
         var proposals = mock(McpDocumentProposalService.class);
         var audit = mock(McpAuditLogger.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
+        var catalog = new McpToolCatalog(mock(McpProductGuideClient.class), mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), proposals, mock(McpPlanProposalService.class),
                 mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpHierarchyTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class), audit, new ObjectMapper(), McpTokenVerifierTest.props(), "https://app.example/", mock(CreditService.class));
         var identity = new McpIdentity("user", "workspace", "https://client.example/client.json",
@@ -274,7 +310,7 @@ class McpToolCatalogTest {
 
     @Test void planToolIsStrictInvocableAndRegistered() {
         var planProposals = mock(McpPlanProposalService.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
+        var catalog = new McpToolCatalog(mock(McpProductGuideClient.class), mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class), planProposals,
                 mock(McpWikiProposalService.class), mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpHierarchyTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props(), "https://app.example/", mock(CreditService.class));
@@ -313,7 +349,7 @@ class McpToolCatalogTest {
 
     @Test void sixWikiToolsHaveExactSchemasInPublicCatalog() {
         var wikiProposals = mock(McpWikiProposalService.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
+        var catalog = new McpToolCatalog(mock(McpProductGuideClient.class), mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), wikiProposals, mock(McpSkillTools.class), mock(McpMeetingTools.class), mock(McpHierarchyTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class), mock(McpAuditLogger.class), new ObjectMapper(),
                 McpTokenVerifierTest.props(), "https://app.example/", mock(CreditService.class));
@@ -359,7 +395,7 @@ class McpToolCatalogTest {
     @Test void everyReviewUrlToolTellsClientToOpenItAndWikiSubmitsDocumentEvidenceRules() {
         var pdf = mock(McpPdfTools.class);
         when(pdf.tools()).thenCallRealMethod();
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
+        var catalog = new McpToolCatalog(mock(McpProductGuideClient.class), mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), mock(McpWikiProposalService.class),
                 new McpSkillTools(mock(fruition.core.skill.service.SkillService.class), mock(McpDocumentProposalService.class),
@@ -382,12 +418,12 @@ class McpToolCatalogTest {
     @Test void skillToolsAreWrappedWithReadAnnotationsAuditTargetAndErrorMapping() {
         var skills = mock(fruition.core.skill.service.SkillService.class);
         var audit = mock(McpAuditLogger.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
+        var catalog = new McpToolCatalog(mock(McpProductGuideClient.class), mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), new McpSkillTools(skills, mock(McpDocumentProposalService.class), new ObjectMapper()), mock(McpMeetingTools.class), mock(McpHierarchyTools.class), mock(McpPdfTools.class), mock(McpDocumentUploadTools.class),
                 audit, new ObjectMapper(), McpTokenVerifierTest.props(), "https://app.example/", mock(CreditService.class));
         var tools = catalog.tools();
-        assertThat(tools).extracting(spec -> spec.tool().name()).hasSize(16).endsWith("list_skills", "get_skill", "propose_skill_definition", "get_credit_balance");
+        assertThat(tools).extracting(spec -> spec.tool().name()).hasSize(17).endsWith("list_skills", "get_skill", "propose_skill_definition", "get_product_guide", "get_credit_balance");
         assertThat(tools.subList(12, 14)).allSatisfy(spec -> assertThat(spec.tool().annotations().readOnlyHint()).isTrue());
         assertThat(tools.get(14).tool().annotations().readOnlyHint()).isFalse();
         var id = new McpIdentity("user", "workspace", "https://client.example/client.json", "grant", 1,
@@ -420,7 +456,7 @@ class McpToolCatalogTest {
     @Test void uploadToolsWrapWebDirectUploadWithAuditAndStableErrors() throws Exception {
         var uploads = mock(fruition.core.document.service.DocumentDirectUploadService.class);
         var audit = mock(McpAuditLogger.class);
-        var catalog = new McpToolCatalog(mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
+        var catalog = new McpToolCatalog(mock(McpProductGuideClient.class), mock(McpWikiSearchClient.class), mock(McpWikiPageService.class),
                 mock(McpDocumentReadService.class), mock(McpDocumentProposalService.class),
                 mock(McpPlanProposalService.class), mock(McpWikiProposalService.class), mock(McpSkillTools.class),
                 mock(McpMeetingTools.class), mock(McpHierarchyTools.class), mock(McpPdfTools.class),
@@ -428,19 +464,19 @@ class McpToolCatalogTest {
                 audit, new ObjectMapper(), McpTokenVerifierTest.props(), "https://app.example/", mock(CreditService.class));
         var tools = catalog.tools();
         assertThat(tools).extracting(spec -> spec.tool().name())
-                .endsWith("start_document_upload", "get_upload_part_urls", "complete_document_upload", "get_credit_balance");
-        assertThat(tools.subList(tools.size() - 4, tools.size() - 1)).allSatisfy(spec -> {
+                .endsWith("start_document_upload", "get_upload_part_urls", "complete_document_upload", "get_product_guide", "get_credit_balance");
+        assertThat(tools.subList(tools.size() - 5, tools.size() - 2)).allSatisfy(spec -> {
             assertThat(spec.tool().inputSchema().get("additionalProperties")).isEqualTo(false);
             assertThat(spec.tool().annotations().readOnlyHint()).isFalse();
             assertThat(spec.tool().annotations().destructiveHint()).isFalse();
             assertThat(spec.tool().annotations().openWorldHint()).isFalse();
             assertThat(spec.tool().description()).contains("upload the file in the Fruition web app");
         });
-        assertThat(tools.subList(tools.size() - 4, tools.size() - 1))
+        assertThat(tools.subList(tools.size() - 5, tools.size() - 2))
                 .extracting(spec -> spec.tool().annotations().idempotentHint()).containsExactly(false, true, true);
-        assertThat(tools.get(tools.size() - 4).tool().description()).contains("confirm with the user before uploading");
-        assertThat(tools.get(tools.size() - 2).tool().description()).contains("confirm with the user before uploading");
-        assertThat(tools.get(tools.size() - 4).tool().description()).contains("PUT the raw bytes of each part");
+        assertThat(tools.get(tools.size() - 5).tool().description()).contains("confirm with the user before uploading");
+        assertThat(tools.get(tools.size() - 3).tool().description()).contains("confirm with the user before uploading");
+        assertThat(tools.get(tools.size() - 5).tool().description()).contains("PUT the raw bytes of each part");
 
         String folder = "00000000-0000-4000-8000-000000000001";
         when(uploads.start(org.mockito.ArgumentMatchers.eq("workspace"), org.mockito.ArgumentMatchers.eq("user"),
@@ -450,7 +486,7 @@ class McpToolCatalogTest {
                 Set.of("write_propose"), "MEMBER", Set.of());
         var args = new java.util.HashMap<String, Object>();
         args.put("filename", "a.docx"); args.put("size", 5); args.put("folder_id", folder);
-        var result = tools.get(tools.size() - 4).callHandler().apply(
+        var result = tools.get(tools.size() - 5).callHandler().apply(
                 McpTransportContext.create(Map.of(McpSecurityFilter.IDENTITY, id)),
                 new io.modelcontextprotocol.spec.McpSchema.CallToolRequest("start_document_upload", args, null));
         assertThat(result.isError()).isTrue();

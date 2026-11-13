@@ -95,6 +95,60 @@ public class CreditService {
     }
 
     /**
+     * 자동 편입을 승인한 변환이 끝날 때, 편입 몫을 변환과 다른 원장 키({@link #autoIngestHold})에 옮겨 예약해 둔다.
+     * 호출자는 같은 트랜잭션에서 이어 변환 실행을 정산한다. 그래서 그 사이 다른 요청이 이 몫을 쓰지 못하고,
+     * 변환 정산(수집 대기열·오래된 예약 정리)이 따로 돌아도 이 예약은 풀지 않는다. 같은 변환에는 한 번만 예약한다.
+     */
+    public void holdAutoIngest(String convertRunId, String userId, long amount) {
+        if (amount <= 0) return;
+        transaction.executeWithoutResult(tx -> {
+            lock(userId);
+            String hold = autoIngestHold(convertRunId);
+            if (append(userId, "reserve", amount, hold, "reserve:" + hold, "document")) {
+                jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
+                        amount, userId);
+            }
+        });
+    }
+
+    /**
+     * 승인된 변환의 자동 편입 예약. 잔액을 다시 보지 않고, 남은 자동 편입 몫에서 먼저 옮긴다(모자라면 그만큼 더 예약한다).
+     * 같은 편입 실행에는 한 번만 반영한다.
+     */
+    public void reserveConvertedIngest(String parentRunId, String runId, String workspaceId, String userId, long estimate) {
+        if (estimate < 0) throw new IllegalArgumentException("Invalid estimate");
+        transaction.executeWithoutResult(tx -> {
+            lock(userId);
+            boolean accepted = Boolean.TRUE.equals(jdbc.queryForObject("""
+                    SELECT EXISTS (SELECT 1 FROM ai_task_runs r JOIN credit_entries e ON e.run_id=r.id
+                    WHERE r.id=? AND r.user_id=? AND r.workspace_id=? AND r.kind='convert'
+                    AND r.status IN ('running','completed') AND r.cost_quote->>'auto_ingest'='true'
+                    AND e.user_id=? AND e.type='reserve')
+                    """, Boolean.class, parentRunId, userId, workspaceId, userId));
+            if (!accepted) throw new IllegalStateException("Conversion did not admit automatic ingestion");
+            if (!append(userId, "reserve", estimate, runId, "reserve:" + runId, "document")) return;
+            String hold = autoIngestHold(parentRunId);
+            long moved = Math.min(Math.max(0, open(hold, userId)), estimate);
+            if (moved > 0) append(userId, "release", -moved, hold, "release:" + hold + ":" + runId, null);
+            jdbc.update("UPDATE credit_accounts SET reserved = reserved + ?, updated_at = now() WHERE user_id = ?",
+                    estimate - moved, userId);
+        });
+    }
+
+    /** 자동 편입 등록을 마친 뒤(건너뛰거나 실패해도) 남은 자동 편입 몫을 푼다. 여러 번 불러도 한 번만 푼다. */
+    public void releaseAutoIngestHold(String convertRunId) {
+        settle(autoIngestHold(convertRunId));
+    }
+
+    /**
+     * 자동 편입 몫의 원장 run_id. 실행 행이 없어 진행 중으로 보이지 않으므로, 등록 도중 프로세스가 죽어 풀지 못한 몫은
+     * {@link #releaseStale}이 오래된 예약으로 정리한다.
+     */
+    static String autoIngestHold(String convertRunId) {
+        return "autoingest:" + convertRunId;
+    }
+
+    /**
      * MCP reserves its full cap; only explicit account exemptions bypass the balance check.
      * A free approval (cap 0) never checks the balance, so accounts left negative by settlement keep using it.
      */
@@ -204,17 +258,6 @@ public class CreditService {
         return environment.getProperty("app.billing.estimate." + kind, Long.class, defaultEstimate);
     }
 
-    /** UTF-8 본문 길이에 비례한 편입 예약액. 기준 보고서 5,537바이트의 실사용 33원에 70원을 예약한다. */
-    public long estimateDocument(long sourceBytes) {
-        long referenceBytes = environment.getProperty("app.billing.document-reference-bytes", Long.class, 5537L);
-        long referenceAmount = estimate("document");
-        if (sourceBytes < 0 || referenceBytes <= 0 || referenceAmount <= 0) {
-            throw new IllegalArgumentException("Document reservation sizes and rate must be positive.");
-        }
-        return Math.max(1, BigDecimal.valueOf(sourceBytes).multiply(BigDecimal.valueOf(referenceAmount))
-                .divide(BigDecimal.valueOf(referenceBytes), 0, RoundingMode.CEILING).longValueExact());
-    }
-
     /**
      * kind 실행 한 건의 예상 비용(USD micro). 예상 상한(milli-KRW)을 최신 환율로 바꾼다: KRW = milli/1000, USD = KRW/환율,
      * micro = USD×10^6. 마진·부가세가 포함된 값이라 실제 원가보다 크게 잡힌다. 환율 행은 V72가 기본값을 넣는다.
@@ -242,6 +285,10 @@ public class CreditService {
      */
     private long admit(String userId, String kind, long estimate, long available, String rejection) {
         if (!enforce || limitExempt(userId)) return estimate;
+        if (java.util.Set.of("document", "chat_wiki", "convert").contains(kind)) {
+            if (available < estimate) throw new InsufficientCreditException(rejection);
+            return estimate;
+        }
         if (available < minimum(kind, estimate)) throw new InsufficientCreditException(rejection);
         return Math.min(estimate, available);
     }

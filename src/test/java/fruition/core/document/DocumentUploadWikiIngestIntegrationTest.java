@@ -45,6 +45,7 @@ class DocumentUploadWikiIngestIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired StringRedisTemplate redis;
     @Autowired JwtTokenProvider jwt;
+    @Autowired fruition.core.usage.service.DocumentCostEstimator costEstimator;
 
     private String userId;
     private String workspaceId;
@@ -85,8 +86,10 @@ class DocumentUploadWikiIngestIntegrationTest {
 
     @Test
     void multipleUploads_laterFileIsSkippedOnceReservationsUseTheBalance() throws Exception {
-        // 16바이트 본문의 예약액은 203 milli-KRW다. 잔액 100을 모두 예약하면 다음 편입은 거절된다.
-        credit(100L, false);
+        // 첫 편입 예상액 전액만 지급하면 첫 요청은 승인되고 두 번째 요청은 거절된다.
+        long estimate = costEstimator.document("# 제목\n\n본문".getBytes(StandardCharsets.UTF_8).length,
+                workspaceAiModelClient.get(workspaceId)).amount();
+        credit(estimate, false);
 
         JsonNode first = upload("first.md");
         JsonNode second = upload("second.txt");
