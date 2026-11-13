@@ -18,7 +18,12 @@ decompression to select the required `read`, `write_propose` (`propose_document_
 allowed for native clients, while any present Origin must exactly match the configured canonical list.
 Forwarding headers are ignored; the servlet request itself must already represent the canonical HTTPS host.
 
-## 공개 카탈로그 (`mcp-tools.v14`)
+## 공개 카탈로그 (`mcp-tools.v15`)
+
+튜토리얼 조회 추가(2026-11-13): `get_product_guide`는 인자 없는 `read` 도구다. 웹 AI 도움말과 같은 공개 가이드의 `schema_version=mcp.product-guide.v1`, `title`, `markdown`을 반환한다. 연결·워크스페이스·scope 검증과 공통 감사/응답 크기 제한을 적용한다. 모델 호출·크레딧 조회/차감·작업 실행은 없다. 계정 상태, 작업 상태, 문서 내용이나 시스템 프롬프트는 반환하지 않는다.
+
+가이드는 AI의 `GET /internal/mcp/product-guide`에서 내부 토큰으로 읽는다. 주소는 기존 `wiki-search-uri`의 `/internal/mcp/wiki/search`와 같은 서비스의 `/internal/mcp/product-guide`다. AI를 먼저 배포해야 하며, 미지원/오류 시 `DEPENDENCY_UNAVAILABLE`을 반환한다. 정적 복사본으로 대체하지 않는다. 외부 AI는 필요한 절만 사용자의 언어로 설명한다. 서버 instructions와 도구 설명에서도 사용법 질문에 이 도구를 안내한다.
+
 
 source block 레지스트리·lint 맥락(2026-11-12, `mcp-tools.v13` → `mcp-tools.v14`):
 - `get_document` 블록 ID는 웹 편입이 쓰는 pipeline `source_blocks` 레지스트리 ID다(아래 Source block 해석 참고).
@@ -130,7 +135,7 @@ lint 대상 값 추가(2026-11-12, `mcp-tools.v12` → `mcp-tools.v13`): `get_wi
 공개 output schema에 위 필드를 추가하고 카탈로그 버전을 올린다. 기존 `schema_version` v1은 유지하며,
 AI↔document 내부 strict 계약에는 이 표시용 필드를 보내지 않는다.
 
-`McpToolCatalog.tools()`는 2026-11-12부터 다음 30개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
+`McpToolCatalog.tools()`는 2026-11-12부터 다음 31개 도구를 이 순서로 등록한다: 읽기 4개(`search_wiki`,
 `find_documents`, `get_document`, `get_wiki_page`), 제안 2개(`propose_document_edit`, `propose_plan`), 위키 6개
 (`start_ingest`, `resume_ingest`, `get_window`, `submit_window`, `finalize_ingest`, `submit_lint_changes`), 계층 읽기 5개
 (`list_root_items`, `list_folder_children`, `get_document_metadata`, `search_hierarchy`, `get_breadcrumb`), Skill 3개

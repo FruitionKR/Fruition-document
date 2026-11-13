@@ -78,8 +78,9 @@ public class McpToolCatalog {
     private final McpProperties properties;
     private final URI sourceOrigin;
     private final CreditService credits;
+    private final McpProductGuideClient productGuide;
 
-    public McpToolCatalog(McpWikiSearchClient wiki, McpWikiPageService wikiPages, McpDocumentReadService documents,
+    public McpToolCatalog(McpProductGuideClient productGuide, McpWikiSearchClient wiki, McpWikiPageService wikiPages, McpDocumentReadService documents,
                           McpDocumentProposalService proposals, McpPlanProposalService planProposals,
                           McpWikiProposalService wikiProposals, McpSkillTools skillTools,
                           McpMeetingTools meetingTools, McpHierarchyTools hierarchyTools, McpPdfTools pdfTools,
@@ -94,6 +95,7 @@ public class McpToolCatalog {
         this.uploadTools = uploadTools;
         this.sourceOrigin = sourceOrigin.isBlank() ? null : McpProperties.parseOrigin(sourceOrigin);
         this.credits = credits;
+        this.productGuide = productGuide;
         this.audit = audit; this.mapper = mapper; this.properties = properties;
     }
 
@@ -140,6 +142,18 @@ public class McpToolCatalog {
             tools.add(spec(tool, (id, args) -> pdfTools.invoke(id, tool.name(), args)));
         for (McpSchema.Tool tool : uploadTools.tools())
             tools.add(spec(tool, (id, args) -> uploadTools.invoke(id, tool.name(), args)));
+        tools.add(spec(tool("get_product_guide", "Read the official Fruition tutorial shared with web product-help answers."
+                        + " Use for questions about getting started, adding documents to the wiki, MCP connection,"
+                        + " supported operations, approval, costs, and troubleshooting, including when wiki search"
+                        + " has no evidence for a product-usage question. No arguments. Returns public guide Markdown,"
+                        + " not workspace documents, private prompts, or live account/job state. Explain only the relevant"
+                        + " section in the user's language; do not invent missing instructions. This read-only tool"
+                        + " invokes no model and does not charge Fruition credits or perform any described action.",
+                Map.of("type", "object", "properties", Map.of(), "additionalProperties", false)),
+                (id, args) -> {
+                    if (args != null && !args.isEmpty()) throw new McpToolException("INVALID_INPUT");
+                    return productGuide.read();
+                }));
         tools.add(spec(tool("get_credit_balance", "Read the authenticated user's personal credit balance across all"
                         + " workspaces. No arguments. Amounts are integer milli-KRW: divide by 1000 for KRW."
                         + " Report available_krw_milli as spendable balance, and distinguish balance from reserved funds."
@@ -247,6 +261,12 @@ public class McpToolCatalog {
                 .annotations(annotations).build();
     }
     private static Map<String,Object> outputSchema(String name) {
+        if ("get_product_guide".equals(name)) {
+            var fields = Map.of("schema_version", Map.of("type", "string", "const", "mcp.product-guide.v1"),
+                    "title", Map.of("type", "string"), "markdown", Map.of("type", "string"));
+            return Map.of("type", "object", "additionalProperties", false, "properties", fields,
+                    "required", List.of("schema_version", "title", "markdown"));
+        }
         if ("get_credit_balance".equals(name)) {
             var amount = Map.of("type", "integer");
             var fields = Map.of("schema_version", Map.of("type", "string", "const", "mcp.credit-balance.v1"),
