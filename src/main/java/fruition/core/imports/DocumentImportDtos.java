@@ -71,19 +71,21 @@ public final class DocumentImportDtos {
     @Schema(name = "DocumentImportIngestEstimateResponse")
     public record IngestEstimateResponse(
             @Schema(description = "아직 편입하지 않은(편입 요청한 적 없는) 휴지통 밖 가져온 Markdown 문서 수. PDF 원본은 빼고, PDF 변환본은 변환이 끝난 것만 센다") int documentCount,
-            @Schema(description = "예상 비용(USD) = 본문 길이별 예약액 합계를 최신 환율로 환산. 환율을 못 읽으면 null", nullable = true)
+            @Schema(description = "예상 비용(USD) = estimated_credits를 최신 환율로 환산. 환율을 못 읽으면 null", nullable = true)
             BigDecimal estimatedCostUsd,
-            @Schema(description = "예상 크레딧(milli-KRW, /users/me/credits의 *_krw_milli와 같은 단위) = 각 Markdown 본문의 UTF-8 바이트 길이별 예약액 합계",
+            @Schema(description = "예상 크레딧(milli-KRW, /users/me/credits의 *_krw_milli와 같은 단위) = 각 Markdown 본문의 편입 견적(워크스페이스 모델 단가·완료 기록 보정) 합계. 예약액이며 사용료가 아니다",
                     nullable = true)
             Long estimatedCredits,
             @Schema(description = "아직 Markdown 변환 중이라 document_count에서 빠진 가져온 PDF 변환본 수. 변환이 끝나면 편입 대상에 들어간다")
             int convertingCount,
-            @Schema(description = "아직 변환하지 않은(변환본이 없거나 변환에 실패한) 가져온 PDF 수. POST .../convert로 변환한다")
+            @Schema(description = "아직 변환하지 않은(변환본이 없거나 다시 시도할 수 있는 변환 실패만 있는) 가져온 PDF 수. POST .../convert로 변환한다. 읽을 수 없는 PDF로 실패한 원본은 빠진다")
             int pdfUnconvertedCount,
-            @Schema(description = "PDF 변환 예상 비용(USD) = 변환 1건 예상 비용 × pdf_unconverted_count. 환율을 못 읽으면 null", nullable = true)
+            @Schema(description = "PDF 변환 예상 비용(USD) = convert_estimated_credits를 최신 환율로 환산. 환율을 못 읽으면 null", nullable = true)
             BigDecimal convertEstimatedCostUsd,
-            @Schema(description = "PDF 변환 예상 크레딧(milli-KRW) = app.billing.estimate.convert(없으면 기본값) × pdf_unconverted_count")
-            Long convertEstimatedCredits) {}
+            @Schema(description = "PDF 변환 예상 크레딧(milli-KRW) = 읽을 수 있는 PDF마다 쪽·텍스트·이미지 구조로 낸 변환 견적의 합계")
+            Long convertEstimatedCredits,
+            @Schema(description = "pdf_unconverted_count 중 구조를 읽을 수 없는(암호화·손상) PDF 수. 변환하면 비용 없이 실패로 남고 convert_estimated_credits에 넣지 않는다")
+            int pdfUnreadableCount) {}
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     @Schema(name = "DocumentImportIngestRequest")
