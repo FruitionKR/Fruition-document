@@ -247,6 +247,18 @@ class McpEnabledIntegrationTest {
         }
     }
 
+    @Test void authenticatedReadClientCanReadTutorialWithoutCreditWrites() throws Exception {
+        long entries = jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE user_id = ?", Long.class, USER);
+        ai.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody(
+                "{\"schema_version\":\"mcp.product-guide.v1\",\"title\":\"Guide\",\"markdown\":\"MCP 연결 안내\"}"));
+        JsonNode response = rpc("""
+                {"jsonrpc":"2.0","id":80,"method":"tools/call","params":{"name":"get_product_guide","arguments":{}}}
+                """);
+        assertThat(response.path("result").path("isError").asBoolean()).isFalse();
+        assertThat(response.path("result").path("structuredContent").path("markdown").asText()).isEqualTo("MCP 연결 안내");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM credit_entries WHERE user_id = ?", Long.class, USER)).isEqualTo(entries);
+    }
+
     @Test void creditBalanceReadsOnlyCallerAndNeverWritesAccounts() throws Exception {
         String request = """
                 {"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"get_credit_balance","arguments":{}}}
@@ -296,8 +308,8 @@ class McpEnabledIntegrationTest {
                 """);
         assertThat(initialized.path("result").path("protocolVersion").asText()).isEqualTo("2025-11-25");
 
-        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v14");
-        assertThat(initialized.path("result").path("instructions").asText()).contains("free", "Fruition fee", "get_credit_balance");
+        assertThat(initialized.path("result").path("serverInfo").path("version").asText()).isEqualTo("mcp-tools.v15");
+        assertThat(initialized.path("result").path("instructions").asText()).contains("free", "Fruition fee", "get_product_guide", "get_credit_balance");
 
         JsonNode tools = rpc("""
                 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
@@ -308,7 +320,7 @@ class McpEnabledIntegrationTest {
                         "submit_window", "finalize_ingest", "submit_lint_changes", "list_root_items", "list_folder_children", "get_document_metadata", "search_hierarchy", "get_breadcrumb", "list_skills", "get_skill", "propose_skill_definition",
                         "list_meetings", "get_meeting_transcript", "start_pdf_conversion",
                         "get_conversion_window", "submit_conversion_window", "finalize_pdf_conversion",
-                        "start_document_upload", "get_upload_part_urls", "complete_document_upload", "get_credit_balance");
+                        "start_document_upload", "get_upload_part_urls", "complete_document_upload", "get_product_guide", "get_credit_balance");
 
         JsonNode call = rpc("""
                 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_documents",
