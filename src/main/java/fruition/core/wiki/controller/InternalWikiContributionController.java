@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.List;
+import java.util.Set;
+import java.util.Objects;
 
 @RestController
 public class InternalWikiContributionController {
@@ -52,10 +54,21 @@ public class InternalWikiContributionController {
         }
         var contributions = repository.findByPageIdsAndWorkspaceId(
                 request.pageIds(), request.workspaceId());
+        var documentIds = contributions.stream().map(row -> row.getSourceDocumentId())
+                .filter(Objects::nonNull).distinct().toList();
+        Set<String> deletedDocuments = documentIds.isEmpty() ? Set.of()
+                : Set.copyOf(repository.findDeletedSourceDocumentIds(documentIds, request.workspaceId()));
         return ResponseEntity.ok(contributions.stream()
                 .map(row -> new ContributionResponse(
                         row.getPageId(), row.getIngestOperationId(), row.getSourceDocumentId(),
-                        row.getSequenceRevision(), row.isActive(), row.getObjectKey()))
+                        row.getSequenceRevision(), row.isActive() && (row.getSourceDocumentId() == null
+                                || !deletedDocuments.contains(row.getSourceDocumentId())), row.getObjectKey(),
+                        // AI는 자기 lint 기록과 다른 작업에서 이은 기록을 구분한다.
+                        Objects.equals(row.getIngestOperationId(), row.getLintOperationId())
+                                ? null : row.getLintOperationId(),
+                        row.getSourceDocumentId() != null && deletedDocuments.contains(row.getSourceDocumentId()),
+                        // 복원은 끈 작업을 deactivated_by에 남긴다. 비어 있으면 원본 휴지통 이동이 끈 기여다.
+                        row.getSourceDocumentId() != null && !row.isActive() && row.getDeactivatedBy() == null))
                 .toList());
     }
 
@@ -69,6 +82,9 @@ public class InternalWikiContributionController {
             @JsonProperty("source_document_id") String sourceDocumentId,
             @JsonProperty("sequence_revision") long sequenceRevision,
             boolean active,
-            @JsonProperty("object_key") String objectKey
+            @JsonProperty("object_key") String objectKey,
+            @JsonProperty("lint_operation_id") String lintOperationId,
+            @JsonProperty("source_document_deleted") boolean sourceDocumentDeleted,
+            @JsonProperty("deactivated_by_source_deletion") boolean deactivatedBySourceDeletion
     ) {}
 }
