@@ -995,6 +995,11 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/m
 
 `POST /internal/wiki/contributions`
 
+응답의 각 기여에는 `lint_operation_id`를 포함한다. 다른 작업의 기여를 lint가 이은 경우 그 lint ID이며,
+편입·수동 기여와 lint 자신의 기여에는 null이다. AI는 이 값을 `linked_by_operation_id` 대기 기록과 대조한다.
+`source_document_deleted`는 원본 문서가 휴지통에 있거나 영구 삭제되어 없는 상태다. true이면 `active`도 false로 반환한다.
+AI는 삭제 이벤트 수신 전에도 이 상태로 기여를 대조하고 해당 문서를 개념 페이지의 유효 출처에서 제외한다.
+
 #### 2. 목적
 
 요청한 Wiki 페이지의 기여 이력을 조회합니다.
