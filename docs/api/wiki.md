@@ -999,6 +999,8 @@ curl -X GET "$DOCUMENT/api/workspaces/ws_9d47a0e9a6324341b47562553b75f92a/wiki/m
 편입·수동 기여와 lint 자신의 기여에는 null이다. AI는 이 값을 `linked_by_operation_id` 대기 기록과 대조한다.
 `source_document_deleted`는 원본 문서가 휴지통에 있거나 영구 삭제되어 없는 상태다. true이면 `active`도 false로 반환한다.
 AI는 삭제 이벤트 수신 전에도 이 상태로 기여를 대조하고 해당 문서를 개념 페이지의 유효 출처에서 제외한다.
+`deactivated_by_source_deletion`은 원본 휴지통 이동이 끈 기여다(꺼져 있고 `deactivated_by`가 비어 있음. 복원이 끈 기여는 복원 작업 ID가 남는다).
+문서를 휴지통에서 바로 복구해도 이 기여는 꺼진 채라, AI는 삭제 이벤트 수신 전에도 이 값으로 대기 기록을 대조한다.
 
 #### 2. 목적
 

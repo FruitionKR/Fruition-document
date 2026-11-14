@@ -39,6 +39,29 @@ class InternalWikiContributionControllerTest {
     }
 
     @ParameterizedTest
+    @CsvSource({"trash,true", "restore,false", "active,false", "lint-record,false"})
+    void find_reportsContributionTurnedOffBySourceTrash(String state, boolean expected) {
+        var contribution = WikiPageContribution.lint("page-1", "ingest-1",
+                state.equals("lint-record") ? null : "doc-1",
+                1, "wiki/ws-1/page-1.json", null, java.time.Instant.now());
+        switch (state) {
+            case "trash", "lint-record" -> contribution.deactivate(null);
+            case "restore" -> contribution.deactivate("restore-1");
+            default -> { }
+        }
+        when(repository.findByPageIdsAndWorkspaceId(List.of("page-1"), "ws-1"))
+                .thenReturn(List.of(contribution));
+
+        var response = controller.find("token",
+                new InternalWikiContributionController.ContributionRequest(List.of("page-1"), "ws-1"));
+        var row = new ObjectMapper().valueToTree(response.getBody()).get(0);
+
+        // 휴지통에서 복구해 문서는 살아 있어도 휴지통 이동이 끈 기여임을 알린다.
+        assertThat(row.get("source_document_deleted").asBoolean()).isFalse();
+        assertThat(row.get("deactivated_by_source_deletion").asBoolean()).isEqualTo(expected);
+    }
+
+    @ParameterizedTest
     @CsvSource({"ingest-1,,", "lint-1,lint-1,", "ingest-1,lint-1,lint-1"})
     void find_exposesLinkingLintForAiReconciliation(String operationId, String lintId, String expected) {
         var contribution = WikiPageContribution.lint("page-1", operationId, null,
