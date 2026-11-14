@@ -61,6 +61,19 @@ public interface WikiPageContributionRepository
 
     long countByIdPageIdAndActiveTrue(String pageId);
 
+    @Query(value = """
+            SELECT DISTINCT contribution.source_document_id FROM wiki_page_contributions contribution
+            WHERE contribution.source_document_id IN (:documentIds)
+              AND NOT EXISTS (
+                  SELECT 1 FROM documents document
+                  WHERE document.id = contribution.source_document_id
+                    AND document.workspace_id = :workspaceId AND document.deleted_at IS NULL
+              )
+            """, nativeQuery = true)
+    List<String> findDeletedSourceDocumentIds(
+            @Param("documentIds") Collection<String> documentIds,
+            @Param("workspaceId") String workspaceId);
+
     /** 휴지통으로 옮긴 문서의 기여를 끈다. 복구 작업이 아니므로 deactivated_by는 비워 둔다. */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query(value = """
