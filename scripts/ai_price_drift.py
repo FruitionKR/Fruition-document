@@ -20,7 +20,8 @@ SEED = 'src/main/resources/db/migration/V70__seed_ai_model_prices.sql'
 LITELLM_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
 DEPRECATION_URLS = {
     'openai': 'https://developers.openai.com/api/docs/deprecations',
-    'gemini': 'https://ai.google.dev/gemini-api/docs/deprecations',
+    # AI Studio의 폐기 페이지는 화면을 스크립트로 그려 표가 HTML에 없다. 같은 모델의 Vertex AI 수명 주기 표를 읽는다.
+    'gemini': 'https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions',
 }
 ISSUE_TITLE = 'chore: AI 모델 단가·폐기 일정 주간 점검 결과'
 # LiteLLM 키. OpenAI·Anthropic은 모델 id 그대로, Gemini(AI Studio)는 gemini/ 접두사다.
@@ -33,7 +34,8 @@ FIELDS = {
     'cache_read': 'cache_read_input_token_cost',
     'cache_write': 'cache_creation_input_token_cost',
 }
-NO_SHUTDOWN = 'No shutdown date announced'
+# 폐기 표에서 대체 모델 열의 머리글. OpenAI 'Recommended replacement', Vertex 'Replacement model ID'·'Recommended upgrade'.
+REPLACEMENT = re.compile(r'replacement|recommended upgrade', re.I)
 
 
 def catalog_models(java):
@@ -87,19 +89,26 @@ def table_rows(page):
 def deprecations(provider, models, page):
     """폐기 페이지에서 카탈로그 모델이 폐기 대상으로 올라온 행.
 
-    마지막 열(권장 대체 모델)에만 나오는 경우는 대체 모델로 추천된 것이라 뺀다. 종료일도 대체 모델도 없는 행
-    (Gemini 수명 표의 'No shutdown date announced')은 폐기 대상이 아니다.
+    표마다 머리글에서 대체 모델 열을 찾는다. 대체 모델 열에만 나오는 경우는 대체 모델로 추천된 것이라 빼고,
+    대체 모델이 비어 있는 행(Vertex 수명 표의 아직 종료 예정이 없는 모델)은 폐기 대상이 아니다.
     """
     rows = table_rows(page)
     if not rows:
         return [f'{provider} 폐기 페이지에서 표를 찾지 못함(페이지 구조 변경 확인 필요)']
+    if not any(REPLACEMENT.search(cell) for cells in rows for cell in cells):
+        return [f'{provider} 폐기 표에서 대체 모델 열을 찾지 못함(페이지 구조 변경 확인 필요)']
     hits = []
     for _, model in (m for m in models if m[0] == provider):
         pattern = re.compile(r'(?<![\w.-])' + re.escape(model) + r'(?![\w.-])')
+        replacement = None
         for cells in rows:
-            if len(cells) < 2 or not any(pattern.search(cell) for cell in cells[:-1]):
+            header = next((i for i, cell in enumerate(cells) if REPLACEMENT.search(cell)), None)
+            if header is not None:
+                replacement = header
                 continue
-            if cells[-1] or not any(NO_SHUTDOWN in cell for cell in cells):
+            if replacement is None or replacement >= len(cells) or not cells[replacement]:
+                continue
+            if any(pattern.search(cell) for i, cell in enumerate(cells) if i != replacement):
                 hits.append(f'`{provider}/{model}`: ' + ' | '.join(cells))
     return hits
 

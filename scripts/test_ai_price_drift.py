@@ -43,22 +43,25 @@ class DriftTest(unittest.TestCase):
         self.assertIn('`gemini/gemini-3.8-flash` output: 시드 3.75 ≠ LiteLLM 4', diffs[0])
         self.assertIn('`claude/claude-opus-5-5`: 시드 단가 없음', diffs[1])
 
-    def test_deprecations_ignore_replacement_column_and_rows_without_shutdown(self):
-        models = [('openai', 'gpt-6-luna'), ('openai', 'gpt-4o'), ('gemini', 'gemini-3.8-flash'),
-                  ('gemini', 'gemini-3-flash-preview')]
-        openai = ('<table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr>'
-                  '<tr><td>Apr 1, 2027</td><td><code>gpt-5.4-nano</code></td><td>gpt-6-luna</td></tr>'
-                  '<tr><td>Jan 6, 2027</td><td>gpt-4o-2024-05-13</td><td>gpt-6-sol</td></tr>'
-                  '<tr><td>Mar 1, 2027</td><td>gpt-4o</td><td>gpt-6-sol</td></tr></table>')
-        hits = drift.deprecations('openai', models, openai)
-        self.assertEqual(hits, ['`openai/gpt-4o`: Mar 1, 2027 | gpt-4o | gpt-6-sol'])
-        gemini = ('<table><tr><td>gemini-3.8-flash</td><td>Sep 1, 2026</td><td>No shutdown date announced</td><td></td></tr>'
-                  '<tr><td>gemini-3-flash-preview</td><td>Dec 17, 2025</td><td>No shutdown date announced</td>'
-                  '<td>gemini-3.6-flash</td></tr></table>')
-        self.assertEqual(len(drift.deprecations('gemini', models, gemini)), 1)
-        self.assertIn('gemini-3-flash-preview', drift.deprecations('gemini', models, gemini)[0])
+    def test_deprecations_read_replacement_column_from_header(self):
+        models = [('openai', 'gpt-6-luna'), ('openai', 'gpt-4o'), ('gemini', 'gemini-3.5-flash-lite'),
+                  ('gemini', 'gemini-3.6-flash')]
+        # 대체 모델 열이 마지막이 아니어도(뒤에 공지일 열) 대체 모델로 추천된 모델은 폐기 대상이 아니다.
+        openai = ('<table><tr><th>Shutdown date</th><th>Affected model</th><th>Status</th>'
+                  '<th>Recommended replacement</th><th>Notice date</th></tr>'
+                  '<tr><td>Apr 1, 2027</td><td><code>gpt-5.4-nano</code></td><td>Deprecated</td><td>gpt-6-luna</td><td>Oct 1, 2026</td></tr>'
+                  '<tr><td>Mar 1, 2027</td><td>gpt-4o</td><td>Deprecated</td><td>gpt-6-sol</td><td>Sep 1, 2026</td></tr></table>')
+        self.assertEqual(drift.deprecations('openai', models, openai),
+                         ['`openai/gpt-4o`: Mar 1, 2027 | gpt-4o | Deprecated | gpt-6-sol | Sep 1, 2026'])
+        # Vertex 수명 표: 대체 모델이 비어 있으면 아직 종료 예정이 없는 모델이다.
+        gemini = ('<table><tr><th>Model ID</th><th>Release date</th><th>Retirement date</th><th>Replacement model ID</th></tr>'
+                  '<tr><td>gemini-3.5-flash-lite</td><td>July 21, 2026</td><td>July 21, 2027 or later</td><td></td></tr>'
+                  '<tr><td>gemini-3.6-flash</td><td>July 21, 2026</td><td>November 19, 2026</td><td>gemini-3.8-flash</td></tr></table>')
+        hits = drift.deprecations('gemini', models, gemini)
+        self.assertEqual(len(hits), 1)
+        self.assertIn('gemini-3.6-flash', hits[0])
         self.assertIn('표를 찾지 못함', drift.deprecations('gemini', models, '<p>moved</p>')[0])
-
+        self.assertIn('대체 모델 열을 찾지 못함', drift.deprecations('gemini', models, '<table><tr><td>a</td><td>b</td></tr></table>')[0])
 
 if __name__ == '__main__':
     unittest.main()
